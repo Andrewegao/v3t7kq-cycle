@@ -1,0 +1,53 @@
+# Unattended data freshness cycle on free public-repo minutes. Checks out the private
+# atmos repo read-only (deploy key), mirrors the LIVE site's data tree (atomic Pages deploys
+# replace the whole site — the runner must carry everything), then runs the same cycle the
+# laptop launchd runs: models → GFS enrichment → marine → air → gate → deploy.
+#
+# Without the CLOUDFLARE_API_TOKEN secret the cycle runs PUBLISH=0 (bake-only validation) —
+# a push can never replace the live site until the token is configured.
+# Secrets: ATMOS_DEPLOY_KEY (read-only key on Andrewegao/atmos) · CLOUDFLARE_API_TOKEN.
+name: bake
+on:
+  schedule:
+    - cron: '30 2,8,14,20 * * *'   # ~20 min after each ECMWF publication lands
+  workflow_dispatch: {}            # manual "refresh now"
+concurrency:
+  group: bake
+  cancel-in-progress: false        # never abort a half-written run
+jobs:
+  bake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: checkout atmos (private, read-only deploy key)
+        uses: actions/checkout@v4
+        with:
+          repository: Andrewegao/atmos
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: app/package-lock.json }
+      - name: system eccodes (GRIB decode engine — pip eccodes needs the C lib)
+        run: sudo apt-get update && sudo apt-get install -y libeccodes-dev
+      - name: venv + python deps
+        run: |
+          python -m venv data/.venv
+          data/.venv/bin/pip install -r data/requirements.txt
+      - name: app deps (vite + wrangler for the atomic deploy)
+        run: npm ci --prefix app
+      - name: mirror live data tree
+        run: bash ops/mirror-live-data.sh
+      - name: bake → gate → deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "no CLOUDFLARE_API_TOKEN — PUBLISH=0 bake-only validation"
+            export PUBLISH=0
+          fi
+          bash ops/bake-weatherx.sh
+      - name: cycle log
+        if: always()
+        run: tail -100 "ops/logs/bake-$(date -u +%Y%m%d).log" || true
