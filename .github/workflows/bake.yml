@@ -36,6 +36,8 @@ jobs:
           data/.venv/bin/pip install -r data/requirements.txt
       - name: app deps (vite + wrangler for the atomic deploy)
         run: npm ci --prefix app
+      - name: playwright chromium (the demo-ready gate drives a real browser on deploy cycles)
+        run: cd app && npx playwright install --with-deps chromium
       - name: mirror live data tree
         run: bash ops/mirror-live-data.sh
       - name: bake → gate → deploy
