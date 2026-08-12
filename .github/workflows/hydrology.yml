@@ -15,6 +15,11 @@ on:
         required: false
         type: boolean
         default: true
+      limit:
+        description: 'Maximum remaining threshold points this run (blank = all)'
+        required: false
+        type: string
+        default: '50'
 
 concurrency:
   group: hydrology
@@ -47,7 +52,12 @@ jobs:
       - name: Prepare empirical return-period thresholds
         id: thresholds
         continue-on-error: true
-        run: python data/fetch_rivers.py --thresholds
+        env:
+          POINT_LIMIT: ${{ inputs.limit }}
+        run: |
+          args=(--thresholds)
+          if [ -n "$POINT_LIMIT" ]; then args+=(--limit "$POINT_LIMIT"); fi
+          python data/fetch_rivers.py "${args[@]}"
       - name: Validate complete threshold contract
         id: threshold_contract
         if: ${{ steps.thresholds.outcome == 'success' }}
