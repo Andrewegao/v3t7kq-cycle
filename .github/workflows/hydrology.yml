@@ -1,0 +1,86 @@
+# Long-running, data-only preparation for WeatherX hydrology. This workflow checks out an
+# explicit atmos feature ref with the existing read-only deploy key. It never runs the Pages
+# deploy path; validated results are returned as an Actions artifact for review and commit.
+name: hydrology
+
+on:
+  workflow_dispatch:
+    inputs:
+      atmos_ref:
+        description: 'Atmos branch or immutable SHA to prepare'
+        required: true
+        type: string
+      run_bake_validation:
+        description: 'Also bake and validate river/reservoir output after thresholds complete'
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: hydrology
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - name: Checkout atmos ref (private, read-only deploy key)
+        uses: actions/checkout@v4
+        with:
+          repository: Andrewegao/atmos
+          ref: ${{ inputs.atmos_ref }}
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: data/requirements.txt
+      - name: Install hydrology dependency
+        run: pip install requests==2.34.2
+      - name: Restore resumable GloFAS history cache
+        uses: actions/cache@v4
+        with:
+          path: data/.cache-rivers
+          key: glofas-thresholds-v2-${{ hashFiles('data/rivers_points.json') }}
+          restore-keys: glofas-thresholds-v2-
+      - name: Prepare empirical return-period thresholds
+        id: thresholds
+        continue-on-error: true
+        run: python data/fetch_rivers.py --thresholds
+      - name: Validate complete threshold contract
+        id: threshold_contract
+        if: ${{ steps.thresholds.outcome == 'success' }}
+        continue-on-error: true
+        run: python data/fetch_rivers.py --validate-thresholds
+      - name: Bake and validate live artifacts
+        id: live_contract
+        if: ${{ inputs.run_bake_validation && steps.threshold_contract.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          python data/fetch_rivers.py --bake
+          python data/fetch_rivers.py --validate
+          python data/fetch_reservoirs.py --force
+          python data/fetch_reservoirs.py --validate
+      - name: Upload checkpoint or validated artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: hydrology-${{ github.run_id }}
+          path: |
+            data/rivers_points.json
+            app/public/data-atmos/rivers/reaches.json
+            app/public/data-atmos/rivers/reservoirs.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Fail unless requested contracts completed
+        if: ${{ always() }}
+        env:
+          THRESHOLDS: ${{ steps.thresholds.outcome }}
+          THRESHOLD_CONTRACT: ${{ steps.threshold_contract.outcome }}
+          LIVE_CONTRACT: ${{ steps.live_contract.outcome }}
+          RUN_LIVE: ${{ inputs.run_bake_validation }}
+        run: |
+          test "$THRESHOLDS" = success
+          test "$THRESHOLD_CONTRACT" = success
+          if [ "$RUN_LIVE" = true ]; then test "$LIVE_CONTRACT" = success; fi
