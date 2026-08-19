@@ -1,7 +1,8 @@
 # Unattended data freshness cycle on free public-repo minutes. Checks out the private
-# atmos repo read-only (deploy key), mirrors the LIVE site's data tree (atomic Pages deploys
-# replace the whole site — the runner must carry everything), then runs the same cycle the
-# laptop launchd runs: models → GFS enrichment → marine → air → gate → deploy.
+# atmos repo read-only (deploy key), rejects only recent exact duplicates, mirrors the LIVE
+# site's data tree (atomic Pages deploys replace the whole site — the runner must carry
+# everything), then runs the same cycle the laptop launchd runs: models → enrichment → gate
+# → deploy.
 #
 # Without the CLOUDFLARE_API_TOKEN secret the cycle runs PUBLISH=0 (bake-only validation) —
 # a push can never replace the live site until the token is configured.
@@ -29,37 +30,63 @@ jobs:
         with:
           repository: Andrewegao/atmos
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
-      - uses: actions/setup-python@v5
+      - name: plan conservative no-change fast path
+        id: bake_plan
         if: ${{ !inputs.code_only }}
+        env:
+          LIVE: https://atmos-platform-dnp.pages.dev
+          PLAN: ${{ runner.temp }}/weatherx-bake-plan.json
+        run: |
+          # This guard is deliberately fail-open. A missing script during a staggered rollout,
+          # a provider timeout, or an internal preflight error must run the normal full bake.
+          if ! timeout 90s python3 ops/bake_no_change.py plan \
+            --live "$LIVE" --output "$PLAN" --github-output "$GITHUB_OUTPUT"; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "reason=preflight-command-failed" >> "$GITHUB_OUTPUT"
+            echo "preflight failed; continuing with the full bake"
+          fi
+      - uses: actions/setup-python@v5
+        if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
         with: { python-version: '3.12' }
       - uses: actions/setup-node@v4
+        if: ${{ inputs.code_only || steps.bake_plan.outputs.skip != 'true' }}
         with: { node-version: 22, cache: npm, cache-dependency-path: app/package-lock.json }
       - name: system eccodes (GRIB decode engine — pip eccodes needs the C lib)
-        if: ${{ !inputs.code_only }}
+        if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
         run: sudo apt-get update && sudo apt-get install -y libeccodes-dev
       - name: venv + python deps
-        if: ${{ !inputs.code_only }}
+        if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
         run: |
           python -m venv data/.venv
           data/.venv/bin/pip install -r data/requirements.txt
       - name: app deps (vite + wrangler for the atomic deploy)
+        if: ${{ inputs.code_only || steps.bake_plan.outputs.skip != 'true' }}
         run: npm ci --prefix app
       - name: playwright chromium (the demo-ready gate drives a real browser on deploy cycles)
+        if: ${{ inputs.code_only || steps.bake_plan.outputs.skip != 'true' }}
         run: cd app && npx playwright install --with-deps chromium
       - name: mirror live data tree
-        if: ${{ !inputs.code_only }}
+        if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
         run: bash ops/mirror-live-data.sh
       - name: bake → gate → deploy
-        if: ${{ !inputs.code_only }}
+        if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
+          BAKE_PREFLIGHT_PLAN: ${{ runner.temp }}/weatherx-bake-plan.json
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
             echo "no CLOUDFLARE_API_TOKEN — PUBLISH=0 bake-only validation"
             export PUBLISH=0
           fi
           bash ops/bake-weatherx.sh
+      - name: no-change cycle summary
+        if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip == 'true' }}
+        env:
+          REASON: ${{ steps.bake_plan.outputs.reason }}
+        run: |
+          echo "✓ recent exact duplicate; full bake safely skipped ($REASON)"
+          cat "${{ runner.temp }}/weatherx-bake-plan.json"
       - name: code-only → mirror → gate → deploy
         if: ${{ inputs.code_only }}
         env:
