@@ -100,4 +100,7 @@ jobs:
           bash ops/deploy-code-only.sh
       - name: cycle log
         if: always()
-        run: tail -100 "ops/logs/bake-$(date -u +%Y%m%d).log" || true
+        run: |
+        # A 3h bake can cross UTC midnight — tail the NEWEST log, not today's name (a failed
+        # run's only diagnosis lives here; 08-20 20:56Z run lost its verdict to this).
+        tail -n 200 "$(ls -t ops/logs/bake-*.log 2>/dev/null | head -1)" || true
