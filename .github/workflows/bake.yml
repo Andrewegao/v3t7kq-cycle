@@ -59,6 +59,17 @@ jobs:
         run: |
           python -m venv data/.venv
           data/.venv/bin/pip install -r data/requirements.txt
+      # GitHub caches are repository-scoped. The one-off seed used to live in the private atmos
+      # repo while this scheduled bake lives here, so every cycle started with an empty cache and
+      # rebuilt a 0.75-day archive over the qualified history. Restore/save in THIS repository so
+      # the scheduled writer and the seed share one persistence boundary.
+      - name: restore rolling verification cache
+        if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: data/.verify_cache
+          key: verify-cache-live-${{ github.run_id }}
+          restore-keys: verify-cache-live-
       - name: app deps (vite + wrangler for the atomic deploy)
         if: ${{ inputs.code_only || steps.bake_plan.outputs.skip != 'true' }}
         run: npm ci --prefix app
@@ -80,6 +91,12 @@ jobs:
             export PUBLISH=0
           fi
           bash ops/bake-weatherx.sh
+      - name: save rolling verification cache
+        if: ${{ success() && !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: data/.verify_cache
+          key: verify-cache-live-${{ github.run_id }}
       - name: no-change cycle summary
         if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip == 'true' }}
         env:

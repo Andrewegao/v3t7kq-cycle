@@ -1,0 +1,148 @@
+name: verify-backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      half:
+        description: 'a and b fill in parallel; full merges, qualifies, and publishes'
+        type: choice
+        options: [a, b, full]
+        default: full
+      days:
+        description: 'History days (40 recommended; client qualification is 21)'
+        type: string
+        default: '40'
+
+permissions:
+  contents: read
+
+concurrency:
+  # Unlike the old private-repo workflow, `full` now shares this exact group with the scheduled
+  # writer. A seed publication and a normal Pages replacement can no longer overlap.
+  group: ${{ inputs.half == 'full' && 'bake' || format('verify-backfill-{0}', inputs.half) }}
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: checkout atmos (private, read-only deploy key)
+        uses: actions/checkout@v4
+        with:
+          repository: Andrewegao/atmos
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: system eccodes
+        run: sudo apt-get update && sudo apt-get install -y libeccodes-dev
+      - name: venv + python deps
+        run: |
+          python -m venv data/.venv
+          data/.venv/bin/pip install -r data/requirements.txt
+
+      - name: restore this half
+        if: ${{ inputs.half != 'full' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: data/.verify_cache
+          key: verify-cache-${{ inputs.half }}-${{ github.run_id }}
+          restore-keys: verify-cache-${{ inputs.half }}-
+      - name: restore half a
+        if: ${{ inputs.half == 'full' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: data/.verify_cache
+          key: verify-cache-a-${{ github.run_id }}
+          restore-keys: verify-cache-a-
+      - name: restore half b
+        if: ${{ inputs.half == 'full' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: data/.verify_cache
+          key: verify-cache-b-${{ github.run_id }}
+          restore-keys: verify-cache-b-
+
+      - name: validate input and fill history
+        env:
+          DAYS: ${{ inputs.days }}
+          HALF: ${{ inputs.half }}
+        run: |
+          set -euo pipefail
+          case "$DAYS" in ''|*[!0-9]*) echo "days must be a positive integer" >&2; exit 2 ;; esac
+          [ "$DAYS" -ge 21 ] || { echo "days must be at least the 21-day client gate" >&2; exit 2; }
+          ARGS=(--repair --ledger ../app/public/data/ledger)
+          case "$HALF" in
+            a) ARGS+=(--days "$(( DAYS - DAYS / 2 ))" --end "$(date -u -d "$(( DAYS / 2 )) days ago" +%Y-%m-%dT%H:%M:%SZ)") ;;
+            b) ARGS+=(--days "$(( DAYS / 2 ))") ;;
+            full) ARGS+=(--days "$DAYS") ;;
+          esac
+          cd data
+          .venv/bin/python backfill_verify.py "${ARGS[@]}"
+
+      - name: save half
+        # Partial caches are resumable and valuable after a transient source failure. `full`
+        # remains fail-closed; only the non-publishing halves may save an incomplete fill.
+        if: ${{ always() && inputs.half != 'full' }}
+        uses: actions/cache/save@v4
+        with:
+          path: data/.verify_cache
+          key: verify-cache-${{ inputs.half }}-${{ github.run_id }}
+      - name: half complete
+        if: ${{ inputs.half != 'full' }}
+        run: echo "half ${{ inputs.half }} is cached; dispatch full after both halves succeed"
+
+      - name: complete static and observed truth tiers
+        if: ${{ inputs.half == 'full' }}
+        run: |
+          cd data
+          .venv/bin/python backfill_verify.py --orog-only
+          .venv/bin/python backfill_verify.py --obs-only
+      - uses: actions/setup-node@v4
+        if: ${{ inputs.half == 'full' }}
+        with: { node-version: 22, cache: npm, cache-dependency-path: app/package-lock.json }
+      - name: app dependencies
+        if: ${{ inputs.half == 'full' }}
+        run: npm ci --prefix app
+      - name: browser for guarded deploy gates
+        if: ${{ inputs.half == 'full' }}
+        run: cd app && npx playwright install --with-deps chromium
+      - name: mirror live data tree
+        if: ${{ inputs.half == 'full' }}
+        run: bash ops/mirror-live-data.sh
+      - name: build and monotonically promote archive
+        if: ${{ inputs.half == 'full' }}
+        run: |
+          set -euo pipefail
+          CANDIDATE="$(mktemp -d app/public/data/.verify-candidate.XXXXXX)"
+          data/.venv/bin/python data/build_verify.py --build --publish --out "$CANDIDATE"
+          data/.venv/bin/python data/promote_verify_archive.py \
+            --candidate "$CANDIDATE" --live app/public/data/verify
+          rm -rf "$CANDIDATE"
+          python3 - <<'PY'
+          import json
+          d = json.load(open('app/public/data/verify/index.json'))
+          assert float(d['verifyDays']) >= 21, d
+          print('qualified archive', d['latest'], d['verifyDays'])
+          PY
+      - name: file budget
+        if: ${{ inputs.half == 'full' }}
+        run: |
+          set -euo pipefail
+          ( cd app/public && find data data-atmos basemap-ground -type f 2>/dev/null | sort > /tmp/pre-manifest.txt )
+          python3 data/check_file_budget.py --manifest /tmp/pre-manifest.txt --app-files 277
+      - name: guarded deploy
+        if: ${{ inputs.half == 'full' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
+        run: |
+          set -euo pipefail
+          [ -n "$CLOUDFLARE_API_TOKEN" ] || { echo "missing CLOUDFLARE_API_TOKEN" >&2; exit 1; }
+          ./deploy-atmos.sh
+      - name: save qualified rolling cache
+        if: ${{ success() && inputs.half == 'full' }}
+        uses: actions/cache/save@v4
+        with:
+          path: data/.verify_cache
+          key: verify-cache-live-${{ github.run_id }}
