@@ -98,7 +98,7 @@ jobs:
           path: data/.verify_cache
           key: verify-cache-live-${{ github.run_id }}
       - name: Mirror the last-good whole release into staging R2
-        if: ${{ success() && !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
+        if: ${{ success() && !inputs.code_only && steps.bake_plan.outputs.skip != 'true' && vars.R2_FALLBACK_MIRROR_ENABLED == 'true' }}
         env:
           R2_BUCKET: weatherx-data-staging
           RELEASE_ID: cycle-${{ github.run_id }}
