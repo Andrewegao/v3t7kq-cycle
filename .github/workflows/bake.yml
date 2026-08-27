@@ -47,7 +47,7 @@ jobs:
             echo "preflight failed; continuing with the full bake"
           fi
       - uses: actions/setup-python@v5
-        if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
+        if: ${{ inputs.code_only || steps.bake_plan.outputs.skip != 'true' }}
         with: { python-version: '3.12' }
       - uses: actions/setup-node@v4
         if: ${{ inputs.code_only || steps.bake_plan.outputs.skip != 'true' }}
@@ -70,6 +70,11 @@ jobs:
         run: |
           python -m venv data/.venv
           data/.venv/bin/pip install -r data/requirements.txt
+      - name: Road crop deps (code-only)
+        if: ${{ inputs.code_only }}
+        run: |
+          python -m venv data/.venv
+          data/.venv/bin/pip install numpy==2.4.6 pillow==12.2.0
       # GitHub caches are repository-scoped. The one-off seed used to live in the private atmos
       # repo while this scheduled bake lives here, so every cycle started with an empty cache and
       # rebuilt a 0.75-day archive over the qualified history. Restore/save in THIS repository so
