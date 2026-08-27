@@ -1,0 +1,20 @@
+{
+  "name": "@weatherx/model-scheduler",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "check": "npm run types && tsc --noEmit && vitest run && wrangler deploy --dry-run",
+    "test": "vitest run",
+    "types": "wrangler types --env-interface CloudflareBindings --include-runtime false"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260827.1",
+    "typescript": "~6.0.2",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.126.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
