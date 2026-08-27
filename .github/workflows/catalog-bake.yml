@@ -58,6 +58,7 @@ jobs:
           COMPONENT_ID: ${{ matrix.model }}
           ALLOW_EMPTY_CATALOG: '1'
           ALLOW_MISSING_COMPONENT: '1'
+          HYDRATE_MISSING_FROM_RELEASE: '1'
           CATALOG_R2_REMOTE: weatherx:weatherx-data-staging
           COMPONENT_R2_REMOTE: weatherx:weatherx-components-staging
           RCLONE_CONFIG_WEATHERX_TYPE: s3
