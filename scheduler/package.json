@@ -4,8 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "check": "npm run types && tsc --noEmit && vitest run && wrangler deploy --dry-run",
+    "check": "npm run types && tsc --noEmit && vitest run && npm run test:workflow && wrangler deploy --dry-run",
     "test": "vitest run",
+    "test:workflow": "node test-bake-workflow.mjs",
     "types": "wrangler types --env-interface CloudflareBindings --include-runtime false"
   },
   "devDependencies": {

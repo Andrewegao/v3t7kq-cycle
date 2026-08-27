@@ -3,12 +3,14 @@ name: WeatherX scheduler CI
 on:
   pull_request:
     paths:
+      - ".github/workflows/bake.yml"
       - ".github/workflows/catalog-bake.yml"
       - ".github/workflows/scheduler-ci.yml"
       - "scheduler/**"
   push:
     branches: [main]
     paths:
+      - ".github/workflows/bake.yml"
       - ".github/workflows/catalog-bake.yml"
       - ".github/workflows/scheduler-ci.yml"
       - "scheduler/**"
