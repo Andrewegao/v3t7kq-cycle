@@ -1,0 +1,124 @@
+name: WeatherX recover existing component promotion
+permissions:
+  contents: read
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Model whose already-verified immutable component is being recovered
+        type: choice
+        required: true
+        options: [ecmwf, gfs, hrrr, aifs]
+      artifact_id:
+        description: Exact immutable artifact ID printed by the successful upload step
+        type: string
+        required: true
+      expected_previous_manifest_sha256:
+        description: Catalog digest hydrated before the bake; leave empty only if the model was absent
+        type: string
+        required: false
+        default: ''
+      expected_rollback_epoch:
+        description: Rollback epoch hydrated before the bake
+        type: string
+        required: true
+        default: '0'
+jobs:
+  staging:
+    concurrency:
+      group: weatherx-component-${{ inputs.model }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout WeatherX publisher
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Andrewegao/atmos
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: atmos
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Install the pinned S3-compatible transfer client
+        run: |
+          archive="$RUNNER_TEMP/rclone-v1.75.0-linux-amd64.zip"
+          curl --fail --silent --show-error --location \
+            https://github.com/rclone/rclone/releases/download/v1.75.0/rclone-v1.75.0-linux-amd64.zip \
+            --output "$archive"
+          printf '%s  %s\n' 'aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa' "$archive" | sha256sum --check --status
+          unzip -q "$archive" -d "$RUNNER_TEMP"
+          sudo install -m 0755 "$RUNNER_TEMP/rclone-v1.75.0-linux-amd64/rclone" /usr/local/bin/rclone
+          rclone version | head -1 | grep -Fx 'rclone v1.75.0'
+      - name: Revalidate the immutable publication receipt
+        env:
+          MODEL: ${{ inputs.model }}
+          ARTIFACT_ID: ${{ inputs.artifact_id }}
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+        run: |
+          [[ "$ARTIFACT_ID" =~ ^${MODEL}-[A-Za-z0-9._-]{1,90}$ ]]
+          manifest_key="components/$MODEL/$ARTIFACT_ID/component.json"
+          manifest="$RUNNER_TEMP/component.json"
+          rclone copyto "weatherx:weatherx-components-staging/$manifest_key" "$manifest" --s3-no-check-bucket
+          node --input-type=module - "$manifest" "$MODEL" "$ARTIFACT_ID" <<'NODE'
+          import fs from 'node:fs';
+          const [path, model, artifactId] = process.argv.slice(2);
+          const value = JSON.parse(fs.readFileSync(path, 'utf8'));
+          const required = ['manifest', 'inventory', 'remote_bytes', 'coverage', 'freshness',
+            'live_superset', 'horizon', 'cadence', 'grid', 'referenced_bytes'];
+          if (value.schemaVersion !== 1 || value.componentId !== model || value.artifactId !== artifactId ||
+              value.rootPrefix !== `components/${model}/${artifactId}/` || value.mounts?.length !== 1 ||
+              value.mounts[0] !== `data/${model}/` || value.quality?.status !== 'passed' ||
+              !required.every((check) => value.quality.checks?.includes(check))) {
+            throw new Error('immutable component publication receipt is invalid or incomplete');
+          }
+          NODE
+          manifest_sha256="$(sha256sum "$manifest" | cut -d' ' -f1)"
+          printf 'MANIFEST_KEY=%s\nMANIFEST_SHA256=%s\n' "$manifest_key" "$manifest_sha256" >> "$GITHUB_ENV"
+      - name: Retry only the idempotent CAS promotion
+        working-directory: atmos
+        env:
+          EXPECTED_PREVIOUS: ${{ inputs.expected_previous_manifest_sha256 }}
+          EXPECTED_ROLLBACK_EPOCH: ${{ inputs.expected_rollback_epoch }}
+          CATALOG_ENDPOINT: ${{ secrets.CATALOG_ENDPOINT }}
+          CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY }}
+        run: |
+          [[ -z "$EXPECTED_PREVIOUS" || "$EXPECTED_PREVIOUS" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$EXPECTED_ROLLBACK_EPOCH" =~ ^[0-9]+$ ]]
+          node ops/platform/submit-catalog-mutation.mjs promote "$CATALOG_ENDPOINT" \
+            "$MANIFEST_KEY" "$MANIFEST_SHA256" "$EXPECTED_PREVIOUS" "$EXPECTED_ROLLBACK_EPOCH"
+      - name: Verify the promoted pointer and immutable snapshot
+        env:
+          MODEL: ${{ inputs.model }}
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+        run: |
+          pointer="$RUNNER_TEMP/current.json"
+          snapshot="$RUNNER_TEMP/catalog.json"
+          rclone copyto weatherx:weatherx-data-staging/catalogs/current.json "$pointer" --s3-no-check-bucket
+          catalog_id="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1])).catalogId)' "$pointer")"
+          rclone copyto "weatherx:weatherx-data-staging/catalogs/snapshots/$catalog_id.json" "$snapshot" --s3-no-check-bucket
+          node --input-type=module - "$pointer" "$snapshot" "$MODEL" "$MANIFEST_SHA256" <<'NODE'
+          import fs from 'node:fs';
+          import { createHash } from 'node:crypto';
+          const [pointerPath, snapshotPath, model, manifestSha256] = process.argv.slice(2);
+          const pointer = JSON.parse(fs.readFileSync(pointerPath, 'utf8'));
+          const bytes = fs.readFileSync(snapshotPath);
+          const catalog = JSON.parse(bytes);
+          const digest = createHash('sha256').update(bytes).digest('hex');
+          if (digest !== pointer.catalogSha256 || catalog.sequence !== pointer.sequence ||
+              catalog.createdAt !== pointer.publishedAt || catalog.parentCatalogId !== pointer.previousCatalogId ||
+              catalog.components?.[model]?.manifestSha256 !== manifestSha256) {
+            throw new Error('promoted catalog pointer or immutable snapshot failed integrity verification');
+          }
+          console.log(JSON.stringify({ catalogId: pointer.catalogId, sequence: pointer.sequence,
+            model, manifestSha256, componentCount: Object.keys(catalog.components).length }));
+          NODE
