@@ -7,7 +7,7 @@
 # Without the CLOUDFLARE_API_TOKEN secret the cycle runs PUBLISH=0 (bake-only validation) —
 # a push can never replace the live site until the token is configured.
 # Secrets: ATMOS_DEPLOY_KEY (read-only key on Andrewegao/atmos) · CLOUDFLARE_API_TOKEN
-# (Pages deploy) · CLOUDFLARE_R2_API_TOKEN (optional staging fallback mirror).
+# (Pages deploy) · R2_ACCESS_KEY_ID + R2_SECRET_ACCESS_KEY (optional staging fallback mirror).
 name: bake
 on:
   schedule:
@@ -52,9 +52,9 @@ jobs:
       - uses: actions/setup-node@v4
         if: ${{ inputs.code_only || steps.bake_plan.outputs.skip != 'true' }}
         with: { node-version: 22, cache: npm, cache-dependency-path: app/package-lock.json }
-      - name: system eccodes (GRIB decode engine — pip eccodes needs the C lib)
+      - name: system eccodes and S3-compatible transfer client
         if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
-        run: sudo apt-get update && sudo apt-get install -y libeccodes-dev
+        run: sudo apt-get update && sudo apt-get install -y libeccodes-dev rclone
       - name: venv + python deps
         if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
         run: |
@@ -101,10 +101,14 @@ jobs:
       - name: Mirror the last-good whole release into staging R2
         if: ${{ success() && !inputs.code_only && steps.bake_plan.outputs.skip != 'true' && vars.R2_FALLBACK_MIRROR_ENABLED == 'true' }}
         env:
-          R2_BUCKET: weatherx-data-staging
+          R2_REMOTE: weatherx:weatherx-data-staging
           RELEASE_ID: cycle-${{ github.run_id }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_R2_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
         run: bash ops/platform/publish-r2-release.sh
       - name: no-change cycle summary
         if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip == 'true' }}

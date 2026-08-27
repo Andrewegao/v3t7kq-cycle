@@ -41,7 +41,7 @@ jobs:
         working-directory: atmos
         run: |
           sudo apt-get update
-          sudo apt-get install -y libeccodes-dev
+          sudo apt-get install -y libeccodes-dev rclone
           python -m venv data/.venv
           data/.venv/bin/pip install -r data/requirements.txt
       - name: Restore only this model's last-known-good component
@@ -49,10 +49,14 @@ jobs:
         env:
           COMPONENT_ID: ${{ matrix.model }}
           ALLOW_EMPTY_CATALOG: '1'
-          CATALOG_R2_BUCKET: weatherx-data-staging
-          COMPONENT_R2_BUCKET: weatherx-components-staging
-          CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_R2_API_TOKEN }}
+          CATALOG_R2_REMOTE: weatherx:weatherx-data-staging
+          COMPONENT_R2_REMOTE: weatherx:weatherx-components-staging
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
         run: bash ops/platform/hydrate-r2-component.sh
       - name: Bake, validate, upload, and CAS-promote one model
         working-directory: atmos
@@ -61,9 +65,13 @@ jobs:
           PUBLISH: '1'
           DATA_PUBLISH_MODE: component-catalog
           LIVE: https://atmos-platform-dnp.pages.dev
-          COMPONENT_R2_BUCKET: weatherx-components-staging
-          CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_R2_API_TOKEN }}
+          COMPONENT_R2_REMOTE: weatherx:weatherx-components-staging
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
           CATALOG_ENDPOINT: ${{ secrets.CATALOG_ENDPOINT }}
           CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY }}
         run: bash ops/bake-model-component.sh
