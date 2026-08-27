@@ -54,7 +54,17 @@ jobs:
         with: { node-version: 22, cache: npm, cache-dependency-path: app/package-lock.json }
       - name: system eccodes and S3-compatible transfer client
         if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
-        run: sudo apt-get update && sudo apt-get install -y libeccodes-dev rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeccodes-dev
+          archive="$RUNNER_TEMP/rclone-v1.75.0-linux-amd64.zip"
+          curl --fail --silent --show-error --location \
+            https://github.com/rclone/rclone/releases/download/v1.75.0/rclone-v1.75.0-linux-amd64.zip \
+            --output "$archive"
+          printf '%s  %s\n' 'aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa' "$archive" | sha256sum --check --status
+          unzip -q "$archive" -d "$RUNNER_TEMP"
+          sudo install -m 0755 "$RUNNER_TEMP/rclone-v1.75.0-linux-amd64/rclone" /usr/local/bin/rclone
+          rclone version | head -1 | grep -Fx 'rclone v1.75.0'
       - name: venv + python deps
         if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
         run: |
