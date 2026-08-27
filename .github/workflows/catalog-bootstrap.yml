@@ -25,7 +25,7 @@ jobs:
         working-directory: atmos
         env:
           CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_R2_API_TOKEN }}
         run: |
           node ops/platform/r2-rest.mjs list weatherx-data-staging '' >/dev/null
           node ops/platform/r2-rest.mjs list weatherx-components-staging '' >/dev/null
@@ -40,7 +40,7 @@ jobs:
           R2_BUCKET: weatherx-data-staging
           RELEASE_ID: bootstrap-${{ github.run_id }}
           CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_R2_API_TOKEN }}
         run: bash ops/platform/publish-r2-release.sh
       - name: Publish and CAS-promote the four current model components
         working-directory: atmos
@@ -50,7 +50,7 @@ jobs:
           CATALOG_R2_BUCKET: weatherx-data-staging
           COMPONENT_R2_BUCKET: weatherx-components-staging
           CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_R2_API_TOKEN }}
           CATALOG_ENDPOINT: ${{ secrets.CATALOG_ENDPOINT }}
           CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY }}
         run: bash ops/platform/bootstrap-r2-catalog.sh
