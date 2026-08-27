@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "weatherx-model-scheduler",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "triggers": {
+    "crons": ["8-59/10 * * * *", "7 * * * *"]
+  },
+  "secrets": {
+    "required": ["GITHUB_DISPATCH_TOKEN"]
+  },
+  "vars": {
+    "GITHUB_OWNER": "Andrewegao",
+    "GITHUB_REPO": "v3t7kq-cycle",
+    "GITHUB_WORKFLOW": "catalog-bake.yml",
+    "GITHUB_REF": "main"
+  },
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1, "invocation_logs": true },
+    "traces": { "enabled": true, "head_sampling_rate": 0.05 }
+  }
+}
