@@ -6,7 +6,8 @@
 #
 # Without the CLOUDFLARE_API_TOKEN secret the cycle runs PUBLISH=0 (bake-only validation) —
 # a push can never replace the live site until the token is configured.
-# Secrets: ATMOS_DEPLOY_KEY (read-only key on Andrewegao/atmos) · CLOUDFLARE_API_TOKEN.
+# Secrets: ATMOS_DEPLOY_KEY (read-only key on Andrewegao/atmos) · CLOUDFLARE_API_TOKEN
+# (Pages deploy) · CLOUDFLARE_R2_API_TOKEN (optional staging fallback mirror).
 name: bake
 on:
   schedule:
@@ -102,7 +103,7 @@ jobs:
         env:
           R2_BUCKET: weatherx-data-staging
           RELEASE_ID: cycle-${{ github.run_id }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_R2_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
         run: bash ops/platform/publish-r2-release.sh
       - name: no-change cycle summary
