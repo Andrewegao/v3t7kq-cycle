@@ -21,5 +21,9 @@ assert.match(deployWorkflow, /working-directory: scheduler[\s\S]*?run: npx wrang
   'guarded deploy must use wrangler deploy so cron triggers are applied');
 assert.match(deployWorkflow, /working-directory: scheduler[\s\S]*?run: npm run verify:live/,
   'guarded deploy must verify the live trigger set');
+assert.match(deployWorkflow, /secrets\.CLOUDFLARE_WORKERS_API_TOKEN/,
+  'scheduler deploy must use its dedicated least-privilege Workers credential');
+assert.doesNotMatch(deployWorkflow, /secrets\.CLOUDFLARE_API_TOKEN/,
+  'scheduler deploy must not reuse the Pages publication credential');
 
 console.log('scheduler deployment and cron contract: ok');

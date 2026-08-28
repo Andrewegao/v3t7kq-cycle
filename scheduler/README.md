@@ -30,9 +30,11 @@ all release gates, uses `wrangler deploy` so code and triggers are applied toget
 then queries Cloudflare and requires the live trigger set to exactly match
 `wrangler.jsonc`.
 
-Configure the repository secret `CLOUDFLARE_API_TOKEN` with Workers Scripts edit
-permission for account `a89f9a1af485021fbc60a68b163c7c6e`. A missing or
-under-scoped token fails before the deployment can be reported successful.
+Configure the dedicated repository secret `CLOUDFLARE_WORKERS_API_TOKEN` with only
+Workers Scripts edit permission for account `a89f9a1af485021fbc60a68b163c7c6e`.
+Do not reuse or replace the separate `CLOUDFLARE_API_TOKEN` Pages publication
+credential. A missing or under-scoped Workers token fails before the deployment
+can be reported successful.
 
 Local validation is read-only:
 
