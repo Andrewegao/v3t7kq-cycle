@@ -9,6 +9,10 @@
 # Secrets: ATMOS_DEPLOY_KEY (read-only key on Andrewegao/atmos) · CLOUDFLARE_API_TOKEN
 # (Pages deploy) · R2_ACCESS_KEY_ID + R2_SECRET_ACCESS_KEY (optional staging fallback mirror).
 name: bake
+permissions:
+  contents: read
+  actions: read
+  issues: write # automatic rollback opens the persistent release-fuse incident
 on:
   schedule:
     - cron: '30 2,8,14,20 * * *'   # ~20 min after each ECMWF publication lands
@@ -100,6 +104,10 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_GUARD_FUSE_MODE: github
+          RELEASE_GUARD_INCIDENT_DIR: ${{ runner.temp }}/weatherx-release-guard/incidents
+          WEATHERX_LIVE_ORIGIN: https://weatherx.org
           BAKE_PREFLIGHT_PLAN: ${{ runner.temp }}/weatherx-bake-plan.json
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
@@ -137,12 +145,24 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_GUARD_FUSE_MODE: github
+          RELEASE_GUARD_INCIDENT_DIR: ${{ runner.temp }}/weatherx-release-guard/incidents
+          WEATHERX_LIVE_ORIGIN: https://weatherx.org
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
             echo "✗ code-only is a deploy — it needs CLOUDFLARE_API_TOKEN" >&2
             exit 1
           fi
           bash ops/deploy-code-only.sh
+      - name: retain automatic rollback evidence
+        if: ${{ always() && (inputs.code_only || steps.bake_plan.outputs.skip != 'true') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-guard-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/weatherx-release-guard/incidents/*.json
+          if-no-files-found: ignore
+          retention-days: 90
       - name: cycle log
         if: always()
         run: |
