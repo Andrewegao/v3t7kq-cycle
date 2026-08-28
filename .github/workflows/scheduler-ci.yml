@@ -6,6 +6,7 @@ on:
       - ".github/workflows/bake.yml"
       - ".github/workflows/catalog-bake.yml"
       - ".github/workflows/scheduler-ci.yml"
+      - ".github/workflows/scheduler-deploy.yml"
       - "scheduler/**"
   push:
     branches: [main]
@@ -13,6 +14,7 @@ on:
       - ".github/workflows/bake.yml"
       - ".github/workflows/catalog-bake.yml"
       - ".github/workflows/scheduler-ci.yml"
+      - ".github/workflows/scheduler-deploy.yml"
       - "scheduler/**"
 
 permissions:

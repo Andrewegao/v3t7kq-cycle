@@ -1,5 +1,4 @@
-const HRRR_CRON = '8-59/10 * * * *';
-const SLOW_CRON = '7 * * * *';
+import { HRRR_CRON, SLOW_CRON } from './schedules';
 const MAX_ATTEMPTS = 4;
 const MAX_ERROR_BYTES = 4_096;
 

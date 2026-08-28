@@ -17,7 +17,9 @@ on:
     - cron: '7 * * * *'
 jobs:
   model:
-    if: ${{ github.event_name == 'workflow_dispatch' || vars.CATALOG_SCHEDULER_ENABLED == 'true' }}
+    # Fail open: native schedules remain a publisher unless an operator explicitly
+    # disables the fallback after the Cloudflare trigger set is verified live.
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true' }}
     concurrency:
       group: weatherx-component-${{ matrix.model }}
       cancel-in-progress: false
