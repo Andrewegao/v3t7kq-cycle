@@ -34,9 +34,13 @@ export async function dispatchForCron(
   sleep: Sleeper = defaultSleep,
 ): Promise<{ model: ModelSelection; runId: number | null }> {
   const model = selectionForCron(cron);
+  const target = env.CATALOG_TARGET;
+  if (target !== 'staging' && target !== 'production') {
+    throw new Error(`unsupported catalog target: ${target}`);
+  }
   const workflow = encodeURIComponent(env.GITHUB_WORKFLOW);
   const endpoint = `https://api.github.com/repos/${encodeURIComponent(env.GITHUB_OWNER)}/${encodeURIComponent(env.GITHUB_REPO)}/actions/workflows/${workflow}/dispatches`;
-  const body = JSON.stringify({ ref: env.GITHUB_REF, inputs: { model } });
+  const body = JSON.stringify({ ref: env.GITHUB_REF, inputs: { model, target } });
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
     let response: Response;
@@ -93,6 +97,7 @@ export default {
       cron: controller.cron,
       scheduledTime: new Date(controller.scheduledTime).toISOString(),
       model: result.model,
+      target: env.CATALOG_TARGET,
       runId: result.runId,
     }));
   },

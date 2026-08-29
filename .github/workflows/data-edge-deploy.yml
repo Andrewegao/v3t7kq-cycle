@@ -1,0 +1,155 @@
+name: WeatherX production data edge
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: Reversible production cutover phase
+        type: choice
+        required: true
+        options: [bootstrap-control, shadow, serve]
+      confirm:
+        description: Type the phase-specific confirmation shown in the workflow
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weatherx-production-data-edge
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    steps:
+      - name: Require exact phase confirmation
+        env:
+          PHASE: ${{ inputs.phase }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          case "$PHASE" in
+            bootstrap-control) expected=DEPLOY-PRODUCTION-CONTROL ;;
+            shadow) expected=ENABLE-PRODUCTION-SHADOW ;;
+            serve) expected=ENABLE-PRODUCTION-CATALOG ;;
+            *) exit 2 ;;
+          esac
+          test "$CONFIRM" = "$expected"
+      - name: Checkout the reviewed WeatherX release
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Andrewegao/atmos
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          ref: master
+          path: atmos
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: atmos/platform/edge/package-lock.json
+      - name: Install locked edge dependencies
+        working-directory: atmos/platform/edge
+        run: npm ci
+      - name: Run the complete data-edge release gates
+        working-directory: atmos/platform/edge
+        run: npm run check
+      - name: Require isolated deployment credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+          AUTH_HASH_KEY: ${{ secrets.DATA_EDGE_AUTH_HASH_KEY }}
+          CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+        run: test -n "$CLOUDFLARE_API_TOKEN" && test -n "$AUTH_HASH_KEY" && test -n "$CATALOG_PROMOTION_KEY"
+      - name: Create the Worker with no public route before installing secrets
+        if: ${{ inputs.phase == 'bootstrap-control' }}
+        working-directory: atmos/platform/edge
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+        run: npx wrangler deploy --config wrangler.data.jsonc --env production-unrouted
+      - name: Install production-only Worker secrets
+        working-directory: atmos/platform/edge
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+          AUTH_HASH_KEY: ${{ secrets.DATA_EDGE_AUTH_HASH_KEY }}
+          CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+        run: |
+          secret_file="$(mktemp)"
+          trap 'rm -f "$secret_file"' EXIT
+          chmod 600 "$secret_file"
+          jq -n --arg auth "$AUTH_HASH_KEY" --arg catalog "$CATALOG_PROMOTION_KEY" \
+            '{AUTH_HASH_KEY:$auth,CATALOG_PROMOTION_KEY:$catalog}' > "$secret_file"
+          npx wrangler secret bulk "$secret_file" --config wrangler.data.jsonc --env production-unrouted
+      - name: Require production fallback and catalog before data routing
+        if: ${{ inputs.phase != 'bootstrap-control' }}
+        working-directory: atmos
+        env:
+          CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          node ops/platform/r2-rest.mjs get weatherx-data-production releases/current.json "$work/release.json"
+          node ops/platform/r2-rest.mjs get weatherx-data-production catalogs/current.json "$work/pointer.json"
+          catalog_id="$(node -e 'const p=JSON.parse(require("node:fs").readFileSync(process.argv[1])); if(!p.catalogId)process.exit(1); process.stdout.write(p.catalogId)' "$work/pointer.json")"
+          node ops/platform/r2-rest.mjs get weatherx-data-production "catalogs/snapshots/$catalog_id.json" "$work/catalog.json"
+          node --input-type=module - "$work/pointer.json" "$work/catalog.json" "$work/manifest-keys.txt" <<'NODE'
+          import fs from 'node:fs';
+          import { createHash } from 'node:crypto';
+          const [pointerPath, catalogPath, outputPath] = process.argv.slice(2);
+          const pointer = JSON.parse(fs.readFileSync(pointerPath));
+          const bytes = fs.readFileSync(catalogPath);
+          const catalog = JSON.parse(bytes);
+          const core = ['ecmwf', 'gfs', 'hrrr', 'aifs'];
+          if (createHash('sha256').update(bytes).digest('hex') !== pointer.catalogSha256 ||
+              catalog.sequence !== pointer.sequence || catalog.createdAt !== pointer.publishedAt ||
+              catalog.parentCatalogId !== pointer.previousCatalogId ||
+              !core.every((id) => catalog.components?.[id]?.quality?.status === 'passed')) {
+            throw new Error('production catalog failed the pre-route integrity gate');
+          }
+          fs.writeFileSync(outputPath, core.map((id) =>
+            `${id}\t${catalog.components[id].manifestKey}\t${catalog.components[id].manifestSha256}`).join('\n') + '\n');
+          NODE
+          while IFS=$'\t' read -r model key expected_sha; do
+            node ops/platform/r2-rest.mjs get weatherx-components-production "$key" "$work/$model-component.json"
+            actual_sha="$(sha256sum "$work/$model-component.json" | cut -d' ' -f1)"
+            test "$actual_sha" = "$expected_sha"
+          done < "$work/manifest-keys.txt"
+      - name: Attach only the selected production routes
+        working-directory: atmos/platform/edge
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+          PHASE: ${{ inputs.phase }}
+        run: |
+          case "$PHASE" in
+            bootstrap-control) environment=production-bootstrap ;;
+            shadow) environment=production-shadow ;;
+            serve) environment=production-serve ;;
+          esac
+          npx wrangler deploy --config wrangler.data.jsonc --env "$environment"
+      - name: Verify the live mode and routing authority
+        env:
+          PHASE: ${{ inputs.phase }}
+        run: |
+          nonce="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          health="$(curl --fail --silent --show-error "https://weatherx.org/api/platform/data-health?verify=$nonce")"
+          expected_mode=shadow
+          [ "$PHASE" != serve ] || expected_mode=serve
+          node -e 'const [body,mode]=process.argv.slice(1); const value=JSON.parse(body); if(value.ok!==true||value.authMode!=="public"||value.catalogMode!==mode)process.exit(1)' "$health" "$expected_mode"
+          [ "$PHASE" != bootstrap-control ] || exit 0
+          curl --fail --silent --show-error --dump-header "$RUNNER_TEMP/model.headers" \
+            --output "$RUNNER_TEMP/model.json" "https://weatherx.org/data/gfs/index.json?verify=$nonce"
+          node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1]))' "$RUNNER_TEMP/model.json"
+          curl --fail --silent --show-error --dump-header "$RUNNER_TEMP/fallback.headers" \
+            --output "$RUNNER_TEMP/fallback.json" "https://weatherx.org/data/health.json?verify=$nonce"
+          if [ "$PHASE" = shadow ]; then
+            grep -Eiq '^x-weatherx-release: .+' "$RUNNER_TEMP/model.headers"
+            if grep -Eiq '^x-weatherx-catalog:' "$RUNNER_TEMP/model.headers"; then
+              echo 'shadow traffic unexpectedly became catalog-authoritative' >&2
+              exit 1
+            fi
+          else
+            grep -Eiq '^x-weatherx-catalog: .+' "$RUNNER_TEMP/model.headers"
+          fi
+          grep -Eiq '^x-weatherx-release: .+' "$RUNNER_TEMP/fallback.headers"

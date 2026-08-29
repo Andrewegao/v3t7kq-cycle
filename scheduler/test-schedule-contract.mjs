@@ -17,6 +17,14 @@ assert.match(catalogWorkflow,
   'GitHub fallback must fail open unless an operator explicitly disables it');
 assert.doesNotMatch(catalogWorkflow, /CATALOG_SCHEDULER_ENABLED/,
   'legacy opt-in gating can silently leave the platform without a publisher');
+assert.match(catalogWorkflow, /options: \[staging, production\]/,
+  'manual component dispatches must select an isolated catalog target');
+assert.match(catalogWorkflow, /vars\.CATALOG_DEFAULT_TARGET \|\| 'staging'/,
+  'native fallback must default safely to staging until production is explicitly selected');
+assert.match(catalogWorkflow, /weatherx-data-production/,
+  'production dispatches must use the production catalog bucket');
+assert.match(catalogWorkflow, /weatherx-components-production/,
+  'production dispatches must use the production component bucket');
 assert.match(deployWorkflow, /working-directory: scheduler[\s\S]*?run: npx wrangler deploy/,
   'guarded deploy must use wrangler deploy so cron triggers are applied');
 assert.match(deployWorkflow, /working-directory: scheduler[\s\S]*?run: npm run verify:live/,
