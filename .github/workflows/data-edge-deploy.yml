@@ -67,7 +67,15 @@ jobs:
         working-directory: atmos/platform/edge
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
-        run: npx wrangler deploy --config wrangler.data.jsonc --env production-unrouted
+          AUTH_HASH_KEY: ${{ secrets.DATA_EDGE_AUTH_HASH_KEY }}
+          CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+        run: |
+          secret_file="$(mktemp)"
+          trap 'rm -f "$secret_file"' EXIT
+          chmod 600 "$secret_file"
+          jq -n --arg auth "$AUTH_HASH_KEY" --arg catalog "$CATALOG_PROMOTION_KEY" \
+            '{AUTH_HASH_KEY:$auth,CATALOG_PROMOTION_KEY:$catalog}' > "$secret_file"
+          npx wrangler deploy --secrets-file "$secret_file" --config wrangler.data.jsonc --env production-unrouted
       - name: Install production-only Worker secrets
         working-directory: atmos/platform/edge
         env:

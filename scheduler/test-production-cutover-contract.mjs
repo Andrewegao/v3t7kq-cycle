@@ -15,6 +15,8 @@ for (const workflow of [edge, bootstrap, drill, bake]) {
 }
 
 assert.match(edge, /production-unrouted/, 'the first Worker deployment must have no public route');
+assert.match(edge, /wrangler deploy --secrets-file "\$secret_file" --config wrangler\.data\.jsonc --env production-unrouted/,
+  'a new Worker must receive required secrets atomically with its unrouted first deployment');
 assert.match(edge, /production-bootstrap/, 'bootstrap must attach only catalog control routes');
 assert.match(edge, /production-shadow/, 'shadow must be an explicit phase');
 assert.match(edge, /production-serve/, 'serve must be an explicit phase');
