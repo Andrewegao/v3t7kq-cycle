@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 const workflow = await readFile(new URL('../.github/workflows/bake.yml', import.meta.url), 'utf8');
 
-assert.match(workflow, /actions\/setup-python@v5\n\s+if: \$\{\{ steps\.bake_plan\.outputs\.skip != 'true' \}\}/);
+assert.match(workflow, /actions\/setup-python@[a-f0-9]{40} # v5\n\s+if: \$\{\{ steps\.bake_plan\.outputs\.skip != 'true' \}\}/);
 assert.doesNotMatch(workflow, /code_only|Road crop deps/,
   'UI preparation must not extend or add deployment authority to the data lane');
 assert.match(workflow,

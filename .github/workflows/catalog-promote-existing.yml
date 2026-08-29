@@ -25,6 +25,7 @@ on:
         default: '0'
 jobs:
   staging:
+    environment: staging
     concurrency:
       group: weatherx-component-${{ inputs.model }}
       cancel-in-progress: false

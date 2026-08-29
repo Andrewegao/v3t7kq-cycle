@@ -10,6 +10,7 @@ on:
         required: true
 jobs:
   staging:
+    environment: staging
     concurrency:
       group: weatherx-catalog-safety-drill-staging
       cancel-in-progress: false

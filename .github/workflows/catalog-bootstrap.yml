@@ -5,6 +5,7 @@ on:
   workflow_dispatch:
 jobs:
   staging:
+    environment: staging
     concurrency:
       group: weatherx-catalog-bootstrap-staging
       cancel-in-progress: false
