@@ -21,5 +21,10 @@ Any failure keeps the live site untouched.
   Scripts write and Workers R2 Storage read; scope zone permissions to `weatherx.org`
   Workers Routes write and Zone read. The pinned D1 binding does not require D1 API
   access. Never reuse the Pages or scheduler token for this Worker.
+- `R2_PRODUCTION_ACCESS_KEY_ID` + `R2_PRODUCTION_SECRET_ACCESS_KEY` — account-owned
+  R2 S3 credentials used only by production component publishing, bootstrap, and the
+  rollback drill. Grant Object Read & Write on exactly `weatherx-data-production` and
+  `weatherx-components-production`; do not grant staging buckets or R2 administration.
+  Keep this credential separate from Pages, scheduler, and data-edge deployment.
 
 Data sources are all open (ECMWF open data CC-BY-4.0 via AWS Open Data, NOAA GFS/HRRR/RTOFS).

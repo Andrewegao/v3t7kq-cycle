@@ -36,15 +36,46 @@ jobs:
         with: { node-version: 22 }
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with: { python-version: '3.12' }
+      - name: Install the pinned S3-compatible transfer client
+        run: |
+          archive="$RUNNER_TEMP/rclone-v1.75.0-linux-amd64.zip"
+          curl --fail --silent --show-error --location \
+            https://github.com/rclone/rclone/releases/download/v1.75.0/rclone-v1.75.0-linux-amd64.zip \
+            --output "$archive"
+          printf '%s  %s\n' 'aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa' "$archive" | sha256sum --check --status
+          unzip -q "$archive" -d "$RUNNER_TEMP"
+          sudo install -m 0755 "$RUNNER_TEMP/rclone-v1.75.0-linux-amd64/rclone" /usr/local/bin/rclone
+          rclone version | head -1 | grep -Fx 'rclone v1.75.0'
       - name: Require the shadow control plane and isolated credentials
         env:
           CATALOG_ENDPOINT: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
           CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          R2_PRODUCTION_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          R2_PRODUCTION_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
         run: |
-          test -n "$CATALOG_ENDPOINT" && test -n "$CATALOG_PROMOTION_KEY" && test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CATALOG_ENDPOINT" && test -n "$CATALOG_PROMOTION_KEY"
+          test -n "$R2_PRODUCTION_ACCESS_KEY_ID" && test -n "$R2_PRODUCTION_SECRET_ACCESS_KEY"
           health="$(curl --fail --silent --show-error "https://weatherx.org/api/platform/data-health?verify=$GITHUB_RUN_ID")"
           node -e 'const value=JSON.parse(process.argv[1]); if(value.ok!==true||value.catalogMode!=="shadow")process.exit(1)' "$health"
+      - name: Prove the publisher is limited to the two production buckets
+        env:
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+        run: |
+          rclone lsf weatherx:weatherx-data-production --max-depth 1 --s3-no-check-bucket >/dev/null
+          rclone lsf weatherx:weatherx-components-production --max-depth 1 --s3-no-check-bucket >/dev/null
+          if rclone lsf weatherx:weatherx-data-staging --max-depth 1 --s3-no-check-bucket >/dev/null 2>&1; then
+            echo 'production credential unexpectedly accessed weatherx-data-staging' >&2
+            exit 1
+          fi
+          if rclone lsf weatherx:weatherx-components-staging --max-depth 1 --s3-no-check-bucket >/dev/null 2>&1; then
+            echo 'production credential unexpectedly accessed weatherx-components-staging' >&2
+            exit 1
+          fi
       - name: Mirror the current production whole-release fallback
         working-directory: atmos
         env:
@@ -53,35 +84,47 @@ jobs:
       - name: Publish and byte-verify an immutable production fallback
         working-directory: atmos
         env:
-          R2_BUCKET: weatherx-data-production
+          R2_REMOTE: weatherx:weatherx-data-production
           RELEASE_ID: production-bootstrap-${{ github.run_id }}
-          CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
         run: bash ops/platform/publish-r2-release.sh
       - name: Publish and CAS-promote the four current production components
         working-directory: atmos
         env:
           CONFIRM_SHADOW_BOOTSTRAP: '1'
           BOOTSTRAP_LIVE: https://weatherx.org
-          CATALOG_R2_BUCKET: weatherx-data-production
-          COMPONENT_R2_BUCKET: weatherx-components-production
-          CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CATALOG_R2_REMOTE: weatherx:weatherx-data-production
+          COMPONENT_R2_REMOTE: weatherx:weatherx-components-production
           CATALOG_ENDPOINT: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
           CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
         run: bash ops/platform/bootstrap-r2-catalog.sh
       - name: Verify production pointers, catalog, manifests, and core mounts
         working-directory: atmos
         env:
-          CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
         run: |
           work="$(mktemp -d)"
           trap 'rm -rf "$work"' EXIT
-          node ops/platform/r2-rest.mjs get weatherx-data-production releases/current.json "$work/release.json"
-          node ops/platform/r2-rest.mjs get weatherx-data-production catalogs/current.json "$work/pointer.json"
+          rclone copyto weatherx:weatherx-data-production/releases/current.json "$work/release.json" --s3-no-check-bucket
+          rclone copyto weatherx:weatherx-data-production/catalogs/current.json "$work/pointer.json" --s3-no-check-bucket
           catalog_id="$(node -e 'const p=JSON.parse(require("node:fs").readFileSync(process.argv[1])); process.stdout.write(p.catalogId)' "$work/pointer.json")"
-          node ops/platform/r2-rest.mjs get weatherx-data-production "catalogs/snapshots/$catalog_id.json" "$work/catalog.json"
+          rclone copyto "weatherx:weatherx-data-production/catalogs/snapshots/$catalog_id.json" "$work/catalog.json" --s3-no-check-bucket
           node --input-type=module - "$work/pointer.json" "$work/catalog.json" "$work/manifest-keys.txt" <<'NODE'
           import fs from 'node:fs';
           import { createHash } from 'node:crypto';
@@ -100,7 +143,7 @@ jobs:
           fs.writeFileSync(outputPath, core.map((id) => `${id}\t${catalog.components[id].manifestKey}\t${catalog.components[id].manifestSha256}`).join('\n') + '\n');
           NODE
           while IFS=$'\t' read -r model key expected_sha; do
-            node ops/platform/r2-rest.mjs get weatherx-components-production "$key" "$work/$model-component.json"
+            rclone copyto "weatherx:weatherx-components-production/$key" "$work/$model-component.json" --s3-no-check-bucket
             actual_sha="$(sha256sum "$work/$model-component.json" | cut -d' ' -f1)"
             test "$actual_sha" = "$expected_sha"
             node -e 'const [path,id]=process.argv.slice(1); const m=JSON.parse(require("node:fs").readFileSync(path)); if(m.componentId!==id||m.quality?.status!=="passed"||m.objectCount<1)process.exit(1)' "$work/$model-component.json" "$model"
