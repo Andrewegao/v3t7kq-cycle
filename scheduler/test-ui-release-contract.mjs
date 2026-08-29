@@ -39,8 +39,8 @@ assert.match(ui, /environment:[\s\S]*?name: production/,
 assert.match(ui, /repository: Andrewegao\/atmos/);
 assert.match(ui, /ref: \$\{\{ inputs\.atmos_sha \}\}/,
   'the UI artifact must be checked out from the requested immutable commit');
-assert.match(ui, /git merge-base --is-ancestor "\$ATMOS_SHA" origin\/master/,
-  'the requested commit must belong to Atmos master');
+assert.match(ui, /test "\$ATMOS_SHA" = "\$\(git rev-parse origin\/master\)"/,
+  'the requested commit must be the current Atmos master head');
 assert.match(ui, /RELEASE_GUARD_EXPECTED_GIT_SHA: \$\{\{ inputs\.atmos_sha \}\}/,
   'the release guard must bind the live receipt to the requested source commit');
 assert.match(ui, /RELEASE_GUARD_VERIFY_REQUIRED_SUCCESSES: '3'/,
@@ -54,6 +54,8 @@ assert.match(ui, /secrets\.CLOUDFLARE_API_TOKEN/,
 assert.doesNotMatch(ui, /R2_PRODUCTION_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY)|publish-r2-release|bake-weatherx/,
   'the UI lane must not mutate model, ledger, or R2 release state');
 assert.match(ui, /node ops\/platform\/test-independent-ui-release\.mjs/);
+assert.match(ui, /name: full application test gate[\s\S]*?npm test --prefix app/,
+  'the release job must independently rerun the complete application tests');
 assert.match(ui, /name: Weather Lab release gate[\s\S]*?LIVE_DATA: '1'[\s\S]*?bash ops\/weather-lab-ready\.sh/,
   'the independent UI gate must exercise the live data edge without mirroring data into Pages');
 assert.match(ui, /bash ops\/weather-lab-ready\.sh/);
