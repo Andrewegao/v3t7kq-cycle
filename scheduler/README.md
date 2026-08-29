@@ -9,10 +9,12 @@ This scheduled-only Cloudflare Worker dispatches the existing GitHub Actions bak
 
 The GitHub-native schedules are a fail-open independent fallback. Existing workflow
 concurrency and immutable/no-change promotion behavior make duplicate dispatches
-safe. Leave the fallback on until the Worker has produced at least three HRRR
-dispatches and one successful slow dispatch. After that evidence exists, set the
-repository variable `CATALOG_GITHUB_FALLBACK_DISABLED=true` to avoid duplicate
-no-change jobs. Missing, empty, or misspelled values keep the fallback on.
+safe. The reviewed Worker target is `production`; it may be deployed only after the
+production bootstrap, rollback drill, and `serve` data-edge gate pass. Leave the
+fallback on until the production Worker has produced at least three HRRR dispatches
+and one successful slow dispatch. After that evidence exists, set the repository
+variable `CATALOG_GITHUB_FALLBACK_DISABLED=true` to avoid duplicate no-change jobs.
+Missing, empty, or misspelled values keep the fallback on.
 
 ## Credential
 
@@ -27,8 +29,8 @@ npx wrangler secret put GITHUB_DISPATCH_TOKEN
 Production deploys are automatic after a scheduler change reaches `main`, and can
 also be retried from the **WeatherX scheduler deploy** workflow. The workflow runs
 all release gates, uses `wrangler deploy` so code and triggers are applied together,
-then queries Cloudflare and requires the live trigger set to exactly match
-`wrangler.jsonc`.
+then queries Cloudflare and requires both the live trigger set and the live
+`CATALOG_TARGET` binding to exactly match `wrangler.jsonc`.
 
 Configure the dedicated repository secret `CLOUDFLARE_WORKERS_API_TOKEN` with only
 Workers Scripts edit permission for account `a89f9a1af485021fbc60a68b163c7c6e`.

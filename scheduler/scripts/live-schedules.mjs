@@ -7,6 +7,7 @@ export async function loadSchedulerConfig(configUrl = new URL('../wrangler.jsonc
   const accountId = config.account_id;
   const workerName = config.name;
   const expectedCrons = config.triggers?.crons;
+  const expectedTarget = config.vars?.CATALOG_TARGET;
 
   if (typeof accountId !== 'string' || !accountId) throw new Error('wrangler.jsonc is missing account_id');
   if (typeof workerName !== 'string' || !workerName) throw new Error('wrangler.jsonc is missing name');
@@ -17,8 +18,23 @@ export async function loadSchedulerConfig(configUrl = new URL('../wrangler.jsonc
   if (new Set(expectedCrons).size !== expectedCrons.length) {
     throw new Error('wrangler.jsonc contains duplicate cron triggers');
   }
+  if (expectedTarget !== 'staging' && expectedTarget !== 'production') {
+    throw new Error('wrangler.jsonc must declare a valid CATALOG_TARGET');
+  }
 
-  return { accountId, workerName, expectedCrons };
+  return { accountId, workerName, expectedCrons, expectedTarget };
+}
+
+export function assertExactTarget(payload, expectedTarget) {
+  if (!payload || typeof payload !== 'object' || payload.success !== true ||
+      !payload.result || typeof payload.result !== 'object' || !Array.isArray(payload.result.bindings)) {
+    throw new Error('Cloudflare returned malformed Worker settings');
+  }
+  const targets = payload.result.bindings.filter((binding) => binding?.name === 'CATALOG_TARGET');
+  if (targets.length !== 1 || targets[0]?.type !== 'plain_text' || targets[0]?.text !== expectedTarget) {
+    throw new Error(`live catalog target mismatch: expected ${expectedTarget}`);
+  }
+  return expectedTarget;
 }
 
 export function assertExactSchedules(payload, expectedCrons) {
@@ -60,4 +76,22 @@ export async function fetchLiveSchedules({ accountId, workerName, apiToken, expe
     throw new Error('Cloudflare schedules API returned invalid JSON');
   }
   return assertExactSchedules(payload, expectedCrons);
+}
+
+export async function fetchLiveTarget({ accountId, workerName, apiToken, expectedTarget, fetcher = fetch }) {
+  const endpoint = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/workers/scripts/${encodeURIComponent(workerName)}/settings`;
+  const response = await fetcher(endpoint, {
+    headers: { Authorization: `Bearer ${apiToken}` },
+    signal: AbortSignal.timeout(15_000),
+  });
+  const body = (await response.text()).slice(0, MAX_ERROR_BYTES);
+  if (!response.ok) throw new Error(`Cloudflare Worker settings API failed (${response.status}): ${body}`);
+
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    throw new Error('Cloudflare Worker settings API returned invalid JSON');
+  }
+  return assertExactTarget(payload, expectedTarget);
 }
