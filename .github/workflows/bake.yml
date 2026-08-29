@@ -87,9 +87,27 @@ jobs:
         if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
         uses: actions/cache/restore@v4
         with:
-          path: data/.verify_cache
+          path: |
+            data/.verify_cache
+            data/.ens_points
+            data/.ecmwf-float
+            data/.gfs-float
+            data/.aifs-float
           key: verify-cache-live-${{ github.run_id }}
           restore-keys: verify-cache-live-
+      - name: Retry restored fusion-input vault before new downloads
+        if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
+        continue-on-error: true
+        env:
+          VAULT_REMOTE: weatherx:weatherx-data-staging/vault
+          VAULT_SKIP_LEDGER: '1'
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+        run: bash ops/vault-archive.sh
       - name: app deps (vite + wrangler for the atomic deploy)
         if: ${{ inputs.code_only || steps.bake_plan.outputs.skip != 'true' }}
         run: npm ci --prefix app
@@ -116,11 +134,31 @@ jobs:
           fi
           bash ops/bake-weatherx.sh
       - name: save rolling verification cache
-        if: ${{ success() && !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
+        if: ${{ always() && !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
         uses: actions/cache/save@v4
         with:
-          path: data/.verify_cache
+          path: |
+            data/.verify_cache
+            data/.ens_points
+            data/.ecmwf-float
+            data/.gfs-float
+            data/.aifs-float
           key: verify-cache-live-${{ github.run_id }}
+      # The bake script also archives on its healthy path. This independent retry is intentionally
+      # `always()`: a release gate can fail after model/obs downloads, and those inputs are still
+      # irreplaceable. The Actions cache above keeps them available if R2 itself is transiently down.
+      - name: Archive irreplaceable fusion inputs even after a failed release gate
+        if: ${{ always() && !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
+        continue-on-error: true
+        env:
+          VAULT_REMOTE: weatherx:weatherx-data-staging/vault
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+        run: bash ops/vault-archive.sh
       - name: Mirror the last-good whole release into staging R2
         if: ${{ success() && !inputs.code_only && steps.bake_plan.outputs.skip != 'true' && vars.R2_FALLBACK_MIRROR_ENABLED == 'true' }}
         env:
