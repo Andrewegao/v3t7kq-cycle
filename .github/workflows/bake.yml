@@ -1,29 +1,16 @@
-# Unattended data freshness cycle on free public-repo minutes. Checks out the private
-# atmos repo read-only (deploy key), rejects only recent exact duplicates, mirrors the LIVE
-# site's data tree (atomic Pages deploys replace the whole site — the runner must carry
-# everything), then runs the same cycle the laptop launchd runs: models → enrichment → gate
-# → deploy.
-#
-# Without the CLOUDFLARE_API_TOKEN secret the cycle runs PUBLISH=0 (bake-only validation) —
-# a push can never replace the live site until the token is configured.
-# Secrets: ATMOS_DEPLOY_KEY (read-only key on Andrewegao/atmos) · CLOUDFLARE_API_TOKEN
-# (Pages deploy) · R2_ACCESS_KEY_ID + R2_SECRET_ACCESS_KEY (optional staging fallback mirror).
+# Unattended legacy data-maintenance cycle. It owns observations/truth, accuracy, vault, and
+# ancillary data, then publishes one immutable whole-data release to production R2. It has no
+# Pages credential and cannot deploy or overwrite the application shell.
 name: bake
 permissions:
   contents: read
   actions: read
-  issues: write # automatic rollback opens the persistent release-fuse incident
 on:
   schedule:
     - cron: '30 2,8,14,20 * * *'   # ~20 min after each ECMWF publication lands
-  workflow_dispatch:               # manual "refresh now" — or a fast code-only release
-    inputs:
-      code_only:
-        description: 'Skip baking: mirror live data, gate, deploy the app (~5 min)'
-        type: boolean
-        default: false
+  workflow_dispatch:               # manual data refresh; UI releases use ui-release.yml
 concurrency:
-  group: bake
+  group: weatherx-data-maintenance
   cancel-in-progress: false        # never abort a half-written run
 jobs:
   bake:
@@ -37,7 +24,6 @@ jobs:
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
       - name: plan conservative no-change fast path
         id: bake_plan
-        if: ${{ !inputs.code_only }}
         env:
           LIVE: https://atmos-platform-dnp.pages.dev
           PLAN: ${{ runner.temp }}/weatherx-bake-plan.json
@@ -51,13 +37,13 @@ jobs:
             echo "preflight failed; continuing with the full bake"
           fi
       - uses: actions/setup-python@v5
-        if: ${{ inputs.code_only || steps.bake_plan.outputs.skip != 'true' }}
+        if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         with: { python-version: '3.12' }
       - uses: actions/setup-node@v4
-        if: ${{ inputs.code_only || steps.bake_plan.outputs.skip != 'true' }}
+        if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         with: { node-version: 22, cache: npm, cache-dependency-path: app/package-lock.json }
       - name: system eccodes and S3-compatible transfer client
-        if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
+        if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y libeccodes-dev
@@ -70,21 +56,16 @@ jobs:
           sudo install -m 0755 "$RUNNER_TEMP/rclone-v1.75.0-linux-amd64/rclone" /usr/local/bin/rclone
           rclone version | head -1 | grep -Fx 'rclone v1.75.0'
       - name: venv + python deps
-        if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
+        if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         run: |
           python -m venv data/.venv
           data/.venv/bin/pip install -r data/requirements.txt
-      - name: Road crop deps (code-only)
-        if: ${{ inputs.code_only }}
-        run: |
-          python -m venv data/.venv
-          data/.venv/bin/pip install numpy==2.4.6 pillow==12.2.0
       # GitHub caches are repository-scoped. The one-off seed used to live in the private atmos
       # repo while this scheduled bake lives here, so every cycle started with an empty cache and
       # rebuilt a 0.75-day archive over the qualified history. Restore/save in THIS repository so
       # the scheduled writer and the seed share one persistence boundary.
       - name: restore rolling verification cache
-        if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
+        if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -96,7 +77,7 @@ jobs:
           key: verify-cache-live-${{ github.run_id }}
           restore-keys: verify-cache-live-
       - name: Retry restored fusion-input vault before new downloads
-        if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
+        if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         continue-on-error: true
         env:
           VAULT_REMOTE: weatherx:weatherx-data-staging/vault
@@ -108,33 +89,32 @@ jobs:
           RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
           RCLONE_CONFIG_WEATHERX_REGION: auto
         run: bash ops/vault-archive.sh
-      - name: app deps (vite + wrangler for the atomic deploy)
-        if: ${{ inputs.code_only || steps.bake_plan.outputs.skip != 'true' }}
+      - name: app deps (Weather Lab and release gates)
+        if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         run: npm ci --prefix app
       - name: playwright chromium (the demo-ready gate drives a real browser on deploy cycles)
-        if: ${{ inputs.code_only || steps.bake_plan.outputs.skip != 'true' }}
+        if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         run: cd app && npx playwright install --with-deps chromium
       - name: mirror live data tree
-        if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
+        if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         run: bash ops/mirror-live-data.sh
-      - name: bake → gate → deploy
-        if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
+      - name: bake → gate → publish immutable data release
+        if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
-          GITHUB_TOKEN: ${{ github.token }}
-          RELEASE_GUARD_FUSE_MODE: github
-          RELEASE_GUARD_INCIDENT_DIR: ${{ runner.temp }}/weatherx-release-guard/incidents
           WEATHERX_LIVE_ORIGIN: https://weatherx.org
           BAKE_PREFLIGHT_PLAN: ${{ runner.temp }}/weatherx-bake-plan.json
-        run: |
-          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-            echo "no CLOUDFLARE_API_TOKEN — PUBLISH=0 bake-only validation"
-            export PUBLISH=0
-          fi
-          bash ops/bake-weatherx.sh
+          DATA_PUBLISH_MODE: r2-release
+          R2_REMOTE: weatherx:weatherx-data-production
+          RELEASE_ID: cycle-${{ github.run_id }}
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+        run: bash ops/bake-weatherx.sh
       - name: save rolling verification cache
-        if: ${{ always() && !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
+        if: ${{ always() && steps.bake_plan.outputs.skip != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: |
@@ -148,7 +128,7 @@ jobs:
       # `always()`: a release gate can fail after model/obs downloads, and those inputs are still
       # irreplaceable. The Actions cache above keeps them available if R2 itself is transiently down.
       - name: Archive irreplaceable fusion inputs even after a failed release gate
-        if: ${{ always() && !inputs.code_only && steps.bake_plan.outputs.skip != 'true' }}
+        if: ${{ always() && steps.bake_plan.outputs.skip != 'true' }}
         continue-on-error: true
         env:
           VAULT_REMOTE: weatherx:weatherx-data-staging/vault
@@ -160,7 +140,7 @@ jobs:
           RCLONE_CONFIG_WEATHERX_REGION: auto
         run: bash ops/vault-archive.sh
       - name: Mirror the last-good whole release into staging R2
-        if: ${{ success() && !inputs.code_only && steps.bake_plan.outputs.skip != 'true' && vars.R2_FALLBACK_MIRROR_ENABLED == 'true' }}
+        if: ${{ success() && steps.bake_plan.outputs.skip != 'true' && vars.R2_FALLBACK_MIRROR_ENABLED == 'true' }}
         env:
           R2_REMOTE: weatherx:weatherx-data-staging
           RELEASE_ID: cycle-${{ github.run_id }}
@@ -172,35 +152,12 @@ jobs:
           RCLONE_CONFIG_WEATHERX_REGION: auto
         run: bash ops/platform/publish-r2-release.sh
       - name: no-change cycle summary
-        if: ${{ !inputs.code_only && steps.bake_plan.outputs.skip == 'true' }}
+        if: ${{ steps.bake_plan.outputs.skip == 'true' }}
         env:
           REASON: ${{ steps.bake_plan.outputs.reason }}
         run: |
           echo "✓ recent exact duplicate; full bake safely skipped ($REASON)"
           cat "${{ runner.temp }}/weatherx-bake-plan.json"
-      - name: code-only → mirror → gate → deploy
-        if: ${{ inputs.code_only }}
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
-          GITHUB_TOKEN: ${{ github.token }}
-          RELEASE_GUARD_FUSE_MODE: github
-          RELEASE_GUARD_INCIDENT_DIR: ${{ runner.temp }}/weatherx-release-guard/incidents
-          WEATHERX_LIVE_ORIGIN: https://weatherx.org
-        run: |
-          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-            echo "✗ code-only is a deploy — it needs CLOUDFLARE_API_TOKEN" >&2
-            exit 1
-          fi
-          bash ops/deploy-code-only.sh
-      - name: retain automatic rollback evidence
-        if: ${{ always() && (inputs.code_only || steps.bake_plan.outputs.skip != 'true') }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-guard-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/weatherx-release-guard/incidents/*.json
-          if-no-files-found: ignore
-          retention-days: 90
       - name: cycle log
         if: always()
         run: |

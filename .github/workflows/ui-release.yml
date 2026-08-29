@@ -1,0 +1,60 @@
+# Short, independent WeatherX application-shell release. Data routes are served by the production
+# R2 edge, so this workflow never downloads, bakes, uploads, or bundles forecast/ledger data.
+name: WeatherX UI release
+permissions:
+  contents: read
+  actions: read
+  issues: write # automatic rollback opens the persistent release-fuse incident
+on:
+  workflow_dispatch:
+concurrency:
+  group: weatherx-ui-production
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: checkout Atmos master (private, read-only deploy key)
+        uses: actions/checkout@v4
+        with:
+          repository: Andrewegao/atmos
+          ref: master
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: install application dependencies
+        run: npm ci --prefix app
+      - name: install Weather Lab browser
+        run: cd app && npx playwright install --with-deps chromium
+      - name: verify independent release architecture
+        run: |
+          node ops/platform/test-independent-ui-release.mjs
+          node ops/release/test-production-verifiers.mjs
+      - name: Weather Lab release gate
+        env:
+          LIVE_DATA: '1'
+        run: bash ops/weather-lab-ready.sh
+      - name: guarded UI-only production deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_GUARD_FUSE_MODE: github
+          RELEASE_GUARD_INCIDENT_DIR: ${{ runner.temp }}/weatherx-release-guard/incidents
+          EDGE_ORIGIN: https://weatherx.org
+          PLATFORM_EDGE_CONFIRMED: '1'
+        run: bash ops/platform/deploy-code-only.sh
+      - name: retain automatic rollback evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-guard-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/weatherx-release-guard/incidents/*.json
+          if-no-files-found: ignore
+          retention-days: 90
