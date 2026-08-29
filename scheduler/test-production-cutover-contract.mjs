@@ -73,5 +73,12 @@ assert.match(drill, /verify-release-component\.mjs/, 'the drill must prove whole
 
 assert.match(bake, /default: staging/, 'production publication must remain opt-in before cutover');
 assert.match(bake, /CATALOG_PROMOTION_KEY_PRODUCTION/);
+assert.match(bake, /bootstrap_missing:[\s\S]*?type: boolean[\s\S]*?default: false/,
+  'initial production seeding must be an explicit one-shot dispatch option');
+assert.match(bake, /test "\$CATALOG_TARGET" = production[\s\S]*?test "\$REQUESTED_MODEL" = all/,
+  'fallback seeding must be limited to an explicit all-model production dispatch');
+assert.match(bake, /ALLOW_MISSING_COMPONENT: \$\{\{ inputs\.bootstrap_missing && '1' \|\| '0' \}\}/);
+assert.match(bake, /HYDRATE_MISSING_FROM_RELEASE: \$\{\{ inputs\.bootstrap_missing && '1' \|\| '0' \}\}/,
+  'a missing production component may be restored only from the verified immutable fallback');
 
 console.log('production catalog cutover contract: ok');
