@@ -31,6 +31,10 @@ assert.match(edge, /ENABLE-PRODUCTION-SHADOW/);
 assert.match(edge, /ENABLE-PRODUCTION-CATALOG/);
 assert.match(edge, /x-weatherx-release/i, 'the deployment must prove the whole-release path');
 assert.match(edge, /x-weatherx-catalog/i, 'serve must prove catalog authority');
+assert.match(edge, /for attempt in \$\(seq 1 20\)/,
+  'route verification must tolerate bounded Cloudflare propagation delay');
+assert.match(edge, /did not converge[\s\S]*within 60 seconds/,
+  'route verification must fail closed after its bounded propagation window');
 
 for (const workflow of [edge, bootstrap, drill, bake]) {
   assert.match(workflow, /weatherx-data-production/, 'production catalog storage must be explicit');
