@@ -20,6 +20,10 @@ assert.match(edge, /wrangler deploy --secrets-file "\$secret_file" --config wran
 assert.match(edge, /production-bootstrap/, 'bootstrap must attach only catalog control routes');
 assert.match(edge, /production-shadow/, 'shadow must be an explicit phase');
 assert.match(edge, /production-serve/, 'serve must be an explicit phase');
+assert.doesNotMatch(edge, /CLOUDFLARE_WORKERS_API_TOKEN/,
+  'the Worker-only token cannot validate the production R2 bindings');
+assert.match(edge, /secrets\.CLOUDFLARE_API_TOKEN/,
+  'data-edge deployment must use the guarded credential that covers both Worker and R2 bindings');
 assert.match(edge, /DEPLOY-PRODUCTION-CONTROL/);
 assert.match(edge, /ENABLE-PRODUCTION-SHADOW/);
 assert.match(edge, /ENABLE-PRODUCTION-CATALOG/);
