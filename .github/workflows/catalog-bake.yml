@@ -16,6 +16,11 @@ on:
         required: true
         default: staging
         options: [staging, production]
+      bootstrap_missing:
+        description: Seed missing production components from the verified immutable whole-release fallback
+        type: boolean
+        required: false
+        default: false
   schedule:
     # GitHub may delay or drop schedules on busy round-number boundaries. Keep the
     # ten-minute provider poll cadence, but offset it to a quieter minute.
@@ -65,7 +70,16 @@ jobs:
           python -m venv data/.venv
           data/.venv/bin/pip install -r data/requirements.txt
       - name: Reject an unknown publication target
-        run: test "$CATALOG_TARGET" = staging || test "$CATALOG_TARGET" = production
+        env:
+          BOOTSTRAP_MISSING: ${{ inputs.bootstrap_missing || false }}
+          REQUESTED_MODEL: ${{ inputs.model || '' }}
+        run: |
+          test "$CATALOG_TARGET" = staging || test "$CATALOG_TARGET" = production
+          if [ "$BOOTSTRAP_MISSING" = true ]; then
+            test "$GITHUB_EVENT_NAME" = workflow_dispatch
+            test "$CATALOG_TARGET" = production
+            test "$REQUESTED_MODEL" = all
+          fi
       - name: Restore only this model's last-known-good staging component
         if: ${{ env.CATALOG_TARGET == 'staging' }}
         working-directory: atmos
@@ -88,6 +102,8 @@ jobs:
         working-directory: atmos
         env:
           COMPONENT_ID: ${{ matrix.model }}
+          ALLOW_MISSING_COMPONENT: ${{ inputs.bootstrap_missing && '1' || '0' }}
+          HYDRATE_MISSING_FROM_RELEASE: ${{ inputs.bootstrap_missing && '1' || '0' }}
           CATALOG_R2_REMOTE: weatherx:weatherx-data-production
           COMPONENT_R2_REMOTE: weatherx:weatherx-components-production
           RCLONE_CONFIG_WEATHERX_TYPE: s3

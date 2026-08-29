@@ -76,5 +76,12 @@ assert.match(bake, /CATALOG_PROMOTION_KEY_PRODUCTION/);
 assert.match(await readFile(new URL('../scheduler/wrangler.jsonc', import.meta.url), 'utf8'),
   /"CATALOG_TARGET": "production"/,
   'the reviewed scheduler release must dispatch the fast component lane to production');
+assert.match(bake, /bootstrap_missing:[\s\S]*?type: boolean[\s\S]*?default: false/,
+  'initial production seeding must be an explicit one-shot dispatch option');
+assert.match(bake, /test "\$CATALOG_TARGET" = production[\s\S]*?test "\$REQUESTED_MODEL" = all/,
+  'fallback seeding must be limited to an explicit all-model production dispatch');
+assert.match(bake, /ALLOW_MISSING_COMPONENT: \$\{\{ inputs\.bootstrap_missing && '1' \|\| '0' \}\}/);
+assert.match(bake, /HYDRATE_MISSING_FROM_RELEASE: \$\{\{ inputs\.bootstrap_missing && '1' \|\| '0' \}\}/,
+  'a missing production component may be restored only from the verified immutable fallback');
 
 console.log('production catalog cutover contract: ok');
