@@ -14,11 +14,12 @@ concurrency:
   cancel-in-progress: false        # never abort a half-written run
 jobs:
   bake:
+    environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
       - name: checkout atmos (private, read-only deploy key)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Andrewegao/atmos
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
@@ -36,10 +37,10 @@ jobs:
             echo "reason=preflight-command-failed" >> "$GITHUB_OUTPUT"
             echo "preflight failed; continuing with the full bake"
           fi
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         with: { python-version: '3.12' }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         with: { node-version: 22, cache: npm, cache-dependency-path: app/package-lock.json }
       - name: system eccodes and S3-compatible transfer client
@@ -66,7 +67,7 @@ jobs:
       # the scheduled writer and the seed share one persistence boundary.
       - name: restore rolling verification cache
         if: ${{ steps.bake_plan.outputs.skip != 'true' }}
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             data/.verify_cache
@@ -115,7 +116,7 @@ jobs:
         run: bash ops/bake-weatherx.sh
       - name: save rolling verification cache
         if: ${{ always() && steps.bake_plan.outputs.skip != 'true' }}
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             data/.verify_cache

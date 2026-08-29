@@ -24,15 +24,16 @@ concurrency:
 
 jobs:
   backfill:
+    environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
       - name: checkout atmos (private, read-only deploy key)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Andrewegao/atmos
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with: { python-version: '3.12' }
       - name: system eccodes
         run: sudo apt-get update && sudo apt-get install -y libeccodes-dev
@@ -43,21 +44,21 @@ jobs:
 
       - name: restore this half
         if: ${{ inputs.half != 'full' }}
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: data/.verify_cache
           key: verify-cache-${{ inputs.half }}-${{ github.run_id }}
           restore-keys: verify-cache-${{ inputs.half }}-
       - name: restore half a
         if: ${{ inputs.half == 'full' }}
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: data/.verify_cache
           key: verify-cache-a-${{ github.run_id }}
           restore-keys: verify-cache-a-
       - name: restore half b
         if: ${{ inputs.half == 'full' }}
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: data/.verify_cache
           key: verify-cache-b-${{ github.run_id }}
@@ -84,7 +85,7 @@ jobs:
         # Partial caches are resumable and valuable after a transient source failure. `full`
         # remains fail-closed; only the non-publishing halves may save an incomplete fill.
         if: ${{ always() && inputs.half != 'full' }}
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: data/.verify_cache
           key: verify-cache-${{ inputs.half }}-${{ github.run_id }}
@@ -98,7 +99,7 @@ jobs:
           cd data
           .venv/bin/python backfill_verify.py --orog-only
           .venv/bin/python backfill_verify.py --obs-only
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: ${{ inputs.half == 'full' }}
         with: { node-version: 22, cache: npm, cache-dependency-path: app/package-lock.json }
       - name: app dependencies
@@ -142,7 +143,7 @@ jobs:
           ./deploy-atmos.sh
       - name: save qualified rolling cache
         if: ${{ success() && inputs.half == 'full' }}
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: data/.verify_cache
           key: verify-cache-live-${{ github.run_id }}

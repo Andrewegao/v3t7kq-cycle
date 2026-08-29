@@ -7,23 +7,40 @@ permissions:
   issues: write # automatic rollback opens the persistent release-fuse incident
 on:
   workflow_dispatch:
+    inputs:
+      atmos_sha:
+        description: Exact 40-character Atmos master commit to release
+        required: true
+        type: string
 concurrency:
   group: weatherx-ui-production
   cancel-in-progress: false
 jobs:
   release:
+    environment:
+      name: production
+      url: https://weatherx.org
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: checkout Atmos master (private, read-only deploy key)
-        uses: actions/checkout@v4
+      - name: checkout exact Atmos commit (private, read-only deploy key)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Andrewegao/atmos
-          ref: master
+          ref: ${{ inputs.atmos_sha }}
+          fetch-depth: 0
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
-      - uses: actions/setup-python@v5
+      - name: verify immutable Atmos source provenance
+        env:
+          ATMOS_SHA: ${{ inputs.atmos_sha }}
+        run: |
+          [[ "$ATMOS_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$ATMOS_SHA"
+          git fetch --no-tags origin master
+          git merge-base --is-ancestor "$ATMOS_SHA" origin/master
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with: { python-version: '3.12' }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -47,12 +64,15 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           RELEASE_GUARD_FUSE_MODE: github
           RELEASE_GUARD_INCIDENT_DIR: ${{ runner.temp }}/weatherx-release-guard/incidents
+          RELEASE_GUARD_EXPECTED_GIT_SHA: ${{ inputs.atmos_sha }}
+          RELEASE_GUARD_VERIFY_REQUIRED_SUCCESSES: '3'
+          RELEASE_GUARD_VERIFY_SLEEP_SECONDS: '15'
           EDGE_ORIGIN: https://weatherx.org
           PLATFORM_EDGE_CONFIRMED: '1'
         run: bash ops/platform/deploy-code-only.sh
       - name: retain automatic rollback evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-guard-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/weatherx-release-guard/incidents/*.json

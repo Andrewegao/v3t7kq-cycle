@@ -27,16 +27,17 @@ concurrency:
 
 jobs:
   prepare:
+    environment: staging
     runs-on: ubuntu-latest
     timeout-minutes: 330
     steps:
       - name: Checkout atmos ref (private, read-only deploy key)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Andrewegao/atmos
           ref: ${{ inputs.atmos_ref }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
           cache: pip
@@ -44,7 +45,7 @@ jobs:
       - name: Install hydrology dependency
         run: pip install requests==2.34.2
       - name: Restore resumable GloFAS history cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: data/.cache-rivers
           key: glofas-thresholds-v2-${{ hashFiles('data/rivers_points.json') }}
@@ -74,7 +75,7 @@ jobs:
           python data/fetch_reservoirs.py --validate
       - name: Upload checkpoint or validated artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: hydrology-${{ github.run_id }}
           path: |

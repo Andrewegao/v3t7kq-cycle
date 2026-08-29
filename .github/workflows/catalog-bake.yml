@@ -28,6 +28,7 @@ on:
     - cron: '7 * * * *'
 jobs:
   model:
+    environment: production
     # Fail open: native schedules remain a publisher unless an operator explicitly
     # disables the fallback after the Cloudflare trigger set is verified live.
     if: ${{ github.event_name == 'workflow_dispatch' || vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true' }}

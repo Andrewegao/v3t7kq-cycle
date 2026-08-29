@@ -1,11 +1,24 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 
 const readWorkflow = (name) => readFile(new URL(`../.github/workflows/${name}`, import.meta.url), 'utf8');
 const [bake, ui] = await Promise.all([
   readWorkflow('bake.yml'),
   readWorkflow('ui-release.yml'),
 ]);
+const workflowDirectory = new URL('../.github/workflows/', import.meta.url);
+const workflowNames = (await readdir(workflowDirectory)).filter((name) => name.endsWith('.yml'));
+for (const workflowName of workflowNames) {
+  const workflow = await readWorkflow(workflowName);
+  for (const line of workflow.split('\n').filter((candidate) => /\buses:/.test(candidate))) {
+    assert.match(line, /@[a-f0-9]{40}(?:\s+#.*)?$/,
+      `${workflowName} must pin every external action to a full commit SHA: ${line.trim()}`);
+  }
+  if (/secrets\./.test(workflow)) {
+    assert.match(workflow, /\n\s{4}environment:\s*(?:production|staging|\n)/,
+      `${workflowName} must place secret-bearing jobs behind a protected environment`);
+  }
+}
 
 assert.match(bake, /group: weatherx-data-maintenance/,
   'the multi-hour data bake must not occupy the UI release lane');
@@ -19,7 +32,19 @@ assert.doesNotMatch(bake, /CLOUDFLARE_API_TOKEN\b|deploy-atmos\.sh|deploy-code-o
 
 assert.match(ui, /group: weatherx-ui-production/,
   'UI releases need their own short production serialization boundary');
+assert.match(ui, /atmos_sha:[\s\S]*?required: true/,
+  'UI releases must name an immutable Atmos commit');
+assert.match(ui, /environment:[\s\S]*?name: production/,
+  'the Pages credential must be gated by the production environment');
 assert.match(ui, /repository: Andrewegao\/atmos/);
+assert.match(ui, /ref: \$\{\{ inputs\.atmos_sha \}\}/,
+  'the UI artifact must be checked out from the requested immutable commit');
+assert.match(ui, /git merge-base --is-ancestor "\$ATMOS_SHA" origin\/master/,
+  'the requested commit must belong to Atmos master');
+assert.match(ui, /RELEASE_GUARD_EXPECTED_GIT_SHA: \$\{\{ inputs\.atmos_sha \}\}/,
+  'the release guard must bind the live receipt to the requested source commit');
+assert.match(ui, /RELEASE_GUARD_VERIFY_REQUIRED_SUCCESSES: '3'/,
+  'production acceptance must require a bounded healthy soak');
 assert.match(ui, /bash ops\/platform\/deploy-code-only\.sh/,
   'the UI lane must deploy the data-free application shell');
 assert.match(ui, /PLATFORM_EDGE_CONFIRMED: '1'/,
@@ -32,7 +57,9 @@ assert.match(ui, /node ops\/platform\/test-independent-ui-release\.mjs/);
 assert.match(ui, /name: Weather Lab release gate[\s\S]*?LIVE_DATA: '1'[\s\S]*?bash ops\/weather-lab-ready\.sh/,
   'the independent UI gate must exercise the live data edge without mirroring data into Pages');
 assert.match(ui, /bash ops\/weather-lab-ready\.sh/);
-assert.match(ui, /actions\/upload-artifact@v4[\s\S]*?release-guard/,
+assert.match(ui, /actions\/upload-artifact@[a-f0-9]{40}[\s\S]*?release-guard/,
   'rollback evidence must survive a failed UI release');
+assert.doesNotMatch(ui, /uses:\s+[^\n#]+@v[0-9]/,
+  'production workflows must pin every action to an immutable commit SHA');
 
 console.log('independent UI release workflow contract: ok');
