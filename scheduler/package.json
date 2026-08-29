@@ -6,7 +6,7 @@
   "scripts": {
     "check": "npm run types && tsc --noEmit && vitest run && npm run test:workflow && wrangler deploy --dry-run",
     "test": "vitest run",
-    "test:workflow": "node test-bake-workflow.mjs && node test-schedule-contract.mjs && node test-production-cutover-contract.mjs",
+    "test:workflow": "node test-bake-workflow.mjs && node test-schedule-contract.mjs && node test-production-cutover-contract.mjs && node test-ui-release-contract.mjs",
     "types": "wrangler types --env-interface CloudflareBindings --include-runtime false",
     "verify:live": "node scripts/verify-live-schedules.mjs"
   },
