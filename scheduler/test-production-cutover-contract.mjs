@@ -22,8 +22,10 @@ assert.match(edge, /production-shadow/, 'shadow must be an explicit phase');
 assert.match(edge, /production-serve/, 'serve must be an explicit phase');
 assert.doesNotMatch(edge, /CLOUDFLARE_WORKERS_API_TOKEN/,
   'the Worker-only token cannot validate the production R2 bindings');
-assert.match(edge, /secrets\.CLOUDFLARE_API_TOKEN/,
-  'data-edge deployment must use the guarded credential that covers both Worker and R2 bindings');
+assert.doesNotMatch(edge, /secrets\.CLOUDFLARE_API_TOKEN\b/,
+  'data-edge deployment must not reuse the Pages publication credential');
+assert.match(edge, /secrets\.CLOUDFLARE_DATA_EDGE_API_TOKEN/,
+  'data-edge deployment must use its dedicated Worker, R2-read, and route credential');
 assert.match(edge, /DEPLOY-PRODUCTION-CONTROL/);
 assert.match(edge, /ENABLE-PRODUCTION-SHADOW/);
 assert.match(edge, /ENABLE-PRODUCTION-CATALOG/);

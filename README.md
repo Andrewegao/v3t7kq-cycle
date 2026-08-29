@@ -16,5 +16,10 @@ Any failure keeps the live site untouched.
   (bake-only validation, deploys skipped). Create: Cloudflare dashboard → My Profile →
   API Tokens → template "Edit Cloudflare Workers"/Pages, scope to the account, then
   `gh secret set CLOUDFLARE_API_TOKEN -R Andrewegao/v3t7kq-cycle`.
+- `CLOUDFLARE_DATA_EDGE_API_TOKEN` — account-owned, expiring credential used only by
+  the guarded production data-edge workflow. Scope account permissions to Workers
+  Scripts write and Workers R2 Storage read; scope zone permissions to `weatherx.org`
+  Workers Routes write and Zone read. The pinned D1 binding does not require D1 API
+  access. Never reuse the Pages or scheduler token for this Worker.
 
 Data sources are all open (ECMWF open data CC-BY-4.0 via AWS Open Data, NOAA GFS/HRRR/RTOFS).

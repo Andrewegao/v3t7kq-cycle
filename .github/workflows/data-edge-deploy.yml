@@ -56,9 +56,9 @@ jobs:
       - name: Run the complete data-edge release gates
         working-directory: atmos/platform/edge
         run: npm run check
-      - name: Require the production Worker and R2 deployment credential
+      - name: Require the dedicated production data-edge credential
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
           AUTH_HASH_KEY: ${{ secrets.DATA_EDGE_AUTH_HASH_KEY }}
           CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
         run: test -n "$CLOUDFLARE_API_TOKEN" && test -n "$AUTH_HASH_KEY" && test -n "$CATALOG_PROMOTION_KEY"
@@ -66,7 +66,7 @@ jobs:
         if: ${{ inputs.phase == 'bootstrap-control' }}
         working-directory: atmos/platform/edge
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
           AUTH_HASH_KEY: ${{ secrets.DATA_EDGE_AUTH_HASH_KEY }}
           CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
         run: |
@@ -79,7 +79,7 @@ jobs:
       - name: Install production-only Worker secrets
         working-directory: atmos/platform/edge
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
           AUTH_HASH_KEY: ${{ secrets.DATA_EDGE_AUTH_HASH_KEY }}
           CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
         run: |
@@ -94,7 +94,7 @@ jobs:
         working-directory: atmos
         env:
           CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
         run: |
           work="$(mktemp -d)"
           trap 'rm -rf "$work"' EXIT
@@ -127,7 +127,7 @@ jobs:
       - name: Attach only the selected production routes
         working-directory: atmos/platform/edge
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
           PHASE: ${{ inputs.phase }}
         run: |
           case "$PHASE" in
