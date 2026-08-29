@@ -20,9 +20,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production
-    env:
-      CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
       - name: Require explicit production confirmation
         env:
@@ -47,14 +44,31 @@ jobs:
           path: atmos
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22 }
+      - name: Install the pinned S3-compatible transfer client
+        run: |
+          archive="$RUNNER_TEMP/rclone-v1.75.0-linux-amd64.zip"
+          curl --fail --silent --show-error --location \
+            https://github.com/rclone/rclone/releases/download/v1.75.0/rclone-v1.75.0-linux-amd64.zip \
+            --output "$archive"
+          printf '%s  %s\n' 'aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa' "$archive" | sha256sum --check --status
+          unzip -q "$archive" -d "$RUNNER_TEMP"
+          sudo install -m 0755 "$RUNNER_TEMP/rclone-v1.75.0-linux-amd64/rclone" /usr/local/bin/rclone
+          rclone version | head -1 | grep -Fx 'rclone v1.75.0'
       - name: Capture and verify the pre-drill production catalog
         working-directory: atmos
+        env:
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
         run: |
           pointer="$RUNNER_TEMP/original-pointer.json"
           snapshot="$RUNNER_TEMP/original-catalog.json"
-          node ops/platform/r2-rest.mjs get weatherx-data-production catalogs/current.json "$pointer"
+          rclone copyto weatherx:weatherx-data-production/catalogs/current.json "$pointer" --s3-no-check-bucket
           catalog_id="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1])).catalogId)' "$pointer")"
-          node ops/platform/r2-rest.mjs get weatherx-data-production "catalogs/snapshots/$catalog_id.json" "$snapshot"
+          rclone copyto "weatherx:weatherx-data-production/catalogs/snapshots/$catalog_id.json" "$snapshot" --s3-no-check-bucket
           node --input-type=module - "$pointer" "$snapshot" <<'NODE'
           import fs from 'node:fs';
           import { createHash } from 'node:crypto';
@@ -77,9 +91,15 @@ jobs:
       - name: Race two independent immutable production promotions
         working-directory: atmos
         env:
-          COMPONENT_R2_BUCKET: weatherx-components-production
+          COMPONENT_R2_REMOTE: weatherx:weatherx-components-production
           CATALOG_ENDPOINT: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
           CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
         run: |
           generation_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           for lane in a b; do
@@ -108,12 +128,19 @@ jobs:
           test "$failed" = 0
       - name: Verify both concurrent winners without a lost update
         working-directory: atmos
+        env:
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
         run: |
           pointer="$RUNNER_TEMP/drill-pointer.json"
           snapshot="$RUNNER_TEMP/drill-catalog.json"
-          node ops/platform/r2-rest.mjs get weatherx-data-production catalogs/current.json "$pointer"
+          rclone copyto weatherx:weatherx-data-production/catalogs/current.json "$pointer" --s3-no-check-bucket
           catalog_id="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1])).catalogId)' "$pointer")"
-          node ops/platform/r2-rest.mjs get weatherx-data-production "catalogs/snapshots/$catalog_id.json" "$snapshot"
+          rclone copyto "weatherx:weatherx-data-production/catalogs/snapshots/$catalog_id.json" "$snapshot" --s3-no-check-bucket
           node --input-type=module - "$RUNNER_TEMP/original-catalog.json" "$pointer" "$snapshot" "$ORIGINAL_SEQUENCE" <<'NODE'
           import fs from 'node:fs';
           import { createHash } from 'node:crypto';
@@ -137,9 +164,15 @@ jobs:
         env:
           CATALOG_ENDPOINT: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
           CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
         run: |
           test -n "${ORIGINAL_CATALOG_ID:-}"
-          node ops/platform/r2-rest.mjs get weatherx-data-production catalogs/current.json "$RUNNER_TEMP/pre-rollback-pointer.json"
+          rclone copyto weatherx:weatherx-data-production/catalogs/current.json "$RUNNER_TEMP/pre-rollback-pointer.json" --s3-no-check-bucket
           current_id="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1])).catalogId)' "$RUNNER_TEMP/pre-rollback-pointer.json")"
           printf 'DRILL_CATALOG_ID=%s\n' "$current_id" >> "$GITHUB_ENV"
           if [ "$current_id" != "$ORIGINAL_CATALOG_ID" ]; then
@@ -151,12 +184,18 @@ jobs:
         env:
           CATALOG_ENDPOINT: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
           CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
         run: |
           pointer="$RUNNER_TEMP/rollback-pointer.json"
           snapshot="$RUNNER_TEMP/rollback-catalog.json"
-          node ops/platform/r2-rest.mjs get weatherx-data-production catalogs/current.json "$pointer"
+          rclone copyto weatherx:weatherx-data-production/catalogs/current.json "$pointer" --s3-no-check-bucket
           catalog_id="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1])).catalogId)' "$pointer")"
-          node ops/platform/r2-rest.mjs get weatherx-data-production "catalogs/snapshots/$catalog_id.json" "$snapshot"
+          rclone copyto "weatherx:weatherx-data-production/catalogs/snapshots/$catalog_id.json" "$snapshot" --s3-no-check-bucket
           node --input-type=module - "$RUNNER_TEMP/original-catalog.json" "$pointer" "$snapshot" "$ORIGINAL_SEQUENCE" "$ORIGINAL_EPOCH" "$ORIGINAL_CATALOG_ID" "${DRILL_CATALOG_ID:-}" "${DRILL_PROMOTIONS_PASSED:-0}" <<'NODE'
           import fs from 'node:fs';
           import { createHash } from 'node:crypto';
@@ -175,7 +214,7 @@ jobs:
           NODE
           if [ "${DRILL_PROMOTIONS_PASSED:-0}" = 1 ]; then
             stale_manifest="components/catalog-drill-a/catalog-drill-a-$GITHUB_RUN_ID/component.json"
-            node ops/platform/r2-rest.mjs get weatherx-components-production "$stale_manifest" "$RUNNER_TEMP/stale-component.json"
+            rclone copyto "weatherx:weatherx-components-production/$stale_manifest" "$RUNNER_TEMP/stale-component.json" --s3-no-check-bucket
             stale_sha="$(sha256sum "$RUNNER_TEMP/stale-component.json" | cut -d' ' -f1)"
             if node ops/platform/submit-catalog-mutation.mjs promote "$CATALOG_ENDPOINT" \
                 "$stale_manifest" "$stale_sha" '' "$ORIGINAL_EPOCH" > "$RUNNER_TEMP/stale.log" 2>&1; then
@@ -184,9 +223,9 @@ jobs:
             fi
             grep -F catalog_epoch_changed "$RUNNER_TEMP/stale.log"
           fi
-          node ops/platform/r2-rest.mjs get weatherx-data-production releases/current.json "$RUNNER_TEMP/release-pointer.json"
+          rclone copyto weatherx:weatherx-data-production/releases/current.json "$RUNNER_TEMP/release-pointer.json" --s3-no-check-bucket
           release_id="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1])).releaseId)' "$RUNNER_TEMP/release-pointer.json")"
-          node ops/platform/r2-rest.mjs get weatherx-data-production "releases/$release_id/manifest.json" "$RUNNER_TEMP/release-manifest.json"
+          rclone copyto "weatherx:weatherx-data-production/releases/$release_id/manifest.json" "$RUNNER_TEMP/release-manifest.json" --s3-no-check-bucket
           for model in ecmwf gfs hrrr aifs; do
             node ops/platform/verify-release-component.mjs verify \
               "$RUNNER_TEMP/release-pointer.json" "$RUNNER_TEMP/release-manifest.json" "$model" >/dev/null

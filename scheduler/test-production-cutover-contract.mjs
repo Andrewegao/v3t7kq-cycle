@@ -14,6 +14,17 @@ for (const workflow of [edge, bootstrap, drill, bake]) {
     'catalog cutover workflows must never directly deploy the website');
 }
 
+for (const workflow of [bootstrap, drill, bake]) {
+  assert.doesNotMatch(workflow, /secrets\.CLOUDFLARE_API_TOKEN\b/,
+    'production catalog publication must not reuse the Pages credential');
+  assert.match(workflow, /secrets\.R2_PRODUCTION_ACCESS_KEY_ID/,
+    'production catalog publication must use its bucket-scoped R2 access key');
+  assert.match(workflow, /secrets\.R2_PRODUCTION_SECRET_ACCESS_KEY/,
+    'production catalog publication must use its bucket-scoped R2 secret');
+  assert.match(workflow, /RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare/,
+    'production catalog publication must use the bucket-scoped S3 transport');
+}
+
 assert.match(edge, /production-unrouted/, 'the first Worker deployment must have no public route');
 assert.match(edge, /wrangler deploy --secrets-file "\$secret_file" --config wrangler\.data\.jsonc --env production-unrouted/,
   'a new Worker must receive required secrets atomically with its unrouted first deployment');
@@ -45,6 +56,10 @@ assert.match(bootstrap, /BOOTSTRAP-PRODUCTION-CATALOG/);
 assert.match(bootstrap, /https:\/\/weatherx\.org/);
 assert.match(bootstrap, /publish-r2-release\.sh/, 'bootstrap must retain an immutable release fallback');
 assert.match(bootstrap, /bootstrap-r2-catalog\.sh/, 'bootstrap must populate the component catalog');
+assert.match(bootstrap, /unexpectedly accessed weatherx-data-staging/,
+  'bootstrap must prove the production credential cannot access staging data');
+assert.match(bootstrap, /unexpectedly accessed weatherx-components-staging/,
+  'bootstrap must prove the production credential cannot access staging components');
 
 assert.match(drill, /RUN-PRODUCTION-DRILL/);
 assert.match(drill, /CATALOG_DEFAULT_TARGET/,
