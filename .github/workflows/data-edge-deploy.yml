@@ -141,23 +141,55 @@ jobs:
           PHASE: ${{ inputs.phase }}
         run: |
           nonce="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          health="$(curl --fail --silent --show-error "https://weatherx.org/api/platform/data-health?verify=$nonce")"
           expected_mode=shadow
           [ "$PHASE" != serve ] || expected_mode=serve
-          node -e 'const [body,mode]=process.argv.slice(1); const value=JSON.parse(body); if(value.ok!==true||value.authMode!=="public"||value.catalogMode!==mode)process.exit(1)' "$health" "$expected_mode"
-          [ "$PHASE" != bootstrap-control ] || exit 0
-          curl --fail --silent --show-error --dump-header "$RUNNER_TEMP/model.headers" \
-            --output "$RUNNER_TEMP/model.json" "https://weatherx.org/data/gfs/index.json?verify=$nonce"
-          node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1]))' "$RUNNER_TEMP/model.json"
-          curl --fail --silent --show-error --dump-header "$RUNNER_TEMP/fallback.headers" \
-            --output "$RUNNER_TEMP/fallback.json" "https://weatherx.org/data/health.json?verify=$nonce"
-          if [ "$PHASE" = shadow ]; then
-            grep -Eiq '^x-weatherx-release: .+' "$RUNNER_TEMP/model.headers"
-            if grep -Eiq '^x-weatherx-catalog:' "$RUNNER_TEMP/model.headers"; then
-              echo 'shadow traffic unexpectedly became catalog-authoritative' >&2
-              exit 1
+
+          verify_health() {
+            health="$(curl --fail --silent --show-error "https://weatherx.org/api/platform/data-health?verify=$nonce")" || return 1
+            node -e 'const [body,mode]=process.argv.slice(1); const value=JSON.parse(body); if(value.ok!==true||value.authMode!=="public"||value.catalogMode!==mode)process.exit(1)' "$health" "$expected_mode"
+          }
+          health_ready=
+          for attempt in $(seq 1 20); do
+            if verify_health; then
+              health_ready=1
+              break
             fi
-          else
-            grep -Eiq '^x-weatherx-catalog: .+' "$RUNNER_TEMP/model.headers"
+            [ "$attempt" -eq 20 ] || sleep 3
+          done
+          if [ "$health_ready" != 1 ]; then
+            echo "production data-health route did not converge to $expected_mode within 60 seconds" >&2
+            exit 1
           fi
-          grep -Eiq '^x-weatherx-release: .+' "$RUNNER_TEMP/fallback.headers"
+          [ "$PHASE" != bootstrap-control ] || exit 0
+
+          verify_data_authority() {
+            rm -f "$RUNNER_TEMP/model.headers" "$RUNNER_TEMP/model.json" \
+              "$RUNNER_TEMP/fallback.headers" "$RUNNER_TEMP/fallback.json"
+            curl --fail --silent --show-error --dump-header "$RUNNER_TEMP/model.headers" \
+              --output "$RUNNER_TEMP/model.json" "https://weatherx.org/data/gfs/index.json?verify=$nonce" || return 1
+            node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1]))' "$RUNNER_TEMP/model.json" || return 1
+            curl --fail --silent --show-error --dump-header "$RUNNER_TEMP/fallback.headers" \
+              --output "$RUNNER_TEMP/fallback.json" "https://weatherx.org/data/health.json?verify=$nonce" || return 1
+            node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1]))' "$RUNNER_TEMP/fallback.json" || return 1
+            if [ "$PHASE" = shadow ]; then
+              grep -Eiq '^x-weatherx-release: .+' "$RUNNER_TEMP/model.headers" || return 1
+              if grep -Eiq '^x-weatherx-catalog:' "$RUNNER_TEMP/model.headers"; then
+                return 1
+              fi
+            else
+              grep -Eiq '^x-weatherx-catalog: .+' "$RUNNER_TEMP/model.headers" || return 1
+            fi
+            grep -Eiq '^x-weatherx-release: .+' "$RUNNER_TEMP/fallback.headers" || return 1
+          }
+          authority_ready=
+          for attempt in $(seq 1 20); do
+            if verify_data_authority; then
+              authority_ready=1
+              break
+            fi
+            [ "$attempt" -eq 20 ] || sleep 3
+          done
+          if [ "$authority_ready" != 1 ]; then
+            echo "production data routes did not converge to $PHASE authority within 60 seconds" >&2
+            exit 1
+          fi
