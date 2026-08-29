@@ -8,7 +8,7 @@ const env = {
   GITHUB_WORKFLOW: 'catalog-bake.yml',
   GITHUB_REF: 'main',
   CATALOG_TARGET: 'staging',
-} as CloudflareBindings;
+} as unknown as CloudflareBindings;
 
 describe('Cloudflare scheduler dispatch bridge', () => {
   it.each([

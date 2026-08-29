@@ -18,7 +18,7 @@
     "GITHUB_REPO": "v3t7kq-cycle",
     "GITHUB_WORKFLOW": "catalog-bake.yml",
     "GITHUB_REF": "main",
-    "CATALOG_TARGET": "staging"
+    "CATALOG_TARGET": "production"
   },
   "observability": {
     "enabled": true,

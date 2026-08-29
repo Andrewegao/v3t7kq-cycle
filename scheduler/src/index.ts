@@ -34,7 +34,9 @@ export async function dispatchForCron(
   sleep: Sleeper = defaultSleep,
 ): Promise<{ model: ModelSelection; runId: number | null }> {
   const model = selectionForCron(cron);
-  const target = env.CATALOG_TARGET;
+  // Wrangler narrows config vars to their currently deployed literal. Keep the runtime
+  // validation alive so a future config-only cutover cannot bypass the fail-closed check.
+  const target: string = env.CATALOG_TARGET;
   if (target !== 'staging' && target !== 'production') {
     throw new Error(`unsupported catalog target: ${target}`);
   }

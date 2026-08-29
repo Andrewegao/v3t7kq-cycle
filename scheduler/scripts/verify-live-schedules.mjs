@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from 'node:timers/promises';
-import { fetchLiveSchedules, loadSchedulerConfig } from './live-schedules.mjs';
+import { fetchLiveSchedules, fetchLiveTarget, loadSchedulerConfig } from './live-schedules.mjs';
 
 const apiToken = process.env.CLOUDFLARE_API_TOKEN;
 if (!apiToken) throw new Error('CLOUDFLARE_API_TOKEN is required');
@@ -17,11 +17,11 @@ if (!Number.isSafeInteger(delayMs) || delayMs < 0 || delayMs > 60_000) {
 let lastError;
 for (let attempt = 1; attempt <= attempts; attempt += 1) {
   try {
-    const actual = await fetchLiveSchedules({
-      ...config,
-      apiToken,
-    });
-    console.log(`live scheduler verified: ${config.workerName} ${JSON.stringify(actual)}`);
+    const [actual, target] = await Promise.all([
+      fetchLiveSchedules({ ...config, apiToken }),
+      fetchLiveTarget({ ...config, apiToken }),
+    ]);
+    console.log(`live scheduler verified: ${config.workerName} target=${target} crons=${JSON.stringify(actual)}`);
     process.exitCode = 0;
     lastError = undefined;
     break;

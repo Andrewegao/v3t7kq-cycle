@@ -65,7 +65,7 @@ assert.match(drill, /RUN-PRODUCTION-DRILL/);
 assert.match(drill, /CATALOG_DEFAULT_TARGET/,
   'the production scheduler must remain paused while the destructive rollback drill runs');
 assert.match(drill, /CATALOG_TARGET!=="staging"/,
-  'the Cloudflare scheduler configuration must remain on staging during the drill');
+  'the pre-cutover drill must require the Cloudflare scheduler to remain on staging');
 assert.match(drill, /if: \$\{\{ always\(\) \}\}[\s\S]*?submit-catalog-mutation\.mjs rollback/,
   'the drill must attempt rollback even after a failed race');
 assert.match(drill, /catalog_epoch_changed/, 'the drill must prove stale-bake fencing');
@@ -73,6 +73,9 @@ assert.match(drill, /verify-release-component\.mjs/, 'the drill must prove whole
 
 assert.match(bake, /default: staging/, 'production publication must remain opt-in before cutover');
 assert.match(bake, /CATALOG_PROMOTION_KEY_PRODUCTION/);
+assert.match(await readFile(new URL('../scheduler/wrangler.jsonc', import.meta.url), 'utf8'),
+  /"CATALOG_TARGET": "production"/,
+  'the reviewed scheduler release must dispatch the fast component lane to production');
 assert.match(bake, /bootstrap_missing:[\s\S]*?type: boolean[\s\S]*?default: false/,
   'initial production seeding must be an explicit one-shot dispatch option');
 assert.match(bake, /test "\$CATALOG_TARGET" = production[\s\S]*?test "\$REQUESTED_MODEL" = all/,
