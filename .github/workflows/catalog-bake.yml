@@ -10,6 +10,12 @@ on:
         required: true
         default: all
         options: [all, slow, ecmwf, gfs, hrrr, aifs]
+      target:
+        description: Isolated catalog and component bucket set to publish
+        type: choice
+        required: true
+        default: staging
+        options: [staging, production]
   schedule:
     # GitHub may delay or drop schedules on busy round-number boundaries. Keep the
     # ten-minute provider poll cadence, but offset it to a quieter minute.
@@ -21,7 +27,7 @@ jobs:
     # disables the fallback after the Cloudflare trigger set is verified live.
     if: ${{ github.event_name == 'workflow_dispatch' || vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true' }}
     concurrency:
-      group: weatherx-component-${{ matrix.model }}
+      group: weatherx-component-${{ github.event_name == 'workflow_dispatch' && inputs.target || vars.CATALOG_DEFAULT_TARGET || 'staging' }}-${{ matrix.model }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
@@ -30,6 +36,8 @@ jobs:
         model: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.model == 'slow' && '["ecmwf","gfs","aifs"]' || github.event_name == 'workflow_dispatch' && inputs.model != 'all' && format('["{0}"]', inputs.model) || github.event_name == 'workflow_dispatch' && '["ecmwf","gfs","hrrr","aifs"]' || github.event.schedule == '8-59/10 * * * *' && '["hrrr"]' || '["ecmwf","gfs","aifs"]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 210
+    env:
+      CATALOG_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || vars.CATALOG_DEFAULT_TARGET || 'staging' }}
     steps:
       - name: Checkout WeatherX
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -56,7 +64,10 @@ jobs:
           rclone version | head -1 | grep -Fx 'rclone v1.75.0'
           python -m venv data/.venv
           data/.venv/bin/pip install -r data/requirements.txt
-      - name: Restore only this model's last-known-good component
+      - name: Reject an unknown publication target
+        run: test "$CATALOG_TARGET" = staging || test "$CATALOG_TARGET" = production
+      - name: Restore only this model's last-known-good staging component
+        if: ${{ env.CATALOG_TARGET == 'staging' }}
         working-directory: atmos
         env:
           COMPONENT_ID: ${{ matrix.model }}
@@ -72,7 +83,18 @@ jobs:
           RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
           RCLONE_CONFIG_WEATHERX_REGION: auto
         run: bash ops/platform/hydrate-r2-component.sh
-      - name: Bake, validate, upload, and CAS-promote one model
+      - name: Restore only this model's last-known-good production component
+        if: ${{ env.CATALOG_TARGET == 'production' }}
+        working-directory: atmos
+        env:
+          COMPONENT_ID: ${{ matrix.model }}
+          CATALOG_R2_BUCKET: weatherx-data-production
+          COMPONENT_R2_BUCKET: weatherx-components-production
+          CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: bash ops/platform/hydrate-r2-component.sh
+      - name: Bake, validate, upload, and CAS-promote one staging model
+        if: ${{ env.CATALOG_TARGET == 'staging' }}
         working-directory: atmos
         env:
           MODEL: ${{ matrix.model }}
@@ -88,4 +110,18 @@ jobs:
           RCLONE_CONFIG_WEATHERX_REGION: auto
           CATALOG_ENDPOINT: ${{ secrets.CATALOG_ENDPOINT }}
           CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY }}
+        run: bash ops/bake-model-component.sh
+      - name: Bake, validate, upload, and CAS-promote one production model
+        if: ${{ env.CATALOG_TARGET == 'production' }}
+        working-directory: atmos
+        env:
+          MODEL: ${{ matrix.model }}
+          PUBLISH: '1'
+          DATA_PUBLISH_MODE: component-catalog
+          LIVE: https://weatherx.org
+          COMPONENT_R2_BUCKET: weatherx-components-production
+          CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CATALOG_ENDPOINT: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
+          CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
         run: bash ops/bake-model-component.sh

@@ -1,0 +1,195 @@
+name: WeatherX production catalog safety drill
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type RUN-PRODUCTION-DRILL; the workflow always restores the original component set
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weatherx-production-catalog-safety-drill
+  cancel-in-progress: false
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - name: Require explicit production confirmation
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: test "$CONFIRM" = RUN-PRODUCTION-DRILL
+      - name: Checkout the scheduler control plane
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: cycle
+      - name: Require production publishing to remain paused during the drill
+        env:
+          DEFAULT_TARGET: ${{ vars.CATALOG_DEFAULT_TARGET }}
+        run: |
+          test "${DEFAULT_TARGET:-staging}" != production
+          node -e 'const c=JSON.parse(require("node:fs").readFileSync(process.argv[1])); if(c.vars?.CATALOG_TARGET!=="staging")process.exit(1)' cycle/scheduler/wrangler.jsonc
+      - name: Checkout the reviewed WeatherX publisher
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Andrewegao/atmos
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          ref: master
+          path: atmos
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Capture and verify the pre-drill production catalog
+        working-directory: atmos
+        run: |
+          pointer="$RUNNER_TEMP/original-pointer.json"
+          snapshot="$RUNNER_TEMP/original-catalog.json"
+          node ops/platform/r2-rest.mjs get weatherx-data-production catalogs/current.json "$pointer"
+          catalog_id="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1])).catalogId)' "$pointer")"
+          node ops/platform/r2-rest.mjs get weatherx-data-production "catalogs/snapshots/$catalog_id.json" "$snapshot"
+          node --input-type=module - "$pointer" "$snapshot" <<'NODE'
+          import fs from 'node:fs';
+          import { createHash } from 'node:crypto';
+          const [pointerPath, snapshotPath] = process.argv.slice(2);
+          const pointer = JSON.parse(fs.readFileSync(pointerPath));
+          const bytes = fs.readFileSync(snapshotPath);
+          const catalog = JSON.parse(bytes);
+          const core = ['ecmwf', 'gfs', 'hrrr', 'aifs'];
+          if (createHash('sha256').update(bytes).digest('hex') !== pointer.catalogSha256 ||
+              catalog.sequence !== pointer.sequence || catalog.createdAt !== pointer.publishedAt ||
+              catalog.parentCatalogId !== pointer.previousCatalogId ||
+              !core.every((id) => catalog.components?.[id]?.quality?.status === 'passed')) {
+            throw new Error('pre-drill production catalog is incomplete or invalid');
+          }
+          NODE
+          original_epoch="$(node -e 'process.stdout.write(String(JSON.parse(require("node:fs").readFileSync(process.argv[1])).rollbackEpoch??0))' "$snapshot")"
+          original_sequence="$(node -e 'process.stdout.write(String(JSON.parse(require("node:fs").readFileSync(process.argv[1])).sequence))' "$snapshot")"
+          printf 'ORIGINAL_CATALOG_ID=%s\nORIGINAL_EPOCH=%s\nORIGINAL_SEQUENCE=%s\n' \
+            "$catalog_id" "$original_epoch" "$original_sequence" >> "$GITHUB_ENV"
+      - name: Race two independent immutable production promotions
+        working-directory: atmos
+        env:
+          COMPONENT_R2_BUCKET: weatherx-components-production
+          CATALOG_ENDPOINT: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
+          CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+        run: |
+          generation_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          for lane in a b; do
+            mkdir -p "$RUNNER_TEMP/drill-$lane"
+            printf '{"catalogSafetyDrill":"%s","runId":"%s"}\n' "$lane" "$GITHUB_RUN_ID" > "$RUNNER_TEMP/drill-$lane/receipt.json"
+          done
+          publish_lane() {
+            lane="$1"
+            component_id="catalog-drill-$lane"
+            SOURCE_DIR="$RUNNER_TEMP/drill-$lane" \
+            COMPONENT_ID="$component_id" \
+            ARTIFACT_ID="$component_id-$GITHUB_RUN_ID" \
+            GENERATION_TIME="$generation_time" \
+            MOUNT="data-atmos/$component_id/" \
+            COMPONENT_QUALITY_CHECKS=catalog_safety_drill \
+            EXPECTED_CATALOG_ROLLBACK_EPOCH="$ORIGINAL_EPOCH" \
+              bash ops/platform/publish-r2-component.sh
+          }
+          publish_lane a > "$RUNNER_TEMP/drill-a.log" 2>&1 & pid_a=$!
+          publish_lane b > "$RUNNER_TEMP/drill-b.log" 2>&1 & pid_b=$!
+          failed=0
+          wait "$pid_a" || failed=1
+          wait "$pid_b" || failed=1
+          cat "$RUNNER_TEMP/drill-a.log"
+          cat "$RUNNER_TEMP/drill-b.log"
+          test "$failed" = 0
+      - name: Verify both concurrent winners without a lost update
+        working-directory: atmos
+        run: |
+          pointer="$RUNNER_TEMP/drill-pointer.json"
+          snapshot="$RUNNER_TEMP/drill-catalog.json"
+          node ops/platform/r2-rest.mjs get weatherx-data-production catalogs/current.json "$pointer"
+          catalog_id="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1])).catalogId)' "$pointer")"
+          node ops/platform/r2-rest.mjs get weatherx-data-production "catalogs/snapshots/$catalog_id.json" "$snapshot"
+          node --input-type=module - "$RUNNER_TEMP/original-catalog.json" "$pointer" "$snapshot" "$ORIGINAL_SEQUENCE" <<'NODE'
+          import fs from 'node:fs';
+          import { createHash } from 'node:crypto';
+          const [originalPath, pointerPath, snapshotPath, sequenceText] = process.argv.slice(2);
+          const original = JSON.parse(fs.readFileSync(originalPath));
+          const pointer = JSON.parse(fs.readFileSync(pointerPath));
+          const bytes = fs.readFileSync(snapshotPath);
+          const catalog = JSON.parse(bytes);
+          const core = ['ecmwf', 'gfs', 'hrrr', 'aifs'];
+          if (createHash('sha256').update(bytes).digest('hex') !== pointer.catalogSha256 ||
+              catalog.sequence !== Number(sequenceText) + 2 ||
+              !['catalog-drill-a', 'catalog-drill-b'].every((id) => catalog.components?.[id]) ||
+              !core.every((id) => catalog.components?.[id]?.manifestSha256 === original.components[id].manifestSha256)) {
+            throw new Error('concurrent production promotion lost an update or changed a core component');
+          }
+          NODE
+          printf 'DRILL_CATALOG_ID=%s\nDRILL_PROMOTIONS_PASSED=1\n' "$catalog_id" >> "$GITHUB_ENV"
+      - name: Always restore the exact pre-drill component set
+        if: ${{ always() }}
+        working-directory: atmos
+        env:
+          CATALOG_ENDPOINT: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
+          CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+        run: |
+          test -n "${ORIGINAL_CATALOG_ID:-}"
+          node ops/platform/r2-rest.mjs get weatherx-data-production catalogs/current.json "$RUNNER_TEMP/pre-rollback-pointer.json"
+          current_id="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1])).catalogId)' "$RUNNER_TEMP/pre-rollback-pointer.json")"
+          printf 'DRILL_CATALOG_ID=%s\n' "$current_id" >> "$GITHUB_ENV"
+          if [ "$current_id" != "$ORIGINAL_CATALOG_ID" ]; then
+            node ops/platform/submit-catalog-mutation.mjs rollback "$CATALOG_ENDPOINT" "$ORIGINAL_CATALOG_ID" "$current_id"
+          fi
+      - name: Verify rollback, stale-bake fencing, and whole-release fallback
+        if: ${{ always() }}
+        working-directory: atmos
+        env:
+          CATALOG_ENDPOINT: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
+          CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+        run: |
+          pointer="$RUNNER_TEMP/rollback-pointer.json"
+          snapshot="$RUNNER_TEMP/rollback-catalog.json"
+          node ops/platform/r2-rest.mjs get weatherx-data-production catalogs/current.json "$pointer"
+          catalog_id="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1])).catalogId)' "$pointer")"
+          node ops/platform/r2-rest.mjs get weatherx-data-production "catalogs/snapshots/$catalog_id.json" "$snapshot"
+          node --input-type=module - "$RUNNER_TEMP/original-catalog.json" "$pointer" "$snapshot" "$ORIGINAL_SEQUENCE" "$ORIGINAL_EPOCH" "$ORIGINAL_CATALOG_ID" "${DRILL_CATALOG_ID:-}" "${DRILL_PROMOTIONS_PASSED:-0}" <<'NODE'
+          import fs from 'node:fs';
+          import { createHash } from 'node:crypto';
+          const [originalPath, pointerPath, snapshotPath, sequenceText, epochText, originalId, drillId, drillPassed] = process.argv.slice(2);
+          const original = JSON.parse(fs.readFileSync(originalPath));
+          const pointer = JSON.parse(fs.readFileSync(pointerPath));
+          const bytes = fs.readFileSync(snapshotPath);
+          const catalog = JSON.parse(bytes);
+          const digests = (value) => Object.fromEntries(Object.entries(value.components).map(([id, component]) => [id, component.manifestSha256]));
+          const integrityFailed = createHash('sha256').update(bytes).digest('hex') !== pointer.catalogSha256 ||
+            JSON.stringify(digests(catalog)) !== JSON.stringify(digests(original));
+          const completedDrillFailed = drillPassed === '1' &&
+            (catalog.sequence !== Number(sequenceText) + 3 || catalog.rollbackEpoch !== Number(epochText) + 1 ||
+             pointer.rollbackOfCatalogId !== originalId || pointer.previousCatalogId !== drillId);
+          if (integrityFailed || completedDrillFailed) throw new Error('production rollback did not restore the exact component set');
+          NODE
+          if [ "${DRILL_PROMOTIONS_PASSED:-0}" = 1 ]; then
+            stale_manifest="components/catalog-drill-a/catalog-drill-a-$GITHUB_RUN_ID/component.json"
+            node ops/platform/r2-rest.mjs get weatherx-components-production "$stale_manifest" "$RUNNER_TEMP/stale-component.json"
+            stale_sha="$(sha256sum "$RUNNER_TEMP/stale-component.json" | cut -d' ' -f1)"
+            if node ops/platform/submit-catalog-mutation.mjs promote "$CATALOG_ENDPOINT" \
+                "$stale_manifest" "$stale_sha" '' "$ORIGINAL_EPOCH" > "$RUNNER_TEMP/stale.log" 2>&1; then
+              echo 'rollback failed to fence a stale production bake' >&2
+              exit 1
+            fi
+            grep -F catalog_epoch_changed "$RUNNER_TEMP/stale.log"
+          fi
+          node ops/platform/r2-rest.mjs get weatherx-data-production releases/current.json "$RUNNER_TEMP/release-pointer.json"
+          release_id="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1])).releaseId)' "$RUNNER_TEMP/release-pointer.json")"
+          node ops/platform/r2-rest.mjs get weatherx-data-production "releases/$release_id/manifest.json" "$RUNNER_TEMP/release-manifest.json"
+          for model in ecmwf gfs hrrr aifs; do
+            node ops/platform/verify-release-component.mjs verify \
+              "$RUNNER_TEMP/release-pointer.json" "$RUNNER_TEMP/release-manifest.json" "$model" >/dev/null
+          done
+          test "${DRILL_PROMOTIONS_PASSED:-0}" = 1
+          echo "production safety drill passed and restored the original component set"

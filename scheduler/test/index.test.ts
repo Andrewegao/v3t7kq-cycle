@@ -7,6 +7,7 @@ const env = {
   GITHUB_REPO: 'v3t7kq-cycle',
   GITHUB_WORKFLOW: 'catalog-bake.yml',
   GITHUB_REF: 'main',
+  CATALOG_TARGET: 'staging',
 } as CloudflareBindings;
 
 describe('Cloudflare scheduler dispatch bridge', () => {
@@ -22,7 +23,7 @@ describe('Cloudflare scheduler dispatch bridge', () => {
     expect(fetcher).toHaveBeenCalledOnce();
     const [url, init] = fetcher.mock.calls[0]!;
     expect(url).toBe('https://api.github.com/repos/Andrewegao/v3t7kq-cycle/actions/workflows/catalog-bake.yml/dispatches');
-    expect(JSON.parse(String(init?.body))).toEqual({ ref: 'main', inputs: { model } });
+    expect(JSON.parse(String(init?.body))).toEqual({ ref: 'main', inputs: { model, target: 'staging' } });
     expect(new Headers(init?.headers).get('authorization')).toBe('Bearer test-token');
   });
 
@@ -47,6 +48,13 @@ describe('Cloudflare scheduler dispatch bridge', () => {
   it('rejects unknown cron triggers before contacting GitHub', async () => {
     const fetcher = vi.fn<typeof fetch>();
     await expect(dispatchForCron('* * * * *', env, fetcher)).rejects.toThrow('unsupported scheduler cron');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('fails before dispatch when the configured catalog target is not recognized', async () => {
+    const fetcher = vi.fn<typeof fetch>();
+    await expect(dispatchForCron('7 * * * *', { ...env, CATALOG_TARGET: 'preview' } as never, fetcher))
+      .rejects.toThrow('unsupported catalog target');
     expect(fetcher).not.toHaveBeenCalled();
   });
 
