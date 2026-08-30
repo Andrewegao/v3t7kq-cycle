@@ -96,9 +96,17 @@ jobs:
       - name: playwright chromium (the demo-ready gate drives a real browser on deploy cycles)
         if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         run: cd app && npx playwright install --with-deps chromium
-      - name: mirror live data tree
+      - name: hydrate and verify current production R2 release
         if: ${{ steps.bake_plan.outputs.skip != 'true' }}
-        run: bash ops/mirror-live-data.sh
+        env:
+          R2_REMOTE: weatherx:weatherx-data-production
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+        run: bash ops/platform/hydrate-r2-release.sh
       - name: bake → gate → publish immutable data release
         if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         env:
