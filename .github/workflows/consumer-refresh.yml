@@ -1,0 +1,131 @@
+# Manual code-only repair for the two existing production release consumers.
+# No bake, R2 publication, catalog promotion, secret changes, or scheduler deployment.
+name: WeatherX production consumer refresh
+
+on:
+  workflow_dispatch:
+    inputs:
+      atmosphere_sha:
+        description: Exact reviewed 40-character Atmos master commit
+        type: string
+        required: true
+      expected_release:
+        description: Exact release already published at the production R2 current pointer
+        type: string
+        required: true
+      confirm:
+        description: Type REFRESH-PRODUCTION-CONSUMERS
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+# Share the existing data-edge cutover lock; never cancel an in-progress refresh.
+concurrency:
+  group: weatherx-production-data-edge
+  cancel-in-progress: false
+
+jobs:
+  consumer-refresh:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    environment: production
+    env:
+      ATMOSPHERE_SHA: ${{ inputs.atmosphere_sha }}
+      EXPECTED_RELEASE: ${{ inputs.expected_release }}
+    steps:
+      - name: Require immutable consumer-refresh confirmation
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          ATMOSPHERE_SHA: ${{ inputs.atmosphere_sha }}
+          EXPECTED_RELEASE: ${{ inputs.expected_release }}
+        run: |
+          test "$CONFIRM" = REFRESH-PRODUCTION-CONSUMERS
+          [[ "$ATMOSPHERE_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          [[ "$EXPECTED_RELEASE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$ ]] || exit 1
+          [[ "$EXPECTED_RELEASE" != *..* ]] || exit 1
+      - name: Checkout the exact cycle workflow source
+        timeout-minutes: 2
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: cycle
+          persist-credentials: false
+      - name: Checkout the exact reviewed Atmos source
+        timeout-minutes: 2
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Andrewegao/atmos
+          ref: ${{ inputs.atmosphere_sha }}
+          fetch-depth: 0
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: atmos
+          persist-credentials: false
+      - name: Verify immutable source provenance
+        env:
+          CYCLE_SHA: ${{ github.sha }}
+        run: |
+          test "$(git -C cycle rev-parse HEAD)" = "$CYCLE_SHA"
+          test "$(git -C atmos rev-parse HEAD)" = "$ATMOSPHERE_SHA"
+          git -C atmos merge-base --is-ancestor "$ATMOSPHERE_SHA" refs/remotes/origin/master
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        timeout-minutes: 2
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: atmos/platform/edge/package-lock.json
+      - name: Install locked consumer dependencies
+        timeout-minutes: 5
+        working-directory: atmos/platform/edge
+        run: npm ci
+      - name: Run consumer refresh safety contracts
+        timeout-minutes: 2
+        run: |
+          node cycle/tests/consumer-workflow.mjs
+          node --test cycle/tests/consumer-refresh*.mjs
+      - name: Run the complete consumer release gates
+        timeout-minutes: 5
+        working-directory: atmos/platform/edge
+        run: npm run check
+      - name: Capture and validate the unchanged production boundary
+        timeout-minutes: 6
+        env:
+          REFRESH_RECEIPT: ${{ runner.temp }}/consumer-refresh/receipt.json
+          DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
+          PLATFORM_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+        run: |
+          node cycle/tools/consumer-refresh.mjs preflight \
+            --atmos atmos --receipt "$REFRESH_RECEIPT" \
+            --release "$EXPECTED_RELEASE" --sha "$ATMOSPHERE_SHA"
+      - name: Refresh both consumers with guarded verification and rollback
+        id: refresh
+        timeout-minutes: 14
+        env:
+          REFRESH_RECEIPT: ${{ runner.temp }}/consumer-refresh/receipt.json
+          DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
+          PLATFORM_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+        run: |
+          node cycle/tools/consumer-refresh.mjs execute \
+            --atmos atmos --receipt "$REFRESH_RECEIPT" \
+            --release "$EXPECTED_RELEASE" --sha "$ATMOSPHERE_SHA"
+      - name: Recover prior consumer versions after an interrupted refresh
+        if: ${{ always() && (steps.refresh.outcome == 'failure' || steps.refresh.outcome == 'cancelled') }}
+        timeout-minutes: 6
+        env:
+          REFRESH_RECEIPT: ${{ runner.temp }}/consumer-refresh/receipt.json
+          DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
+          PLATFORM_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+        run: |
+          node cycle/tools/consumer-refresh.mjs recover \
+            --atmos atmos --receipt "$REFRESH_RECEIPT" \
+            --release "$EXPECTED_RELEASE" --sha "$ATMOSPHERE_SHA"
+      - name: Retain the non-sensitive consumer refresh receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: consumer-refresh-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/consumer-refresh/receipt.json
+          if-no-files-found: ignore
+          retention-days: 30

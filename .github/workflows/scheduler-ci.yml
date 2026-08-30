@@ -10,9 +10,11 @@ on:
       - ".github/workflows/scheduler-ci.yml"
       - ".github/workflows/scheduler-deploy.yml"
       - ".github/workflows/ui-release.yml"
+      - ".github/workflows/consumer-refresh.yml"
       - ".github/workflows/fusion-*.yml"
       - "scheduler/**"
       - "tests/**"
+      - "tools/**"
 
 permissions:
   contents: read
@@ -32,3 +34,7 @@ jobs:
       - run: npm run check --prefix scheduler
       - name: Late-failure bake diagnostic retention contract
         run: node tests/bake-diagnostics.mjs
+      - name: Consumer refresh workflow safety contract
+        run: node tests/consumer-workflow.mjs
+      - name: Consumer refresh preflight and rollback contracts
+        run: node --test tests/consumer-refresh*.mjs
