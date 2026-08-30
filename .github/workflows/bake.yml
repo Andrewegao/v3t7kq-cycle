@@ -106,6 +106,7 @@ jobs:
           BAKE_PREFLIGHT_PLAN: ${{ runner.temp }}/weatherx-bake-plan.json
           DATA_PUBLISH_MODE: r2-release
           R2_REMOTE: weatherx:weatherx-data-production
+          COMPONENT_R2_REMOTE: weatherx:weatherx-components-production
           RELEASE_ID: cycle-${{ github.run_id }}
           RCLONE_CONFIG_WEATHERX_TYPE: s3
           RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
