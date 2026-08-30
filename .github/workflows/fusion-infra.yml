@@ -58,7 +58,7 @@ jobs:
       - run: npm run check --prefix platform/edge
       - name: Provision scoped keys for preprovisioned isolated fusion buckets
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.FUSION_DEPLOY_API_TOKEN }}
           TARGET: ${{ inputs.target }}
           FUSION_ISSUANCE_KEY: ${{ secrets.FUSION_ISSUANCE_KEY }}
           FUSION_ARCHIVE_READ_KEY: ${{ secrets.FUSION_ARCHIVE_READ_KEY }}
@@ -67,7 +67,7 @@ jobs:
       - name: Deploy only isolated fusion Workers, with learning disabled
         working-directory: platform/edge
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.FUSION_DEPLOY_API_TOKEN }}
           TARGET: ${{ inputs.target }}
         run: |
           npx wrangler deploy --env "$TARGET" -c wrangler.fusion-archive.jsonc
@@ -75,7 +75,7 @@ jobs:
       - name: Verify isolated storage and fail-closed control
         env:
           TARGET: ${{ inputs.target }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.FUSION_DEPLOY_API_TOKEN }}
           FUSION_ISSUANCE_KEY: ${{ secrets.FUSION_ISSUANCE_KEY }}
           FUSION_ARCHIVE_READ_KEY: ${{ secrets.FUSION_ARCHIVE_READ_KEY }}
           FUSION_PROMOTION_KEY: ${{ secrets.FUSION_PROMOTION_KEY }}
