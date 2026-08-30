@@ -21,5 +21,11 @@ assert.match(workflow, /VAULT_REMOTE: weatherx:weatherx-data-staging\/vault/,
 assert.match(workflow, /RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: \$\{\{ secrets\.R2_ACCESS_KEY_ID \}\}/);
 assert.match(workflow, /if: \$\{\{ always\(\) && steps\.bake_plan\.outputs\.skip != 'true'[\s\S]*?bash ops\/vault-archive\.sh/,
   'vault retry must run independently of the bake/release step result');
+assert.match(workflow, /name: hydrate and verify current production R2 release[\s\S]*?R2_REMOTE: weatherx:weatherx-data-production[\s\S]*?bash ops\/platform\/hydrate-r2-release\.sh/,
+  'fresh runners must hydrate the verified immutable production release before baking');
+assert.match(workflow, /name: hydrate and verify current production R2 release[\s\S]*?secrets\.R2_PRODUCTION_ACCESS_KEY_ID[\s\S]*?secrets\.R2_PRODUCTION_SECRET_ACCESS_KEY/,
+  'release hydration must use the bucket-scoped production R2 credential');
+assert.doesNotMatch(workflow, /mirror-live-data\.sh/,
+  'the retired Pages data mirror must not return to the production data lane');
 
 console.log('bake workflow data persistence contracts: ok');
