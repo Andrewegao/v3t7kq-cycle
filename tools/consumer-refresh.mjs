@@ -207,7 +207,7 @@ async function releaseProof(atmos,release,previous) {
       assert.equal(payload.releaseId,release);assert.equal(payload.runId,pointer.pointSeries.models[definition.model].runId);
       assert.equal(payload.quality,'complete','point pack is stale or missing requested variables');
       for(const item of Object.values(payload.series))assert.ok(item.samples.some(s=>Number.isFinite(s.value)),'no finite point samples');
-      points.push({...definition,payloadSha256:hash(JSON.stringify(payload)),runId:payload.runId});
+      points.push({...definition,payloadSha256:hash(JSON.stringify(payload)),payload,runId:payload.runId});
     }
     const fallbacks=[];
     for(const path of ['ledger/index.json','verify/index.json','health.json']){
@@ -218,24 +218,69 @@ async function releaseProof(atmos,release,previous) {
     return {pointerSha256:hash(raw),manifestSha256:pointer.manifestSha256,objectCount:pointer.objectCount,pointObjectCount:pointer.pointSeries.objectCount,points,fallbacks};
   } finally {loader.deregister();}
 }
-async function liveVerify(receipt) {
+// Persist only our own stage identifiers and a small error category, never arbitrary
+// assertion/CLI messages (which can contain binding values or response bodies).
+export async function checked(stage,action,report=()=>{}) {
+  assert.match(stage,/^[A-Za-z0-9:/._-]{1,180}$/,'invalid diagnostic stage');
+  report({stage,state:'started'});
+  try {const result=await action();report({stage,state:'passed'});return result;}
+  catch(error){report({stage,state:'failed',kind:error?.code==='ERR_ASSERTION'?'assertion':error?.name==='AbortError'?'aborted':'error'});throw error;}
+}
+// Math.atan2 is implementation-approximated. Real identical WXPS packs at the
+// pinned source differ by <=5.69e-14 degrees in Node/workerd. Keep every other
+// payload field exact; admit only <=1e-12 degree rounding in derived direction.
+export function assertPointPayload(actual,expected) {
+  const normalized=structuredClone(actual);
+  const samples=normalized?.series?.wind_direction?.samples;
+  const reference=expected?.series?.wind_direction?.samples;
+  let roundedDirectionValues=0,maxDirectionDifference=0;
+  if(Array.isArray(samples)&&Array.isArray(reference)) {
+    assert.equal(samples.length,reference.length,'direction sample count differs');
+    for(let i=0;i<samples.length;i++){
+      const value=samples[i]?.value,wanted=reference[i]?.value;
+      if(Number.isFinite(value)&&Number.isFinite(wanted)){
+        const difference=Math.abs(value-wanted);
+        assert.ok(difference<=1e-12,'derived direction exceeds runtime rounding bound');
+        if(difference>0){roundedDirectionValues++;maxDirectionDifference=Math.max(maxDirectionDifference,difference);}
+        samples[i].value=wanted;
+      }
+    }
+  }
+  assert.deepEqual(normalized,expected,'decoded payload differs beyond runtime direction rounding');
+  assert.equal(hash(JSON.stringify(normalized)),hash(JSON.stringify(expected)),'normalized payload serialization differs');
+  return {roundedDirectionValues,maxDirectionDifference};
+}
+export async function liveVerify(receipt,{read=bytes,report=()=>{}}={}) {
+  const check=(stage,action)=>checked(stage,action,report);
   for(const [path,wanted] of [['/api/platform/data-health',{ok:true,authMode:'public',catalogMode:'serve'}],['/api/platform/health',{ok:true,authMode:'observe',billingMode:'disabled'}]]){
-    const {body}=await bytes(ORIGIN+path);assert.deepEqual(JSON.parse(body),wanted,'safety health mismatch');
+    const stage=`health:${path.includes('data-health')?'data':'platform'}`;
+    const {body}=await check(stage+':read',()=>read(ORIGIN+path));
+    await check(stage+':payload',()=>assert.deepEqual(JSON.parse(body),wanted,'safety health mismatch'));
   }
   for(const sample of receipt.proof.fallbacks){
     for(const method of ['GET','HEAD']){
-      const {body,headers}=await bytes(`${ORIGIN}/data/${sample.path}`,null,16*1024*1024,method);
-      assert.equal(headers.get('x-weatherx-release'),receipt.release,'fallback still serves wrong release');
-      assert.equal(headers.get('x-weatherx-catalog'),null);
-      if(method==='GET')assert.equal(hash(body),sample.sha256,'fallback bytes mismatch');
+      const stage=`fallback:${sample.path}:${method}`;
+      const {body,headers}=await check(stage+':read',()=>read(`${ORIGIN}/data/${sample.path}`,null,16*1024*1024,method));
+      await check(stage+':release',()=>assert.equal(headers.get('x-weatherx-release'),receipt.release,'fallback still serves wrong release'));
+      await check(stage+':catalog',()=>assert.equal(headers.get('x-weatherx-catalog'),null));
+      if(method==='GET')await check(stage+':payload',()=>assert.equal(hash(body),sample.sha256,'fallback bytes mismatch'));
     }
   }
   for(const sample of receipt.proof.points){
-    const {body,headers}=await bytes(sample.url);assert.equal(headers.get('x-weatherx-release'),receipt.release);
-    assert.equal(hash(JSON.stringify(JSON.parse(body))),sample.payloadSha256,'live decoder differs from exact-source real-pack proof');
+    const stage=`point:${sample.model}:${sample.name}`;
+    const {body,headers}=await check(stage+':read',()=>read(sample.url));
+    await check(stage+':release',()=>assert.equal(headers.get('x-weatherx-release'),receipt.release));
+    await check(stage+':payload',()=>{
+      assert.equal(hash(JSON.stringify(sample.payload)),sample.payloadSha256,'reference payload hash mismatch');
+      const actual=JSON.parse(body);
+      const comparison=assertPointPayload(actual,sample.payload);
+      receipt.pointComparisons??={};
+      receipt.pointComparisons[`${sample.model}:${sample.name}`]={expectedSha256:sample.payloadSha256,actualSha256:hash(JSON.stringify(actual)),...comparison};
+    });
   }
   for(const model of ['ecmwf','gfs','hrrr','aifs']){
-    const {headers}=await bytes(`${ORIGIN}/data/${model}/index.json`);assert.ok(headers.get('x-weatherx-catalog'),'catalog authority lost');
+    const {headers}=await check(`catalog:${model}:read`,()=>read(`${ORIGIN}/data/${model}/index.json`));
+    await check(`catalog:${model}:header`,()=>assert.ok(headers.get('x-weatherx-catalog'),'catalog authority lost'));
   }
 }
 const pause = async ms => {await new Promise(r=>setTimeout(r,boundedTimeout(ms)));};
@@ -265,6 +310,12 @@ export async function main(args=process.argv.slice(2)) {
   assert.equal(receipt.workflowRun,process.env.GITHUB_RUN_ID);assert.equal(receipt.workflowAttempt,process.env.GITHUB_RUN_ATTEMPT);
   if(command==='execute'){assert.equal(receipt.status,'preflight-passed');assert.ok(Date.now()-Date.parse(receipt.createdAt)<15*60_000,'preflight expired');}
   const persist=()=>saveReceipt(receiptPath,receipt);
+  const report=event=>{
+    receipt.lastCheck={...event,at:new Date().toISOString()};
+    if(event.state==='failed')receipt.failedChecks=[...(receipt.failedChecks??[]),receipt.lastCheck].slice(-16);
+    persist();
+  };
+  const check=(stage,action)=>checked(stage,action,report);
   const wrangler=resolve(atmos,'platform/edge/node_modules/wrangler/bin/wrangler.js');
   async function run(t,args){
     // Capture output; print neither credentials nor arbitrary remote response bodies.
@@ -305,13 +356,13 @@ export async function main(args=process.argv.slice(2)) {
       deploy:async id=>{
         const t=targets.find(t=>t.id===id);assert.deepEqual(await snapshot(t),receipt.before[id],'concurrent deployment detected');
         receipt.status='activating';persist();
-        await run(t,['versions','deploy',`${receipt.uploaded[id]}@100%`,'--yes','--message',`Qualified v2 consumer ${sha}`]);
-        await converge(async()=>assert.equal((await snapshot(t)).version,receipt.uploaded[id]));
+        await check(`activation:${id}`,()=>run(t,['versions','deploy',`${receipt.uploaded[id]}@100%`,'--yes','--message',`Qualified v2 consumer ${sha}`]));
+        await check(`activation:${id}:converged`,()=>converge(async()=>assert.equal((await snapshot(t)).version,receipt.uploaded[id])));
       },
       verify:async()=>{
-        await converge(()=>liveVerify(receipt));await pause(31_000);await liveVerify(receipt);
-        receipt.after={};for(const t of targets){const state=await snapshot(t);assert.equal(state.version,receipt.uploaded[t.id]);assert.equal(state.settingsSha256,receipt.before[t.id].settingsSha256,'settings drift');receipt.after[t.id]=state;}
-        assert.equal(hash(await remoteObject('releases/current.json',process.env.DATA_EDGE_TOKEN,256*1024)),receipt.proof.pointerSha256,'pointer changed during rollout');
+        await converge(()=>liveVerify(receipt,{report}));await pause(31_000);await liveVerify(receipt,{report});
+        receipt.after={};for(const t of targets){await check(`postcheck:${t.id}:settings`,async()=>{const state=await snapshot(t);assert.equal(state.version,receipt.uploaded[t.id]);assert.equal(state.settingsSha256,receipt.before[t.id].settingsSha256,'settings drift');receipt.after[t.id]=state;});}
+        await check('postcheck:pointer',async()=>assert.equal(hash(await remoteObject('releases/current.json',process.env.DATA_EDGE_TOKEN,256*1024)),receipt.proof.pointerSha256,'pointer changed during rollout'));
       },
       rollback:async id=>{
         if(!rollbackStarted){rollbackStarted=true;deadline=Date.now()+4*60_000;cancellation=new AbortController();}
