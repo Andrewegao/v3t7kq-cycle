@@ -1,0 +1,88 @@
+name: WeatherX fusion infrastructure
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        type: choice
+        options: [staging, production]
+        default: staging
+        required: true
+      confirmation:
+        description: Enter DEPLOY ISOLATED FUSION STAGING or DEPLOY ISOLATED FUSION PRODUCTION
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-fusion-infrastructure-${{ inputs.target }}
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    environment:
+      name: ${{ inputs.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Andrewegao/atmos
+          ref: ${{ vars.FUSION_ENGINE_SHA }}
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          persist-credentials: false
+      - name: Require the reviewed immutable engine
+        env:
+          ENGINE_SHA: ${{ vars.FUSION_ENGINE_SHA }}
+        run: |
+          [[ "$ENGINE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$ENGINE_SHA"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - run: npm ci --prefix app
+      - name: Feedback contract tests and CLI types
+        run: |
+          cd app
+          npx tsc -p ../ops/fusion/tsconfig.json --noEmit
+          npx vitest run src/fusion/feedback.test.ts
+      - name: Validate confirmation and preprovisioned isolated resources
+        env:
+          TARGET: ${{ inputs.target }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          case "$TARGET" in
+            staging) test "$CONFIRMATION" = 'DEPLOY ISOLATED FUSION STAGING' ;;
+            production) test "$CONFIRMATION" = 'DEPLOY ISOLATED FUSION PRODUCTION' ;;
+            *) exit 1 ;;
+          esac
+      - run: npm ci --prefix platform/edge
+      - run: npm run check --prefix platform/edge
+      - name: Provision only dedicated fusion buckets and scoped service keys
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+          TARGET: ${{ inputs.target }}
+          FUSION_ISSUANCE_KEY: ${{ secrets.FUSION_ISSUANCE_KEY }}
+          FUSION_ARCHIVE_READ_KEY: ${{ secrets.FUSION_ARCHIVE_READ_KEY }}
+          FUSION_PROMOTION_KEY: ${{ secrets.FUSION_PROMOTION_KEY }}
+        run: node ops/fusion/provision.mjs
+      - name: Deploy only isolated fusion Workers, with learning disabled
+        working-directory: platform/edge
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          npx wrangler deploy --env "$TARGET" -c wrangler.fusion-archive.jsonc
+          npx wrangler deploy --env "$TARGET" -c wrangler.fusion-control.jsonc
+      - name: Verify isolated storage and fail-closed control
+        env:
+          TARGET: ${{ inputs.target }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+          FUSION_ISSUANCE_KEY: ${{ secrets.FUSION_ISSUANCE_KEY }}
+          FUSION_ARCHIVE_READ_KEY: ${{ secrets.FUSION_ARCHIVE_READ_KEY }}
+          FUSION_PROMOTION_KEY: ${{ secrets.FUSION_PROMOTION_KEY }}
+        run: app/node_modules/.bin/tsx ops/fusion/smoke.ts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fusion-infrastructure-proof
+          path: feedback-output/infrastructure-proof.json
+          if-no-files-found: error
+          retention-days: 90
