@@ -28,4 +28,22 @@ assert.match(workflow, /name: hydrate and verify current production R2 release[\
 assert.doesNotMatch(workflow, /mirror-live-data\.sh/,
   'the retired Pages data mirror must not return to the production data lane');
 
+assert.match(workflow, /fetch-depth: 32/,
+  'checkpoint source ancestry must be verifiable across reviewed gate-only commits');
+assert.match(workflow, /persist-credentials: false/);
+assert.match(workflow, /python3 ops\/maintenance_checkpoint\.py fingerprint/);
+assert.match(workflow, /name: restore unqualified maintenance checkpoint[\s\S]*?actions\/cache\/restore@[a-f0-9]{40}/);
+assert.match(workflow, /maintenance-inputs-v1-\$\{\{ steps\.maintenance_checkpoint\.outputs\.producer \}\}/,
+  'different data producer versions must not share completed-input checkpoint keys');
+assert.match(workflow, /MAINTENANCE_CHECKPOINT_ENABLED: '1'/);
+assert.match(workflow, /MAINTENANCE_MODEL_PARALLELISM: '2'/,
+  'model concurrency on a shared maintenance runner must be explicitly bounded');
+assert.ok(workflow.indexOf('name: hydrate and verify current production R2 release')
+  < workflow.indexOf('name: bake → gate → publish immutable data release'),
+  'checkpoint validation must compare against freshly hydrated production bytes');
+assert.match(workflow, /name: save unqualified maintenance checkpoint\n\s+if: \$\{\{ always\(\)/,
+  'a late failed gate must retain completed inputs without retaining gate authority');
+assert.match(workflow, /path: ops\/\.maintenance-checkpoint/);
+assert.doesNotMatch(workflow, /resume.*(?:skip.gate|skip.validation)|QUALIFIED_CACHE/i);
+
 console.log('bake workflow data persistence contracts: ok');

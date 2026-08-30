@@ -23,6 +23,8 @@ jobs:
         with:
           repository: Andrewegao/atmos
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          fetch-depth: 32 # bound checkout cost; unknown checkpoint ancestry is a cache miss
+          persist-credentials: false
       - name: plan conservative no-change fast path
         id: bake_plan
         env:
@@ -93,6 +95,23 @@ jobs:
       - name: app deps (Weather Lab and release gates)
         if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         run: npm ci --prefix app
+      - name: identify committed maintenance input producer
+        id: maintenance_checkpoint
+        if: ${{ steps.bake_plan.outputs.skip != 'true' }}
+        run: |
+          producer="$(python3 ops/maintenance_checkpoint.py fingerprint)"
+          [[ "$producer" =~ ^[a-f0-9]{64}$ ]]
+          echo "producer=$producer" >> "$GITHUB_OUTPUT"
+      # These are unqualified weather-data inputs only, never app code, secrets,
+      # private fusion issuance archives, or a cached release-gate decision.
+      - name: restore unqualified maintenance checkpoint
+        if: ${{ steps.bake_plan.outputs.skip != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ops/.maintenance-checkpoint
+          key: maintenance-inputs-v1-${{ steps.maintenance_checkpoint.outputs.producer }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: maintenance-inputs-v1-${{ steps.maintenance_checkpoint.outputs.producer }}-
       - name: playwright chromium (the demo-ready gate drives a real browser on deploy cycles)
         if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         run: cd app && npx playwright install --with-deps chromium
@@ -116,6 +135,8 @@ jobs:
           R2_REMOTE: weatherx:weatherx-data-production
           COMPONENT_R2_REMOTE: weatherx:weatherx-components-production
           RELEASE_ID: cycle-${{ github.run_id }}
+          MAINTENANCE_CHECKPOINT_ENABLED: '1'
+          MAINTENANCE_MODEL_PARALLELISM: '2'
           RCLONE_CONFIG_WEATHERX_TYPE: s3
           RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
           RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
@@ -123,6 +144,13 @@ jobs:
           RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
           RCLONE_CONFIG_WEATHERX_REGION: auto
         run: bash ops/bake-weatherx.sh
+      - name: save unqualified maintenance checkpoint
+        if: ${{ always() && steps.bake_plan.outputs.skip != 'true' && steps.maintenance_checkpoint.outputs.producer != '' && hashFiles('ops/.maintenance-checkpoint/manifest.json') != '' }}
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ops/.maintenance-checkpoint
+          key: maintenance-inputs-v1-${{ steps.maintenance_checkpoint.outputs.producer }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: save rolling verification cache
         if: ${{ always() && steps.bake_plan.outputs.skip != 'true' }}
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
