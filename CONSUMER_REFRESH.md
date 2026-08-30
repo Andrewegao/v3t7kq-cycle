@@ -20,10 +20,10 @@ the workflow activate platform followed by data, using explicit version IDs and 
 publishers. Versions operations leave routes, cron triggers and queue-consumer configuration in
 place; no secret writes, R2 writes, catalog mutations, Pages deployments or feature activation occur.
 
-Live acceptance requires exact decoded response hashes, pinned/unpinned GET+HEAD fallback parity,
+Live acceptance requires source-bound decoded response equality, pinned/unpinned GET+HEAD fallback parity,
 catalog authority, public/serve data health and observe/disabled platform health, repeated after
 31 seconds. The receipt contains source/release IDs, hashes and previous/new Worker version IDs,
-not tokens, raw settings or personal data. Execution has an eight-minute deadline plus a reserved
+and public-weather reference payloads, not tokens, raw settings or personal data. Execution has an eight-minute deadline plus a reserved
 four-minute recovery budget; a separate workflow recovery step covers failed/interrupted execution.
 An abrupt runner loss can still prevent recovery and requires inspection of the retained receipt.
 
@@ -32,3 +32,27 @@ overwritten. Restoring old pre-v2 consumers is **not** a claim that v2 data is t
 workflow reports failure and does not rewrite the data pointer or initiate a bake. Full production
 launch qualification (including application, billing, infrastructure and source semantics) remains
 separate; successful consumer refresh alone is not launch approval.
+
+Failure receipts include the last named check and up to 16 failed checks, including the exact
+health, fallback method/header/body, point-model/location, catalog, activation or postcheck stage.
+Only static check identifiers, timestamps and a small error category are retained. Arbitrary
+assertion messages, settings values and CLI output are excluded. Diagnostics do not alter recovery.
+
+## Cross-runtime numeric comparison
+
+Refresh 33342375037 restored its prior versions after verification failed. The original error
+wrapper omitted the failed assertion; the new stage diagnostics address that evidence gap.
+Independent replay of its fourteen real, manifest-hashed packs at identical source e479977 found
+four whole-payload hash mismatches between Node 22.21.1 and workerd 1.20260811.1. Only eight
+`wind_direction` sample values differed, by at most 5.684341886080802e-14 degrees. All fourteen
+Node hashes matched the original receipt; every other field and object key order matched workerd.
+Thus whole-response hash equality can falsely reject a correct decoder. This does not prove
+which check failed first in that historical rollout or exclude another live failure.
+
+The comparison now permits at most 1e-12 degrees absolute difference **only** for finite derived
+`series.wind_direction.samples[].value` numbers before strict equality of the entire payload.
+Sample times, coordinates, source/run/release IDs, quality, missing values, array lengths, units,
+temperature, wind speed, precipitation and every other field remain exact. Raw pack/manifest
+hashes and fallback bytes remain exact. Original and actual response hashes plus numeric-difference
+counts/bounds are retained; actual responses are not rewritten. Neither weather source production,
+data accuracy gates nor the deployed consumer code changes.
