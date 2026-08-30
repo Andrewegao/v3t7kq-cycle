@@ -11,7 +11,7 @@ for (const workflow of [issue, evaluate, promote, infra]) {
 }
 for (const workflow of [issue, evaluate, promote]) {
   assert.match(workflow, /environment: production/);
-  assert.doesNotMatch(workflow, /CLOUDFLARE_.*TOKEN|R2_.*KEY|wrangler|deploy-code-only|bake-weatherx/);
+  assert.doesNotMatch(workflow, /CLOUDFLARE_.*TOKEN|FUSION_DEPLOY_API_TOKEN|R2_.*KEY|wrangler|deploy-code-only|bake-weatherx/);
 }
 assert.match(issue, /secrets.FUSION_ISSUANCE_KEY/);
 assert.doesNotMatch(issue, /secrets.FUSION_PROMOTION_KEY|secrets.FUSION_ARCHIVE_READ_KEY/);
@@ -29,6 +29,6 @@ assert.match(issue, /vars.FUSION_FEEDBACK_ENABLED == 'true'/);
 assert.match(evaluate, /vars.FUSION_FEEDBACK_ENABLED == 'true'/);
 assert.doesNotMatch(issue, /path: feedback-output\/(issues|truth)/);
 assert.doesNotMatch(evaluate, /path: feedback-archive/);
-assert.match(infra, /CLOUDFLARE_WORKERS_API_TOKEN/);
-assert.doesNotMatch(infra, /secrets\.CLOUDFLARE_API_TOKEN|R2_PRODUCTION|pages deploy/);
+assert.equal((infra.match(/secrets\.FUSION_DEPLOY_API_TOKEN/g) ?? []).length, 3);
+assert.doesNotMatch(infra, /secrets\.CLOUDFLARE_API_TOKEN|CLOUDFLARE_WORKERS_API_TOKEN|R2_PRODUCTION|pages deploy/);
 console.log('fusion feedback authority/workflow contract: ok');
