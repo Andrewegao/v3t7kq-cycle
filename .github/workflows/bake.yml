@@ -199,6 +199,22 @@ jobs:
       - name: cycle log
         if: always()
         run: |
-          # A 3h bake can cross UTC midnight — tail the NEWEST log, not today's name (a failed
-          # run's only diagnosis lives here; 08-20 20:56Z run lost its verdict to this).
-          tail -n 200 "$(ls -t ops/logs/bake-*.log 2>/dev/null | head -1)" || true
+          # A bake can cross UTC midnight. Keep bounded checkpoint/resource
+          # receipts from the newest log even when browser output fills its tail.
+          # Do not upload the full internal log or print unrelated earlier lines.
+          log_file=
+          for candidate in ops/logs/bake-*.log; do
+            if [ -f "$candidate" ] && [ ! -L "$candidate" ] &&
+               { [ -z "$log_file" ] || [ "$candidate" -nt "$log_file" ]; }; then
+              log_file="$candidate"
+            fi
+          done
+          if [ -n "$log_file" ] && [ -f "$log_file" ]; then
+            awk '
+              /^checkpoint: / { print substr($0, 1, 512); next }
+              /^model-input resource (ecmwf|gfs|hrrr|aifs) peak-rss-kib=[0-9]+ elapsed-seconds=[0-9.]+$/ { print; next }
+              /^\[[0-9T:.+Z-]+\] model-input start (ecmwf|gfs|hrrr|aifs)$/ { print; next }
+              /^\[[0-9T:.+Z-]+\] model-input end (ecmwf|gfs|hrrr|aifs) exit=-?[0-9]+$/ { print }
+            ' "$log_file" || true
+            tail -n 200 "$log_file" || true
+          fi
