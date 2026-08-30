@@ -1,0 +1,90 @@
+name: WeatherX fusion evaluation
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [score, build, evaluate]
+        default: score
+        required: true
+      confirmation:
+        description: For one preregistered build only, enter BUILD FROZEN FUSION CANDIDATE
+        type: string
+        required: false
+  schedule:
+    - cron: '47 9 * * *'
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: weatherx-fusion-evaluation
+  cancel-in-progress: false
+jobs:
+  evaluate:
+    if: ${{ github.ref == 'refs/heads/main' && vars.FUSION_FEEDBACK_ENABLED == 'true' }}
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Andrewegao/atmos
+          ref: ${{ vars.FUSION_ENGINE_SHA }}
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          persist-credentials: false
+      - name: Require the reviewed immutable engine
+        env:
+          ENGINE_SHA: ${{ vars.FUSION_ENGINE_SHA }}
+        run: |
+          [[ "$ENGINE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$ENGINE_SHA"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - run: npm ci --prefix app
+      - name: Feedback contract tests and CLI types
+        run: |
+          cd app
+          npx tsc -p ../ops/fusion/tsconfig.json --noEmit
+          npx vitest run src/fusion/feedback.test.ts
+      - name: Read source-bound candidate from the successful evaluation run
+        if: ${{ vars.FUSION_SHADOW_RUN != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVALUATION_RUN_ID: ${{ vars.FUSION_SHADOW_RUN }}
+          EXPECTED_CANDIDATE_ID: ${{ vars.FUSION_SHADOW_CANDIDATE }}
+        run: bash ops/fusion/download-evaluation.sh
+      - name: Pull immutable archive with read-only authority
+        env:
+          FUSION_ARCHIVE_READ_KEY: ${{ secrets.FUSION_ARCHIVE_READ_KEY }}
+        run: app/node_modules/.bin/tsx ops/fusion/cli.ts pull --days 60 --out feedback-archive
+      - name: Score, fit a preregistered candidate, or evaluate the frozen shadow
+        env:
+          REQUESTED_MODE: ${{ inputs.mode || 'score' }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          FUSION_CALIBRATION_RUNTIME_ENABLED: ${{ vars.FUSION_CALIBRATION_RUNTIME_ENABLED || 'false' }}
+        run: |
+          candidate_args=()
+          mode="$REQUESTED_MODE"
+          if [ -f feedback-evidence/candidate.json ]; then
+            test "$mode" != build
+            mode=evaluate
+            candidate_args=(--candidate feedback-evidence/candidate.json)
+          fi
+          if [ "$mode" = build ]; then
+            test "$CONFIRMATION" = 'BUILD FROZEN FUSION CANDIDATE'
+            test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          fi
+          if [ "$mode" = evaluate ]; then test -f feedback-evidence/candidate.json; fi
+          app/node_modules/.bin/tsx ops/fusion/cli.ts "$mode" --archive feedback-archive --out feedback-output "${candidate_args[@]}"
+      - name: Keep source-bound evaluation and separate fusion accuracy
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fusion-evaluation
+          path: |
+            feedback-output/candidate.json
+            feedback-output/evaluation.json
+            feedback-output/evaluation-receipt.json
+            feedback-output/pending.json
+            feedback-output/accuracy/*
+          if-no-files-found: error
+          retention-days: 90

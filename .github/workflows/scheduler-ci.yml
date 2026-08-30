@@ -10,6 +10,7 @@ on:
       - ".github/workflows/scheduler-ci.yml"
       - ".github/workflows/scheduler-deploy.yml"
       - ".github/workflows/ui-release.yml"
+      - ".github/workflows/fusion-*.yml"
       - "scheduler/**"
 
 permissions:

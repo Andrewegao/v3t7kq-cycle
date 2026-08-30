@@ -1,0 +1,93 @@
+name: WeatherX fusion guarded promotion
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        type: choice
+        options: [promote, rollback]
+        required: true
+      evaluation_run:
+        type: string
+        required: false
+      candidate_id:
+        type: string
+        required: false
+      expected_calibration:
+        description: Exact currently deployed calibration ID (or builtin-v1)
+        type: string
+        required: true
+      rollback_target:
+        type: string
+        default: builtin-v1
+      confirmation:
+        description: Enter PROMOTE VERIFIED FUSION or ROLLBACK FUSION
+        type: string
+        required: true
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: weatherx-fusion-promotion
+  cancel-in-progress: false
+jobs:
+  promote:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Andrewegao/atmos
+          ref: ${{ vars.FUSION_ENGINE_SHA }}
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          persist-credentials: false
+      - name: Require the reviewed immutable engine
+        env:
+          ENGINE_SHA: ${{ vars.FUSION_ENGINE_SHA }}
+        run: |
+          [[ "$ENGINE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$ENGINE_SHA"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - run: npm ci --prefix app
+      - name: Feedback contract tests and CLI types
+        run: |
+          cd app
+          npx tsc -p ../ops/fusion/tsconfig.json --noEmit
+          npx vitest run src/fusion/feedback.test.ts
+      - name: Validate explicit operator operation
+        env:
+          OPERATION: ${{ inputs.operation }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          if [ "$OPERATION" = promote ]; then test "$CONFIRMATION" = 'PROMOTE VERIFIED FUSION'
+          elif [ "$OPERATION" = rollback ]; then test "$CONFIRMATION" = 'ROLLBACK FUSION'
+          else exit 1; fi
+      - name: Require successful source-bound evaluation
+        if: ${{ inputs.operation == 'promote' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVALUATION_RUN_ID: ${{ inputs.evaluation_run }}
+          EXPECTED_CANDIDATE_ID: ${{ inputs.candidate_id }}
+          EVIDENCE_MODE: promote
+        run: bash ops/fusion/download-evaluation.sh
+      - name: CAS promote or epoch-fenced rollback (no model or UI credentials)
+        env:
+          FUSION_PROMOTION_KEY: ${{ secrets.FUSION_PROMOTION_KEY }}
+          OPERATION: ${{ inputs.operation }}
+          EXPECTED_CALIBRATION: ${{ inputs.expected_calibration }}
+          ROLLBACK_TARGET: ${{ inputs.rollback_target }}
+        run: |
+          if [ "$OPERATION" = promote ]; then
+            app/node_modules/.bin/tsx ops/fusion/cli.ts promote --candidate feedback-evidence/candidate.json --report feedback-evidence/evaluation.json --expected-calibration "$EXPECTED_CALIBRATION" --out feedback-output
+          else
+            app/node_modules/.bin/tsx ops/fusion/cli.ts rollback --target "$ROLLBACK_TARGET" --expected-calibration "$EXPECTED_CALIBRATION" --out feedback-output
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ always() }}
+        with:
+          name: fusion-mutation-receipt
+          path: feedback-output/*.json
+          if-no-files-found: ignore
+          retention-days: 90

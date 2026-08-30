@@ -58,6 +58,7 @@ jobs:
       - name: Weather Lab release gate
         env:
           LIVE_DATA: '1'
+          VITE_FUSION_CALIBRATION_ENABLED: ${{ vars.FUSION_CALIBRATION_RUNTIME_ENABLED == 'true' && '1' || '0' }}
         run: bash ops/weather-lab-ready.sh
       - name: guarded UI-only production deploy
         env:
@@ -71,6 +72,7 @@ jobs:
           RELEASE_GUARD_VERIFY_SLEEP_SECONDS: '15'
           EDGE_ORIGIN: https://weatherx.org
           PLATFORM_EDGE_CONFIRMED: '1'
+          VITE_FUSION_CALIBRATION_ENABLED: ${{ vars.FUSION_CALIBRATION_RUNTIME_ENABLED == 'true' && '1' || '0' }}
         run: bash ops/platform/deploy-code-only.sh
       - name: retain automatic rollback evidence
         if: ${{ always() }}
