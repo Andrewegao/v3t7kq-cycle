@@ -91,6 +91,30 @@ async function jsonGet(url,token){
   for await(const chunk of r.body){n+=chunk.length;assert.ok(n<=2*1024**2,'oversized Cloudflare response');parts.push(chunk);}
   const value=JSON.parse(Buffer.concat(parts));assert.equal(value.success,true,'Cloudflare rejected read');return value.result;
 }
+export async function consumerSnapshot(config,get){
+  // /settings describes the latest upload, not necessarily the version serving
+  // traffic. Versioned bindings/runtime must come from the active deployment.
+  const deployment=await get(BASE+'/deployments'),version=activeVersion(deployment);
+  const selected=value=>[...value.deployments].sort((a,b)=>Date.parse(b.created_on)-Date.parse(a.created_on))[0];
+  const first=selected(deployment);assert.match(first.id??'',UUID,'missing deployment identity');
+  const [settings,resource,routes,schedules]=await Promise.all([
+    get(BASE+'/settings'),get(BASE+`/versions/${version}`),
+    get(`https://api.cloudflare.com/client/v4/zones/${ZONE}/workers/routes`),get(BASE+'/schedules')]);
+  assert.equal(resource.id,version,'active version resource mismatch');
+  assert.ok(Array.isArray(resource.resources?.bindings),'active bindings missing');
+  const runtime=resource.resources?.script_runtime;
+  assert.ok(runtime&&typeof runtime.compatibility_date==='string','active runtime missing');
+  const last=await get(BASE+'/deployments');assert.equal(activeVersion(last),version,'deployment changed during snapshot');
+  assert.deepEqual(selected(last),first,'deployment changed during snapshot');
+  const patterns=routes.filter(r=>r.script===WORKER).map(r=>r.pattern),crons=schedules.schedules.map(v=>v.cron);
+  assert.deepEqual(sorted(patterns),sorted(EXISTING_ROUTES),'staging route mismatch');
+  assert.deepEqual(sorted(crons),sorted(config.triggers?.crons??[]),'staging schedules changed');
+  // Keep script-global settings, routes and schedules in the strict boundary.
+  const state=settingsState({...settings,bindings:resource.resources.bindings,
+    compatibility_date:runtime.compatibility_date,compatibility_flags:runtime.compatibility_flags??[]},patterns,crons);
+  assertSettings(config,desiredSettings(state));
+  return {version,state};
+}
 export async function main(command,atmos,receiptPath,env=process.env){
   assert.ok(['preflight','execute','recover'].includes(command));
   const croot=resolve(atmos,'platform/edge');
@@ -99,16 +123,7 @@ export async function main(command,atmos,receiptPath,env=process.env){
   const config=configForStaging(JSON.parse(readFileSync(resolve(croot,'wrangler.jsonc'))));
   const token=env.STAGING_WORKER_API_TOKEN;assert.ok(token,'staging Worker credential required');
   const getVersion=async()=>activeVersion(await jsonGet(BASE+'/deployments',token));
-  async function snapshot(){
-    const [settings,deployment,routes,schedules]=await Promise.all([
-      jsonGet(BASE+'/settings',token),jsonGet(BASE+'/deployments',token),
-      jsonGet(`https://api.cloudflare.com/client/v4/zones/${ZONE}/workers/routes`,token),jsonGet(BASE+'/schedules',token)]);
-    const patterns=routes.filter(r=>r.script===WORKER).map(r=>r.pattern),crons=schedules.schedules.map(v=>v.cron);
-    assert.deepEqual(sorted(patterns),sorted(EXISTING_ROUTES),'staging route mismatch');
-    assert.deepEqual(sorted(crons),sorted(config.triggers?.crons??[]),'staging schedules changed');
-    const state=settingsState(settings,patterns,crons);assertSettings(config,desiredSettings(state));
-    return {version:activeVersion(deployment),state};
-  }
+  const snapshot=()=>consumerSnapshot(config,url=>jsonGet(url,token));
   const persist=async receipt=>{mkdirSync(dirname(receiptPath),{recursive:true,mode:0o700});writeFileSync(receiptPath,JSON.stringify(receipt,null,2)+'\n',{mode:0o600});};
   if(command==='preflight'){
     const before=await snapshot(),desired=desiredSettings(before.state);
