@@ -29,7 +29,8 @@ test('guard is pinned, both candidate verification paths are inside automatic ro
   assert.match(source,/ui-verify\.sh/);
   assert.match(source,/RELEASE_GUARD_VERIFY_REQUIRED_SUCCESSES:'3'/);
   assert.match(source,/RELEASE_GUARD_VERIFY_SLEEP_SECONDS:'15'/);
-  assert.match(source,/RELEASE_GUARD_PHASE !== 'rollback'/);
+  assert.match(source,/const phase=process\.env\.RELEASE_GUARD_PHASE==='rollback'\?'rollback':'candidate'/);
+  assert.match(source,/weatherFeedVerificationRequired\(stage, phase\)/);
   assert.match(source,/weather-lab-only-runtime\.mjs/);assert.match(source,/layer-switch-tint\.mjs/);
   assert.match(source,/cwd:uploadCwd/);assert.doesNotMatch(source,/cwd:dirname\(dist\)/);
 });
