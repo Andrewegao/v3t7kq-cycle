@@ -1,0 +1,78 @@
+# Prepare published bytes once for staging. No collector, processing, or activation.
+name: WeatherX shared data staging preparation
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: Exact currently published whole release to reuse
+        required: true
+        type: string
+      release_manifest_sha256:
+        description: Reviewed canonical whole-manifest SHA-256
+        required: true
+        type: string
+      catalog_id:
+        description: Exact currently published component catalog to reuse
+        required: true
+        type: string
+      catalog_sha256:
+        description: Reviewed byte SHA-256 of the immutable catalog snapshot
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-shared-staging-preparation
+  cancel-in-progress: false
+jobs:
+  prepare:
+    environment:
+      name: data-staging
+      url: https://staging.weatherx.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      STAGING_DATA_ENABLED: ${{ vars.STAGING_DATA_ENABLED }}
+      STAGING_DATA_ISOLATION_APPROVED: ${{ vars.STAGING_DATA_ISOLATION_APPROVED }}
+      STAGING_DATA_APPROVED_SELECTION_SHA256: ${{ vars.STAGING_DATA_APPROVED_SELECTION_SHA256 }}
+      STAGING_R2_ACCOUNT_ID: ${{ vars.STAGING_R2_ACCOUNT_ID }}
+      RELEASE_ID: ${{ inputs.release_id }}
+      RELEASE_MANIFEST_SHA256: ${{ inputs.release_manifest_sha256 }}
+      CATALOG_ID: ${{ inputs.catalog_id }}
+      CATALOG_SHA256: ${{ inputs.catalog_sha256 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Refuse local, unapproved, or changed snapshot selection
+        run: node cycle/tools/shared-data.mjs gate
+      - name: Checkout pinned schema validator only (not a collector or candidate source)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Andrewegao/atmos
+          ref: dbc97a26bc239398ffa9ec157a094148961b6451
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: control
+          persist-credentials: false
+      - name: Install checksum-pinned S3 transfer tool (no credential exposed)
+        run: |
+          archive="$RUNNER_TEMP/rclone-v1.75.0-linux-amd64.zip"
+          curl --fail --silent --show-error --location \
+            https://github.com/rclone/rclone/releases/download/v1.75.0/rclone-v1.75.0-linux-amd64.zip \
+            --output "$archive"
+          printf '%s  %s\n' 'aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa' "$archive" | sha256sum --check --status
+          unzip -q "$archive" -d "$RUNNER_TEMP"
+          sudo install -m 0755 "$RUNNER_TEMP/rclone-v1.75.0-linux-amd64/rclone" /usr/local/bin/rclone
+          rclone version | head -1 | grep -Fx 'rclone v1.75.0'
+      - name: Verify synthetic S3 transport and pinned descriptor integration without credentials
+        env:
+          SHARED_DATA_VALIDATOR_MODULE: ${{ github.workspace }}/control/ops/platform/validate-point-series.mjs
+        run: node cycle/tests/shared-data-s3.mjs
+      - name: Verify and prepare immutable published bytes; never activate
+        env:
+          SHARED_R2_READ_ACCESS_KEY_ID: ${{ secrets.SHARED_R2_READ_ACCESS_KEY_ID }}
+          SHARED_R2_READ_SECRET_ACCESS_KEY: ${{ secrets.SHARED_R2_READ_SECRET_ACCESS_KEY }}
+          STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
+          STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
+        run: node cycle/tools/shared-data.mjs prepare

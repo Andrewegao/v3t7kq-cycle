@@ -11,6 +11,7 @@ on:
       - ".github/workflows/scheduler-deploy.yml"
       - ".github/workflows/ui-release.yml"
       - ".github/workflows/ui-staging.yml"
+      - ".github/workflows/staging-data.yml"
       - ".github/workflows/verify-backfill.yml"
       - ".github/workflows/consumer-refresh.yml"
       - ".github/workflows/gdacs-feed-release.yml"
@@ -39,6 +40,8 @@ jobs:
         run: node tests/bake-diagnostics.mjs
       - name: Staged UI artifact, manual promotion and privacy contracts
         run: node --test tests/ui-*.mjs
+      - name: Cloud-only staging data isolation and public-mode contracts
+        run: node --test tests/staging-data.mjs tests/shared-data.mjs
       - name: Consumer refresh workflow safety contract
         run: node tests/consumer-workflow.mjs
       - name: Consumer refresh preflight and rollback contracts

@@ -6,6 +6,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CONTROL_SHA, REPOSITORY, MAX_BYTES, gate, hash, createCandidate, validateCandidate,
   readTree, validateFiles, seal, unseal, restore, eligibleRun } from './ui-candidate.mjs';
+import { packBuild, unpackBuild, eligibleBuild } from './ui-build-transfer.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONTROL = resolve(ROOT, '../control');
@@ -14,7 +15,7 @@ const ACCOUNT = 'a89f9a1af485021fbc60a68b163c7c6e';
 const ORIGINS = { staging: 'https://staging.weatherx.org', production: 'https://weatherx.org' };
 const PROJECTS = { staging: 'weatherx-platform-staging', production: 'atmos-platform' };
 const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workflows/ui-release.yml',
-  'tools/ui-candidate.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh'];
+  'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh'];
 const run = (command, args, options = {}) => execFileSync(command, args, { stdio: 'inherit', ...options });
 const git = (args, cwd = ROOT) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore','pipe','pipe'] }).trim();
 export const pipelineDigest = () => hash(POLICY_FILES.map(p => `${p}\0${hash(readFileSync(resolve(ROOT,p)))}`).join('\n'));
@@ -37,12 +38,13 @@ async function get(url, token, limit = 2 * 1024 * 1024) {
 }
 const json = async (url, token) => JSON.parse((await get(url, token)).bytes);
 const gh = path => json(`https://api.github.com/repos/${REPOSITORY}/${path}`, process.env.GITHUB_TOKEN);
-function target(stage) {
+export function target(stage, env=process.env) {
   assert.ok(Object.hasOwn(ORIGINS, stage), 'unknown UI target');
-  assert.match(process.env.CLOUDFLARE_ACCOUNT_ID ?? '', /^[a-f0-9]{32}$/);
-  if (stage === 'production') assert.equal(process.env.CLOUDFLARE_ACCOUNT_ID, ACCOUNT);
-  assert.ok(process.env.CLOUDFLARE_API_TOKEN, 'dedicated UI Pages token is missing');
-  assert.match(process.env.UI_PAGES_CONFIG_SHA256 ?? '', /^[a-f0-9]{64}$/, 'reviewed Pages configuration digest is missing');
+  assert.equal(env.GITHUB_ACTIONS,'true'); assert.equal(env.RUNNER_ENVIRONMENT,'github-hosted');
+  assert.equal(env.GITHUB_JOB,stage==='staging'?'qualify':'promote','wrong publishing job');
+  assert.equal(env.CLOUDFLARE_ACCOUNT_ID, ACCOUNT);
+  assert.ok(env.CLOUDFLARE_API_TOKEN, 'dedicated UI Pages token is missing');
+  assert.match(env.UI_PAGES_CONFIG_SHA256 ?? '', /^[a-f0-9]{64}$/, 'reviewed Pages configuration digest is missing');
   return { origin: ORIGINS[stage], project: PROJECTS[stage] };
 }
 function canonical(value) {
@@ -67,12 +69,21 @@ async function projectSnapshot(stage) {
   assert.equal(p.canonical_deployment?.latest_stage?.status, 'success');
   return p;
 }
+export function validatePublicModes(origin, health, data) {
+  assert.ok(Object.values(ORIGINS).includes(origin));
+  // Staging has public/cacheable weather reads; production's reviewed platform
+  // remains observe while its separate data Worker owns the public data routes.
+  assert.equal(health.ok, true);
+  assert.equal(health.authMode, origin === ORIGINS.staging ? 'public' : 'observe');
+  assert.equal(health.billingMode, 'disabled');
+  assert.equal(data.ok, true); assert.equal(data.catalogMode, 'serve');
+  if (origin === ORIGINS.staging) assert.equal(data.authMode, 'public');
+}
 export async function publicModes(origin) {
   assert.ok(Object.values(ORIGINS).includes(origin));
   const health = await json(`${origin}/api/platform/health`);
-  assert.equal(health.ok, true); assert.equal(health.authMode, 'observe'); assert.equal(health.billingMode, 'disabled');
   const data = await json(`${origin}/api/platform/data-health`);
-  assert.equal(data.ok, true); assert.equal(data.catalogMode, 'serve');
+  validatePublicModes(origin, health, data);
   const core = await get(`${origin}/data/gfs/index.json`);
   assert.ok(core.headers.get('x-weatherx-catalog'), 'core model must use catalog authority');
   const ancillary = await get(`${origin}/data/ledger/index.json`);
@@ -90,7 +101,7 @@ function sourceIdentity() {
   git(['diff','--exit-code','HEAD'], SOURCE);
 }
 function build() {
-  gate(process.env); controller(); sourceIdentity();
+  buildGate(); controller(); sourceIdentity();
   const app = resolve(SOURCE, 'app'), shell = resolve(process.env.RUNNER_TEMP, 'ui-public-shell');
   mkdirSync(shell, { mode: 0o700 });
   run('rsync',['-a','--exclude','/data/','--exclude','/data-atmos/',`${app}/public/`,`${shell}/`]);
@@ -106,6 +117,39 @@ function build() {
   const c = createCandidate(dist,{sourceSha:process.env.ATMOS_SHA,runId:process.env.GITHUB_RUN_ID,
     attempt:process.env.GITHUB_RUN_ATTEMPT,workflowSha:process.env.GITHUB_SHA,pipelineDigest:pipelineDigest()});
   save(stateFile(),c);
+}
+function buildGate() {
+  assert.equal(process.env.GITHUB_ACTIONS,'true');assert.equal(process.env.RUNNER_ENVIRONMENT,'github-hosted');
+  assert.equal(process.env.GITHUB_REPOSITORY,REPOSITORY);
+  assert.equal(process.env.GITHUB_EVENT_NAME,'workflow_dispatch');assert.equal(process.env.GITHUB_REF,'refs/heads/main');
+  assert.equal(process.env.GITHUB_JOB,'build');assert.equal(process.env.UI_BUILDS_ENABLED,'true');
+  assert.ok(process.env.UI_BUILD_PUBLIC_KEY?.includes('BEGIN PUBLIC KEY'));
+  for(const k of ['CLOUDFLARE_API_TOKEN','UI_BUILD_PRIVATE_KEY','UI_CANDIDATE_KEY']) assert.equal(process.env[k],undefined);
+}
+function pack() {
+  buildGate();controller();
+  const out=resolve(process.env.RUNNER_TEMP,'ui-build');mkdirSync(out,{mode:0o700});
+  writeFileSync(resolve(out,'build.wxub'),packBuild(candidate(),process.env.UI_BUILD_PUBLIC_KEY),{flag:'wx',mode:0o600});
+}
+async function receiveBuild() {
+  gate(process.env);controller();assert.equal(process.env.GITHUB_JOB,'qualify');
+  const id=process.env.GITHUB_RUN_ID, attempt=process.env.GITHUB_RUN_ATTEMPT;
+  assert.match(id??'',/^[1-9][0-9]{0,19}$/);assert.match(attempt??'',/^[1-9][0-9]{0,19}$/);
+  const r=await gh(`actions/runs/${id}`), a=await gh(`actions/runs/${id}/artifacts?per_page=100`);
+  const jobs=await gh(`actions/runs/${id}/attempts/${attempt}/jobs?per_page=100`);
+  assert.ok(a.total_count<=100 && jobs.total_count<=100);
+  const name=`ui-build-${id}-${attempt}`, matches=a.artifacts.filter(x=>x.name===name);
+  assert.equal(matches.length,1);assert.equal(matches[0].expired,false);
+  assert.ok(matches[0].size_in_bytes<MAX_BYTES*2+1024);
+  const out=resolve(process.env.RUNNER_TEMP,'ui-build-download');mkdirSync(out,{mode:0o700});
+  run('gh',['run','download',id,'--repo',REPOSITORY,'--name',name,'--dir',out],{env:{...process.env,GH_TOKEN:process.env.GITHUB_TOKEN}});
+  assert.deepEqual(readdirSync(out),['build.wxub']);
+  assert.ok(statSync(resolve(out,'build.wxub')).size<=MAX_BYTES*2+1024);
+  const c=unpackBuild(readFileSync(resolve(out,'build.wxub')),process.env.UI_BUILD_PRIVATE_KEY);
+  eligibleBuild(c,r,jobs.jobs,a.artifacts,{runId:id,attempt,workflowSha:process.env.GITHUB_SHA,
+    sourceSha:process.env.ATMOS_SHA,pipelineDigest:pipelineDigest()});
+  // Candidate source is absent. Treat every artifact file as opaque data, never execute it.
+  restore(c,resolve(process.env.RUNNER_TEMP,'ui-stage-dist'));save(stateFile(),c);
 }
 function environment(c) {
   const r = validateCandidate(c);
@@ -132,7 +176,7 @@ async function deploy(stage) {
   await preflight(stage);
   const c = candidate();
   if (stage === 'production') { await auditRun(c); await exactStaging(c); }
-  const dist = stage === 'staging' ? resolve(SOURCE,'app/dist') : resolve(process.env.RUNNER_TEMP,'ui-promote-dist');
+  const dist = stage === 'staging' ? resolve(process.env.RUNNER_TEMP,'ui-stage-dist') : resolve(process.env.RUNNER_TEMP,'ui-promote-dist');
   assert.equal(validateFiles(readTree(dist)).digest,c.artifactDigest, 'deploy bytes differ from candidate');
   const env = environment(c);
   // Work outside the Atmos app: no wrangler config discovery, no Functions discovery/rebuild.
@@ -202,6 +246,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const [command,stage]=process.argv.slice(2);
   try {
     if(command==='gate') { gate(process.env); controller(); assert.equal(git(['rev-parse','HEAD']),process.env.GITHUB_SHA); }
+    else if(command==='build-gate') { buildGate(); controller(); }
+    else if(command==='pack-build') pack();
+    else if(command==='receive-build') await receiveBuild();
     else if(command==='preflight') await preflight(stage);
     else if(command==='build') build();
     else if(command==='deploy') await deploy(stage);

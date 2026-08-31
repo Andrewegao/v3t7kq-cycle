@@ -15,8 +15,9 @@ explicit approval. Normal data collection, scoring, archive and R2 publication a
 
 1. Run **WeatherX UI staging qualification** (`ui-staging.yml`) with the exact current Atmos
    master SHA. It runs all app tests, the existing live Weather Lab gates, builds the public-only
-   shell and compiles Pages Functions once. It uses the existing deploy/rollback guard to
-   deploy only to `weatherx-platform-staging`, then verifies the actual built website.
+   shell and compiles Pages Functions once on a build runner with no deployment environment
+   or deployment secrets. A separate fresh publisher runner uses the existing deploy/rollback
+   guard to deploy only to `weatherx-platform-staging`, then verifies the actual built website.
 2. Test `https://staging.weatherx.org`. A successful workflow retains an encrypted candidate
    and a summary with the source SHA, run ID and artifact digest. Failed qualification never
    produces a promotable artifact. Neither the candidate source nor server code is uploaded
@@ -57,13 +58,37 @@ Both have `UI_RELEASES_ENABLED=false`, `UI_ISOLATION_APPROVED=false` and
 `UI_CANDIDATE_KEY` for AES-256-GCM artifact encryption. The key is not a Cloudflare credential
 and is not printed in logs. Rotating it invalidates retained candidates; stage a new candidate.
 
-Provision the Pages credentials separately, audit their effective scopes, and only then record
-`UI_ISOLATION_APPROVED=true`. **Different secret names do not prove Cloudflare resource
-isolation.** An account-wide Pages token may still reach both projects. Prefer a separate
-staging Cloudflare account or an audited resource-restricting deployment broker if project-level
-credential restriction is unavailable. Do not copy the existing broad OAuth/production token
-into the staging environment to unblock a failed check. Until this review is complete, leave
-the activation flags false and the workflows disabled.
+The selected architecture uses the **same Cloudflare account** and a restricted trusted
+publishing job. The credential's provider-level Pages scope remains account-wide; the
+controller, protected workflow and fresh-runner boundary restrict staging operations. This
+does not make the token itself project-scoped or protect against a compromised administrator
+or trusted publisher. Do not copy a broad OAuth/production token into the candidate build.
+
+The build job has no GitHub deployment environment, no CF token, no decryption key and no
+qualified-candidate encryption key. It has only the repository `UI_BUILD_PUBLIC_KEY` and
+`UI_BUILDS_ENABLED` variable (default disabled). It encrypts its **unqualified** output with
+RSA-OAEP-SHA256/AES-256-GCM as `build.wxub`. Only `ui-staging` holds the corresponding
+`UI_BUILD_PRIVATE_KEY`. Use a dedicated RSA 3072/4096-bit keypair; never reuse a deployment
+credential. The public key is safe to expose; neither private key nor private Functions code
+may appear in public logs/artifacts. Intermediate encrypted build retention is one day.
+
+The fresh `qualify` job downloads only its own exact-attempt build artifact, checks the actual
+successful build job and source/workflow/policy identities, decrypts and restores a bounded
+hash-verified inventory, and treats it as opaque data. It never checks out or runs candidate
+source/scripts. It uses only pinned controller dependencies; no cache crosses the runner
+boundary. The controller fixes the staging account/project and rejects staging operations
+outside `qualify` (production operations require the separate `promote` job). Existing
+configuration fingerprint, no-rebuild upload, browser/probe gates and rollback are retained.
+
+The build envelope has a different authenticated format from a qualified promotion artifact.
+It cannot be accepted by production's existing decryptor. Only after real staging verification
+does the publisher seal a promotable artifact with `UI_CANDIDATE_KEY`.
+
+Review the controller/workflow and actual Pages project bindings before supplying a dedicated
+Pages-only token to `ui-staging` or recording `UI_ISOLATION_APPROVED=true`. Candidate Functions
+must not inherit production-capable bindings/secrets. Until the actual account configuration
+and end-to-end qualification are proven, leave release activation flags false. No separate
+Cloudflare account, extra always-on deployment service, or production release is created here.
 
 The configuration hash is computed by `configurationDigest()` in `tools/ui-release.mjs` from
 the read-only Pages project response. It binds the project, branch, domains, Git-source state
