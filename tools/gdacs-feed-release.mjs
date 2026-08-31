@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // One-time, exact-source GDACS isolation. This is not a general Worker deployer.
 // Only mutations: create the previously absent Worker, disable its development
-// URLs, attach one new route, and (on failure) delete that exact owned route.
+// URLs, attach the three fixed feed routes, and delete only those owned routes.
 // Cloudflare routes have no compare-and-swap. Recheck immediately before POST;
 // detected drift is a refusal, never permission to replace another publisher.
 import assert from 'node:assert/strict';
@@ -15,6 +15,11 @@ import { normalizedBindings, activeVersion, validateInputs, assertPointPayload, 
 
 export const WORKER = 'weatherx-gdacs-feed-production';
 export const PATTERN = 'weatherx.org/api/gdacs/list*';
+export const ROUTE_MANIFEST = Object.freeze([
+  Object.freeze({id:'gdacs-list',path:'/api/gdacs/list',pattern:PATTERN}),
+  Object.freeze({id:'gdacs-geom',path:'/api/gdacs/geom',pattern:'weatherx.org/api/gdacs/geom*'}),
+  Object.freeze({id:'tc-geom',path:'/api/tc/geom',pattern:'weatherx.org/api/tc/geom*'}),
+]);
 export const ACCOUNT = 'a89f9a1af485021fbc60a68b163c7c6e';
 export const ZONE = '9dc4df7c3c094ab9a11dd00d378adc26';
 const ORIGIN = 'https://weatherx.org';
@@ -79,9 +84,9 @@ export function assertBootstrap(worker,routes) {
     assert.ok(route.script!==WORKER,'target already owns a route');
     // Reject broad matches and narrower descendants/query-specific competitors.
     const probe=route.pattern.replace(/^https?:\/\//,'').replace(/\*/g,'');
-    assert.ok(!routeMatches(route.pattern,ORIGIN+'/api/gdacs/list') &&
-      !routeMatches(route.pattern,ORIGIN+'/api/gdacs/list?guard=1') &&
-      !probe.toLowerCase().startsWith('weatherx.org/api/gdacs/list'),'overlapping GDACS route exists');
+    for(const entry of ROUTE_MANIFEST)assert.ok(!routeMatches(route.pattern,ORIGIN+entry.path) &&
+      !routeMatches(route.pattern,ORIGIN+entry.path+'?guard=1') &&
+      !probe.toLowerCase().startsWith('weatherx.org'+entry.path),'overlapping feed route exists');
   }
 }
 export function sourceInventory(atmos,sha,git=(args)=>execFileSync('git',args,{cwd:atmos,encoding:'utf8',maxBuffer:16*1024*1024,timeout:30_000})) {
@@ -199,7 +204,7 @@ export function makeOperations(transport,atmos,bundle){
       await api(SCRIPT,'PLATFORM_EDGE_TOKEN',{method:'PUT',body:form});
     },
     disable:()=>api(SCRIPT+'/subdomain','PLATFORM_EDGE_TOKEN',{method:'POST',body:{enabled:false,previews_enabled:false}}),
-    attach:()=>api(ROUTES,'DATA_EDGE_TOKEN',{method:'POST',body:{pattern:PATTERN,script:WORKER}}),
+    attach:entry=>{assert.ok(ROUTE_MANIFEST.includes(entry),'unreviewed route attachment');return api(ROUTES,'DATA_EDGE_TOKEN',{method:'POST',body:{pattern:entry.pattern,script:WORKER}});},
     detach:id=>{assert.match(id,/^[a-f0-9]{32}$/,'invalid route id');return api(ROUTES+'/'+id,'DATA_EDGE_TOKEN',{method:'DELETE'});},
     verify:receipt=>verifyLive(transport,atmos,receipt),
     pause:ms=>new Promise(resolvePromise=>setTimeout(resolvePromise,ms)),
@@ -221,24 +226,30 @@ export function assertOwnedWorker(worker,receipt,{inert=false,pinned=false}={}){
   if(inert)same(worker.subdomain,{enabled:false,previews_enabled:false},'candidate development URLs enabled');
   if(pinned)same(worker,receipt.candidate,'candidate state drift');
 }
-export function ownedRoute(routes,receipt){
-  const identity=receipt.route&&routes.find(route=>route.id===receipt.route.id);
-  if(identity)same(identity,receipt.route,'owned route identity changed');
-  const matches=routes.filter(route=>route.pattern===PATTERN);
+export function ownedRoute(routes,receipt,entry){
+  assert.ok(ROUTE_MANIFEST.includes(entry),'unreviewed route identity');
+  const recorded=receipt.routes?.[entry.id];
+  const identity=recorded&&routes.find(route=>route.id===recorded.id);
+  if(identity)same(identity,recorded,'owned route identity changed');
+  const matches=routes.filter(route=>route.pattern===entry.pattern);
   assert.ok(matches.length<=1,'ambiguous GDACS route');
   const route=matches[0];if(!route)return null;
-  assert.ok(receipt.intent?.attach,'route exists without durable attach intent');
+  assert.ok(receipt.intent?.routes?.[entry.id]?.attach,'route exists without durable attach intent');
   assert.ok(!receipt.before.routes.some(old=>old.id===route.id),'cannot own an existing route');
   assert.equal(route.script,WORKER,'route belongs to another publisher');
   assert.match(route.id,/^[a-f0-9]{32}$/,'invalid owned route id');
-  if(receipt.route)assert.equal(route.id,receipt.route.id,'owned route identity changed');
+  if(recorded)assert.equal(route.id,recorded.id,'owned route identity changed');
   return route;
 }
 export function assertBoundary(current,receipt,allowRoute=false){
-  const route=allowRoute?ownedRoute(current.routes,receipt):null;
-  const without={...current,routes:current.routes.filter(item=>item.id!==route?.id)};
+  const additions=allowRoute?ROUTE_MANIFEST.map(entry=>{
+    const route=ownedRoute(current.routes,receipt,entry);
+    if(receipt.routes?.[entry.id])assert.ok(route,'previously attached route disappeared');
+    return route;
+  }).filter(Boolean):[];
+  const without={...current,routes:current.routes.filter(item=>!additions.some(route=>route.id===item.id))};
   same(without,receipt.before,'protected production boundary drift');
-  return route;
+  return additions;
 }
 export async function recover(receipt,ops,persist){
   if(receipt.status==='passed')return receipt;
@@ -249,7 +260,7 @@ export async function recover(receipt,ops,persist){
   async function observeForeignBoundary(){
     try{
       const current=await ops.boundary();
-      const without={...current,routes:current.routes.filter(route=>route.id!==receipt.route?.id)};
+      const without={...current,routes:current.routes.filter(route=>!Object.values(receipt.routes??{}).some(owned=>owned.id===route.id))};
       if(canonical(without)!==canonical(receipt.before))receipt.foreignDrift={kind:'protected-boundary-changed',sha256:hash(without),manualReview:true};
     }catch{receipt.foreignDrift={kind:'protected-boundary-read-failed',manualReview:true};}
     persist();
@@ -258,26 +269,30 @@ export async function recover(receipt,ops,persist){
     await observeForeignBoundary();receipt.recovery='no-owned-mutation';receipt.status='failed-no-mutation';persist();return receipt;
   }
   try{
-    const route=ownedRoute(await ops.routes(),receipt);
-    if(route){receipt.route=route;persist();}
-    await observeForeignBoundary();
     const worker=await ops.worker();
     if(worker){
       assertOwnedWorker(worker,receipt,{pinned:!!receipt.candidate});
       // A cancellation between upload and URL-disable still owns the candidate.
       // This is the only idempotent containment mutation; never retry the upload.
       if(worker.subdomain.enabled||worker.subdomain.previews_enabled){receipt.intent.disable=true;persist();try{await ops.disable();}catch{};assertOwnedWorker(await ops.worker(),receipt,{inert:true});}
-    }else assert.equal(route,null,'route points to missing candidate');
-    if(route){
-      assertOwnedWorker(await ops.worker(),receipt,{inert:true,pinned:!!receipt.candidate});
-      // Immediately recheck our exact route identity, but do not overwrite or
-      // require restoration of concurrently changed unrelated route entries.
-      const currentRoute=ownedRoute(await ops.routes(),receipt);same(currentRoute,route,'route changed before detach');
-      receipt.route=route;receipt.intent.detach=true;persist();
-      try{await ops.detach(route.id);}catch{} // Response loss is resolved by readback, not retried.
     }
+    receipt.routes??={};receipt.intent.routes??={};const failures=[];
+    // Independently contain each exact owned route in reverse attachment order.
+    // A foreign/deletion failure for one entry must not strand our other entries.
+    for(const entry of [...ROUTE_MANIFEST].reverse())try{
+      const route=ownedRoute(await ops.routes(),receipt,entry);
+      if(!route)continue;
+      receipt.routes[entry.id]=route;persist();
+      assertOwnedWorker(await ops.worker(),receipt,{inert:true,pinned:!!receipt.candidate});
+      same(ownedRoute(await ops.routes(),receipt,entry),route,'route changed before detach');
+      receipt.intent.routes[entry.id].detach=true;persist();
+      try{await ops.detach(route.id);}catch{} // Reconcile response loss; never retry DELETE.
+      assert.equal(ownedRoute(await ops.routes(),receipt,entry),null,'owned route remains attached');
+    }catch{failures.push(entry.id);}
+    receipt.failedRecoveryRoutes=failures;persist();
+    await observeForeignBoundary();
+    assert.equal(failures.length,0,'one or more feed routes need manual recovery');
     const remainingRoutes=await ops.routes();
-    assert.equal(ownedRoute(remainingRoutes,receipt),null,'owned route remains attached');
     assert.ok(!remainingRoutes.some(route=>route.script===WORKER),'candidate has a foreign route; cannot claim quarantine');
     if(worker)assertOwnedWorker(await ops.worker(),receipt,{inert:true,pinned:!!receipt.candidate});
     await observeForeignBoundary();
@@ -291,7 +306,7 @@ export async function execute(receipt,ops,persist){
   const stage=async(name,action)=>{receipt.stage=name;persist();try{return await action();}catch(error){receipt.failedStage=name;receipt.errorKind=error?.code==='ERR_ASSERTION'?'assertion':error?.name==='AbortError'?'aborted':'error';persist();throw error;}};
   try{
     await stage('bootstrap-recheck',async()=>{assertBoundary(await ops.boundary(),receipt);assertBootstrap(await ops.worker(),await ops.routes());});
-    receipt.status='executing';receipt.intent={upload:true};persist();
+    receipt.status='executing';receipt.intent={upload:true,routes:{}};receipt.routes={};persist();
     await stage('upload',async()=>{
       try{await ops.upload(receipt);}catch{receipt.uploadResponseLost=true;persist();}
       // The absent-to-new Worker is ours only with BOTH exact bytes and random tag.
@@ -300,13 +315,14 @@ export async function execute(receipt,ops,persist){
     receipt.intent.disable=true;persist();
     await stage('disable-development-urls',async()=>{try{await ops.disable();}catch{receipt.disableResponseLost=true;persist();}assertOwnedWorker(await ops.worker(),receipt,{inert:true});});
     await stage('candidate-readback',async()=>{receipt.candidate=await ops.worker();assertOwnedWorker(receipt.candidate,receipt,{inert:true});persist();assertBoundary(await ops.boundary(),receipt);});
-    await stage('attach-route',async()=>{
+    for(const entry of ROUTE_MANIFEST)await stage('attach-route:'+entry.id,async()=>{
       assertOwnedWorker(await ops.worker(),receipt,{inert:true,pinned:true});
-      assertBoundary(await ops.boundary(),receipt);
+      assertBoundary(await ops.boundary(),receipt,true);
       // No API supports route CAS. Store intent, then a final full route re-read.
-      receipt.intent.attach=true;persist();same(sorted(await ops.routes()),receipt.before.routes,'route inventory changed before attach');
-      try{await ops.attach();}catch{receipt.routeResponseLost=true;persist();}
-      receipt.route=ownedRoute(await ops.routes(),receipt);assert.ok(receipt.route,'route attachment absent');persist();
+      receipt.intent.routes[entry.id]={attach:true};persist();
+      same(sorted(await ops.routes()),sorted([...receipt.before.routes,...Object.values(receipt.routes)]),'route inventory changed before attach');
+      try{await ops.attach(entry);}catch{receipt.intent.routes[entry.id].responseLost=true;persist();}
+      const attached=ownedRoute(await ops.routes(),receipt,entry);assert.ok(attached,'route attachment absent');receipt.routes[entry.id]=attached;persist();
       assertBoundary(await ops.boundary(),receipt,true);
     });
     for(let round=1;round<=3;round++){
@@ -370,12 +386,12 @@ export async function verifyLive(transport,atmos,receipt,verification){
   try{
     // Execute the original source verifier unchanged, with an outer byte/deadline
     // cap and no redirects. Its list and representative geometry gates all run.
-    globalThis.fetch=async(url,init)=>{assert.equal(new URL(url).origin,ORIGIN,'verifier escaped origin');const response=await transport.request(url,init);return new Response(response.body,{status:response.status,headers:response.headers});};
+    globalThis.fetch=async(url,init)=>{const parsed=new URL(url);assert.equal(parsed.origin,ORIGIN,'verifier escaped origin');const response=await transport.request(url,init);if(ROUTE_MANIFEST.some(entry=>entry.path===parsed.pathname))assert.equal(response.headers.get('x-weatherx-feed'),'weather-feeds-v2','isolated feed provenance missing');return new Response(response.body,{status:response.status,headers:response.headers});};
     receipt.feedChecks=await verifyWeatherFeeds(ORIGIN);
   }finally{globalThis.fetch=original;}
   for(const suffix of ['', '?guard=query']){
     const response=await transport.request(ORIGIN+'/api/gdacs/list'+suffix);assert.equal(response.status,200,'GDACS route not served');
-    assert.equal(response.headers.get('x-weatherx-feed'),'gdacs-events4app-v1','isolated feed provenance missing');
+    assert.equal(response.headers.get('x-weatherx-feed'),'weather-feeds-v2','isolated feed provenance missing');
     const payload=JSON.parse(response.body);assert.equal(payload.type,'FeatureCollection');assert.ok(Array.isArray(payload.features));assert.match(response.headers.get('x-swr-age')??'',/^\d+$/);assert.ok(Number(response.headers.get('x-swr-age'))<86_400);
   }
 }
@@ -409,12 +425,12 @@ export async function main(args=process.argv.slice(2)){
       assert.ok(!existsSync(receiptPath),'refuse to replace an existing receipt');
       const before=await ops.boundary();assert.equal(before.pointer.release,release,'expected release is not current');assertBootstrap(await ops.worker(),before.routes);
       const proof=await pointProof(transport,atmos,release);assert.equal(proof.pointerSha256,before.pointer.sha256,'proof pointer changed');
-      receipt={schemaVersion:1,sha,release,source:bundle.source,ownershipTag:`gdacs-${randomUUID()}`,createdAt:new Date().toISOString(),workflowRun:process.env.GITHUB_RUN_ID??null,workflowAttempt:process.env.GITHUB_RUN_ATTEMPT??null,before,proof,status:'preflight-passed'};
+      receipt={schemaVersion:2,routeManifest:ROUTE_MANIFEST,sha,release,source:bundle.source,ownershipTag:`gdacs-${randomUUID()}`,createdAt:new Date().toISOString(),workflowRun:process.env.GITHUB_RUN_ID??null,workflowAttempt:process.env.GITHUB_RUN_ATTEMPT??null,before,proof,status:'preflight-passed'};
       await safetyChecks(transport,receipt);receipt.feedDiagnostics=await beforeFeedDiagnostics(transport);
       assertBoundary(await ops.boundary(),receipt);persist();console.log('GDACS preflight passed; no production mutation');return receipt;
     }
     assertWorkflow();receipt=JSON.parse(readFileSync(receiptPath,'utf8'));
-    assert.equal(receipt.schemaVersion,1);assert.equal(receipt.sha,sha);assert.equal(receipt.release,release);assert.equal(receipt.workflowRun,process.env.GITHUB_RUN_ID);assert.equal(receipt.workflowAttempt,process.env.GITHUB_RUN_ATTEMPT);
+    assert.equal(receipt.schemaVersion,2);same(receipt.routeManifest,ROUTE_MANIFEST,'receipt route manifest mismatch');assert.equal(receipt.sha,sha);assert.equal(receipt.release,release);assert.equal(receipt.workflowRun,process.env.GITHUB_RUN_ID);assert.equal(receipt.workflowAttempt,process.env.GITHUB_RUN_ATTEMPT);
     assert.match(receipt.ownershipTag,/^gdacs-[a-f0-9-]{36}$/);assert.equal(receipt.before.pointer.release,release);
     if(command==='recover'){await recover(receipt,ops,persist);console.log(`GDACS recovery status: ${receipt.recovery??'not-needed'}`);return receipt;}
     same(bundle.source,receipt.source,'build differs from preflight');await execute(receipt,ops,persist);console.log('GDACS feed qualified three times; protected production boundaries unchanged');return receipt;

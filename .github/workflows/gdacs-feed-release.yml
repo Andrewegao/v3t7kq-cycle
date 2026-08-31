@@ -13,7 +13,7 @@ on:
         type: string
         required: true
       confirm:
-        description: Type REPAIR-GDACS-LIST-ONLY
+        description: Type REPAIR-WEATHER-FEEDS-ONLY
         type: string
         required: true
 
@@ -40,7 +40,7 @@ jobs:
         env:
           CONFIRM: ${{ inputs.confirm }}
         run: |
-          test "$CONFIRM" = REPAIR-GDACS-LIST-ONLY
+          test "$CONFIRM" = REPAIR-WEATHER-FEEDS-ONLY
           [[ "$ATMOS_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
           [[ "$EXPECTED_RELEASE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$ ]] || exit 1
           [[ "$EXPECTED_RELEASE" != *..* ]] || exit 1
@@ -93,7 +93,7 @@ jobs:
           node cycle/tools/gdacs-feed-release.mjs preflight \
             --atmos atmos --sha "$ATMOS_SHA" --expected-release "$EXPECTED_RELEASE" \
             --receipt "$FEED_RECEIPT"
-      - name: Guarded bootstrap of the single GDACS list route
+      - name: Guarded bootstrap of the three enumerated feed routes
         id: repair
         timeout-minutes: 8
         env:
@@ -105,7 +105,7 @@ jobs:
           node cycle/tools/gdacs-feed-release.mjs execute \
             --atmos atmos --sha "$ATMOS_SHA" --expected-release "$EXPECTED_RELEASE" \
             --receipt "$FEED_RECEIPT"
-      - name: Recover only the owned route after interruption or failed verification
+      - name: Recover only the owned routes after interruption or failed verification
         if: ${{ always() && (steps.repair.outcome == 'failure' || steps.repair.outcome == 'cancelled') }}
         timeout-minutes: 5
         env:

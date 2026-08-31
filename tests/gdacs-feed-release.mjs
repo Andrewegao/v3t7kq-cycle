@@ -3,22 +3,23 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, statSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { WORKER, PATTERN, parseInputs, canonical, normalizedSettings, timeout, routeMatches, assertBootstrap, sourceInventory, assertBuildInputs, createTransport, saveReceipt, execute, recover, buildOptions, assertOwnedWorker, moduleHash, verifyLive } from '../tools/gdacs-feed-release.mjs';
+import { WORKER, PATTERN, ROUTE_MANIFEST, parseInputs, canonical, normalizedSettings, timeout, routeMatches, assertBootstrap, sourceInventory, assertBuildInputs, createTransport, saveReceipt, execute, recover, buildOptions, assertOwnedWorker, moduleHash, verifyLive, assertBoundary } from '../tools/gdacs-feed-release.mjs';
 
 const clone=value=>structuredClone(value);
 const originalRoute={id:'1'.repeat(32),pattern:'weatherx.org/api/platform/*',script:'weatherx-platform-edge-production'};
 const newRoute={id:'2'.repeat(32),pattern:PATTERN,script:WORKER};
+const newRoutes=ROUTE_MANIFEST.map((entry,index)=>({id:String(index+2).repeat(32),pattern:entry.pattern,script:WORKER}));
 function fixture(overrides={}){
   const before={consumers:{platform:{version:'healthy-platform',settingsSha256:'settings',schedulesSha256:'schedules'},data:{version:'healthy-data',settingsSha256:'data-settings'}},pages:{id:'canonical',sha256:'pages'},pointer:{release:'cycle-1',sha256:'pointer'},routes:[originalRoute]};
-  const receipt={schemaVersion:1,sha:'a'.repeat(40),release:'cycle-1',source:{bundleSha256:'exact-module'},ownershipTag:'gdacs-12345678-1234-1234-1234-123456789abc',before:clone(before),createdAt:new Date().toISOString(),status:'preflight-passed'};
+  const receipt={schemaVersion:2,routeManifest:ROUTE_MANIFEST,sha:'a'.repeat(40),release:'cycle-1',source:{bundleSha256:'exact-module'},ownershipTag:'gdacs-12345678-1234-1234-1234-123456789abc',before:clone(before),createdAt:new Date().toISOString(),status:'preflight-passed'};
   const state={boundary:clone(before),worker:null};const calls=[],saved=[];
   const candidate=()=>({contentSha256:'exact-module',version:'12345678-1234-1234-1234-123456789abc',versionSha256:'version-detail',versionAnnotations:{'workers/tag':receipt.ownershipTag},settings:{bindings:[],compatibility_date:'2026-08-18',compatibility_flags:['nodejs_compat'],observability:{enabled:true,head_sampling_rate:1},logpush:false,tail_consumers:[]},schedules:{schedules:[]},subdomain:{enabled:false,previews_enabled:false}});
   const ops={
     boundary:async()=>clone(state.boundary),worker:async()=>clone(state.worker),routes:async()=>clone(state.boundary.routes),
     upload:async()=>{calls.push('upload');assert.equal(saved.at(-1).intent.upload,true);state.worker=candidate();},
     disable:async()=>{calls.push('disable');assert.equal(saved.at(-1).intent.disable,true);state.worker.subdomain={enabled:false,previews_enabled:false};},
-    attach:async()=>{calls.push('attach');assert.equal(saved.at(-1).intent.attach,true);state.boundary.routes.push(clone(newRoute));},
-    detach:async id=>{calls.push('detach:'+id);assert.equal(saved.at(-1).intent.detach,true);state.boundary.routes=state.boundary.routes.filter(route=>route.id!==id);},
+    attach:async entry=>{calls.push('attach');assert.equal(saved.at(-1).intent.routes[entry.id].attach,true);state.boundary.routes.push(clone(newRoutes.find(route=>route.pattern===entry.pattern)));},
+    detach:async id=>{calls.push('detach:'+id);const entry=ROUTE_MANIFEST.find(item=>newRoutes.find(route=>route.id===id)?.pattern===item.pattern);assert.equal(saved.at(-1).intent.routes[entry.id].detach,true);state.boundary.routes=state.boundary.routes.filter(route=>route.id!==id);},
     verify:async()=>calls.push('verify'),pause:async ms=>calls.push('pause:'+ms),resetRecovery:()=>calls.push('reset-recovery'),
   };
   Object.assign(ops,overrides);
@@ -78,8 +79,8 @@ test('receipt is private and durably replaceable',()=>{
 });
 test('success has three complete rounds with two fifteen-second gaps and no destructive calls',async()=>{
   const f=fixture();await execute(f.receipt,f.ops,f.persist);
-  assert.equal(f.receipt.status,'passed');assert.deepEqual(f.calls,['upload','disable','attach','verify','pause:15000','verify','pause:15000','verify']);
-  assert.deepEqual(f.state.boundary.routes,[originalRoute,newRoute]);assert.deepEqual(f.receipt.before.routes,[originalRoute]);
+  assert.equal(f.receipt.status,'passed');assert.deepEqual(f.calls,['upload','disable','attach','attach','attach','verify','pause:15000','verify','pause:15000','verify']);
+  assert.deepEqual(f.state.boundary.routes,[originalRoute,...newRoutes]);assert.deepEqual(f.receipt.before.routes,[originalRoute]);
 });
 test('stale or replayed execution cannot upload',async()=>{
   for(const status of ['passed','failed-contained','executing']){const f=fixture();f.receipt.status=status;await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.deepEqual(f.calls,[]);}
@@ -90,14 +91,14 @@ test('ambiguous successful upload is reconciled read-only without a retry',async
   await execute(f.receipt,f.ops,f.persist);assert.equal(f.receipt.uploadResponseLost,true);assert.equal(f.calls.filter(call=>call==='upload').length,1);assert.equal(f.receipt.status,'passed');
 });
 test('ambiguous successful route attachment is identified and can complete',async()=>{
-  const f=fixture();const attach=f.ops.attach;f.ops.attach=async()=>{await attach();throw Error('lost response');};
-  await execute(f.receipt,f.ops,f.persist);assert.equal(f.receipt.routeResponseLost,true);assert.equal(f.receipt.route.id,newRoute.id);assert.equal(f.calls.filter(call=>call==='attach').length,1);
+  const f=fixture();const attach=f.ops.attach;f.ops.attach=async entry=>{await attach(entry);throw Error('lost response');};
+  await execute(f.receipt,f.ops,f.persist);assert.ok(ROUTE_MANIFEST.every(entry=>f.receipt.intent.routes[entry.id].responseLost));assert.equal(f.receipt.routes['gdacs-list'].id,newRoute.id);assert.equal(f.calls.filter(call=>call==='attach').length,3);
 });
 test('verification failure removes only the new route and quarantines Worker',async()=>{
   const f=fixture();f.ops.verify=async()=>{throw Error('body with sensitive diagnostic');};
   await assert.rejects(execute(f.receipt,f.ops,f.persist),/quarantined/);
   assert.equal(f.receipt.status,'failed-contained');assert.equal(f.receipt.failedStage,'verification-1');assert.deepEqual(f.state.boundary.routes,[originalRoute]);assert.ok(f.state.worker);assert.deepEqual(f.state.worker.subdomain,{enabled:false,previews_enabled:false});
-  assert.equal(JSON.stringify(f.saved).includes('sensitive diagnostic'),false);assert.equal(f.calls.filter(call=>call.startsWith('detach:')).length,1);
+  assert.equal(JSON.stringify(f.saved).includes('sensitive diagnostic'),false);assert.deepEqual(f.calls.filter(call=>call.startsWith('detach:')),[...newRoutes].reverse().map(route=>'detach:'+route.id));
 });
 test('failed upload with no observed Worker never attaches or deletes',async()=>{
   const f=fixture();f.ops.upload=async()=>{f.calls.push('upload');throw Error('request rejected');};
@@ -111,7 +112,7 @@ test('pre-upload boundary drift prevents all writes and reports no mutation',asy
 test('route boundary changed at last attachment check stops POST',async()=>{
   const f=fixture();let routeReads=0;
   f.ops.routes=async()=>{routeReads++;if(routeReads===2)f.state.boundary.routes.push({id:'4'.repeat(32),pattern:'weatherx.org/new/*',script:'new-publisher'});return clone(f.state.boundary.routes);};
-  await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.ok(!f.calls.includes('attach'));assert.equal(f.receipt.failedStage,'attach-route');
+  await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.ok(!f.calls.includes('attach'));assert.equal(f.receipt.failedStage,'attach-route:gdacs-list');
 });
 test('candidate module, version, settings, URL or schedule drift is never overwritten',async()=>{
   for(const change of [w=>w.contentSha256='foreign',w=>w.version='22345678-1234-1234-1234-123456789abc',w=>w.settings.bindings.push({name:'NEW',type:'plain_text',text:'x'}),w=>w.subdomain.enabled=true,w=>w.schedules.schedules.push({cron:'* * * * *'})]){
@@ -124,13 +125,13 @@ test('cancellation recovery after upload disables owned development URLs with no
   await recover(f.receipt,f.ops,f.persist);assert.deepEqual(f.calls,['disable']);assert.equal(f.receipt.recovery,'route-removed-candidate-quarantined');
 });
 test('independent recovery reconciles route POST response loss from persisted intent',async()=>{
-  const f=fixture();f.receipt.status='executing';f.receipt.intent={upload:true,disable:true,attach:true};f.state.worker=f.candidate();f.receipt.candidate=clone(f.state.worker);f.state.boundary.routes.push(clone(newRoute));
-  await recover(f.receipt,f.ops,f.persist);assert.deepEqual(f.calls,['detach:'+newRoute.id]);assert.deepEqual(f.state.boundary.routes,[originalRoute]);assert.equal(f.receipt.route.id,newRoute.id);
+  const f=fixture();f.receipt.status='executing';f.receipt.intent={upload:true,disable:true,routes:{'gdacs-list':{attach:true}}};f.state.worker=f.candidate();f.receipt.candidate=clone(f.state.worker);f.state.boundary.routes.push(clone(newRoute));
+  await recover(f.receipt,f.ops,f.persist);assert.deepEqual(f.calls,['detach:'+newRoute.id]);assert.deepEqual(f.state.boundary.routes,[originalRoute]);assert.equal(f.receipt.routes['gdacs-list'].id,newRoute.id);
   await recover(f.receipt,f.ops,f.persist);assert.equal(f.calls.length,1);
 });
 test('response-loss deletion is reconciled once, failed deletion remains explicit',async()=>{
   for(const applied of [true,false]){
-    const f=fixture();f.receipt.status='failed';f.receipt.intent={upload:true,disable:true,attach:true};f.state.worker=f.candidate();f.receipt.candidate=clone(f.state.worker);f.state.boundary.routes.push(clone(newRoute));
+    const f=fixture();f.receipt.status='failed';f.receipt.intent={upload:true,disable:true,routes:{'gdacs-list':{attach:true}}};f.state.worker=f.candidate();f.receipt.candidate=clone(f.state.worker);f.state.boundary.routes.push(clone(newRoute));
     const detach=f.ops.detach;f.ops.detach=async id=>{if(applied)await detach(id);else f.calls.push('detach:'+id);throw Error('lost');};
     if(applied){await recover(f.receipt,f.ops,f.persist);assert.equal(f.receipt.status,'failed-contained');}
     else{await assert.rejects(recover(f.receipt,f.ops,f.persist),/incomplete/);assert.equal(f.receipt.status,'rollback-incomplete');}
@@ -139,7 +140,7 @@ test('response-loss deletion is reconciled once, failed deletion remains explici
 });
 test('foreign route ID or script cannot be deleted even with a matching pattern',async()=>{
   for(const change of [route=>route.script='another-worker',route=>route.id='5'.repeat(32),route=>route.pattern='weatherx.org/changed/*']){
-    const f=fixture();f.receipt.status='failed';f.receipt.intent={upload:true,attach:true};f.receipt.route=clone(newRoute);f.state.worker=f.candidate();const route=clone(newRoute);change(route);f.state.boundary.routes.push(route);
+    const f=fixture();f.receipt.status='failed';f.receipt.intent={upload:true,routes:{'gdacs-list':{attach:true}}};f.receipt.routes={'gdacs-list':clone(newRoute)};f.state.worker=f.candidate();const route=clone(newRoute);change(route);f.state.boundary.routes.push(route);
     await assert.rejects(recover(f.receipt,f.ops,f.persist),/incomplete/);assert.deepEqual(f.calls,[]);
   }
 });
@@ -175,14 +176,70 @@ test('regression: pre-mutation refusal is not reported as incomplete rollback',a
   const f=fixture();f.state.boundary.pointer.sha256='new-pointer';await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.equal(f.receipt.status,'failed-no-mutation');assert.equal(f.receipt.recovery,'no-owned-mutation');assert.deepEqual(f.calls,['reset-recovery']);
 });
 test('containment still removes owned route when consumer boundary read fails',async()=>{
-  const f=fixture();f.receipt.status='failed';f.receipt.intent={upload:true,attach:true};f.state.worker=f.candidate();f.receipt.candidate=clone(f.state.worker);f.state.boundary.routes.push(clone(newRoute));f.ops.boundary=async()=>{throw Error('foreign consumer mode');};
+  const f=fixture();f.receipt.status='failed';f.receipt.intent={upload:true,routes:{'gdacs-list':{attach:true}}};f.state.worker=f.candidate();f.receipt.candidate=clone(f.state.worker);f.state.boundary.routes.push(clone(newRoute));f.ops.boundary=async()=>{throw Error('foreign consumer mode');};
   await recover(f.receipt,f.ops,f.persist);assert.deepEqual(f.calls,['detach:'+newRoute.id]);assert.equal(f.receipt.status,'failed-contained-manual-review');assert.equal(f.receipt.foreignDrift.kind,'protected-boundary-read-failed');
 });
 test('regression: plain and query GDACS reads require isolated feed provenance each round',async()=>{
   for(const missing of ['', '?guard=query']){
     const reads=[];let originalVerifierCalls=0;
-    const transport={request:async url=>{const path=new URL(url).pathname;reads.push(url);const payload=path.endsWith('/data-health')?{ok:true,authMode:'public',catalogMode:'serve'}:path.endsWith('/health')?{ok:true,authMode:'observe',billingMode:'disabled'}:{type:'FeatureCollection',features:[]};return {status:200,body:Buffer.from(JSON.stringify(payload)),headers:new Headers({'x-swr-age':'0',...(url.endsWith('/api/gdacs/list'+missing)?{}:{'x-weatherx-feed':'gdacs-events4app-v1'})})};}};
+    const transport={request:async url=>{const path=new URL(url).pathname;reads.push(url);const payload=path.endsWith('/data-health')?{ok:true,authMode:'public',catalogMode:'serve'}:path.endsWith('/health')?{ok:true,authMode:'observe',billingMode:'disabled'}:{type:'FeatureCollection',features:[]};return {status:200,body:Buffer.from(JSON.stringify(payload)),headers:new Headers({'x-swr-age':'0',...(url.endsWith('/api/gdacs/list'+missing)?{}:{'x-weatherx-feed':'weather-feeds-v2'})})};}};
     await assert.rejects(verifyLive(transport,'/source',{proof:{points:[]}},{verifyWeatherFeeds:async()=>{originalVerifierCalls++;return [];}}),/provenance/);
     assert.equal(originalVerifierCalls,1);assert.ok(reads.some(url=>url==='https://weatherx.org/api/gdacs/list'));
+  }
+});
+test('fixed manifest permits exactly the three approved query-capable patterns',()=>{
+  assert.deepEqual(ROUTE_MANIFEST.map(entry=>entry.pattern),['weatherx.org/api/gdacs/list*','weatherx.org/api/gdacs/geom*','weatherx.org/api/tc/geom*']);
+  for(const entry of ROUTE_MANIFEST){
+    assert.equal(routeMatches(entry.pattern,'https://weatherx.org'+entry.path+'?eventid=1&episodeid=1'),true);
+    assert.throws(()=>assertBootstrap(null,[{id:'9'.repeat(32),pattern:entry.pattern,script:'foreign'}]));
+  }
+  for(const path of ['/api/tc/list','/api/eonet/list','/api/v1/point-series/gfs','/api/platform/health'])assert.ok(ROUTE_MANIFEST.every(entry=>!routeMatches(entry.pattern,'https://weatherx.org'+path)));
+});
+test('failed first, second or third attachment contains only preceding owned routes in reverse',async()=>{
+  for(let failed=0;failed<3;failed++){
+    const f=fixture();const attach=f.ops.attach;
+    f.ops.attach=async entry=>{if(entry.id===ROUTE_MANIFEST[failed].id){f.calls.push('rejected:'+entry.id);throw Error('rejected');}await attach(entry);};
+    await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.equal(f.receipt.status,'failed-contained');
+    assert.equal(f.receipt.failedStage,'attach-route:'+ROUTE_MANIFEST[failed].id);
+    assert.deepEqual(f.calls.filter(call=>call.startsWith('detach:')),newRoutes.slice(0,failed).reverse().map(route=>'detach:'+route.id));
+    assert.deepEqual(f.state.boundary.routes,[originalRoute]);assert.ok(!f.calls.includes('verify'));
+  }
+});
+test('cancelled partial attachment reconciles every lost response from per-route durable intent',async()=>{
+  for(let count=1;count<=3;count++){
+    const f=fixture();f.receipt.status='executing';f.receipt.intent={upload:true,disable:true,routes:{}};f.receipt.routes={};f.state.worker=f.candidate();f.receipt.candidate=clone(f.state.worker);
+    for(let index=0;index<count;index++){
+      const entry=ROUTE_MANIFEST[index];f.receipt.intent.routes[entry.id]={attach:true};f.state.boundary.routes.push(clone(newRoutes[index]));
+      if(index<count-1)f.receipt.routes[entry.id]=clone(newRoutes[index]);
+    }
+    await recover(f.receipt,f.ops,f.persist);assert.equal(f.receipt.status,'failed-contained');
+    assert.deepEqual(f.calls,newRoutes.slice(0,count).reverse().map(route=>'detach:'+route.id));assert.deepEqual(f.state.boundary.routes,[originalRoute]);
+  }
+});
+test('one failed deletion does not strand the other owned routes',async()=>{
+  const f=fixture();f.ops.verify=async()=>{throw Error('failed gate');};const detach=f.ops.detach;
+  f.ops.detach=async id=>{if(id===newRoutes[2].id){f.calls.push('detach:'+id);throw Error('rejected');}await detach(id);};
+  await assert.rejects(execute(f.receipt,f.ops,f.persist),/recovery incomplete/);
+  assert.deepEqual(f.calls.filter(call=>call.startsWith('detach:')),[...newRoutes].reverse().map(route=>'detach:'+route.id));
+  assert.deepEqual(f.receipt.failedRecoveryRoutes,['tc-geom']);assert.deepEqual(f.state.boundary.routes,[originalRoute,newRoutes[2]]);
+});
+test('foreign replacement of one owned route never prevents containing other unchanged routes',async()=>{
+  const f=fixture();f.ops.verify=async()=>{f.state.boundary.routes.find(route=>route.id===newRoutes[1].id).script='foreign';throw Error('foreign replacement');};
+  await assert.rejects(execute(f.receipt,f.ops,f.persist),/recovery incomplete/);
+  assert.deepEqual(f.calls.filter(call=>call.startsWith('detach:')),['detach:'+newRoutes[2].id,'detach:'+newRoutes[0].id]);
+  assert.equal(f.state.boundary.routes.find(route=>route.id===newRoutes[1].id).script,'foreign');assert.deepEqual(f.receipt.failedRecoveryRoutes,['gdacs-geom']);
+});
+test('qualification rejects disappearing owned routes and unmanifested additions',async()=>{
+  const f=fixture();await execute(f.receipt,f.ops,f.persist);
+  f.state.boundary.routes=f.state.boundary.routes.filter(route=>route.id!==newRoutes[1].id);
+  assert.throws(()=>assertBoundary(f.state.boundary,f.receipt,true),/disappeared/);
+  f.state.boundary.routes.push(clone(newRoutes[1]),{id:'9'.repeat(32),pattern:'weatherx.org/api/tc/list*',script:WORKER});
+  assert.throws(()=>assertBoundary(f.state.boundary,f.receipt,true),/boundary drift/);
+});
+test('real geometry query responses in the original verifier require the new provenance marker',async()=>{
+  for(const affected of ['/api/gdacs/geom?eventtype=FL&eventid=1&episodeid=1','/api/tc/geom?eventid=2&episodeid=1']){
+    const transport={request:async url=>{const path=new URL(url).pathname;const payload=path.endsWith('/data-health')?{ok:true,authMode:'public',catalogMode:'serve'}:path.endsWith('/health')?{ok:true,authMode:'observe',billingMode:'disabled'}:{type:'FeatureCollection',features:[]};return {status:200,body:Buffer.from(JSON.stringify(payload)),headers:new Headers({'x-swr-age':'0',...(url.endsWith(affected)?{}:{'x-weatherx-feed':'weather-feeds-v2'})})};}};
+    const verification={verifyWeatherFeeds:async origin=>{await fetch(origin+affected);return [];}};
+    await assert.rejects(verifyLive(transport,'/source',{proof:{points:[]}},verification),/provenance/);
   }
 });
