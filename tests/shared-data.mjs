@@ -135,7 +135,45 @@ test('scoped S3 client strips inherited broad credentials, remotes, config and p
   assert.ok(calls.slice(2).every(c=>c.options.env.RCLONE_CONFIG_OBJECTS_ACCESS_KEY_ID==='write-id'));
   assert.ok(calls.slice(2).every(c=>!c.args.some(a=>a.includes('-production/'))));
   assert.ok(calls.at(-1).args.includes('--download'));
+  assert.ok(calls[1].args.includes('--no-modtime'));
+  assert.ok(calls[1].args.includes('--no-mimetype'));
   assert.throws(()=>io.put('data','releases/current.json','/nope'),/never written/);
   assert.throws(()=>io.put('data','vault/private','/nope'));
   assert.ok(calls.every(c=>!c.args.some(a=>['sync','delete','purge','move'].includes(a))));
+});
+test('long preparation cannot upload or certify an expired point selection', async () => {
+  for (const expiresBeforeUpload of [true, false]) {
+    const f=fixture(), events=[];
+    const times=expiresBeforeUpload ? [now, now+31*60_000] : [now, now, now+31*60_000];
+    await assert.rejects(prepare(f.pin,f.io,scratch(),()=>{},()=>times.shift(),e=>events.push(e)),/freshness margin/);
+    assert.ok(!f.writes.some(x=>x[2].endsWith('/receipt.json')));
+    if (expiresBeforeUpload) assert.equal(f.writes.length,0);
+    else assert.equal(f.writes.filter(x=>x[0]==='upload').length,7);
+    assert.equal(events.at(-1).event,'phase-failed');
+    assert.equal(events.at(-1).phase,expiresBeforeUpload?'pre-upload-freshness':'pre-receipt-freshness');
+  }
+});
+test('stage events identify exact work and preserve the deterministic receipt', async () => {
+  const f=fixture(), events=[];
+  const receipt=await prepare(f.pin,f.io,scratch(),()=>{},()=>now,e=>events.push(e));
+  assert.equal(receipt.activated,false);
+  assert.deepEqual(events.filter(x=>x.event==='inventory').map(x=>x.phase),
+    ['whole-data','whole-data-atmos','whole-point-series','aifs','ecmwf','gfs','hrrr']);
+  assert.equal(events.at(-1).phase,'completed-receipt');
+  assert.equal(events.at(-1).event,'phase-complete');
+  for (const x of events.filter(x=>x.elapsedMs!==undefined)) assert.ok(Number.isInteger(x.elapsedMs)&&x.elapsedMs>=0);
+  assert.ok(events.every(x=>!JSON.stringify(x).includes('snapshot')),'no local paths logged');
+  const decoded=JSON.parse(f.writes.at(-1)[3]); assert.deepEqual(decoded,receipt);
+});
+test('subprocess diagnostics allowlist exit/signal/timeout without leaking remote errors', () => {
+  const events=[], env={PATH:process.env.PATH,HOME:process.env.HOME,
+    SHARED_R2_READ_ACCESS_KEY_ID:'secret-id',SHARED_R2_READ_SECRET_ACCESS_KEY:'secret-value'};
+  const io=createTransport(env,()=>{throw Object.assign(Error('secret-value signed-request'),
+    {status:9,signal:'SIGTERM',code:'ETIMEDOUT',stderr:'secret-id cookie',stdout:'private'});},e=>events.push(e));
+  assert.throws(()=>io.list('data','releases/synthetic/data'),/^Error: S3 read lsjson failed; snapshot not activated$/);
+  assert.deepEqual(events[0],{event:'transfer-start',role:'read',operation:'lsjson'});
+  const {elapsedMs,...failed}=events[1];
+  assert.ok(elapsedMs>=0);
+  assert.deepEqual(failed,{event:'transfer-failed',role:'read',operation:'lsjson',exitCode:9,signal:'SIGTERM',timedOut:true});
+  assert.doesNotMatch(JSON.stringify(events),/secret|signed-request|cookie|private/);
 });

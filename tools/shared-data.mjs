@@ -159,15 +159,33 @@ function remote(kind, key, role) {
   if (role === 'write') assert.ok(!key.endsWith('/current.json'), 'current pointers are never written by preparation');
   return `objects:weatherx-${kind}-${role === 'read' ? 'production' : 'staging'}/${key}`;
 }
-export function createTransport(env, execute = execFileSync) {
+// Log only controller-owned labels/numbers. Never serialize subprocess stderr,
+// request headers, credentials, local paths, or arbitrary remote error messages.
+function failureFields(error) {
+  return { exitCode: Number.isInteger(error?.status) ? error.status : null,
+    signal: ['SIGTERM', 'SIGKILL', 'SIGINT'].includes(error?.signal) ? error.signal : null,
+    timedOut: error?.code === 'ETIMEDOUT' };
+}
+export function createTransport(env, execute = execFileSync, emit = () => {}) {
   function call(role, args) {
-    try { return execute('rclone', [...args, '--s3-no-check-bucket', '--retries', '1', '--low-level-retries', '2', '--contimeout', '15s', '--timeout', '60s'],
-      { env: transferEnvironment(env, role), maxBuffer: 32 * 1024 ** 2, timeout: 45 * 60_000, stdio: ['ignore', 'pipe', 'pipe'] }); }
-    catch { throw Error(`S3 ${role} operation failed; snapshot not activated`); }
+    const started = performance.now(), operation = args[0];
+    assert.ok(['cat', 'lsjson', 'copy', 'check', 'copyto'].includes(operation));
+    emit({ event: 'transfer-start', role, operation });
+    try {
+      const result = execute('rclone', [...args, '--s3-no-check-bucket', '--retries', '1', '--low-level-retries', '2', '--contimeout', '15s', '--timeout', '60s'],
+        { env: transferEnvironment(env, role), maxBuffer: 32 * 1024 ** 2, timeout: 45 * 60_000, stdio: ['ignore', 'pipe', 'pipe'] });
+      emit({ event: 'transfer-complete', role, operation, elapsedMs: Math.round(performance.now() - started) });
+      return result;
+    } catch (error) {
+      emit({ event: 'transfer-failed', role, operation, elapsedMs: Math.round(performance.now() - started), ...failureFields(error) });
+      throw Error(`S3 ${role} ${operation} failed; snapshot not activated`);
+    }
   }
   return {
     get: (kind, key) => call('read', ['cat', remote(kind, key, 'read')]),
-    list: (kind, prefix) => JSON.parse(call('read', ['lsjson', remote(kind, prefix, 'read'), '--recursive', '--files-only'])),
+    // Only Path/Size/IsDir feed the inventory gate. Asking S3 for unused ModTime
+    // or MimeType adds a HEAD per object; full byte hashing/readback stays below.
+    list: (kind, prefix) => JSON.parse(call('read', ['lsjson', remote(kind, prefix, 'read'), '--recursive', '--files-only', '--no-modtime', '--no-mimetype'])),
     download: (kind, prefix, dir) => call('read', ['copy', remote(kind, prefix, 'read'), dir, '--transfers', '4', '--checkers', '8', '--max-transfer', '40Gi', '--cutoff-mode', 'HARD']),
     upload: (kind, prefix, dir) => {
       const target = remote(kind, prefix, 'write');
@@ -182,8 +200,24 @@ export function createTransport(env, execute = execFileSync) {
     },
   };
 }
-export async function prepare(pin, io, root, validatePoints, now = Date.now()) {
+export async function prepare(pin, io, root, validatePoints, clock = Date.now, emit = () => {}) {
+  // A fixed timestamp remains a fixture seam; the cloud entrypoint always uses
+  // the live clock, including after long transfers and before the final receipt.
+  const currentTime = typeof clock === 'function' ? clock : () => clock;
+  const now = currentTime();
+  async function phase(name, fn) {
+    const started = performance.now(); emit({ event: 'phase-start', phase: name });
+    try {
+      const result = await fn();
+      emit({ event: 'phase-complete', phase: name, elapsedMs: Math.round(performance.now() - started) });
+      return result;
+    } catch (error) {
+      emit({ event: 'phase-failed', phase: name, elapsedMs: Math.round(performance.now() - started) });
+      throw error;
+    }
+  }
   mkdirSync(root, { mode: 0o700 }); // existing/stale trees are refused, never overlaid
+  emit({ event: 'phase-start', phase: 'source-controls' });
   const releaseRaw = io.get('data', 'releases/current.json'), release = JSON.parse(releaseRaw);
   const catalogPointerRaw = io.get('data', 'catalogs/current.json'), catalogPointer = JSON.parse(catalogPointerRaw);
   const manifestRaw = io.get('data', `releases/${pin.releaseId}/manifest.json`), manifest = JSON.parse(manifestRaw);
@@ -191,6 +225,7 @@ export async function prepare(pin, io, root, validatePoints, now = Date.now()) {
   let total = validateRelease(release, manifest, pin, now);
   await validatePoints(manifest); // exact pinned v2 schema/inventory validator, before transfer
   const catalog = validateCatalog(catalogPointer, catalogRaw, pin, now);
+  emit({ event: 'phase-complete', phase: 'source-controls', objects: manifest.objectCount, bytes: total });
   const save = (name, bytes) => { const p = resolve(root, name); writeFileSync(p, bytes, { flag: 'wx', mode: 0o600 }); return p; };
   const manifestFile = save('manifest.json', manifestRaw), releaseFile = save('release-pointer.json', releaseRaw);
   const catalogFile = save('catalog.json', catalogRaw), catalogPointerFile = save('catalog-pointer.json', catalogPointerRaw);
@@ -199,23 +234,25 @@ export async function prepare(pin, io, root, validatePoints, now = Date.now()) {
   // Prefixes must contain exactly the manifest allowlist; no bucket/vault mirroring.
   for (const top of ['data', 'data-atmos', 'point-series']) {
     const dir = resolve(whole, top); mkdirSync(dir);
-    const listed = listing(io.list('data', `releases/${pin.releaseId}/${top}`));
+    const listed = listing(await phase(`whole-${top}-list`, () => io.list('data', `releases/${pin.releaseId}/${top}`)));
     assert.deepEqual(listed, manifest.objects.filter(o => o.path.startsWith(top + '/')).map(o =>
       ({path:o.path.slice(top.length + 1), size:o.bytes})).sort(byPath), 'unexpected source objects');
-    io.download('data', `releases/${pin.releaseId}/${top}`, dir);
+    emit({ event: 'inventory', phase: `whole-${top}`, objects: listed.length, bytes: listed.reduce((n,o) => n + o.size, 0) });
+    await phase(`whole-${top}-download`, () => io.download('data', `releases/${pin.releaseId}/${top}`, dir));
   }
-  compareInventory(await localInventory(whole), manifest.objects.map(({path, bytes, sha256}) => ({path, size: bytes, sha256})));
+  await phase('whole-sha256', async () => compareInventory(await localInventory(whole), manifest.objects.map(({path, bytes, sha256}) => ({path, size: bytes, sha256}))));
   const components = [];
   for (const c of Object.values(catalog.components)) {
     const raw = io.get('components', c.manifestKey); validateComponent(c, raw);
     const dir = resolve(root, c.componentId); mkdirSync(dir);
-    const listed = listing(io.list('components', c.rootPrefix.slice(0,-1)));
+    const listed = listing(await phase(`${c.componentId}-list`, () => io.list('components', c.rootPrefix.slice(0,-1))));
     assert.equal(listed.length, c.objectCount + 1, 'unexpected component object count');
     assert.equal(listed.find(o => o.path === 'component.json')?.size, raw.length, 'component metadata size changed');
     const componentBytes = listed.reduce((n,o) => n + (o.path === 'component.json' ? 0 : o.size), 0);
     assert.ok(total + componentBytes <= MAX_BYTES, 'combined snapshot exceeds disk budget');
-    io.download('components', c.rootPrefix.slice(0,-1), dir);
-    const all = await localInventory(dir), values = all.filter(f => f.path !== 'component.json');
+    emit({ event: 'inventory', phase: c.componentId, objects: listed.length, bytes: componentBytes });
+    await phase(`${c.componentId}-download`, () => io.download('components', c.rootPrefix.slice(0,-1), dir));
+    const all = await phase(`${c.componentId}-sha256`, () => localInventory(dir)), values = all.filter(f => f.path !== 'component.json');
     assert.equal(hash(readFileSync(resolve(dir, 'component.json'))), c.manifestSha256);
     assert.equal(values.length, c.objectCount); assert.equal(hash(JSON.stringify(values)), c.inventorySha256, 'component inventory hash mismatch');
     total += inventory(values, 'size'); assert.ok(total <= MAX_BYTES, 'combined snapshot exceeds disk budget');
@@ -223,8 +260,12 @@ export async function prepare(pin, io, root, validatePoints, now = Date.now()) {
   }
   // No controller fields are rewritten: source IDs, timestamps, hashes and quality receipts
   // retain their original meaning. A copy is NOT a new model issue or accuracy claim.
-  for (const { descriptor: c, dir } of components) io.upload('components', c.rootPrefix.slice(0,-1), dir);
-  for (const top of ['data', 'data-atmos', 'point-series']) io.upload('data', `releases/${pin.releaseId}/${top}`, resolve(whole, top));
+  const freshness = () => {
+    const time = currentTime(); validateRelease(release, manifest, pin, time); validateCatalog(catalogPointer, catalogRaw, pin, time);
+  };
+  await phase('pre-upload-freshness', freshness);
+  for (const { descriptor: c, dir } of components) await phase(`${c.componentId}-upload-readback`, () => io.upload('components', c.rootPrefix.slice(0,-1), dir));
+  for (const top of ['data', 'data-atmos', 'point-series']) await phase(`whole-${top}-upload-readback`, () => io.upload('data', `releases/${pin.releaseId}/${top}`, resolve(whole, top)));
   io.put('data', `releases/${pin.releaseId}/manifest.json`, manifestFile);
   // Catalog metadata is prepared under the candidate, not a serving snapshot key: the
   // activation controller must install its verified sha256 metadata before selecting it.
@@ -239,7 +280,8 @@ export async function prepare(pin, io, root, validatePoints, now = Date.now()) {
     collected: false, processed: false, activated: false, productionWritten: false,
     producerSource: 'preserved upstream receipts; no new collector-source attestation',
     components: components.map(({descriptor:c}) => ({model:c.componentId, artifactId:c.artifactId, manifestSha256:c.manifestSha256})) };
-  io.put('data', `${prefix}/receipt.json`, save('receipt.json', JSON.stringify(receipt) + '\n'));
+  await phase('pre-receipt-freshness', freshness);
+  await phase('completed-receipt', () => io.put('data', `${prefix}/receipt.json`, save('receipt.json', JSON.stringify(receipt) + '\n')));
   return receipt;
 }
 
@@ -253,8 +295,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
       assert.equal(execFileSync('git', ['rev-parse','HEAD'], {cwd:control,encoding:'utf8'}).trim(), 'dbc97a26bc239398ffa9ec157a094148961b6451');
       execFileSync('git', ['diff','--exit-code','HEAD'], {cwd:control,stdio:'pipe'});
       const { validatePointSeriesDescriptor } = await import(pathToFileURL(resolve(control, 'ops/platform/validate-point-series.mjs')));
-      const receipt = await prepare(pin, createTransport(process.env), resolve(process.env.RUNNER_TEMP, 'shared-staging-snapshot'),
-        m => validatePointSeriesDescriptor(m.pointSeries, m.objects));
+      const emit = event => console.log(JSON.stringify({ time: new Date().toISOString(), ...event }));
+      const receipt = await prepare(pin, createTransport(process.env, execFileSync, emit), resolve(process.env.RUNNER_TEMP, 'shared-staging-snapshot'),
+        m => validatePointSeriesDescriptor(m.pointSeries, m.objects), Date.now, emit);
       console.log(JSON.stringify(receipt));
     }
   } catch (error) { console.error(`Shared-data preparation refused: ${error.message}`); process.exitCode = 1; }
