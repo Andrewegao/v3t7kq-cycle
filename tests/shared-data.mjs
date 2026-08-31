@@ -153,6 +153,38 @@ test('long preparation cannot upload or certify an expired point selection', asy
     assert.equal(events.at(-1).phase,expiresBeforeUpload?'pre-upload-freshness':'pre-receipt-freshness');
   }
 });
+test('every upload/readback failure prevents all later controls and the completed receipt', async () => {
+  for (let failedUpload = 1; failedUpload <= 7; failedUpload++) {
+    const f = fixture(); let attempts = 0;
+    f.io.upload = () => { if (++attempts === failedUpload) throw Error('readback mismatch'); };
+    await assert.rejects(prepare(f.pin, f.io, scratch(), () => {}, now), /readback mismatch/);
+    assert.equal(attempts, failedUpload, 'later prefixes must not continue after failed verification');
+    assert.equal(f.writes.length, 0, 'no control document or receipt may be written');
+  }
+});
+test('bulk transfer uses bounded parallel workers and recursive listings without weakening byte checks', () => {
+  const calls = [], env = { PATH: process.env.PATH, HOME: process.env.HOME,
+    SHARED_R2_READ_ACCESS_KEY_ID: 'read', SHARED_R2_READ_SECRET_ACCESS_KEY: 'fixture',
+    STAGING_R2_WRITE_ACCESS_KEY_ID: 'write', STAGING_R2_WRITE_SECRET_ACCESS_KEY: 'fixture',
+    RCLONE_TRANSFERS: '9999', RCLONE_CHECKERS: '9999', RCLONE_S3_NO_HEAD: 'true' };
+  const io = createTransport(env, (exe, args, options) => { calls.push({ args, options }); return Buffer.alloc(0); });
+  io.download('data', 'releases/test/data', '/scratch/source');
+  io.upload('data', 'releases/test/data', '/scratch/source');
+  assert.deepEqual(calls.map(c => c.args[0]), ['copy', 'copy', 'check']);
+  for (const { args, options } of calls) {
+    assert.ok(args.includes('--fast-list'), 'bulk operations must avoid per-directory traversal');
+    assert.equal(args[args.indexOf('--checkers') + 1], '16');
+    assert.equal(options.timeout, 45 * 60_000, 'do not mask stalls with a longer timeout');
+    for (const key of ['RCLONE_TRANSFERS', 'RCLONE_CHECKERS', 'RCLONE_S3_NO_HEAD']) assert.equal(options.env[key], undefined);
+    for (const flag of ['--size-only', '--ignore-checksum', '--s3-no-head', '--no-check-dest', '--ignore-existing'])
+      assert.ok(!args.includes(flag), `verification shortcut forbidden: ${flag}`);
+  }
+  for (const { args } of calls.slice(0, 2)) assert.equal(args[args.indexOf('--transfers') + 1], '16');
+  assert.ok(calls[0].args.includes('--max-transfer'));
+  assert.equal(calls[0].args[calls[0].args.indexOf('--max-transfer') + 1], '40Gi');
+  assert.ok(calls[1].args.includes('--immutable'));
+  assert.ok(calls[2].args.includes('--download'), 'readback still consumes and compares the complete bytes');
+});
 test('stage events identify exact work and preserve the deterministic receipt', async () => {
   const f=fixture(), events=[];
   const receipt=await prepare(f.pin,f.io,scratch(),()=>{},()=>now,e=>events.push(e));
