@@ -8,7 +8,7 @@ assert.doesNotMatch(workflow, /^  (?:schedule|push|pull_request):/m);
 assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
 assert.match(workflow, /environment: production/);
 assert.match(workflow, /group: weatherx-ui-production\s+cancel-in-progress: false/);
-assert.match(workflow, /REPAIR-GDACS-LIST-ONLY/);
+assert.match(workflow, /REPAIR-WEATHER-FEEDS-ONLY/);
 assert.match(workflow, /ref: \$\{\{ inputs\.atmos_sha \}\}/);
 assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
 assert.match(workflow, /merge-base --is-ancestor/);
