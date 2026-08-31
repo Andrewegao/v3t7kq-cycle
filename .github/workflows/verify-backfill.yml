@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       half:
-        description: 'a and b fill in parallel; full merges, qualifies, and publishes'
+        description: 'a and b fill in parallel; full qualifies and caches archive inputs (no UI deployment)'
         type: choice
         options: [a, b, full]
         default: full
@@ -132,15 +132,8 @@ jobs:
           set -euo pipefail
           ( cd app/public && find data data-atmos basemap-ground -type f 2>/dev/null | sort > /tmp/pre-manifest.txt )
           python3 data/check_file_budget.py --manifest /tmp/pre-manifest.txt --app-files 277
-      - name: guarded deploy
-        if: ${{ inputs.half == 'full' }}
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
-        run: |
-          set -euo pipefail
-          [ -n "$CLOUDFLARE_API_TOKEN" ] || { echo "missing CLOUDFLARE_API_TOKEN" >&2; exit 1; }
-          ./deploy-atmos.sh
+      # The normal data-maintenance lane owns R2 publication. Backfill retains inputs only;
+      # neither backfill nor data maintenance may release UI code.
       - name: save qualified rolling cache
         if: ${{ success() && inputs.half == 'full' }}
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
