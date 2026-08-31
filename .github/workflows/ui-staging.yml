@@ -1,5 +1,6 @@
 # Build once, qualify the actual staging site, retain only an encrypted immutable candidate.
 name: WeatherX UI staging qualification
+run-name: Staging ${{ inputs.atmos_sha }}
 on:
   workflow_dispatch:
     inputs:
