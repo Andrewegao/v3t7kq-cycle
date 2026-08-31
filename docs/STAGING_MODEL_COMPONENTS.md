@@ -94,6 +94,26 @@ A separately approved staging UI build may aggregate verified entries into
 only on `https://staging.weatherx.org`. That integration must preserve regional
 domain/device checks and honest point/fusion fallback. It is not performed here.
 
+## Seven-model public selection assembly
+
+`staging-model-selection.yml` is the separate manual bridge between seven
+completed component qualifications and a reviewed staging UI request. It accepts
+one explicit catalog ID for every model and requires the protected
+`STAGING_MODEL_SELECTION_APPROVED_CATALOGS_JSON` map to match all seven exactly.
+The protected collector and validator SHAs must match every entry. Missing,
+duplicate, stale, wrong-run, wrong-source, wrong-validator or promoted entries
+fail before an artifact is created.
+
+The controller can read only the seven derived
+`staging-candidates/model-components/<catalog-id>/selection.json` objects from
+`weatherx-data-staging`. It has no PUT/delete/list operation and never reads raw
+or encrypted model inputs. It sorts and revalidates the entries with the same UI
+selection policy, then writes one `<sha256>.json` file under `RUNNER_TEMP`.
+Actions retains exactly that public-metadata file for three days. The lane does
+not write R2, change a serving pointer, deploy UI/Workers, enable fusion, or make
+the selection production-eligible. The digest must still be separately reviewed
+and approved by the protected staging UI profile.
+
 ## Verification and limits
 
 Offline tests cover real AES-authenticated restore, path/size/disk constraints,
