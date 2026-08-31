@@ -8,6 +8,7 @@ import {BASELINE_PROFILE,MODELS,GRIDS,variables,displayPaths,digest,canonical,pr
 import {pixelDifference} from '../tools/ui-staging-model-browser.mjs';
 import {createCandidate,hash,eligibleRun,REPOSITORY} from '../tools/ui-candidate.mjs';
 import {eligibleBuild} from '../tools/ui-build-transfer.mjs';
+import {publicBuildEnvironment,requiredSourceGuard} from '../tools/ui-release.mjs';
 
 const NOW=Date.parse('2026-08-31T20:00:00Z'),INIT='2026083112',SHA='a'.repeat(40),DIGEST='b'.repeat(64);
 function entry(model,n){
@@ -74,6 +75,20 @@ test('manual staging defaults to baseline and only its protected environment can
   const root=new URL('../',import.meta.url),staging=readFileSync(new URL('.github/workflows/ui-staging.yml',root),'utf8'),production=readFileSync(new URL('.github/workflows/ui-release.yml',root),'utf8');
   assert.match(staging,/model_selection_sha256:[\s\S]*?default: none/);assert.match(staging,/name: ui-staging[\s\S]*?UI_STAGING_MODEL_SELECTION_APPROVED_SHA256: \$\{\{ vars\.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256 \}\}/);
   assert.doesNotMatch(production,/model_selection_sha256|UI_STAGING_MODEL_SELECTION_APPROVED_SHA256|VITE_STAGING_MODEL_ADMISSION/);
+});
+test('build flags select mutually exclusive production or exact staging-experiment release guards',()=>{
+  const body=selection(['icon']),sha=digest(body),profile=profileFor(sha),source={bytes:body};
+  const staging=publicBuildEnvironment(profile,source,{KEEP:'yes'});
+  assert.equal(staging.ATMOS_PUBLIC_RELEASE,'0');assert.equal(staging.ATMOS_STAGING_EXPERIMENT_RELEASE,'1');
+  assert.equal(staging.VITE_MODEL_EXPANSION_QUALIFICATION,'1');assert.equal(staging.VITE_STAGING_MODEL_ADMISSION,'1');
+  assert.equal(staging.VITE_STAGING_MODEL_SELECTION_SHA256,sha);assert.equal(staging.VITE_PLATFORM_ACCOUNT,'0');assert.equal(staging.VITE_MODEL_LOCAL_BASE,'');assert.equal(staging.KEEP,'yes');
+  const baseline=publicBuildEnvironment(BASELINE_PROFILE,null,{});
+  assert.equal(baseline.ATMOS_PUBLIC_RELEASE,'1');assert.equal(baseline.ATMOS_STAGING_EXPERIMENT_RELEASE,'0');
+  assert.equal(baseline.VITE_MODEL_EXPANSION_QUALIFICATION,'0');assert.equal(baseline.VITE_STAGING_MODEL_ADMISSION,'0');assert.equal(baseline.VITE_STAGING_MODEL_SELECTION_SHA256,'');
+  assert.equal(requiredSourceGuard(profile),'164a469189da2c8303c997d4020b3ae20da84cd7');assert.equal(requiredSourceGuard(BASELINE_PROFILE),null);
+  assert.throws(()=>publicBuildEnvironment(profile,null,{}));
+  assert.throws(()=>publicBuildEnvironment(profile,{bytes:Buffer.from('wrong')},{}));
+  assert.throws(()=>publicBuildEnvironment(BASELINE_PROFILE,source,{}));
 });
 test('browser child process uses an allowlist and pixel proof measures visible color changes',()=>{
   const clean=browserEnvironment({PATH:'/bin',HOME:'/tmp',GITHUB_TOKEN:'secret',CLOUDFLARE_API_TOKEN:'secret',UI_CANDIDATE_KEY:'secret',RANDOM:'discard'},{BASE:'https://staging.weatherx.org'});

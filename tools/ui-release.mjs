@@ -7,11 +7,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CONTROL_SHA, REPOSITORY, MAX_BYTES, gate, hash, createCandidate, validateCandidate,
   readTree, validateFiles, seal, unseal, restore, eligibleRun } from './ui-candidate.mjs';
 import { packBuild, unpackBuild, eligibleBuild } from './ui-build-transfer.mjs';
-import {profileFor,readSelection,requireProductionProfile,requireStagingApproval,SELECTION_ASSET,browserEnvironment,validateBrowserReceipt} from './ui-staging-models.mjs';
+import {profileFor,validateProfile,readSelection,requireProductionProfile,requireStagingApproval,SELECTION_ASSET,browserEnvironment,validateBrowserReceipt} from './ui-staging-models.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONTROL = resolve(ROOT, '../control');
 const SOURCE = resolve(ROOT, '../atmos');
+const STAGING_RELEASE_GUARD_SHA = '164a469189da2c8303c997d4020b3ae20da84cd7';
 const ACCOUNT = 'a89f9a1af485021fbc60a68b163c7c6e';
 const ORIGINS = { staging: 'https://staging.weatherx.org', production: 'https://weatherx.org' };
 const PROJECTS = { staging: 'weatherx-platform-staging', production: 'atmos-platform' };
@@ -129,24 +130,37 @@ async function preflight(stage) {
   await projectSnapshot(stage); await publicModes(ORIGINS[stage]);
   run('node', [resolve(CONTROL,'ops/release/verify-weather-feeds.mjs'), ORIGINS[stage]]);
 }
-function sourceIdentity() {
+export function requiredSourceGuard(profile) {
+  validateProfile(profile); return profile.stagingOnly ? STAGING_RELEASE_GUARD_SHA : null;
+}
+function sourceIdentity(profile) {
   assert.match(process.env.ATMOS_SHA ?? '', /^[a-f0-9]{40}$/);
   assert.equal(git(['rev-parse','HEAD'], SOURCE), process.env.ATMOS_SHA);
   assert.equal(git(['rev-parse','origin/master'], SOURCE), process.env.ATMOS_SHA, 'stage the exact current-master source');
   git(['diff','--exit-code','HEAD'], SOURCE);
+  if (requiredSourceGuard(profile)) git(['merge-base','--is-ancestor',requiredSourceGuard(profile),'HEAD'], SOURCE);
+}
+export function publicBuildEnvironment(profile,selection,env=process.env) {
+  validateProfile(profile);
+  if (profile.stagingOnly) {
+    assert.ok(Buffer.isBuffer(selection?.bytes), 'staging experiment selection bytes are required');
+    assert.equal(hash(selection.bytes),profile.modelSelectionSha256,'staging experiment selection differs from profile');
+  } else assert.equal(selection,null,'baseline build cannot carry a staging selection');
+  return {...env,ATMOS_CODE_ONLY_BUILD:'1',ATMOS_PUBLIC_RELEASE:profile.stagingOnly?'0':'1',
+    ATMOS_STAGING_EXPERIMENT_RELEASE:profile.stagingOnly?'1':'0',VITE_PRODUCT:'lab',VITE_APP:'lab',VITE_PLATFORM_ACCOUNT:'0',
+    VITE_MODEL_EXPANSION_QUALIFICATION:profile.stagingOnly?'1':'0',VITE_MODEL_LOCAL_BASE:'',
+    VITE_STAGING_MODEL_ADMISSION:profile.stagingOnly?'1':'0',VITE_STAGING_MODEL_SELECTION_SHA256:profile.modelSelectionSha256??''};
 }
 function build() {
-  buildGate(); controller(); sourceIdentity();
+  buildGate(); controller();
   const profile=profileFor(process.env.MODEL_SELECTION_SHA256),selection=readSelection(ROOT,profile);
+  sourceIdentity(profile);
   const app = resolve(SOURCE, 'app'), shell = resolve(process.env.RUNNER_TEMP, 'ui-public-shell');
   mkdirSync(shell, { mode: 0o700 });
   run('rsync',['-a','--exclude','/data/','--exclude','/data-atmos/',`${app}/public/`,`${shell}/`]);
   assert.ok(!existsSync(resolve(shell,SELECTION_ASSET)),'candidate source must not supply selection policy');
   if(selection){mkdirSync(dirname(resolve(shell,SELECTION_ASSET)),{recursive:true,mode:0o700});writeFileSync(resolve(shell,SELECTION_ASSET),selection.bytes,{flag:'wx',mode:0o600});}
-  run('npm',['run','build'],{cwd:app, env:{...process.env, ATMOS_CODE_ONLY_BUILD:'1', ATMOS_PUBLIC_RELEASE:'1',
-    ATMOS_PUBLIC_SHELL_DIR:shell,VITE_PRODUCT:'lab',VITE_APP:'lab',VITE_PLATFORM_ACCOUNT:'0',
-    VITE_MODEL_EXPANSION_QUALIFICATION:profile.stagingOnly?'1':'0',VITE_MODEL_LOCAL_BASE:'',
-    VITE_STAGING_MODEL_ADMISSION:profile.stagingOnly?'1':'0',VITE_STAGING_MODEL_SELECTION_SHA256:profile.modelSelectionSha256??''}});
+  run('npm',['run','build'],{cwd:app,env:{...publicBuildEnvironment(profile,selection),ATMOS_PUBLIC_SHELL_DIR:shell}});
   const dist = resolve(app,'dist');
   // Compile once BEFORE qualification; production must never discover/recompile functions/.
   run(resolve(CONTROL,'platform/edge/node_modules/.bin/wrangler'), ['pages','functions','build',resolve(app,'functions'),
