@@ -12,6 +12,8 @@ on:
       - ".github/workflows/ui-release.yml"
       - ".github/workflows/ui-staging.yml"
       - ".github/workflows/staging-data.yml"
+      - ".github/workflows/staging-consumer-refresh.yml"
+      - ".github/workflows/staging-data-activate.yml"
       - ".github/workflows/verify-backfill.yml"
       - ".github/workflows/consumer-refresh.yml"
       - ".github/workflows/gdacs-feed-release.yml"
@@ -19,6 +21,7 @@ on:
       - "scheduler/**"
       - "tests/**"
       - "tools/**"
+      - "staging-controller/**"
 
 permissions:
   contents: read
@@ -42,6 +45,10 @@ jobs:
         run: node --test tests/ui-*.mjs
       - name: Cloud-only staging data isolation and public-mode contracts
         run: node --test tests/staging-data.mjs tests/shared-data.mjs
+      - name: Staging activation transport and fail-closed recovery contracts
+        run: |
+          npm ci --ignore-scripts --prefix staging-controller
+          node --test tests/staging-*.mjs
       - name: Consumer refresh workflow safety contract
         run: node tests/consumer-workflow.mjs
       - name: Consumer refresh preflight and rollback contracts
