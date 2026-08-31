@@ -12,6 +12,10 @@ export const MODELS = ['aifs', 'ecmwf', 'gfs', 'hrrr'];
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
 const SHA = /^[a-f0-9]{64}$/;
 const MAX_OBJECTS = 100_000, MAX_BYTES = 40 * 1024 ** 3;
+// Each prefix still finishes and verifies before the next begins. Bound file-level
+// parallelism here (not a caller/env knob); the 100k-object gate also bounds the
+// recursive listing's metadata memory. Source and readback byte gates are unchanged.
+const BULK_TRANSFERS = '16', BULK_CHECKERS = '16';
 const checks = ['manifest', 'inventory', 'remote_bytes', 'coverage', 'freshness', 'live_superset', 'horizon', 'cadence', 'grid', 'referenced_bytes'];
 export const hash = x => createHash('sha256').update(x).digest('hex');
 export function identifier(value) { assert.match(value ?? '', ID); assert.ok(!value.includes('..')); return value; }
@@ -186,12 +190,12 @@ export function createTransport(env, execute = execFileSync, emit = () => {}) {
     // Only Path/Size/IsDir feed the inventory gate. Asking S3 for unused ModTime
     // or MimeType adds a HEAD per object; full byte hashing/readback stays below.
     list: (kind, prefix) => JSON.parse(call('read', ['lsjson', remote(kind, prefix, 'read'), '--recursive', '--files-only', '--no-modtime', '--no-mimetype'])),
-    download: (kind, prefix, dir) => call('read', ['copy', remote(kind, prefix, 'read'), dir, '--transfers', '4', '--checkers', '8', '--max-transfer', '40Gi', '--cutoff-mode', 'HARD']),
+    download: (kind, prefix, dir) => call('read', ['copy', remote(kind, prefix, 'read'), dir, '--fast-list', '--transfers', BULK_TRANSFERS, '--checkers', BULK_CHECKERS, '--max-transfer', '40Gi', '--cutoff-mode', 'HARD']),
     upload: (kind, prefix, dir) => {
       const target = remote(kind, prefix, 'write');
-      call('write', ['copy', dir, target, '--immutable', '--transfers', '4', '--checkers', '8']);
+      call('write', ['copy', dir, target, '--immutable', '--fast-list', '--transfers', BULK_TRANSFERS, '--checkers', BULK_CHECKERS]);
       // --immutable alone does not prove bytes for equal-size objects or multipart ETags.
-      call('write', ['check', dir, target, '--download', '--checkers', '4']);
+      call('write', ['check', dir, target, '--download', '--fast-list', '--checkers', BULK_CHECKERS]);
     },
     put: (kind, key, file) => {
       const target = remote(kind, key, 'write');

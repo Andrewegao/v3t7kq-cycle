@@ -67,6 +67,44 @@ final receipt. A long copy cannot certify an expired selection. The independent 
 controller still performs its own freshness checks. If acquisition expires, select a newer
 already-published release; do not alter timestamps, waive the margin, or blindly retry.
 
+### Bounded bulk-transfer parallelism
+
+Bulk acquisition/upload now uses sixteen file transfers and sixteen checkers; download
+readback also uses sixteen checkers. These are fixed controller limits, not user-controlled
+environment knobs. Prefixes remain sequential, and no upload starts before all acquired
+source bytes validate. The existing 40 GiB / 100,000-object inventory limits, scoped S3
+credentials, immutable writes, full download-readback, failure propagation, freshness checks
+and receipt-last ordering are unchanged. No timeout or retry limit is increased.
+
+`--fast-list` reduces recursive directory round trips for copy/check. This trades metadata
+memory for fewer requests, not less verification. Rclone documents roughly 1 KiB per listed
+object; the accepted inventory cap is therefore material to this choice. That estimate is
+not a hard process-RSS bound. Sixteen file workers also increase buffering; no weather
+collector or other prefix is run concurrently on this preparation runner. Multipart settings
+remain unchanged. Do not increase these bounds without measuring hosted memory and timing.
+
+`tests/shared-data-throughput.mjs` runs the exact hosted rclone 1.75.0 against loopback-only
+synthetic objects with controlled request latency. It measures listing calls and actual
+GET/PUT concurrency in separate one-variable arms and the combined settings. Every arm
+requires identical full inventories/bytes, a readback GET for every object and rejection of
+equal-size corruption. This is a mechanism test, not a Cloudflare throughput benchmark or a
+promise that the 6.9 GB snapshot completes within a specific time. Small paginated trees can
+even take longer with fast-list despite fewer LIST calls. Hosted transfer phase receipts
+remain the end-to-end acceptance evidence.
+
+Local independent replay on 2026-08-31 used 64 x 16 KiB objects, a 35 ms per-request
+loopback delay and 12-object ListV2 pages. Baseline download/upload/readback was
+821/1417/847 ms; the combined settings measured 480/430/480 ms (3.085 s to 1.390 s).
+Both read every source object and read back every destination object; combined observed
+GET/PUT peaks were sixteen, versus four. Source/readback LIST requests fell from 25 to 6,
+including all five continuation pages. Fast-list alone measured 935/1344/920 ms: fewer
+requests are not automatically lower wall time. There is deliberately no flaky timing
+threshold in the test. The loopback backend's filesystem-parent concurrency limitation
+and empty-parent fixture setup are documented in the test, not attributed to Cloudflare.
+
+References: [rclone S3 listing/performance and memory tradeoffs](https://rclone.org/s3/),
+[download-based byte verification](https://rclone.org/commands/rclone_check/).
+
 ## Credentials and activation boundaries
 
 The protected `data-staging` environment is main-only with administrator bypass disabled.

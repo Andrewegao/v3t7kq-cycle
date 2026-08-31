@@ -70,6 +70,7 @@ jobs:
           SHARED_DATA_VALIDATOR_MODULE: ${{ github.workspace }}/control/ops/platform/validate-point-series.mjs
         run: |
           node cycle/tests/shared-data-listing.mjs
+          node cycle/tests/shared-data-throughput.mjs
           node cycle/tests/shared-data-s3.mjs
       - name: Verify and prepare immutable published bytes; never activate
         env:
