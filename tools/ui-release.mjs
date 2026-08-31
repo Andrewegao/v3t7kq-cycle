@@ -57,17 +57,44 @@ export function configurationDigest(project) {
   return hash(JSON.stringify(canonical({ name: project.name, production_branch: project.production_branch,
     source: project.source ?? null, domains: project.domains, config: project.deployment_configs?.production })));
 }
-async function projectSnapshot(stage) {
-  const { project } = target(stage);
-  const payload = await json(`https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/pages/projects/${project}`, process.env.CLOUDFLARE_API_TOKEN);
-  assert.equal(payload.success, true); const p = payload.result;
+export function validateStagingPagesBindings(project) {
+  // Pages "production" means the main branch of THIS staging project, not WeatherX
+  // production. Neither context may give the public shell writable backend access.
+  // All server-side env_vars are refused too: a secret can be mislabeled plain_text.
+  // Runtime-only API metadata is allowlisted; future nonempty resource maps fail closed.
+  const runtimeFields = new Set(['compatibility_date', 'compatibility_flags', 'always_use_latest_compatibility_date',
+    'usage_model', 'placement', 'limits', 'fail_open', 'build_image_major_version', 'wrangler_config_hash']);
+  const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+  const configs = project.deployment_configs;
+  assert.ok(record(configs) && record(configs.production), 'staging Pages production configuration is missing');
+  for (const [context, config] of Object.entries(configs)) {
+    assert.ok(context === 'production' || context === 'preview', 'unreviewed staging Pages configuration context');
+    if (context === 'preview' && config == null) continue;
+    assert.ok(record(config), 'invalid staging Pages configuration');
+    for (const [field, value] of Object.entries(config)) {
+      if (runtimeFields.has(field)) continue;
+      assert.ok(value === null || value === undefined || (record(value) && Object.keys(value).length === 0),
+        `staging Pages ${context}.${field} bindings/resources must be empty`);
+    }
+  }
+}
+export function validateProjectSnapshot(stage, p, expectedDigest) {
+  assert.ok(Object.hasOwn(PROJECTS, stage), 'unknown UI target');
+  const project = PROJECTS[stage];
   assert.equal(p.name, project); assert.equal(p.production_branch, 'main');
-  assert.equal(p.source, null, 'Git-linked Pages projects cannot bypass staging/manual gates');
-  assert.equal(configurationDigest(p), process.env.UI_PAGES_CONFIG_SHA256, 'Pages configuration changed or is not approved');
+  assert.ok(p.source === null || p.source === undefined, 'Git-linked Pages projects cannot bypass staging/manual gates');
+  if (stage === 'staging') validateStagingPagesBindings(p);
+  assert.equal(configurationDigest(p), expectedDigest, 'Pages configuration changed or is not approved');
   assert.equal(p.deployment_configs?.production?.compatibility_date, '2026-06-23', 'compile/runtime compatibility mismatch');
   assert.deepEqual(p.deployment_configs?.production?.compatibility_flags ?? [], [], 'unreviewed compatibility flags');
   assert.equal(p.canonical_deployment?.latest_stage?.status, 'success');
   return p;
+}
+async function projectSnapshot(stage) {
+  const { project } = target(stage);
+  const payload = await json(`https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/pages/projects/${project}`, process.env.CLOUDFLARE_API_TOKEN);
+  assert.equal(payload.success, true);
+  return validateProjectSnapshot(stage, payload.result, process.env.UI_PAGES_CONFIG_SHA256);
 }
 export function validatePublicModes(origin, health, data) {
   assert.ok(Object.values(ORIGINS).includes(origin));
