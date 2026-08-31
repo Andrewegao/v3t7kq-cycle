@@ -8,7 +8,7 @@ import {BASELINE_PROFILE,MODELS,GRIDS,variables,displayPaths,digest,canonical,pr
 import {pixelDifference} from '../tools/ui-staging-model-browser.mjs';
 import {createCandidate,hash,eligibleRun,REPOSITORY} from '../tools/ui-candidate.mjs';
 import {eligibleBuild} from '../tools/ui-build-transfer.mjs';
-import {publicBuildEnvironment,requiredSourceGuard} from '../tools/ui-release.mjs';
+import {publicBuildEnvironment,requiredSourceGuard,weatherFeedVerificationRequired} from '../tools/ui-release.mjs';
 
 const NOW=Date.parse('2026-08-31T20:00:00Z'),INIT='2026083112',SHA='a'.repeat(40),DIGEST='b'.repeat(64);
 function entry(model,n){
@@ -94,6 +94,16 @@ test('browser child process uses an allowlist and pixel proof measures visible c
   const clean=browserEnvironment({PATH:'/bin',HOME:'/tmp',GITHUB_TOKEN:'secret',CLOUDFLARE_API_TOKEN:'secret',UI_CANDIDATE_KEY:'secret',RANDOM:'discard'},{BASE:'https://staging.weatherx.org'});
   assert.deepEqual(clean,{PATH:'/bin',HOME:'/tmp',BASE:'https://staging.weatherx.org'});
   const off={width:2,height:1,data:Buffer.from([0,0,0,255,0,0,0,255])},on={...off,data:Buffer.from([9,0,0,255,8,0,0,255])};assert.equal(pixelDifference(on,off),.5);
+});
+test('staging can bootstrap an old site but every uploaded candidate must pass weather-feed verification',()=>{
+  assert.equal(weatherFeedVerificationRequired('staging','preflight'),false);
+  assert.equal(weatherFeedVerificationRequired('production','preflight'),true);
+  assert.equal(weatherFeedVerificationRequired('staging','candidate'),true);
+  assert.equal(weatherFeedVerificationRequired('production','candidate'),true);
+  assert.equal(weatherFeedVerificationRequired('staging','rollback'),false);
+  assert.equal(weatherFeedVerificationRequired('production','rollback'),false);
+  assert.throws(()=>weatherFeedVerificationRequired('preview','preflight'));
+  assert.throws(()=>weatherFeedVerificationRequired('staging','unknown'));
 });
 test('browser receipt proves each selected model plus the exact latest-selection race',()=>{
   const body=selection(['icon','nam']),bundle=validateSelection(body,digest(body),NOW),selected=e=>({model:e.model,init:e.init,base:e.manifestPath.slice(0,-'manifest.json'.length)});
