@@ -1,0 +1,41 @@
+name: WeatherX follow master on staging only
+on:
+  schedule:
+    - cron: '3,18,33,48 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: write # Can dispatch staging qualification; cannot approve production.
+concurrency:
+  group: weatherx-staging-follow-master
+  cancel-in-progress: false
+jobs:
+  follow:
+    if: ${{ vars.UI_STAGING_FOLLOW_MASTER_ENABLED == 'true' }}
+    environment: staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Read master identity only, never execute candidate code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Andrewegao/atmos
+          ref: master
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: source-identity
+          fetch-depth: 1
+          sparse-checkout: README.md
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Capture exact observed source
+        run: |
+          echo "APP_MASTER_SHA=$(git -C source-identity rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Qualify new source once; never retry failed sources automatically
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          UI_STAGING_FOLLOW_MASTER_ENABLED: ${{ vars.UI_STAGING_FOLLOW_MASTER_ENABLED }}
+        run: node cycle/tools/staging-follow-master.mjs

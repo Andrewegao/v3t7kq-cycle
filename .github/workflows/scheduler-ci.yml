@@ -11,6 +11,7 @@ on:
       - ".github/workflows/scheduler-deploy.yml"
       - ".github/workflows/ui-release.yml"
       - ".github/workflows/ui-staging.yml"
+      - ".github/workflows/staging-follow-master.yml"
       - ".github/workflows/staging-data.yml"
       - ".github/workflows/staging-consumer-refresh.yml"
       - ".github/workflows/staging-data-activate.yml"
