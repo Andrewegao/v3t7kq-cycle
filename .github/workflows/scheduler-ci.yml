@@ -10,6 +10,8 @@ on:
       - ".github/workflows/scheduler-ci.yml"
       - ".github/workflows/scheduler-deploy.yml"
       - ".github/workflows/ui-release.yml"
+      - ".github/workflows/ui-staging.yml"
+      - ".github/workflows/verify-backfill.yml"
       - ".github/workflows/consumer-refresh.yml"
       - ".github/workflows/gdacs-feed-release.yml"
       - ".github/workflows/fusion-*.yml"
@@ -35,6 +37,8 @@ jobs:
       - run: npm run check --prefix scheduler
       - name: Late-failure bake diagnostic retention contract
         run: node tests/bake-diagnostics.mjs
+      - name: Staged UI artifact, manual promotion and privacy contracts
+        run: node --test tests/ui-*.mjs
       - name: Consumer refresh workflow safety contract
         run: node tests/consumer-workflow.mjs
       - name: Consumer refresh preflight and rollback contracts
