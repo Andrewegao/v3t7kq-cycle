@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 const root=new URL('../',import.meta.url);
 const read=p=>readFileSync(new URL(p,root),'utf8');
 const staging=read('.github/workflows/ui-staging.yml'), prod=read('.github/workflows/ui-release.yml'), source=read('tools/ui-release.mjs');
+const {installPagesWorker}=await import('../tools/ui-release.mjs');
 test('staging workflow leaves release-mode activation to the exact-profile controller',()=>{
   const build=staging.slice(staging.indexOf('\n  build:\n'),staging.indexOf('\n  qualify:\n'));
   assert.match(build,/VITE_MODEL_EXPANSION_QUALIFICATION: '0'/);assert.match(build,/VITE_STAGING_MODEL_ADMISSION: '0'/);
@@ -23,6 +24,26 @@ test('guard upload adapter preserves args and disables rebundling without invoki
   const result=execFileSync('bash',[script,...args],{env:{...process.env,UI_WRANGLER_BIN:bin},encoding:'utf8'});
   assert.deepEqual(JSON.parse(result),[...args.slice(1),'--no-bundle','--upload-source-maps=false']);
   assert.notEqual(spawnSync('bash',[script,'wrangler','deploy'],{env:{...process.env,UI_WRANGLER_BIN:bin}}).status,0);
+});
+test('Pages Functions build installs executable JavaScript and rejects upload envelopes or extra modules',()=>{
+  const temp=mkdtempSync(resolve(tmpdir(),'wx-ui-worker-build-'));
+  const workerOut=resolve(temp,'worker'),dist=resolve(temp,'dist');mkdirSync(workerOut);mkdirSync(dist);
+  writeFileSync(resolve(workerOut,'index.js'),'export default { fetch(){ return new Response("ok") } };\n');
+  installPagesWorker(workerOut,dist);
+  assert.match(readFileSync(resolve(dist,'_worker.js'),'utf8'),/export default/);
+
+  const multipart=resolve(temp,'multipart'),multipartDist=resolve(temp,'multipart-dist');mkdirSync(multipart);mkdirSync(multipartDist);
+  writeFileSync(resolve(multipart,'index.js'),'------formdata\r\nContent-Disposition: form-data; name="metadata"\r\n');
+  assert.throws(()=>installPagesWorker(multipart,multipartDist),/multipart upload bundle/);
+
+  const modules=resolve(temp,'modules'),modulesDist=resolve(temp,'modules-dist');mkdirSync(modules);mkdirSync(modulesDist);
+  writeFileSync(resolve(modules,'index.js'),'export default {};\n');writeFileSync(resolve(modules,'extra.js'),'export {};\n');
+  assert.throws(()=>installPagesWorker(modules,modulesDist),/unexpected modules/);
+});
+test('Pages Functions compilation uses module output, never deprecated multipart outfile',()=>{
+  assert.match(source,/pages','functions','build'[\s\S]*?'--outdir',workerOut/);
+  assert.doesNotMatch(source,/pages','functions','build'[\s\S]{0,300}?'--outfile'/);
+  assert.match(source,/installPagesWorker\(workerOut,dist\)/);
 });
 test('guard is pinned, both candidate verification paths are inside automatic rollback',()=>{
   assert.match(source,/guard-pages-deploy\.sh/);

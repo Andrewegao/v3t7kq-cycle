@@ -1,7 +1,7 @@
 // Guarded orchestration only. This program never writes Workers, DNS, bindings, data or settings.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, chmodSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, chmodSync, existsSync, unlinkSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CONTROL_SHA, REPOSITORY, MAX_BYTES, gate, hash, createCandidate, validateCandidate,
@@ -163,6 +163,20 @@ export function publicBuildEnvironment(profile,selection,env=process.env) {
     VITE_MODEL_EXPANSION_QUALIFICATION:profile.stagingOnly?'1':'0',VITE_MODEL_LOCAL_BASE:'',
     VITE_STAGING_MODEL_ADMISSION:profile.stagingOnly?'1':'0',VITE_STAGING_MODEL_SELECTION_SHA256:profile.modelSelectionSha256??''};
 }
+export function installPagesWorker(workerOut,dist) {
+  assert.deepEqual(readdirSync(workerOut),['index.js'], 'Pages Functions build emitted unexpected modules');
+  const source=readFileSync(resolve(workerOut,'index.js'));
+  assert.ok(source.length>0,'Pages Functions build emitted an empty Worker');
+  const prefix=source.subarray(0,1024).toString('utf8');
+  assert.doesNotMatch(prefix,/Content-Disposition:\s*form-data/i,
+    'Pages Functions build emitted a multipart upload bundle instead of JavaScript');
+  const target=resolve(dist,'_worker.js');
+  assert.equal(existsSync(target),false,'Pages Functions build must not overwrite an existing Worker');
+  const syntaxProbe=resolve(workerOut,'syntax-probe.mjs');
+  writeFileSync(syntaxProbe,source,{flag:'wx',mode:0o600});
+  try { run(process.execPath,['--check',syntaxProbe]); } finally { unlinkSync(syntaxProbe); }
+  writeFileSync(target,source,{flag:'wx',mode:0o600});
+}
 function build() {
   buildGate(); controller();
   const profile=profileFor(process.env.MODEL_SELECTION_SHA256),selection=readSelection(ROOT,profile);
@@ -175,9 +189,14 @@ function build() {
   run('npm',['run','build'],{cwd:app,env:{...publicBuildEnvironment(profile,selection),ATMOS_PUBLIC_SHELL_DIR:shell}});
   const dist = resolve(app,'dist');
   // Compile once BEFORE qualification; production must never discover/recompile functions/.
+  // Wrangler 4.123+ writes a multipart upload envelope for --outfile. Build
+  // through --outdir, then admit only the single executable module that Pages
+  // advanced mode expects as dist/_worker.js.
+  const workerOut=resolve(process.env.RUNNER_TEMP,'ui-pages-worker');mkdirSync(workerOut,{mode:0o700});
   run(resolve(CONTROL,'platform/edge/node_modules/.bin/wrangler'), ['pages','functions','build',resolve(app,'functions'),
-    '--project-directory',app,'--outfile',resolve(dist,'_worker.js'),'--output-routes-path',resolve(dist,'_routes.json'),
+    '--project-directory',app,'--outdir',workerOut,'--output-routes-path',resolve(dist,'_routes.json'),
     '--compatibility-date','2026-06-23','--minify','--sourcemap=false'], {cwd:app});
+  installPagesWorker(workerOut,dist);
   run('node',[resolve(CONTROL,'ops/release/build-release-receipt.mjs'),dist,resolve(dist,'health/release.json')]);
   const c = createCandidate(dist,{sourceSha:process.env.ATMOS_SHA,runId:process.env.GITHUB_RUN_ID,
     attempt:process.env.GITHUB_RUN_ATTEMPT,workflowSha:process.env.GITHUB_SHA,pipelineDigest:pipelineDigest(profile),profile});
