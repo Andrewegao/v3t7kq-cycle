@@ -44,6 +44,29 @@ Prepared control documents live at `staging-candidates/<selection-sha256>/`; `re
 is written last and explicitly states `collected:false`, `processed:false`, `activated:false`,
 `productionWritten:false`. This is **not a live staging release receipt**.
 
+### Transfer diagnostics and freshness
+
+Run `33410167126` exceeded its 90-minute job limit without a preparation receipt.
+Its captured subprocess output did not identify the internal stopping phase, so do not
+claim a specific historical phase or infer progress from elapsed time alone.
+
+The transfer now emits controller-owned phase labels, inventory counts/bytes, elapsed
+milliseconds, and allowlisted subprocess exit/signal/timeout fields. Raw subprocess
+errors and credential-bearing request metadata are never emitted. A phase-start record
+can precede a long synchronous operation; it is not a percentage-complete estimate.
+
+Inventory listings request only the fields actually checked (Path/Size/IsDir). Pinned
+rclone 1.75.0 against a synthetic paginated S3 fixture demonstrates 24 unnecessary object
+HEAD requests for 24 objects with default metadata, and zero with `--no-modtime` plus
+`--no-mimetype`; both retain the same three listing pages and identical required fields.
+This proves request amplification, not historical timing or end-to-end throughput.
+Full local SHA256 inventory and immutable staging upload/download-readback are unchanged.
+
+Freshness is rechecked against the live clock before any staging upload and before the
+final receipt. A long copy cannot certify an expired selection. The independent activation
+controller still performs its own freshness checks. If acquisition expires, select a newer
+already-published release; do not alter timestamps, waive the margin, or blindly retry.
+
 ## Credentials and activation boundaries
 
 The protected `data-staging` environment is main-only with administrator bypass disabled.

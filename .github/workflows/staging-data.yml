@@ -68,7 +68,9 @@ jobs:
       - name: Verify synthetic S3 transport and pinned descriptor integration without credentials
         env:
           SHARED_DATA_VALIDATOR_MODULE: ${{ github.workspace }}/control/ops/platform/validate-point-series.mjs
-        run: node cycle/tests/shared-data-s3.mjs
+        run: |
+          node cycle/tests/shared-data-listing.mjs
+          node cycle/tests/shared-data-s3.mjs
       - name: Verify and prepare immutable published bytes; never activate
         env:
           SHARED_R2_READ_ACCESS_KEY_ID: ${{ secrets.SHARED_R2_READ_ACCESS_KEY_ID }}
