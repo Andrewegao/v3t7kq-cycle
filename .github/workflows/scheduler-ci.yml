@@ -13,6 +13,7 @@ on:
       - ".github/workflows/ui-staging.yml"
       - ".github/workflows/staging-follow-master.yml"
       - ".github/workflows/staging-data.yml"
+      - ".github/workflows/model-inputs.yml"
       - ".github/workflows/staging-consumer-refresh.yml"
       - ".github/workflows/staging-data-activate.yml"
       - ".github/workflows/verify-backfill.yml"
@@ -52,6 +53,7 @@ jobs:
         run: |
           npm ci --ignore-scripts --prefix staging-controller
           node --test tests/staging-*.mjs
+          node --test tests/model-inputs*.mjs
       - name: Consumer refresh workflow safety contract
         run: |
           node tests/consumer-workflow.mjs
