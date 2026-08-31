@@ -15,6 +15,7 @@ on:
       - ".github/workflows/staging-data.yml"
       - ".github/workflows/model-inputs.yml"
       - ".github/workflows/staging-model-components.yml"
+      - ".github/workflows/staging-model-selection.yml"
       - ".github/workflows/staging-consumer-refresh.yml"
       - ".github/workflows/staging-data-activate.yml"
       - ".github/workflows/verify-backfill.yml"

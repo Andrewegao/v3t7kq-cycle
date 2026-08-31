@@ -1,0 +1,84 @@
+name: WeatherX staging model selection assembly
+# Public metadata assembly only: no storage write, serving pointer or deployment.
+on:
+  workflow_dispatch:
+    inputs:
+      icon_catalog_id:
+        description: Exact qualified ICON staging catalog
+        required: true
+        type: string
+      hrrr_ak_catalog_id:
+        description: Exact qualified HRRR-AK staging catalog
+        required: true
+        type: string
+      hrdps_catalog_id:
+        description: Exact qualified HRDPS staging catalog
+        required: true
+        type: string
+      nam_catalog_id:
+        description: Exact qualified NAM staging catalog
+        required: true
+        type: string
+      nam_hi_catalog_id:
+        description: Exact qualified NAM-HI staging catalog
+        required: true
+        type: string
+      nam_ak_catalog_id:
+        description: Exact qualified NAM-AK staging catalog
+        required: true
+        type: string
+      arome_antilles_catalog_id:
+        description: Exact qualified AROME-Antilles staging catalog
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-staging-model-selection
+  cancel-in-progress: false
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: data-staging
+      url: https://staging.weatherx.org
+    env:
+      STAGING_DATA_ISOLATION_APPROVED: ${{ vars.STAGING_DATA_ISOLATION_APPROVED }}
+      STAGING_MODEL_SELECTION_ENABLED: ${{ vars.STAGING_MODEL_SELECTION_ENABLED }}
+      STAGING_MODEL_SELECTION_APPROVED_CATALOGS_JSON: ${{ vars.STAGING_MODEL_SELECTION_APPROVED_CATALOGS_JSON }}
+      STAGING_MODEL_APPROVED_SOURCE_SHA: ${{ vars.STAGING_MODEL_APPROVED_SOURCE_SHA }}
+      STAGING_MODEL_VALIDATOR_SOURCE_SHA: ${{ vars.STAGING_MODEL_VALIDATOR_SOURCE_SHA }}
+      STAGING_R2_ACCOUNT_ID: ${{ vars.STAGING_R2_ACCOUNT_ID }}
+      ICON_CATALOG_ID: ${{ inputs.icon_catalog_id }}
+      HRRR_AK_CATALOG_ID: ${{ inputs.hrrr_ak_catalog_id }}
+      HRDPS_CATALOG_ID: ${{ inputs.hrdps_catalog_id }}
+      NAM_CATALOG_ID: ${{ inputs.nam_catalog_id }}
+      NAM_HI_CATALOG_ID: ${{ inputs.nam_hi_catalog_id }}
+      NAM_AK_CATALOG_ID: ${{ inputs.nam_ak_catalog_id }}
+      AROME_ANTILLES_CATALOG_ID: ${{ inputs.arome_antilles_catalog_id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Refuse unapproved source, catalogs, workflow or target before storage access
+        run: node cycle/tools/staging-model-selection.mjs gate
+      - name: Install locked staging S3 reader without credentials
+        run: npm ci --ignore-scripts --prefix cycle/staging-controller
+      - name: Test exact public-metadata assembly before storage access
+        run: node --test cycle/tests/staging-model-selection.mjs cycle/tests/ui-staging-models.mjs
+      - name: Read exact immutable selection entries and assemble one public bundle
+        id: selection
+        env:
+          STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
+          STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
+        run: node cycle/tools/staging-model-selection.mjs assemble
+      - name: Retain only the content-addressed public selection metadata
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: staging-model-selection-${{ steps.selection.outputs.selection_sha256 }}
+          path: ${{ steps.selection.outputs.selection_path }}
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
