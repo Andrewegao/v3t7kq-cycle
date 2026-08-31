@@ -52,7 +52,9 @@ jobs:
           npm ci --ignore-scripts --prefix staging-controller
           node --test tests/staging-*.mjs
       - name: Consumer refresh workflow safety contract
-        run: node tests/consumer-workflow.mjs
+        run: |
+          node tests/consumer-workflow.mjs
+          node --test tests/scheduler-deploy-plan.mjs
       - name: Consumer refresh preflight and rollback contracts
         run: node --test tests/consumer-refresh*.mjs
       - name: GDACS isolated route workflow and recovery contracts
