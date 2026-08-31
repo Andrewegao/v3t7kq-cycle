@@ -8,6 +8,11 @@ on:
         description: Exact 40-character current Atmos master SHA to qualify
         required: true
         type: string
+      model_selection_sha256:
+        description: Reviewed staging-only selection digest, or none for ordinary staging
+        required: false
+        default: none
+        type: string
 permissions:
   contents: read
   actions: read
@@ -26,10 +31,13 @@ jobs:
       UI_BUILDS_ENABLED: ${{ vars.UI_BUILDS_ENABLED }}
       UI_BUILD_PUBLIC_KEY: ${{ vars.UI_BUILD_PUBLIC_KEY }}
       ATMOS_SHA: ${{ inputs.atmos_sha }}
+      MODEL_SELECTION_SHA256: ${{ inputs.model_selection_sha256 }}
       VITE_FUSION_CALIBRATION_ENABLED: ${{ vars.FUSION_CALIBRATION_RUNTIME_ENABLED == 'true' && '1' || '0' }}
       VITE_PLATFORM_ACCOUNT: '0'
       VITE_MODEL_EXPANSION_QUALIFICATION: '0'
       VITE_MODEL_LOCAL_BASE: ''
+      VITE_STAGING_MODEL_ADMISSION: '0'
+      VITE_STAGING_MODEL_SELECTION_SHA256: ''
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { path: cycle, fetch-depth: 0, persist-credentials: false }
@@ -105,6 +113,8 @@ jobs:
       UI_ISOLATION_APPROVED: ${{ vars.UI_ISOLATION_APPROVED }}
       UI_DEPLOYMENT_HOLD_UNTIL: ${{ vars.UI_DEPLOYMENT_HOLD_UNTIL }}
       ATMOS_SHA: ${{ inputs.atmos_sha }}
+      MODEL_SELECTION_SHA256: ${{ inputs.model_selection_sha256 }}
+      UI_STAGING_MODEL_SELECTION_APPROVED_SHA256: ${{ vars.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { path: cycle, fetch-depth: 0, persist-credentials: false }

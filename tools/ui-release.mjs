@@ -1,12 +1,13 @@
 // Guarded orchestration only. This program never writes Workers, DNS, bindings, data or settings.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, chmodSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, chmodSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CONTROL_SHA, REPOSITORY, MAX_BYTES, gate, hash, createCandidate, validateCandidate,
   readTree, validateFiles, seal, unseal, restore, eligibleRun } from './ui-candidate.mjs';
 import { packBuild, unpackBuild, eligibleBuild } from './ui-build-transfer.mjs';
+import {profileFor,readSelection,requireProductionProfile,requireStagingApproval,SELECTION_ASSET,browserEnvironment,validateBrowserReceipt} from './ui-staging-models.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONTROL = resolve(ROOT, '../control');
@@ -15,10 +16,12 @@ const ACCOUNT = 'a89f9a1af485021fbc60a68b163c7c6e';
 const ORIGINS = { staging: 'https://staging.weatherx.org', production: 'https://weatherx.org' };
 const PROJECTS = { staging: 'weatherx-platform-staging', production: 'atmos-platform' };
 const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workflows/ui-release.yml',
-  'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh'];
+  'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh',
+  'tools/ui-staging-models.mjs','tools/ui-staging-model-browser.mjs'];
 const run = (command, args, options = {}) => execFileSync(command, args, { stdio: 'inherit', ...options });
 const git = (args, cwd = ROOT) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore','pipe','pipe'] }).trim();
-export const pipelineDigest = () => hash(POLICY_FILES.map(p => `${p}\0${hash(readFileSync(resolve(ROOT,p)))}`).join('\n'));
+export const pipelineDigest = (profile=profileFor()) => hash(POLICY_FILES.map(p => `${p}\0${hash(readFileSync(resolve(ROOT,p)))}`)
+  .concat(profile.stagingOnly?[`staging-selections/${profile.modelSelectionSha256}.json\0${hash(readSelection(ROOT,profile,null).bytes)}`]:[]).join('\n'));
 const stateFile = () => resolve(process.env.RUNNER_TEMP, 'ui-candidate.json');
 function save(file, value) { mkdirSync(dirname(file), { recursive: true, mode: 0o700 }); writeFileSync(file, JSON.stringify(value), { mode: 0o600 }); }
 function candidate() { const c = JSON.parse(readFileSync(stateFile())); validateCandidate(c); return c; }
@@ -91,6 +94,7 @@ export function validateProjectSnapshot(stage, p, expectedDigest) {
   return p;
 }
 async function projectSnapshot(stage) {
+  if(stage==='production') requireProductionProfile(candidate().profile);
   const { project } = target(stage);
   const payload = await json(`https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/pages/projects/${project}`, process.env.CLOUDFLARE_API_TOKEN);
   assert.equal(payload.success, true);
@@ -117,6 +121,10 @@ export async function publicModes(origin) {
   assert.ok(ancillary.headers.get('x-weatherx-release'), 'ledger must use whole-release authority');
 }
 async function preflight(stage) {
+  // Artifact authority is checked before even a read-only production CF API call.
+  const c=candidate();
+  if(stage==='production') requireProductionProfile(c.profile);
+  else requireStagingApproval(c,process.env);
   gate(process.env); controller();
   await projectSnapshot(stage); await publicModes(ORIGINS[stage]);
   run('node', [resolve(CONTROL,'ops/release/verify-weather-feeds.mjs'), ORIGINS[stage]]);
@@ -129,12 +137,16 @@ function sourceIdentity() {
 }
 function build() {
   buildGate(); controller(); sourceIdentity();
+  const profile=profileFor(process.env.MODEL_SELECTION_SHA256),selection=readSelection(ROOT,profile);
   const app = resolve(SOURCE, 'app'), shell = resolve(process.env.RUNNER_TEMP, 'ui-public-shell');
   mkdirSync(shell, { mode: 0o700 });
   run('rsync',['-a','--exclude','/data/','--exclude','/data-atmos/',`${app}/public/`,`${shell}/`]);
+  assert.ok(!existsSync(resolve(shell,SELECTION_ASSET)),'candidate source must not supply selection policy');
+  if(selection){mkdirSync(dirname(resolve(shell,SELECTION_ASSET)),{recursive:true,mode:0o700});writeFileSync(resolve(shell,SELECTION_ASSET),selection.bytes,{flag:'wx',mode:0o600});}
   run('npm',['run','build'],{cwd:app, env:{...process.env, ATMOS_CODE_ONLY_BUILD:'1', ATMOS_PUBLIC_RELEASE:'1',
     ATMOS_PUBLIC_SHELL_DIR:shell,VITE_PRODUCT:'lab',VITE_APP:'lab',VITE_PLATFORM_ACCOUNT:'0',
-    VITE_MODEL_EXPANSION_QUALIFICATION:'0',VITE_MODEL_LOCAL_BASE:''}});
+    VITE_MODEL_EXPANSION_QUALIFICATION:profile.stagingOnly?'1':'0',VITE_MODEL_LOCAL_BASE:'',
+    VITE_STAGING_MODEL_ADMISSION:profile.stagingOnly?'1':'0',VITE_STAGING_MODEL_SELECTION_SHA256:profile.modelSelectionSha256??''}});
   const dist = resolve(app,'dist');
   // Compile once BEFORE qualification; production must never discover/recompile functions/.
   run(resolve(CONTROL,'platform/edge/node_modules/.bin/wrangler'), ['pages','functions','build',resolve(app,'functions'),
@@ -142,7 +154,7 @@ function build() {
     '--compatibility-date','2026-06-23','--minify','--sourcemap=false'], {cwd:app});
   run('node',[resolve(CONTROL,'ops/release/build-release-receipt.mjs'),dist,resolve(dist,'health/release.json')]);
   const c = createCandidate(dist,{sourceSha:process.env.ATMOS_SHA,runId:process.env.GITHUB_RUN_ID,
-    attempt:process.env.GITHUB_RUN_ATTEMPT,workflowSha:process.env.GITHUB_SHA,pipelineDigest:pipelineDigest()});
+    attempt:process.env.GITHUB_RUN_ATTEMPT,workflowSha:process.env.GITHUB_SHA,pipelineDigest:pipelineDigest(profile),profile});
   save(stateFile(),c);
 }
 function buildGate() {
@@ -152,6 +164,7 @@ function buildGate() {
   assert.equal(process.env.GITHUB_JOB,'build');assert.equal(process.env.UI_BUILDS_ENABLED,'true');
   assert.ok(process.env.UI_BUILD_PUBLIC_KEY?.includes('BEGIN PUBLIC KEY'));
   for(const k of ['CLOUDFLARE_API_TOKEN','UI_BUILD_PRIVATE_KEY','UI_CANDIDATE_KEY']) assert.equal(process.env[k],undefined);
+  readSelection(ROOT,profileFor(process.env.MODEL_SELECTION_SHA256));
 }
 function pack() {
   buildGate();controller();
@@ -173,8 +186,9 @@ async function receiveBuild() {
   assert.deepEqual(readdirSync(out),['build.wxub']);
   assert.ok(statSync(resolve(out,'build.wxub')).size<=MAX_BYTES*2+1024);
   const c=unpackBuild(readFileSync(resolve(out,'build.wxub')),process.env.UI_BUILD_PRIVATE_KEY);
+  requireStagingApproval(c,process.env);
   eligibleBuild(c,r,jobs.jobs,a.artifacts,{runId:id,attempt,workflowSha:process.env.GITHUB_SHA,
-    sourceSha:process.env.ATMOS_SHA,pipelineDigest:pipelineDigest()});
+    sourceSha:process.env.ATMOS_SHA,pipelineDigest:pipelineDigest(c.profile),profile:profileFor(process.env.MODEL_SELECTION_SHA256)});
   // Candidate source is absent. Treat every artifact file as opaque data, never execute it.
   restore(c,resolve(process.env.RUNNER_TEMP,'ui-stage-dist'));save(stateFile(),c);
 }
@@ -214,12 +228,18 @@ async function deploy(stage) {
   assert.equal(validateFiles(readTree(dist)).digest,c.artifactDigest, 'deployment modified artifact');
   if (stage === 'staging') {
     const p = await projectSnapshot(stage); await exactStaging(c);
+    const selection=requireStagingApproval(c,process.env),modelProof=c.profile.stagingOnly?readFileSync(resolve(process.env.RUNNER_TEMP,'ui-model-browser.json')):null;
+    if(modelProof)validateBrowserReceipt(modelProof,selection,{sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId,selectionSha256:c.profile.modelSelectionSha256});
     c.qualification = {origin:ORIGINS.staging, deploymentId:p.canonical_deployment.id,
       artifactDigest:c.artifactDigest,qualifiedAt:new Date().toISOString(),fullTests:true,weatherLab:true,builtRuntime:true,probes:3};
+    if(modelProof)Object.assign(c.qualification,{modelSelectionSha256:c.profile.modelSelectionSha256,modelBrowserReceiptSha256:hash(modelProof),modelBrowserModels:selection.entries.length});
     save(stateFile(),c);
   }
 }
 async function verify(stage) {
+  const c=candidate();
+  if(stage==='production')requireProductionProfile(c.profile);
+  else if(process.env.RELEASE_GUARD_PHASE!=='rollback')requireStagingApproval(c,process.env);
   controller(); await projectSnapshot(stage); await publicModes(ORIGINS[stage]);
   if (stage === 'production' && process.env.RELEASE_GUARD_PHASE !== 'rollback') await exactStaging(candidate());
   run('bash',[resolve(CONTROL,'ops/release/verify-platform-production.sh'),ORIGINS[stage]]);
@@ -227,10 +247,20 @@ async function verify(stage) {
     // Real built-site checks inside the rollback transaction, not after declaring success.
     run('node',[resolve(CONTROL,'app/e2e/weather-lab-only-runtime.mjs')], {cwd:resolve(CONTROL,'app'),env:{...process.env,BASE:ORIGINS[stage]}});
     run('node',[resolve(CONTROL,'app/e2e/layer-switch-tint.mjs')], {cwd:resolve(CONTROL,'app'),env:{...process.env,BASE:ORIGINS[stage]}});
+    if(stage==='staging'&&c.profile.stagingOnly){
+      const selectionFile=resolve(process.env.RUNNER_TEMP,'ui-browser-selection.json');
+      writeFileSync(selectionFile,Buffer.from(c.files.find(f=>f.path===SELECTION_ASSET).base64,'base64'),{mode:0o600});
+      run('node',[resolve(ROOT,'tools/ui-staging-model-browser.mjs')],{cwd:ROOT,env:browserEnvironment(process.env,{
+        BASE:ORIGINS.staging,UI_CONTROL_ROOT:CONTROL,UI_SELECTION_FILE:selectionFile,UI_SELECTION_SHA256:c.profile.modelSelectionSha256,
+        WEATHERX_EXPECTED_RELEASE_ID:validateCandidate(c).releaseId,UI_EXPECTED_SOURCE_SHA:c.sourceSha,
+        UI_MODEL_BROWSER_OUTPUT:resolve(process.env.RUNNER_TEMP,'ui-model-browser.json')})});
+    }
   }
 }
 function retain() {
   const c=candidate(), out=resolve(process.env.RUNNER_TEMP,'ui-sealed');
+  const selection=requireStagingApproval(c,process.env);
+  if(c.profile.stagingOnly){assert.equal(c.qualification?.modelSelectionSha256,c.profile.modelSelectionSha256);assert.equal(c.qualification?.modelBrowserModels,selection.entries.length);assert.match(c.qualification?.modelBrowserReceiptSha256??'',/^[a-f0-9]{64}$/);}
   mkdirSync(out,{mode:0o700});
   writeFileSync(resolve(out,'candidate.wxui'),seal(c,process.env.UI_CANDIDATE_KEY),{mode:0o600});
   const summary={sourceSha:c.sourceSha,stagingRunId:c.runId,attempt:c.attempt,artifactDigest:c.artifactDigest,
@@ -265,6 +295,7 @@ async function download() {
   assert.deepEqual(readdirSync(out).sort(),['candidate.wxui','summary.json']);
   assert.ok(statSync(resolve(out,'candidate.wxui')).size<MAX_BYTES*2);
   const c=unseal(readFileSync(resolve(out,'candidate.wxui')),process.env.UI_CANDIDATE_KEY);
+  requireProductionProfile(c.profile);
   await auditRun(c); await exactStaging(c);
   save(stateFile(),c); restore(c,resolve(process.env.RUNNER_TEMP,'ui-promote-dist'));
 }

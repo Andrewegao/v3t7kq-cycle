@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { createCipheriv, createDecipheriv, createPublicKey, createPrivateKey,
   publicEncrypt, privateDecrypt, randomBytes, constants } from 'node:crypto';
-import { validateCandidate, MAX_BYTES, REPOSITORY } from './ui-candidate.mjs';
+import { validateCandidate, MAX_BYTES, REPOSITORY, PROFILE } from './ui-candidate.mjs';
 const MAGIC=Buffer.from('WXUB1\0');
 function key(pem, privatePart=false) {
   assert.ok(typeof pem==='string' && pem.includes(privatePart?'BEGIN PRIVATE KEY':'BEGIN PUBLIC KEY'),'missing build transport key');
@@ -37,6 +37,7 @@ export function unpackBuild(blob, privateKey) {
 }
 export function eligibleBuild(c, run, jobs, artifacts, context) {
   unqualified(c);
+  assert.deepEqual(c.profile,context.profile??PROFILE,'build differs from requested profile');
   assert.equal(run.repository?.full_name,REPOSITORY);
   assert.equal(run.path,'.github/workflows/ui-staging.yml');
   assert.equal(run.event,'workflow_dispatch');assert.equal(run.head_branch,'main');
