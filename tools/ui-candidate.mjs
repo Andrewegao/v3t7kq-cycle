@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { createHash, createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
+import {BASELINE_PROFILE,validateProfile,validateCandidateSelection,requireProductionProfile} from './ui-staging-models.mjs';
 
 export const CONTROL_SHA = 'dbc97a26bc239398ffa9ec157a094148961b6451';
 export const REPOSITORY = 'Andrewegao/v3t7kq-cycle';
@@ -11,7 +12,7 @@ export const FREEZE_UNTIL = '2026-08-31T11:00:00Z';
 export const MAX_BYTES = 96 * 1024 * 1024;
 export const MAX_FILES = 5000;
 export const hash = value => createHash('sha256').update(value).digest('hex');
-export const PROFILE = Object.freeze({ product: 'lab', account: false, expandedModels: false, data: false });
+export const PROFILE = BASELINE_PROFILE;
 const SHA = /^[a-f0-9]{40}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
 const ID = /^[1-9][0-9]{0,19}$/;
@@ -80,7 +81,7 @@ export function validateFiles(files) {
 
 export function createCandidate(root, context) {
   const files = readTree(root), { digest } = validateFiles(files);
-  const candidate = { schemaVersion: 1, controlSha: CONTROL_SHA, profile: PROFILE,
+  const candidate = { schemaVersion: 1, controlSha: CONTROL_SHA, profile: context.profile ?? PROFILE,
     sourceSha: context.sourceSha, runId: context.runId, attempt: context.attempt,
     workflowSha: context.workflowSha, pipelineDigest: context.pipelineDigest, artifactDigest: digest, files };
   validateCandidate(candidate);
@@ -90,11 +91,12 @@ export function createCandidate(root, context) {
 export function validateCandidate(candidate) {
   assert.equal(candidate.schemaVersion, 1);
   assert.equal(candidate.controlSha, CONTROL_SHA, 'unreviewed release controller');
-  assert.deepEqual(candidate.profile, PROFILE, 'non-public build profile');
+  validateProfile(candidate.profile);
   assert.match(candidate.sourceSha, SHA); assert.match(candidate.workflowSha, SHA);
   assert.match(candidate.runId, ID); assert.match(candidate.attempt, ID);
   assert.match(candidate.pipelineDigest, DIGEST);
   assert.equal(validateFiles(candidate.files).digest, candidate.artifactDigest, 'inventory mismatch');
+  validateCandidateSelection(candidate);
   const receipt = JSON.parse(Buffer.from(candidate.files.find(f => f.path === 'health/release.json').base64, 'base64'));
   assert.equal(receipt.gitSha, candidate.sourceSha);
   assert.equal(receipt.workflowRunId, candidate.runId);
@@ -144,6 +146,7 @@ export function restore(candidate, root) {
 }
 
 export function eligibleRun(run, artifacts, { runId, sourceSha, digest, pipelineDigest, candidate }, now = Date.now()) {
+  requireProductionProfile(candidate.profile);
   assert.match(runId, ID); assert.match(sourceSha, SHA); assert.match(digest, DIGEST);
   assert.equal(String(run.id), runId); assert.equal(run.repository?.full_name, REPOSITORY);
   assert.equal(run.path, '.github/workflows/ui-staging.yml');
