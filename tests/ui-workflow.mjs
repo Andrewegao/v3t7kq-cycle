@@ -26,7 +26,7 @@ test('guard is pinned, both candidate verification paths are inside automatic ro
   assert.match(source,/cwd:uploadCwd/);assert.doesNotMatch(source,/cwd:dirname\(dist\)/);
 });
 test('only successful staging retains encrypted output; production has no build step',()=>{
-  const order=['npm test --prefix atmos/app','bash ops/weather-lab-ready.sh','ui-release.mjs build',
+  const order=['npm test --prefix atmos/app','bash ops/weather-lab-ready.sh','ui-release.mjs build\n',
     'ui-release.mjs deploy staging','ui-release.mjs retain','path: ${{ runner.temp }}/ui-sealed/*'];
   for(let i=1;i<order.length;i++)assert.ok(staging.indexOf(order[i])>staging.indexOf(order[i-1]),order[i]);
   assert.doesNotMatch(prod,/ui-release.mjs build|npm run build|deploy-code-only.sh/);

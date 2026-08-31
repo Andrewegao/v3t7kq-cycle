@@ -41,7 +41,7 @@ jobs:
       - name: Staged UI artifact, manual promotion and privacy contracts
         run: node --test tests/ui-*.mjs
       - name: Cloud-only staging data isolation and public-mode contracts
-        run: node --test tests/staging-data.mjs
+        run: node --test tests/staging-data.mjs tests/shared-data.mjs
       - name: Consumer refresh workflow safety contract
         run: node tests/consumer-workflow.mjs
       - name: Consumer refresh preflight and rollback contracts
