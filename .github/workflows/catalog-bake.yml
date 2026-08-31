@@ -49,8 +49,16 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Andrewegao/atmos
+          # Qualified fast-lane source, independent of experimental app master.
+          ref: 4e5177d925f0fc32fe57d17e478daf3c9e31dc7c
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: atmos
+          persist-credentials: false
+      - name: Verify approved immutable component collector
+        working-directory: atmos
+        run: |
+          test "$(git rev-parse HEAD)" = "4e5177d925f0fc32fe57d17e478daf3c9e31dc7c"
+          git diff --exit-code HEAD
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22 }
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
