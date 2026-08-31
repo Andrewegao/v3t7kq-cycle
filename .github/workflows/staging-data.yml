@@ -1,0 +1,97 @@
+name: WeatherX isolated staging components
+on:
+  workflow_dispatch:
+    inputs:
+      atmos_sha:
+        description: Exact reviewed Atmos SHA matching the data-staging environment pin
+        required: true
+        type: string
+      model:
+        description: Qualified core model (new regional adapters are not yet admitted)
+        required: true
+        default: all
+        type: choice
+        options: [all, ecmwf, gfs, hrrr, aifs]
+permissions:
+  contents: read
+jobs:
+  model:
+    environment:
+      name: data-staging
+      url: https://staging.weatherx.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 210
+    concurrency:
+      # Shares the existing staging component lock; never overlaps a legacy staging publisher.
+      group: weatherx-component-staging-${{ matrix.model }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        model: ${{ fromJSON(inputs.model == 'all' && '["ecmwf","gfs","hrrr","aifs"]' || format('["{0}"]', inputs.model)) }}
+    env:
+      ATMOS_SHA: ${{ inputs.atmos_sha }}
+      MODEL: ${{ matrix.model }}
+      STAGING_DATA_ENABLED: ${{ vars.STAGING_DATA_ENABLED }}
+      STAGING_DATA_ISOLATION_APPROVED: ${{ vars.STAGING_DATA_ISOLATION_APPROVED }}
+      STAGING_DATA_APPROVED_SHA: ${{ vars.STAGING_DATA_APPROVED_SHA }}
+      STAGING_R2_ACCOUNT_ID: ${{ vars.STAGING_R2_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Refuse local, unapproved, or broken staging runs before weather downloads
+        run: node cycle/tools/staging-data.mjs preflight
+      - name: Checkout exact approved producer
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Andrewegao/atmos
+          ref: ${{ inputs.atmos_sha }}
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: atmos
+          persist-credentials: false
+      - name: Verify source receipt
+        working-directory: atmos
+        run: |
+          test "$(git rev-parse HEAD)" = "$ATMOS_SHA"
+          test -z "$(git status --porcelain)"
+          printf 'Atmos producer: %s; workflow: %s; model: %s\n' "$ATMOS_SHA" "$GITHUB_SHA" "$MODEL" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with: { python-version: '3.12' }
+      - name: Install decoder (no deployment credentials)
+        working-directory: atmos
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeccodes-dev
+          python -m venv data/.venv
+          data/.venv/bin/pip install -r data/requirements.txt
+      - name: Restore verified last-known-good staging component only
+        working-directory: atmos
+        env:
+          COMPONENT_ID: ${{ matrix.model }}
+          ALLOW_EMPTY_CATALOG: '1'
+          ALLOW_MISSING_COMPONENT: '1'
+          HYDRATE_MISSING_FROM_RELEASE: '0'
+          CATALOG_R2_BUCKET: weatherx-data-staging
+          COMPONENT_R2_BUCKET: weatherx-components-staging
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.STAGING_R2_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.STAGING_R2_OBJECT_TOKEN }}
+        run: bash ops/platform/hydrate-r2-component.sh
+      - name: Cloud collect, qualify, and publish only this staging component
+        working-directory: atmos
+        env:
+          PUBLISH: '1'
+          DATA_PUBLISH_MODE: component-catalog
+          LIVE: https://staging.weatherx.org
+          COMPONENT_R2_BUCKET: weatherx-components-staging
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.STAGING_R2_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.STAGING_R2_OBJECT_TOKEN }}
+          CATALOG_ENDPOINT: https://staging.weatherx.org/api/platform/internal/catalog
+          CATALOG_PROMOTION_KEY: ${{ secrets.STAGING_CATALOG_PROMOTION_KEY }}
+        run: |
+          node ../cycle/tools/staging-data.mjs preflight
+          bash ops/bake-model-component.sh
+      - name: Check staging remains publicly readable
+        run: node cycle/tools/staging-data.mjs preflight

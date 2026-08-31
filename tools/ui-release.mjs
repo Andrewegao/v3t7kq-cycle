@@ -67,12 +67,21 @@ async function projectSnapshot(stage) {
   assert.equal(p.canonical_deployment?.latest_stage?.status, 'success');
   return p;
 }
+export function validatePublicModes(origin, health, data) {
+  assert.ok(Object.values(ORIGINS).includes(origin));
+  // Staging has public/cacheable weather reads; production's reviewed platform
+  // remains observe while its separate data Worker owns the public data routes.
+  assert.equal(health.ok, true);
+  assert.equal(health.authMode, origin === ORIGINS.staging ? 'public' : 'observe');
+  assert.equal(health.billingMode, 'disabled');
+  assert.equal(data.ok, true); assert.equal(data.catalogMode, 'serve');
+  if (origin === ORIGINS.staging) assert.equal(data.authMode, 'public');
+}
 export async function publicModes(origin) {
   assert.ok(Object.values(ORIGINS).includes(origin));
   const health = await json(`${origin}/api/platform/health`);
-  assert.equal(health.ok, true); assert.equal(health.authMode, 'observe'); assert.equal(health.billingMode, 'disabled');
   const data = await json(`${origin}/api/platform/data-health`);
-  assert.equal(data.ok, true); assert.equal(data.catalogMode, 'serve');
+  validatePublicModes(origin, health, data);
   const core = await get(`${origin}/data/gfs/index.json`);
   assert.ok(core.headers.get('x-weatherx-catalog'), 'core model must use catalog authority');
   const ancillary = await get(`${origin}/data/ledger/index.json`);
