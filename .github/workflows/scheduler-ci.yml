@@ -11,6 +11,7 @@ on:
       - ".github/workflows/scheduler-deploy.yml"
       - ".github/workflows/ui-release.yml"
       - ".github/workflows/consumer-refresh.yml"
+      - ".github/workflows/gdacs-feed-release.yml"
       - ".github/workflows/fusion-*.yml"
       - "scheduler/**"
       - "tests/**"
@@ -38,3 +39,7 @@ jobs:
         run: node tests/consumer-workflow.mjs
       - name: Consumer refresh preflight and rollback contracts
         run: node --test tests/consumer-refresh*.mjs
+      - name: GDACS isolated route workflow and recovery contracts
+        run: |
+          node tests/gdacs-feed-workflow.mjs
+          node --test tests/gdacs-feed-release.mjs
