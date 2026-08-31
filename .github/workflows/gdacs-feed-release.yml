@@ -88,7 +88,7 @@ jobs:
           FEED_RECEIPT: ${{ runner.temp }}/gdacs-feed/receipt.json
           DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
           PLATFORM_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
-          PAGES_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          PAGES_TOKEN: ${{ secrets.PAGES_READ_TOKEN }} # read-only boundary snapshot; never a UI publisher
         run: |
           node cycle/tools/gdacs-feed-release.mjs preflight \
             --atmos atmos --sha "$ATMOS_SHA" --expected-release "$EXPECTED_RELEASE" \
@@ -100,7 +100,7 @@ jobs:
           FEED_RECEIPT: ${{ runner.temp }}/gdacs-feed/receipt.json
           DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
           PLATFORM_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
-          PAGES_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          PAGES_TOKEN: ${{ secrets.PAGES_READ_TOKEN }}
         run: |
           node cycle/tools/gdacs-feed-release.mjs execute \
             --atmos atmos --sha "$ATMOS_SHA" --expected-release "$EXPECTED_RELEASE" \
@@ -112,7 +112,7 @@ jobs:
           FEED_RECEIPT: ${{ runner.temp }}/gdacs-feed/receipt.json
           DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
           PLATFORM_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
-          PAGES_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          PAGES_TOKEN: ${{ secrets.PAGES_READ_TOKEN }}
         run: |
           node cycle/tools/gdacs-feed-release.mjs recover \
             --atmos atmos --sha "$ATMOS_SHA" --expected-release "$EXPECTED_RELEASE" \

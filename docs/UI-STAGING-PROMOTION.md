@@ -109,3 +109,35 @@ The local legacy `com.weatherx.bake` LaunchAgent remains disabled. `verify-backf
 longer has any Pages token/deploy step; it qualifies and caches archive inputs only. Normal
 data maintenance remains the R2 publisher, with no Pages credential. Retired alternate UI
 release paths must not be re-enabled as shortcuts around this protocol.
+
+## Legacy authority retirement and approval audit
+
+- `bake.yml` (whole maintenance), `catalog-bake.yml` (fast components) and
+  `verify-backfill.yml` (archive preparation) have explicit data/read-only credential
+  allowlists in `tests/ui-approval-boundary.mjs`. They cannot gain Pages credentials,
+  UI publication commands, workflow dispatches or write-capable GitHub job permissions
+  without failing the required CI contract. These are source regression checks; the
+  environment reviewer and credential isolation are the actual authorization controls.
+- Remove the obsolete **repository-level** `CLOUDFLARE_API_TOKEN` from both
+  `Andrewegao/v3t7kq-cycle` and `Andrewegao/atmos`. Otherwise an old workflow rerun could
+  still receive its historical broad Pages key even after its current YAML is repaired.
+  Never re-add this key to unblock an old run. Requalify using the staged promotion path.
+- The disabled GDACS repair uses `PAGES_READ_TOKEN` solely for a read-only Pages boundary
+  snapshot. It needs a separately provisioned, verified **Pages Read** token before future
+  use. This credential is not provisioned by this change. Keep the workflow disabled;
+  do not reuse a Pages Edit token or the protected production promotion credential.
+- On the old Mac checkout, the known local `deploy-atmos.sh` entry is retired with an
+  immediate refusal; its bake no longer has a Pages fallback and defaults to nonpublishing.
+  The launch definition is disabled and explicitly sets `PUBLISH=0`. These are local
+  protections, not changes to the active GitHub R2 maintenance pipeline.
+- Before enabling a release, read back `ui-production`: Andrew must remain the required
+  reviewer, administrator bypass must be off and protected-branch deployment policy must
+  remain enabled. Only that environment may hold the dedicated production Pages token.
+  No agent or scheduled task may submit an approval on Andrew's behalf.
+
+This follows the standard protected-environment approval, least-privilege credential and
+immutable-artifact promotion pattern. It is not a claim that a Cloudflare/GitHub account
+administrator cannot alter controls or deploy with a separate privileged credential.
+Audit account-level access separately; keep production credentials out of normal developer
+and staging jobs. Removing a GitHub secret entry does not revoke the underlying provider
+token or any independent local OAuth session. Those require their own scoped access review.

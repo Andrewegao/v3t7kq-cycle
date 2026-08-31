@@ -23,7 +23,8 @@ assert.ok(workflow.indexOf('Run complete platform') < workflow.indexOf('gdacs-fe
 assert.ok(workflow.indexOf('gdacs-feed-release.mjs preflight') < workflow.indexOf('gdacs-feed-release.mjs execute'));
 assert.equal((workflow.match(/--expected-release "\$EXPECTED_RELEASE"/g) ?? []).length, 3);
 assert.equal((workflow.match(/FEED_RECEIPT: \$\{\{ runner\.temp \}\}\/gdacs-feed\/receipt\.json/g) ?? []).length, 3);
-assert.equal((workflow.match(/PAGES_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/g) ?? []).length, 3);
+assert.equal((workflow.match(/PAGES_TOKEN: \$\{\{ secrets\.PAGES_READ_TOKEN \}\}/g) ?? []).length, 3);
+assert.doesNotMatch(workflow, /secrets\.CLOUDFLARE_API_TOKEN\b|secrets\.UI_PRODUCTION_PAGES_TOKEN\b/);
 assert.equal((workflow.match(/path: \$\{\{ runner\.temp \}\}\/gdacs-feed\/receipt\.json/g) ?? []).length, 1);
 assert.doesNotMatch(workflow, /wrangler deploy|pages deploy|bake\.sh|consumer-refresh\.mjs execute|secrets-file|secret bulk|VITE_PLATFORM_ACCOUNT/);
 assert.match(source, /weatherx-gdacs-feed-production/);
