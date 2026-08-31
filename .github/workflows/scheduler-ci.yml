@@ -40,7 +40,9 @@ jobs:
       - run: npm ci --prefix scheduler
       - run: npm run check --prefix scheduler
       - name: Late-failure bake diagnostic retention contract
-        run: node tests/bake-diagnostics.mjs
+        run: |
+          node tests/bake-diagnostics.mjs
+          node --test tests/collector-source.mjs
       - name: Staged UI artifact, manual promotion and privacy contracts
         run: node --test tests/ui-*.mjs
       - name: Cloud-only staging data isolation and public-mode contracts

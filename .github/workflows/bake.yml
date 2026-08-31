@@ -22,9 +22,16 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Andrewegao/atmos
+          # Approved by successful whole release33374594299. Upgrade through PR;
+          # unrelated master/UI/model experiments must not change this collector.
+          ref: dbc97a26bc239398ffa9ec157a094148961b6451
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 32 # bound checkout cost; unknown checkpoint ancestry is a cache miss
           persist-credentials: false
+      - name: Verify approved immutable collector before running source
+        run: |
+          test "$(git rev-parse HEAD)" = "dbc97a26bc239398ffa9ec157a094148961b6451"
+          git diff --exit-code HEAD
       - name: plan conservative no-change fast path
         id: bake_plan
         env:
