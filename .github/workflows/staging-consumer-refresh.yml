@@ -1,0 +1,73 @@
+name: WeatherX staging public consumer repair
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type REFRESH-STAGING-CONSUMER (never deploys production or UI)
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-staging-publication
+  cancel-in-progress: false
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: data-staging
+      url: https://staging.weatherx.org
+    env:
+      CONFIRM: ${{ inputs.confirm }}
+      STAGING_CONSUMER_ENABLED: ${{ vars.STAGING_CONSUMER_ENABLED }}
+      STAGING_CONSUMER_SOURCE_SHA: 4e5177d925f0fc32fe57d17e478daf3c9e31dc7c
+      STAGING_R2_ACCOUNT_ID: ${{ vars.STAGING_R2_ACCOUNT_ID }}
+      STAGING_CONSUMER_APPROVED_VERSION: ${{ vars.STAGING_CONSUMER_APPROVED_VERSION }}
+      STAGING_CONSUMER_APPROVED_SETTINGS_SHA256: ${{ vars.STAGING_CONSUMER_APPROVED_SETTINGS_SHA256 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Refuse any unapproved target, source or invocation
+        run: node --input-type=module -e "import {consumerGate} from './cycle/tools/staging-consumer.mjs'; consumerGate(process.env)"
+      - name: Checkout only the fixed already-qualified staging consumer
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Andrewegao/atmos
+          ref: 4e5177d925f0fc32fe57d17e478daf3c9e31dc7c
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: control
+          persist-credentials: false
+      - name: Install locked dependencies without a deployment credential
+        working-directory: control/platform/edge
+        run: npm ci
+      - name: Full consumer checks and controller rollback contracts
+        run: |
+          npm run check --prefix control/platform/edge
+          node --test cycle/tests/staging-consumer.mjs
+      - name: Read-only live boundary check
+        env:
+          STAGING_WORKER_API_TOKEN: ${{ secrets.STAGING_WORKER_API_TOKEN }}
+        run: node cycle/tools/staging-consumer.mjs preflight control "$RUNNER_TEMP/staging-consumer/receipt.json"
+      - name: Guarded staging-only inactive upload and public-mode repair
+        id: refresh
+        timeout-minutes: 9
+        env:
+          STAGING_WORKER_API_TOKEN: ${{ secrets.STAGING_WORKER_API_TOKEN }}
+        run: node cycle/tools/staging-consumer.mjs execute control "$RUNNER_TEMP/staging-consumer/receipt.json"
+      - name: Recover prior staging version after interrupted activation
+        if: ${{ always() && (steps.refresh.outcome == 'failure' || steps.refresh.outcome == 'cancelled') }}
+        timeout-minutes: 5
+        env:
+          STAGING_WORKER_API_TOKEN: ${{ secrets.STAGING_WORKER_API_TOKEN }}
+        run: node cycle/tools/staging-consumer.mjs recover control "$RUNNER_TEMP/staging-consumer/receipt.json"
+      - name: Retain non-secret staging boundary receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: staging-consumer-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/staging-consumer/receipt.json
+          if-no-files-found: ignore
+          retention-days: 14

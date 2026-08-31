@@ -1,0 +1,86 @@
+name: WeatherX shared data staging activation
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: Whole release from a successfully prepared candidate
+        required: true
+        type: string
+      release_manifest_sha256:
+        description: Exact source whole manifest hash
+        required: true
+        type: string
+      catalog_id:
+        description: Exact SOURCE catalog ID (staging gets its own next sequence)
+        required: true
+        type: string
+      catalog_sha256:
+        description: Exact source catalog byte hash
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-staging-publication
+  cancel-in-progress: false
+jobs:
+  activate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment:
+      name: data-staging
+      url: https://staging.weatherx.org
+    env:
+      STAGING_DATA_ENABLED: ${{ vars.STAGING_DATA_ENABLED }}
+      STAGING_DATA_ISOLATION_APPROVED: ${{ vars.STAGING_DATA_ISOLATION_APPROVED }}
+      STAGING_DATA_ACTIVATION_ENABLED: ${{ vars.STAGING_DATA_ACTIVATION_ENABLED }}
+      STAGING_DATA_APPROVED_SELECTION_SHA256: ${{ vars.STAGING_DATA_APPROVED_SELECTION_SHA256 }}
+      STAGING_DATA_APPROVED_RECEIPT_SHA256: ${{ vars.STAGING_DATA_APPROVED_RECEIPT_SHA256 }}
+      STAGING_R2_ACCOUNT_ID: ${{ vars.STAGING_R2_ACCOUNT_ID }}
+      RELEASE_ID: ${{ inputs.release_id }}
+      RELEASE_MANIFEST_SHA256: ${{ inputs.release_manifest_sha256 }}
+      CATALOG_ID: ${{ inputs.catalog_id }}
+      CATALOG_SHA256: ${{ inputs.catalog_sha256 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Install integrity-locked S3 client without credentials
+        run: npm ci --ignore-scripts --prefix cycle/staging-controller
+      - name: Require exact approved candidate and cloud staging target
+        run: node cycle/tools/staging-activation-run.mjs gate
+      - name: Checkout fixed qualified consumer and schema validators
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Andrewegao/atmos
+          ref: 4e5177d925f0fc32fe57d17e478daf3c9e31dc7c
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: control
+          persist-credentials: false
+      - name: Verify controller, S3 and pinned-reader contracts without credentials
+        env:
+          STAGING_CONSUMER_ROOT: ${{ github.workspace }}/control
+        run: node --test cycle/tests/staging-*.mjs
+      - name: Reverify all bytes and activate only staging with numeric live proof
+        id: activate
+        timeout-minutes: 75
+        env:
+          STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
+          STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
+        run: node cycle/tools/staging-activation-run.mjs activate
+      - name: Recover only this run's incomplete staging pointer transaction
+        if: ${{ always() && (steps.activate.outcome == 'failure' || steps.activate.outcome == 'cancelled') }}
+        timeout-minutes: 5
+        env:
+          STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
+          STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
+        run: node cycle/tools/staging-activation-run.mjs recover
+      - name: Preserve non-secret live activation receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: staging-activation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/staging-activation/*.json
+          if-no-files-found: ignore
+          retention-days: 14

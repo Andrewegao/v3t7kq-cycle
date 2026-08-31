@@ -1,0 +1,7 @@
+{
+  "name": "weatherx-staging-controller-dependencies",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "dependencies": { "@aws-sdk/client-s3": "3.1121.0" }
+}

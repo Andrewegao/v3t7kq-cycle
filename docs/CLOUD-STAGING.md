@@ -67,17 +67,41 @@ their own narrower output boundary before activation.
 
 ## Separate publication and backend work
 
-Preparation does not select the staging current release/catalog. A guarded activation must
-recheck freshness and consumer compatibility, install the catalog's verified custom hash
-metadata, serialize against other staging publishers, preserve/restore prior pointers,
-and verify actual layer, ledger/accuracy and numeric point responses. Those activation
-operations are not implemented by the preparation helper and must not be substituted
-with manual object edits or a production-target publisher.
+Preparation does not select the staging current release/catalog. The separate manual
+`staging-data-activate.yml` controller rechecks every inventory/hash from staging storage,
+freshness, the approved preparation receipt and pinned consumer compatibility. It requires
+existing prior pointers, preserves both in a durable intent, uses conditional S3 writes,
+and verifies actual layer indexes, ledger/accuracy and fourteen numeric point responses.
+Interrupted activations have a same-run recovery step; recovery restores only pointers
+still owned by that transaction, never a competing publisher's selection.
+
+Catalog sequences are environment-local. For example, older staging sequence 36 can be
+replaced with staging sequence 37 whose components are copied exactly from newer production
+sequence 34. The source catalog remains immutable; the derived staging snapshot keeps its
+own parent/rollback history and verified custom hash metadata. Per-model generation times
+and whole-release point cycles may not regress. A staging-only `stagingActivation` pointer
+extension makes different activations content-distinct for ETag ownership. The pinned real
+consumer validators must accept these pointer bodies before any selection changes.
+
+The activation job has only staging-scoped S3 credentials, not production read/write or
+Worker/Pages credentials. The official S3 SDK is integrity-locked in `staging-controller/`.
+Hashing is streamed with at most eight concurrent object reads. Data preparation and UI
+qualification remain separate operations; this is not a local or duplicate meteorological bake.
 
 The separate Atmos staging repair makes staging weather reads public/cacheable, disables
 billing and adds its missing data-health route. It changes no production configuration.
-That source change is not a Worker deployment. The old live staging auth/billing mismatch
-must be repaired by a guarded staging-only backend release before UI qualification.
+That source change is not a Worker deployment. `staging-consumer-refresh.yml` is the separate
+manual repair, pinned to qualified Atmos `4e5177d925f0fc32fe57d17e478daf3c9e31dc7c`.
+It admits only the AUTH_MODE/BILLING_MODE change, audits all existing bindings, and uploads
+an inactive version before activation. Three public-mode probes and complete settings
+verification are required; failure restores its own previous version. Deployment tokens
+must never reach candidate build or experimental processor code.
+
+The actual existing staging Worker has five routes; the pinned source also names three
+ancillary routes not yet installed. This code-only repair deliberately preserves the five
+actual routes and does not deploy triggers, queues, bindings, migrations or extra routes.
+Its health acceptance is not a claim that stale staging data has become fresh—that requires
+the separate data activation and source-bound numerical proof.
 
 UI build/deploy isolation is documented in `UI-STAGING-PROMOTION.md`: candidate code runs
 on a credential-free runner; a fresh trusted publishing job handles staging-only deployment.
@@ -86,8 +110,18 @@ Neither preparing data nor merging these files deploys either website.
 
 ## Explicit remaining scope
 
-- Verify scoped credentials with real cloud reads/copies; local S3 fixtures are not that proof.
-- Qualify guarded staging backend update and data activation, then the actual staging UI.
+- Dedicated S3 credentials were provisioned with approval on 2026-08-31. Real reads passed
+  in their allowed buckets; both cross-environment reads returned 403. Cloud preparation
+  run `33410167126` is the first copy qualification; its dispatch is not completion evidence.
+- Qualify the new activation controllers in cloud CI; separately approve the dedicated
+  account-scoped staging deployment credentials and exact existing Worker settings digest.
+  General Cloudflare approval was given, but token creation remains blocked pending the
+  tool's explicit account-scoped Workers/Pages credential approval. Do not work around it.
+- Enable `STAGING_CONSUMER_ENABLED` only for its reviewed previous-version/settings pin.
+  Enable `STAGING_DATA_ACTIVATION_ENABLED` only after public consumer health and approval of
+  the exact prepared `receipt.json` byte hash in `STAGING_DATA_APPROVED_RECEIPT_SHA256`.
+- Run guarded backend update and data activation, then qualify the actual staging UI;
+  neither source merge nor successful preparation is a live staging receipt.
 - Shared immutable **raw input** archives for experimental processing still need a complete
   source/producer/config/schema manifest. This lane reuses finished releases instead.
 - A future approved-collector pin migration is separate; production source selection has not
