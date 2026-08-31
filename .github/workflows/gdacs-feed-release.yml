@@ -1,0 +1,127 @@
+# Repair one public feed prerequisite without replacing Pages or either data/point consumer.
+name: WeatherX guarded GDACS list repair
+
+on:
+  workflow_dispatch:
+    inputs:
+      atmos_sha:
+        description: Exact reviewed 40-character Atmos master commit
+        type: string
+        required: true
+      expected_release:
+        description: Exact current whole-data release to preserve
+        type: string
+        required: true
+      confirm:
+        description: Type REPAIR-GDACS-LIST-ONLY
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+# Serialize against the UI publisher whose prepublish feed gate this repair unblocks.
+concurrency:
+  group: weatherx-ui-production
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      ATMOS_SHA: ${{ inputs.atmos_sha }}
+      EXPECTED_RELEASE: ${{ inputs.expected_release }}
+    steps:
+      - name: Require immutable feed-only confirmation
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          test "$CONFIRM" = REPAIR-GDACS-LIST-ONLY
+          [[ "$ATMOS_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          [[ "$EXPECTED_RELEASE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$ ]] || exit 1
+          [[ "$EXPECTED_RELEASE" != *..* ]] || exit 1
+      - name: Checkout exact cycle workflow source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: cycle
+          persist-credentials: false
+      - name: Checkout exact reviewed Atmos source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Andrewegao/atmos
+          ref: ${{ inputs.atmos_sha }}
+          fetch-depth: 0
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: atmos
+          persist-credentials: false
+      - name: Verify immutable source provenance
+        env:
+          CYCLE_SHA: ${{ github.sha }}
+        run: |
+          test "$(git -C cycle rev-parse HEAD)" = "$CYCLE_SHA"
+          test "$(git -C atmos rev-parse HEAD)" = "$ATMOS_SHA"
+          git -C atmos merge-base --is-ancestor "$ATMOS_SHA" refs/remotes/origin/master
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: atmos/platform/edge/package-lock.json
+      - name: Install locked Worker dependencies
+        working-directory: atmos/platform/edge
+        run: npm ci
+      - name: Run feed workflow and mutation-recovery contracts
+        run: |
+          node cycle/tests/gdacs-feed-workflow.mjs
+          node --test cycle/tests/gdacs-feed-release.mjs
+      - name: Run complete platform and feed source gates
+        timeout-minutes: 10
+        working-directory: atmos/platform/edge
+        run: npm run check
+      - name: Capture and validate the unchanged production boundary
+        timeout-minutes: 5
+        env:
+          FEED_RECEIPT: ${{ runner.temp }}/gdacs-feed/receipt.json
+          DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
+          PLATFORM_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+          PAGES_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          node cycle/tools/gdacs-feed-release.mjs preflight \
+            --atmos atmos --sha "$ATMOS_SHA" --expected-release "$EXPECTED_RELEASE" \
+            --receipt "$FEED_RECEIPT"
+      - name: Guarded bootstrap of the single GDACS list route
+        id: repair
+        timeout-minutes: 8
+        env:
+          FEED_RECEIPT: ${{ runner.temp }}/gdacs-feed/receipt.json
+          DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
+          PLATFORM_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+          PAGES_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          node cycle/tools/gdacs-feed-release.mjs execute \
+            --atmos atmos --sha "$ATMOS_SHA" --expected-release "$EXPECTED_RELEASE" \
+            --receipt "$FEED_RECEIPT"
+      - name: Recover only the owned route after interruption or failed verification
+        if: ${{ always() && (steps.repair.outcome == 'failure' || steps.repair.outcome == 'cancelled') }}
+        timeout-minutes: 5
+        env:
+          FEED_RECEIPT: ${{ runner.temp }}/gdacs-feed/receipt.json
+          DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
+          PLATFORM_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+          PAGES_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          node cycle/tools/gdacs-feed-release.mjs recover \
+            --atmos atmos --sha "$ATMOS_SHA" --expected-release "$EXPECTED_RELEASE" \
+            --receipt "$FEED_RECEIPT"
+      - name: Retain sanitized feed repair evidence, never private source or bundles
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gdacs-feed-repair-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gdacs-feed/receipt.json
+          if-no-files-found: ignore
+          retention-days: 30
