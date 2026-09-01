@@ -13,6 +13,18 @@ const SHA = /^[a-f0-9]{64}$/;
 const POINTERS = ['releases/current.json', 'catalogs/current.json'];
 const json = value => Buffer.from(JSON.stringify(value) + '\n');
 const order = (a, b) => a.path.localeCompare(b.path);
+// Component manifests are produced by recursively visiting each directory and
+// locale-sorting the names within that directory. Reconstruct that exact order
+// from an S3 flat listing; whole-string sorting differs when a directory name is
+// also a prefix of a sibling filename (for example grid/x before grid.json).
+export function componentInventoryOrder(a, b) {
+  const left = a.path.split('/'), right = b.path.split('/');
+  for (let i = 0; i < Math.min(left.length, right.length); i++) {
+    const difference = left[i].localeCompare(right[i]);
+    if (difference) return difference;
+  }
+  return left.length - right.length;
+}
 
 // Persist only fixed stage identifiers and a small error category. Never retain
 // arbitrary exception text because transport errors can contain request details.
@@ -177,7 +189,7 @@ export async function inspectPrepared(ctx, io, { validatePoints, now = Date.now,
     const metadata = await check(`component:${name}:metadata`, () => get(io, c.manifestKey, true, STAGING_COMPONENT_BUCKET));
     await check(`component:${name}:validation`, () => validateComponent(c, metadata.body));
     const all = await check(`component:${name}:inventory`, () => readInventory(io, STAGING_COMPONENT_BUCKET, c.rootPrefix));
-    const values = all.filter(x => x.path !== 'component.json');
+    const values = all.filter(x => x.path !== 'component.json').sort(componentInventoryOrder);
     await check(`component:${name}:manifest-entry`, () => {
       assert.deepEqual(all.find(x => x.path === 'component.json'), { path: 'component.json', size: metadata.body.length, sha256: c.manifestSha256 });
     });
