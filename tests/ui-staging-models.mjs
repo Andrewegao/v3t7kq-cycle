@@ -98,10 +98,12 @@ test('browser child process uses an allowlist and pixel proof measures visible c
 test('browser admission requires one coherent exact candidate in its own page context',()=>{
   const expected={sourceSha:SHA,releaseId:`git-${SHA.slice(0,12)}-run-123`,selectionSha256:DIGEST};
   const ready={origin:'https://staging.weatherx.org',releaseStatus:200,selectionStatus:200,sourceSha:expected.sourceSha,
-    releaseId:expected.releaseId,selectionSha256:expected.selectionSha256,modelButtonCount:1,lit:true,atmosReady:true};
+    releaseId:expected.releaseId,selectionSha256:expected.selectionSha256,modelButtonCount:1,modelButtonVisible:true,
+    lit:true,bootSettled:true,atmosReady:true};
   assert.equal(browserCandidateReady(ready,expected),true);
   for(const mutate of [s=>s.origin='https://weatherx.org',s=>s.releaseStatus=404,s=>s.selectionStatus=404,s=>s.sourceSha='0'.repeat(40),
-    s=>s.releaseId='git-'+SHA.slice(0,12)+'-run-999',s=>s.selectionSha256='0'.repeat(64),s=>s.modelButtonCount=0,s=>s.lit=false,s=>s.atmosReady=false]){
+    s=>s.releaseId='git-'+SHA.slice(0,12)+'-run-999',s=>s.selectionSha256='0'.repeat(64),s=>s.modelButtonCount=0,
+    s=>s.modelButtonVisible=false,s=>s.lit=false,s=>s.bootSettled=false,s=>s.atmosReady=false]){
     const state=structuredClone(ready);mutate(state);assert.equal(browserCandidateReady(state,expected),false);
   }
 });

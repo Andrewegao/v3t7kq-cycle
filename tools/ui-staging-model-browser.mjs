@@ -21,7 +21,7 @@ export function browserCandidateReady(state,expected){
   return state?.origin===STAGING_ORIGIN&&state?.releaseStatus===200&&state?.selectionStatus===200
     &&state?.sourceSha===expected.sourceSha&&state?.releaseId===expected.releaseId
     &&state?.selectionSha256===expected.selectionSha256&&state?.modelButtonCount===1
-    &&state?.lit===true&&state?.atmosReady===true;
+    &&state?.modelButtonVisible===true&&state?.lit===true&&state?.bootSettled===true&&state?.atmosReady===true;
 }
 const LABELS={icon:'ICON',hrdps:'HRDPS',nam:'NAM','nam-hi':'NAM HI','nam-ak':'NAM AK','hrrr-ak':'HRRR AK','arome-antilles':'AROME ANT'};
 const DECK={temp:'temp-raster',wind:'wind-field',mslp:'mslp-fill'};
@@ -67,8 +67,12 @@ export async function runMatrix(env){
     return page.evaluate(async()=>{
       const summary={origin:location.origin,href:location.href,width:innerWidth,height:innerHeight,bodyClass:document.body.className,
         lit:document.body.classList.contains('wl-lit'),atmosReady:!!window.__atmos?.deckSnapshot,
+        bootSettled:!document.body.classList.contains('wl-boot'),
         modelButtonCount:document.querySelectorAll('button[aria-controls="forecast-model-dialog"]').length,
         bodyText:document.body.innerText.slice(0,500)};
+      const modelButton=document.querySelector('button[aria-controls="forecast-model-dialog"]');
+      summary.modelButtonVisible=!!modelButton&&modelButton.getClientRects().length===1
+        &&getComputedStyle(modelButton).visibility!=='hidden'&&getComputedStyle(modelButton).display!=='none';
       try {
         const [releaseResponse,selectionResponse]=await Promise.all([
           fetch('/health/release.json',{cache:'no-store',headers:{'Cache-Control':'no-cache'}}),
@@ -87,7 +91,8 @@ export async function runMatrix(env){
     for(let attempt=1;attempt<=3;attempt++){
       await page.goto(STAGING_ORIGIN+'/?devprobes=1#c=104,35,3.1&l=wind',{waitUntil:'domcontentloaded',timeout:60000});
       let startupError=null;
-      try {await page.waitForFunction(()=>window.__atmos?.deckSnapshot&&document.body.classList.contains('wl-lit'),null,{timeout:20000});}
+      try {await page.waitForFunction(()=>window.__atmos?.deckSnapshot&&document.body.classList.contains('wl-lit')
+        &&!document.body.classList.contains('wl-boot'),null,{timeout:20000});}
       catch(error){startupError=String(error);}
       const state=await browserCandidateState();attempts.push({...state,attempt,startupError});
       if(browserCandidateReady(state,expected))return state;
@@ -96,7 +101,9 @@ export async function runMatrix(env){
     throw Error('browser candidate did not converge: '+JSON.stringify(attempts));
   }
   async function openModel(model){
-    await page.locator('button[aria-controls="forecast-model-dialog"]').first().click();
+    const trigger=page.locator('button[aria-controls="forecast-model-dialog"]').first();
+    try {await trigger.waitFor({state:'visible',timeout:15000});await trigger.click({timeout:15000});}
+    catch(error){throw Error(`model trigger unavailable for ${model}: ${JSON.stringify(await browserCandidateState())}; ${error instanceof Error?error.message:String(error)}`);}
     const option=page.locator('#forecast-model-dialog [role="radio"]').filter({has:page.locator('.wy-model-name',{hasText:new RegExp('^'+LABELS[model]+'$')})});
     await option.waitFor({state:'visible',timeout:15000});assert.equal(await option.isDisabled(),false);await option.click();
   }
@@ -110,18 +117,26 @@ export async function runMatrix(env){
   }
   const snapshot=()=>page.evaluate(()=>{const a=window.__atmos,s=a.store.getState(),m=s.manifest,c=a.map.getCenter();return {model:m.model,init:m.init_time,base:m.base,cursor:s.cursorMs,center:[c.lng,c.lat],zoom:a.map.getZoom(),projection:a.map.getProjection()?.type,opacity:s.layers,commits:window.__stagingGateCommits.length};});
   try {
-    let rapid=null,firstRequestStarted=null;
+    let rapid=null,firstRequestStarted=null,firstRequestReleased=false;
     if(bundle.entries.length>1){
       const first=bundle.entries[0];let start;firstRequestStarted=new Promise(resolve=>{start=resolve;});let delayed=false;
       await page.route(url=>url.origin===STAGING_ORIGIN&&url.pathname===first.manifestPath,async route=>{
-        if(delayed)return route.continue();delayed=true;start();await new Promise(resolve=>setTimeout(resolve,1500));return route.continue();
+        if(delayed)return route.continue();delayed=true;start();await new Promise(resolve=>setTimeout(resolve,1500));firstRequestReleased=true;return route.continue();
       });
     }
     await loadExactBrowserCandidate();
     await page.evaluate(()=>{const s=window.__atmos.store.getState();s.setPlaying(false);s.setParticlesOverlay(false);});
     if(bundle.entries.length>1){
       const [first,last]=[bundle.entries[0],bundle.entries.at(-1)];await openModel(first.model);
-      await Promise.race([firstRequestStarted,new Promise((_,reject)=>setTimeout(()=>reject(Error('first model request did not start')),10000))]);await openModel(last.model);
+      await Promise.race([firstRequestStarted,new Promise((_,reject)=>setTimeout(()=>reject(Error('first model request did not start')),10000))]);
+      // The option click closes a real modal with a bounded exit animation. Re-clicking its trigger
+      // before React has committed that close can toggle the still-open dialog shut instead of
+      // reopening it; on a slower CI browser that made the selector appear to vanish. Wait only for
+      // the UI close lifecycle (not the delayed model request), then prove the second user choice
+      // still supersedes the first while its manifest is in flight.
+      await page.locator('#forecast-model-dialog').waitFor({state:'detached',timeout:3000});
+      assert.equal(firstRequestReleased,false,'first model request finished before rapid supersession');
+      await openModel(last.model);
       await page.waitForFunction(model=>window.__atmos.store.getState().manifest?.model===model&&!window.__atmos.map.isMoving(),last.model,{timeout:45000});
       await page.waitForTimeout(2000);await drainResponses();const final=await snapshot();assert.equal(final.model,last.model);assert.equal(final.base,last.manifestPath.slice(0,-'manifest.json'.length));
       if(last.model!=='icon'){const mid=(last.grid.lon0+last.grid.lon1)/2,lon=final.center[0]+360*Math.round((mid-final.center[0])/360);assert.ok(lon>=last.grid.lon0&&lon<=last.grid.lon1&&final.center[1]>=last.grid.lat1&&final.center[1]<=last.grid.lat0,'stale regional camera overrode latest model');}
