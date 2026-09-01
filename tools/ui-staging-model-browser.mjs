@@ -17,6 +17,12 @@ export function pixelDifference(on,off){
   let changed=0;for(let i=0;i<on.data.length;i+=4)if(Math.max(...[0,1,2].map(c=>Math.abs(on.data[i+c]-off.data[i+c])))>8)changed++;
   return changed/(on.width*on.height);
 }
+export function browserCandidateReady(state,expected){
+  return state?.origin===STAGING_ORIGIN&&state?.releaseStatus===200&&state?.selectionStatus===200
+    &&state?.sourceSha===expected.sourceSha&&state?.releaseId===expected.releaseId
+    &&state?.selectionSha256===expected.selectionSha256&&state?.modelButtonCount===1
+    &&state?.lit===true&&state?.atmosReady===true;
+}
 const LABELS={icon:'ICON',hrdps:'HRDPS',nam:'NAM','nam-hi':'NAM HI','nam-ak':'NAM AK','hrrr-ak':'HRRR AK','arome-antilles':'AROME ANT'};
 const DECK={temp:'temp-raster',wind:'wind-field',mslp:'mslp-fill'};
 async function get(url,max=1024*1024){
@@ -57,6 +63,38 @@ export async function runMatrix(env){
     }
     assert.fail('timed out hashing selected staging response bytes');
   }
+  async function browserCandidateState(){
+    return page.evaluate(async()=>{
+      const summary={origin:location.origin,href:location.href,width:innerWidth,height:innerHeight,bodyClass:document.body.className,
+        lit:document.body.classList.contains('wl-lit'),atmosReady:!!window.__atmos?.deckSnapshot,
+        modelButtonCount:document.querySelectorAll('button[aria-controls="forecast-model-dialog"]').length,
+        bodyText:document.body.innerText.slice(0,500)};
+      try {
+        const [releaseResponse,selectionResponse]=await Promise.all([
+          fetch('/health/release.json',{cache:'no-store',headers:{'Cache-Control':'no-cache'}}),
+          fetch('/assets/staging-model-selection.json',{cache:'no-store',headers:{'Cache-Control':'no-cache'}}),
+        ]);
+        summary.releaseStatus=releaseResponse.status;summary.selectionStatus=selectionResponse.status;
+        if(releaseResponse.ok){const release=await releaseResponse.json();summary.sourceSha=release.gitSha;summary.releaseId=release.releaseId;}
+        if(selectionResponse.ok){const selection=await selectionResponse.arrayBuffer(),hash=await crypto.subtle.digest('SHA-256',selection);
+          summary.selectionSha256=[...new Uint8Array(hash)].map(b=>b.toString(16).padStart(2,'0')).join('');}
+      } catch(error){summary.readinessError=String(error);}
+      return summary;
+    });
+  }
+  async function loadExactBrowserCandidate(){
+    const expected={sourceSha:env.UI_EXPECTED_SOURCE_SHA,releaseId:env.WEATHERX_EXPECTED_RELEASE_ID,selectionSha256:env.UI_SELECTION_SHA256},attempts=[];
+    for(let attempt=1;attempt<=3;attempt++){
+      await page.goto(STAGING_ORIGIN+'/?devprobes=1#c=104,35,3.1&l=wind',{waitUntil:'domcontentloaded',timeout:60000});
+      let startupError=null;
+      try {await page.waitForFunction(()=>window.__atmos?.deckSnapshot&&document.body.classList.contains('wl-lit'),null,{timeout:20000});}
+      catch(error){startupError=String(error);}
+      const state=await browserCandidateState();attempts.push({...state,attempt,startupError});
+      if(browserCandidateReady(state,expected))return state;
+      if(attempt<3)await page.waitForTimeout(1500);
+    }
+    throw Error('browser candidate did not converge: '+JSON.stringify(attempts));
+  }
   async function openModel(model){
     await page.locator('button[aria-controls="forecast-model-dialog"]').first().click();
     const option=page.locator('#forecast-model-dialog [role="radio"]').filter({has:page.locator('.wy-model-name',{hasText:new RegExp('^'+LABELS[model]+'$')})});
@@ -79,8 +117,7 @@ export async function runMatrix(env){
         if(delayed)return route.continue();delayed=true;start();await new Promise(resolve=>setTimeout(resolve,1500));return route.continue();
       });
     }
-    await page.goto(STAGING_ORIGIN+'/?devprobes=1#c=104,35,3.1&l=wind',{waitUntil:'domcontentloaded',timeout:60000});
-    await page.waitForFunction(()=>window.__atmos?.deckSnapshot&&document.body.classList.contains('wl-lit'),null,{timeout:90000});
+    await loadExactBrowserCandidate();
     await page.evaluate(()=>{const s=window.__atmos.store.getState();s.setPlaying(false);s.setParticlesOverlay(false);});
     if(bundle.entries.length>1){
       const [first,last]=[bundle.entries[0],bundle.entries.at(-1)];await openModel(first.model);
