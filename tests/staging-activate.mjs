@@ -2,13 +2,26 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setImmediate } from 'node:timers/promises';
 import { ACCOUNT, MODELS, hash } from '../tools/shared-data.mjs';
-import { activationGate, activatePrepared, recoverActivation, inspectPrepared, assertLiveProof, buildServingCatalog,
+import { activationGate, activatePrepared, recoverActivation, inspectPrepared, assertLiveProof, buildServingCatalog, checked,
   STAGING_DATA_BUCKET as DATA, STAGING_COMPONENT_BUCKET as COMPONENTS, STAGING_ORIGIN as ORIGIN } from '../tools/staging-activate.mjs';
 
 const now = Date.parse('2026-08-31T15:00:00Z'), iso = delta => new Date(now + delta).toISOString();
 const encode = value => Buffer.from(JSON.stringify(value) + '\n');
 const clone = value => structuredClone(value);
 const pointerKeys = ['releases/current.json', 'catalogs/current.json'];
+
+test('diagnostics retain only bounded stage, state and error category', async () => {
+  const events = [];
+  assert.equal(await checked('candidate:receipt-read', async () => 7, event => events.push(event)), 7);
+  await assert.rejects(checked('candidate:whole-inventory', async () => assert.fail('sensitive detail'), event => events.push(event)));
+  assert.deepEqual(events, [
+    { stage: 'candidate:receipt-read', state: 'started' },
+    { stage: 'candidate:receipt-read', state: 'passed' },
+    { stage: 'candidate:whole-inventory', state: 'started' },
+    { stage: 'candidate:whole-inventory', state: 'failed', kind: 'assertion' },
+  ]);
+  await assert.rejects(checked('not allowed', async () => {}), /invalid diagnostic stage/);
+});
 
 // All numeric values and inventories below are synthetic protocol fixtures, not
 // real weather qualification. Real source-pack decoding is the adapter's mandatory

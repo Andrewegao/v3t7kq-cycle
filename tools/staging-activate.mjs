@@ -14,6 +14,19 @@ const POINTERS = ['releases/current.json', 'catalogs/current.json'];
 const json = value => Buffer.from(JSON.stringify(value) + '\n');
 const order = (a, b) => a.path.localeCompare(b.path);
 
+// Persist only fixed stage identifiers and a small error category. Never retain
+// arbitrary exception text because transport errors can contain request details.
+export async function checked(stage, action, report = () => {}) {
+  assert.match(stage, /^[A-Za-z0-9:/._-]{1,180}$/, 'invalid diagnostic stage');
+  report({ stage, state: 'started' });
+  try {
+    const result = await action(); report({ stage, state: 'passed' }); return result;
+  } catch (error) {
+    report({ stage, state: 'failed', kind: error?.code === 'ERR_ASSERTION' ? 'assertion' : error?.name === 'AbortError' ? 'aborted' : 'error' });
+    throw error;
+  }
+}
+
 export function activationGate(env) {
   const selection = sharedGate(env);
   assert.equal(env.GITHUB_WORKFLOW_REF, 'Andrewegao/v3t7kq-cycle/.github/workflows/staging-data-activate.yml@refs/heads/main');
@@ -141,40 +154,46 @@ async function readInventory(io, bucket, prefix) {
   return actual.sort(order);
 }
 
-export async function inspectPrepared(ctx, io, { validatePoints, now = Date.now }) {
+export async function inspectPrepared(ctx, io, { validatePoints, now = Date.now, report = () => {} }) {
   context(ctx); assert.equal(typeof validatePoints, 'function', 'real point validator required');
+  const check = (stage, action) => checked(`candidate:${stage}`, action, report);
   const prefix = `staging-candidates/${ctx.candidateId}/`;
-  const receiptObject = await get(io, `${prefix}receipt.json`);
-  assert.equal(hash(receiptObject.body), ctx.receiptSha256, 'prepared receipt differs from approval');
+  const receiptObject = await check('receipt-read', () => get(io, `${prefix}receipt.json`));
+  await check('receipt-hash', () => assert.equal(hash(receiptObject.body), ctx.receiptSha256, 'prepared receipt differs from approval'));
   const receipt = parse(receiptObject);
-  const [releaseObject, catalogObject, catalogPointerObject, manifestObject] = await Promise.all([
+  const [releaseObject, catalogObject, catalogPointerObject, manifestObject] = await check('metadata-read', () => Promise.all([
     get(io, `${prefix}release-pointer.json`), get(io, `${prefix}catalog.json`), get(io, `${prefix}catalog-pointer.json`),
     get(io, `releases/${ctx.selection.releaseId}/manifest.json`),
-  ]);
+  ]));
   const release = parse(releaseObject), manifest = parse(manifestObject), catalogPointer = parse(catalogPointerObject);
-  let bytes = validateRelease(release, manifest, ctx.selection, now());
-  await validatePoints(manifest); // Must use the pinned deployed consumer's actual v2 validator.
-  const catalog = validateCatalog(catalogPointer, catalogObject.body, ctx.selection, now());
-  const whole = await readInventory(io, STAGING_DATA_BUCKET, `releases/${ctx.selection.releaseId}/`);
+  let bytes = await check('release-validation', () => validateRelease(release, manifest, ctx.selection, now()));
+  await check('point-validation', () => validatePoints(manifest)); // Must use the pinned deployed consumer's actual v2 validator.
+  const catalog = await check('catalog-validation', () => validateCatalog(catalogPointer, catalogObject.body, ctx.selection, now()));
+  const whole = await check('whole-inventory', () => readInventory(io, STAGING_DATA_BUCKET, `releases/${ctx.selection.releaseId}/`));
   const expected = [...manifest.objects.map(o => ({ path: o.path, size: o.bytes, sha256: o.sha256 })),
     { path: 'manifest.json', size: manifestObject.body.length, sha256: hash(manifestObject.body) }].sort(order);
-  assert.deepEqual(whole, expected, 'whole release inventory/readback mismatch');
+  await check('whole-inventory-compare', () => assert.deepEqual(whole, expected, 'whole release inventory/readback mismatch'));
   for (const c of Object.values(catalog.components)) {
-    const metadata = await get(io, c.manifestKey, true, STAGING_COMPONENT_BUCKET);
-    validateComponent(c, metadata.body);
-    const all = await readInventory(io, STAGING_COMPONENT_BUCKET, c.rootPrefix);
+    const name = identifier(c.componentId);
+    const metadata = await check(`component:${name}:metadata`, () => get(io, c.manifestKey, true, STAGING_COMPONENT_BUCKET));
+    await check(`component:${name}:validation`, () => validateComponent(c, metadata.body));
+    const all = await check(`component:${name}:inventory`, () => readInventory(io, STAGING_COMPONENT_BUCKET, c.rootPrefix));
     const values = all.filter(x => x.path !== 'component.json');
-    assert.deepEqual(all.find(x => x.path === 'component.json'), { path: 'component.json', size: metadata.body.length, sha256: c.manifestSha256 });
-    assert.equal(values.length, c.objectCount); assert.equal(hash(JSON.stringify(values)), c.inventorySha256, 'component inventory/readback mismatch');
+    await check(`component:${name}:compare`, () => {
+      assert.deepEqual(all.find(x => x.path === 'component.json'), { path: 'component.json', size: metadata.body.length, sha256: c.manifestSha256 });
+      assert.equal(values.length, c.objectCount); assert.equal(hash(JSON.stringify(values)), c.inventorySha256, 'component inventory/readback mismatch');
+    });
     bytes += values.reduce((n, x) => n + x.size, 0); assert.ok(bytes <= MAX_BYTES, 'combined byte budget exceeded');
   }
-  assert.deepEqual(receipt, { schemaVersion: 1, candidateId: ctx.candidateId, selection: ctx.selection,
+  await check('receipt-compare', () => assert.deepEqual(receipt, { schemaVersion: 1, candidateId: ctx.candidateId, selection: ctx.selection,
     objects: manifest.objectCount + Object.values(catalog.components).reduce((n, c) => n + c.objectCount, 0), bytes,
     collected: false, processed: false, activated: false, productionWritten: false,
     producerSource: 'preserved upstream receipts; no new collector-source attestation',
-    components: Object.values(catalog.components).map(c => ({ model: c.componentId, artifactId: c.artifactId, manifestSha256: c.manifestSha256 })) });
+    components: Object.values(catalog.components).map(c => ({ model: c.componentId, artifactId: c.artifactId, manifestSha256: c.manifestSha256 })) }));
   // Recheck freshness after the full streaming readback, not merely at its start.
-  validateRelease(release, manifest, ctx.selection, now()); validateCatalog(catalogPointer, catalogObject.body, ctx.selection, now());
+  await check('freshness-recheck', () => {
+    validateRelease(release, manifest, ctx.selection, now()); validateCatalog(catalogPointer, catalogObject.body, ctx.selection, now());
+  });
   return { release, manifest, catalogPointer, catalog, releaseObject, catalogObject, catalogPointerObject };
 }
 
@@ -255,23 +274,24 @@ export async function recoverActivation(ctx, io) {
   return { state, pointers: result, productionWritten: false };
 }
 
-export async function activatePrepared(ctx, io, { validatePoints, validateServingPointers, verifyConsumer, verifyLive, now = Date.now }) {
+export async function activatePrepared(ctx, io, { validatePoints, validateServingPointers, verifyConsumer, verifyLive, now = Date.now, report = () => {} }) {
   context(ctx); assert.equal(typeof verifyConsumer, 'function'); assert.equal(typeof verifyLive, 'function');
   assert.equal(typeof validateServingPointers, 'function', 'pinned consumer pointer validators required');
   assert.equal(typeof io.validateRestore, 'function', 'restore metadata preflight required');
-  health(await verifyConsumer({ origin: STAGING_ORIGIN }));
-  const prepared = await inspectPrepared(ctx, io, { validatePoints, now });
-  const [oldReleaseObject, oldCatalogPointerObject] = await Promise.all(POINTERS.map(key => get(io, key)));
+  const check = (stage, action) => checked(`activation:${stage}`, action, report);
+  await check('consumer-health', async () => health(await verifyConsumer({ origin: STAGING_ORIGIN })));
+  const prepared = await check('candidate-inspection', () => inspectPrepared(ctx, io, { validatePoints, now, report }));
+  const [oldReleaseObject, oldCatalogPointerObject] = await check('current-pointers-read', () => Promise.all(POINTERS.map(key => get(io, key))));
   // Refuse before any write if the transport cannot round-trip prior metadata.
-  for (const previous of [oldReleaseObject, oldCatalogPointerObject]) await io.validateRestore(previous);
+  await check('restore-metadata-preflight', async () => { for (const previous of [oldReleaseObject, oldCatalogPointerObject]) await io.validateRestore(previous); });
   const oldRelease = parse(oldReleaseObject), oldPointer = parse(oldCatalogPointerObject);
   identifier(oldRelease.releaseId); identifier(oldPointer.catalogId);
-  const oldManifest = parse(await get(io, `releases/${oldRelease.releaseId}/manifest.json`));
-  const oldCatalogObject = await get(io, `catalogs/snapshots/${oldPointer.catalogId}.json`);
+  const oldManifest = parse(await check('current-manifest-read', () => get(io, `releases/${oldRelease.releaseId}/manifest.json`)));
+  const oldCatalogObject = await check('current-catalog-read', () => get(io, `catalogs/snapshots/${oldPointer.catalogId}.json`));
   assert.equal(hash(oldCatalogObject.body), oldPointer.catalogSha256, 'previous catalog integrity failure');
   const oldCatalog = parse(oldCatalogObject);
-  assertNonRegression({ release: oldRelease, manifest: oldManifest, catalogPointer: oldPointer, catalog: oldCatalog }, prepared);
-  const serving = buildServingCatalog(ctx, oldPointer, oldCatalog, prepared.catalog, now());
+  await check('non-regression', () => assertNonRegression({ release: oldRelease, manifest: oldManifest, catalogPointer: oldPointer, catalog: oldCatalog }, prepared));
+  const serving = await check('serving-catalog-build', () => buildServingCatalog(ctx, oldPointer, oldCatalog, prepared.catalog, now()));
   // R2 ETags may identify content, not metadata revisions. The staging-only body
   // marker makes different activation runs ETag-distinct. Immutable upstream
   // candidate/manifest/catalog bytes and all source identities remain unchanged.
@@ -279,7 +299,7 @@ export async function activatePrepared(ctx, io, { validatePoints, validateServin
     assert.equal(pointer.stagingActivation, undefined, 'source pointer unexpectedly contains activation metadata');
     return { ...pointer, stagingActivation: { id: ctx.activationId, sourceSha: ctx.sourceSha } };
   });
-  await validateServingPointers({ release: stagedPointers[0], catalogPointer: stagedPointers[1], catalog: serving.catalog });
+  await check('serving-pointer-validation', () => validateServingPointers({ release: stagedPointers[0], catalogPointer: stagedPointers[1], catalog: serving.catalog }));
   const previous = [oldReleaseObject, oldCatalogPointerObject];
   const next = [prepared.releaseObject, prepared.catalogPointerObject].map((value, index) => ({ ...value, body: json(stagedPointers[index]) }));
   const intent = { schemaVersion: 1, activationId: ctx.activationId, sourceSha: ctx.sourceSha, selection: ctx.selection,
