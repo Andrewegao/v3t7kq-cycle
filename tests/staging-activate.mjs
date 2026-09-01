@@ -181,6 +181,25 @@ test('bad receipt approval, bytes, extras, missing files and real descriptor fai
     const f = fixture(); change(f); await assert.rejects(activatePrepared(f.ctx, f.io, f.deps)); assert.equal(f.writes.length, 0);
   }
 });
+test('component failures identify manifest entry, object count or inventory hash without weakening byte gates', async () => {
+  for (const [expectedStage, change] of [
+    ['candidate:component:ecmwf:manifest-entry', f => {
+      const original = f.io.hashObject;
+      f.io.hashObject = async (bucket, key, options) => key === 'components/ecmwf/ecmwf-123/component.json'
+        ? { ...(await original(bucket, key, options)), sha256: 'f'.repeat(64) }
+        : original(bucket, key, options);
+    }],
+    ['candidate:component:ecmwf:object-count', f => f.store.delete(f.keyFor(COMPONENTS, 'components/ecmwf/ecmwf-123/index.json'))],
+    ['candidate:component:ecmwf:inventory-hash', f => f.save(COMPONENTS, 'components/ecmwf/ecmwf-123/index.json', Buffer.from('corrupt'))],
+  ]) {
+    const f = fixture(), events = []; change(f);
+    await assert.rejects(inspectPrepared(f.ctx, f.io, { validatePoints: f.deps.validatePoints, now: f.deps.now,
+      report: event => events.push(event) }));
+    assert.deepEqual(events.at(-1), { stage: expectedStage, state: 'failed', kind: 'assertion' });
+    assert.equal(f.writes.length, 0);
+    assert.ok(!events.some(event => event.stage === 'candidate:whole-inventory'), 'component failure should fail before the larger whole reread');
+  }
+});
 test('even a newly approved receipt cannot misrepresent transfer counts or processing status', async () => {
   for (const patch of [{ objects: 1 }, { bytes: 0 }, { activated: true }, { productionWritten: true }, { components: [] }, { collected: true }]) {
     const f = fixture(), body = encode({ ...f.receipt, ...patch }); current(f, `${f.prefix}receipt.json`).body = body; f.ctx.receiptSha256 = hash(body);
