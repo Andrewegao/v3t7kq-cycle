@@ -58,6 +58,10 @@ jobs:
         with: { python-version: '3.11' }
       - name: enforce manually enabled isolated build
         run: node cycle/tools/ui-release.mjs build-gate
+      - name: preflight public staging data before expensive build or deployment
+        env:
+          UI_CYCLE_ROOT: cycle
+        run: node cycle/tools/ui-staging-preflight.mjs
       - name: checkout exact candidate Atmos source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

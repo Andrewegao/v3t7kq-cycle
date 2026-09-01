@@ -8,6 +8,13 @@ const root=new URL('../',import.meta.url);
 const read=p=>readFileSync(new URL(p,root),'utf8');
 const staging=read('.github/workflows/ui-staging.yml'), prod=read('.github/workflows/ui-release.yml'), source=read('tools/ui-release.mjs');
 const {installPagesWorker}=await import('../tools/ui-release.mjs');
+test('staging rejects stale public point data before expensive build work while production remains isolated',()=>{
+  const preflight='node cycle/tools/ui-staging-preflight.mjs';
+  assert.match(staging,new RegExp(preflight.replaceAll('.','\\.')));
+  assert.ok(staging.indexOf(preflight)<staging.indexOf('checkout exact candidate Atmos source'));
+  assert.ok(staging.indexOf(preflight)<staging.indexOf('install locked dependencies and browsers'));
+  assert.doesNotMatch(prod,/ui-staging-preflight|MODEL_SELECTION_SHA256/);
+});
 test('staging workflow leaves release-mode activation to the exact-profile controller',()=>{
   const build=staging.slice(staging.indexOf('\n  build:\n'),staging.indexOf('\n  qualify:\n'));
   assert.match(build,/VITE_MODEL_EXPANSION_QUALIFICATION: '0'/);assert.match(build,/VITE_STAGING_MODEL_ADMISSION: '0'/);
