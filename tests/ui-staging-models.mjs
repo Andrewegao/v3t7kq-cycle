@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {BASELINE_PROFILE,MODELS,GRIDS,variables,displayPaths,digest,canonical,profileFor,validateProfile,requireProductionProfile,validateSelection,readSelection,validateCandidateSelection,requireStagingApproval,browserEnvironment,validateBrowserReceipt} from '../tools/ui-staging-models.mjs';
-import {pixelDifference} from '../tools/ui-staging-model-browser.mjs';
+import {browserCandidateReady,pixelDifference} from '../tools/ui-staging-model-browser.mjs';
 import {createCandidate,hash,eligibleRun,REPOSITORY} from '../tools/ui-candidate.mjs';
 import {eligibleBuild} from '../tools/ui-build-transfer.mjs';
 import {publicBuildEnvironment,requiredSourceGuard,weatherFeedVerificationRequired} from '../tools/ui-release.mjs';
@@ -94,6 +94,16 @@ test('browser child process uses an allowlist and pixel proof measures visible c
   const clean=browserEnvironment({PATH:'/bin',HOME:'/tmp',GITHUB_TOKEN:'secret',CLOUDFLARE_API_TOKEN:'secret',UI_CANDIDATE_KEY:'secret',RANDOM:'discard'},{BASE:'https://staging.weatherx.org'});
   assert.deepEqual(clean,{PATH:'/bin',HOME:'/tmp',BASE:'https://staging.weatherx.org'});
   const off={width:2,height:1,data:Buffer.from([0,0,0,255,0,0,0,255])},on={...off,data:Buffer.from([9,0,0,255,8,0,0,255])};assert.equal(pixelDifference(on,off),.5);
+});
+test('browser admission requires one coherent exact candidate in its own page context',()=>{
+  const expected={sourceSha:SHA,releaseId:`git-${SHA.slice(0,12)}-run-123`,selectionSha256:DIGEST};
+  const ready={origin:'https://staging.weatherx.org',releaseStatus:200,selectionStatus:200,sourceSha:expected.sourceSha,
+    releaseId:expected.releaseId,selectionSha256:expected.selectionSha256,modelButtonCount:1,lit:true,atmosReady:true};
+  assert.equal(browserCandidateReady(ready,expected),true);
+  for(const mutate of [s=>s.origin='https://weatherx.org',s=>s.releaseStatus=404,s=>s.selectionStatus=404,s=>s.sourceSha='0'.repeat(40),
+    s=>s.releaseId='git-'+SHA.slice(0,12)+'-run-999',s=>s.selectionSha256='0'.repeat(64),s=>s.modelButtonCount=0,s=>s.lit=false,s=>s.atmosReady=false]){
+    const state=structuredClone(ready);mutate(state);assert.equal(browserCandidateReady(state,expected),false);
+  }
 });
 test('staging can bootstrap an old site but every uploaded candidate must pass weather-feed verification',()=>{
   assert.equal(weatherFeedVerificationRequired('staging','preflight'),false);
