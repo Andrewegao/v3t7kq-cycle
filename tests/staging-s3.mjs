@@ -29,6 +29,24 @@ test('only 404 is absence; permission errors are redacted, not treated as missin
     else await assert.rejects(io.get(bucket,'releases/current.json'),e=>!e.message.includes('PRIVATE'));
   }
 });
+test('read-only requests retry bounded transient R2 failures while writes never retry',async()=>{
+  const calls={get:0,list:0,put:0},client={send:async command=>{
+    const name=command.constructor.name;
+    if(name==='GetObjectCommand'){
+      calls.get+=1;if(calls.get<3)throw {$metadata:{httpStatusCode:503},message:'PRIVATE'};return obj('abc');
+    }
+    if(name==='ListObjectsV2Command'){
+      calls.list+=1;if(calls.list<2)throw {$metadata:{httpStatusCode:429},message:'PRIVATE'};
+      return {Contents:[{Key:'releases/a/one',Size:3}]};
+    }
+    calls.put+=1;throw {$metadata:{httpStatusCode:503},message:'PRIVATE'};
+  }};
+  const io=createStagingS3(env,client,{pause:async()=>{}});
+  assert.equal((await io.hashObject(bucket,'releases/current.json',{maxBytes:3})).bytes,3);
+  assert.equal((await io.list(bucket,'releases/a/',{maxObjects:1})).length,1);
+  await assert.rejects(io.put(bucket,'releases/current.json','{}',{ifMatch:'"old"'}),e=>e.code==='S3_TRANSIENT'&&!e.message.includes('PRIVATE'));
+  assert.deepEqual(calls,{get:3,list:2,put:1});
+});
 test('CAS writes have exact bucket, key, metadata and precondition; no credential-chain fallback',async()=>{
   const commands=[];const io=createStagingS3(env,{send:async c=>{commands.push(c);return {ETag:'"new"'};}});
   await io.put(bucket,'catalogs/current.json','{}',{ifMatch:'"old"',customMetadata:{'activation-id':'123-1'}});

@@ -19,25 +19,38 @@ export function validateObjectMetadata(metadata={}) {
   assert.ok(Buffer.byteLength(JSON.stringify(metadata))<=8192,'metadata exceeds budget');
 }
 
-export function createStagingS3(env, injectedClient) {
+const RETRYABLE_READ_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+export function createStagingS3(env, injectedClient, { pause = delay } = {}) {
   assert.equal(env.STAGING_R2_ACCOUNT_ID, ACCOUNT);
   assert.ok(env.STAGING_R2_WRITE_ACCESS_KEY_ID && env.STAGING_R2_WRITE_SECRET_ACCESS_KEY, 'staging S3 credential required');
   const client = injectedClient ?? new S3Client({ region: 'auto', endpoint: `https://${ACCOUNT}.r2.cloudflarestorage.com`,
     forcePathStyle: true, maxAttempts: 1,
     requestChecksumCalculation: 'WHEN_REQUIRED', responseChecksumValidation: 'WHEN_REQUIRED',
     credentials: { accessKeyId: env.STAGING_R2_WRITE_ACCESS_KEY_ID, secretAccessKey: env.STAGING_R2_WRITE_SECRET_ACCESS_KEY } });
-  async function send(command, allowMissing = false) {
-    try { return await client.send(command, { abortSignal: AbortSignal.timeout(45_000) }); }
-    catch (error) {
-      if (allowMissing && error?.$metadata?.httpStatusCode === 404) return null;
-      const failure = new Error(error?.$metadata?.httpStatusCode === 412 ? 'staging object CAS conflict' : 'staging S3 request failed');
-      failure.code = error?.$metadata?.httpStatusCode === 412 ? 'CAS_CONFLICT' : 'S3_FAILURE';
-      throw failure; // Never echo SDK requests/credentials/remote error bodies.
+  async function send(command, { allowMissing = false, readOnly = false } = {}) {
+    const attempts = readOnly ? 4 : 1;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try { return await client.send(command, { abortSignal: AbortSignal.timeout(45_000) }); }
+      catch (error) {
+        const status = error?.$metadata?.httpStatusCode;
+        if (allowMissing && status === 404) return null;
+        const retryable = RETRYABLE_READ_STATUS.has(status) || Boolean(error?.$retryable) ||
+          error?.name === 'AbortError' || error?.name === 'TimeoutError';
+        if (readOnly && retryable && attempt < attempts) {
+          await pause(Math.min(2_000, 200 * 2 ** (attempt - 1)));
+          continue;
+        }
+        const failure = new Error(status === 412 ? 'staging object CAS conflict' : 'staging S3 request failed');
+        failure.code = status === 412 ? 'CAS_CONFLICT' : retryable ? 'S3_TRANSIENT' : 'S3_FAILURE';
+        throw failure; // Never echo SDK requests/credentials/remote error bodies.
+      }
     }
   }
   async function read(bucket, key, maxBytes, collect) {
     assert.ok(Number.isSafeInteger(maxBytes) && maxBytes > 0 && maxBytes <= 40 * 1024 ** 3);
-    const object = await send(new GetObjectCommand(stagingKey(bucket, key)), true);
+    const object = await send(new GetObjectCommand(stagingKey(bucket, key)), { allowMissing: true, readOnly: true });
     if (!object) return null;
     const chunks = [], digest = createHash('sha256'); let bytes = 0;
     try {
@@ -72,7 +85,7 @@ export function createStagingS3(env, injectedClient) {
       stagingKey(bucket, prefix); assert.ok(Number.isSafeInteger(maxObjects) && maxObjects > 0 && maxObjects <= 100_001);
       const objects = [], tokens = new Set(); let token;
       do {
-        const page = await send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: token, MaxKeys: 1000 }));
+        const page = await send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: token, MaxKeys: 1000 }), { readOnly: true });
         for (const item of page.Contents ?? []) {
           stagingKey(bucket, item.Key); assert.ok(item.Key.startsWith(prefix));
           assert.ok(Number.isSafeInteger(item.Size) && item.Size >= 0);
