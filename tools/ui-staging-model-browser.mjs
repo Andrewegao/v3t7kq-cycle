@@ -44,6 +44,13 @@ export function browserCandidateReady(state,expected){
     &&state?.selectionSha256===expected.selectionSha256&&state?.modelButtonCount===1
     &&state?.modelButtonVisible===true&&state?.lit===true&&state?.bootSettled===true&&state?.atmosReady===true;
 }
+const INDEPENDENT_POINT_SOURCES=new Set(['ECMWF IFS 0.25°','NOAA GFS 0.25°','WeatherX Fusion','Open-Meteo fallback']);
+export function validateIndependentPointSource(copy,source,mapModel){
+  assert.equal(copy,'Point forecast is separate from the map layer.','regional map model must retain the independent point forecast');
+  assert.ok(INDEPENDENT_POINT_SOURCES.has(source),`unexpected independent point source: ${source}`);
+  assert.notEqual(source.trim().toLowerCase(),mapModel.trim().toLowerCase(),'regional map model cannot masquerade as a qualified point/fusion source');
+  return {kind:'independent-global',source,mapModelFusionEligible:false};
+}
 const LABELS={icon:'ICON',hrdps:'HRDPS',nam:'NAM','nam-hi':'NAM HI','nam-ak':'NAM AK','hrrr-ak':'HRRR AK','arome-antilles':'AROME ANT'};
 const DECK={temp:'temp-raster',wind:'wind-field',mslp:'mslp-fill'};
 async function get(url,max=1024*1024){
@@ -211,9 +218,16 @@ export async function runMatrix(env){
         await drainResponses();assert.equal(network.length,0,network.join(';'));
         for(const path of fieldPaths)assert.ok(observed.has(path),'selected field bytes were not verified');
         await page.locator('.maplibregl-canvas').first().click({position:{x:650,y:400}});
-        const card=page.locator('.datalens .dl-card');await card.waitFor({state:'visible',timeout:15000});const text=await card.innerText();
-        assert.match(text,/verified point forecast.*not yet published/i,'unqualified model must explicitly abstain from point/fusion issuance');assert.ok(text.includes(entry.model.toUpperCase()));
-        await page.evaluate(()=>window.__atmos.store.getState().select(null));layers.push({field,changedRatio:changed,point:'explicit-unavailable',fusionEligible:false});
+        const card=page.locator('.datalens .dl-card');await card.waitFor({state:'visible',timeout:15000});
+        const independent=card.locator('[data-testid="independent-point-source"]');await independent.waitFor({state:'visible',timeout:15000});
+        await page.waitForFunction(sources=>{const label=document.querySelector('[data-testid="independent-point-source"] small')?.textContent?.trim();
+          return sources.includes(label??'');},[...INDEPENDENT_POINT_SOURCES],{timeout:30000});
+        const point=validateIndependentPointSource(
+          (await independent.locator('span').innerText()).trim(),
+          (await independent.locator('small').innerText()).trim(),
+          entry.model,
+        );
+        await page.evaluate(()=>window.__atmos.store.getState().select(null));layers.push({field,changedRatio:changed,point});
       }
       await ensureLayer('wind');await settled(entry,'wind',cursor);
       const domain=await page.evaluate(g=>{const a=window.__atmos;let good=null;for(const x of [.25,.5,.75])for(const y of [.25,.5,.75]){

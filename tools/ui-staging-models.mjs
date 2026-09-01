@@ -100,7 +100,8 @@ export function validateBrowserReceipt(bytes,bundle,context,now=Date.now()){
   assert.ok(Array.isArray(r.models));assert.equal(r.models.length,bundle.entries.length+(bundle.entries.length>1?1:0),'browser receipt model cardinality changed');
   for(const entry of bundle.entries){const matches=r.models.filter(x=>x?.model===entry.model);assert.equal(matches.length,1);
     const m=matches[0];assert.equal(m.catalogId,entry.catalogId);assert.equal(m.init,entry.init);assert.equal(m.selected?.model,entry.model);assert.equal(m.selected?.base,entry.manifestPath.slice(0,-'manifest.json'.length));
-    assert.deepEqual(m.layers?.map(x=>x.field),['temp','wind','mslp']);for(const layer of m.layers){assert.ok(layer.changedRatio>.01);assert.equal(layer.point,'explicit-unavailable');assert.equal(layer.fusionEligible,false);}}
+    assert.deepEqual(m.layers?.map(x=>x.field),['temp','wind','mslp']);for(const layer of m.layers){assert.ok(layer.changedRatio>.01);
+      assert.equal(layer.point?.kind,'independent-global');assert.ok(['ECMWF IFS 0.25°','NOAA GFS 0.25°','WeatherX Fusion','Open-Meteo fallback'].includes(layer.point?.source));assert.equal(layer.point?.mapModelFusionEligible,false);}}
   if(bundle.entries.length>1){const sequence=r.models.at(-1),first=bundle.entries[0].model,last=bundle.entries.at(-1).model;
     assert.deepEqual(sequence,{rapidModelSequence:[first,last],finalModel:last});}
   return r;
