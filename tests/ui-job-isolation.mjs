@@ -5,6 +5,10 @@ import { target } from '../tools/ui-release.mjs';
 const read=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
 test('candidate execution is on a separate hosted runner with no deployment environment or keys',()=>{
   const wf=read('.github/workflows/ui-staging.yml');
+  const profile=wf.slice(wf.indexOf('\n  profile:\n'),wf.indexOf('\n  build:\n'));
+  assert.match(profile,/environment:\s*\n\s*name: ui-staging/);
+  assert.match(profile,/UI_STAGING_MODEL_SELECTION_APPROVED_SHA256/);
+  assert.doesNotMatch(profile,/CLOUDFLARE|UI_(?:BUILD_PRIVATE_KEY|BUILD_PUBLIC_KEY|CANDIDATE_KEY|STAGING_PAGES_TOKEN)|STAGING_R2|SHARED_R2|ui-release\.mjs (?:build|deploy|retain)/);
   assert.ok(wf.includes('\n  build:\n'),'separate candidate build job required');
   const build=wf.slice(wf.indexOf('\n  build:\n'),wf.indexOf('\n  qualify:\n'));
   assert.match(build,/runs-on: ubuntu-latest/);
@@ -13,7 +17,7 @@ test('candidate execution is on a separate hosted runner with no deployment envi
   assert.match(build,/ui-release\.mjs build/);
   assert.match(build,/ui-release\.mjs pack-build/);
   const qualify=wf.slice(wf.indexOf('\n  qualify:\n'));
-  assert.match(qualify,/needs: build/);
+  assert.match(qualify,/needs: \[profile, build\]/);
   assert.match(qualify,/runs-on: ubuntu-latest/);
   assert.match(qualify,/name: ui-staging/);
   assert.doesNotMatch(qualify,/path: atmos|prefix atmos|working-directory: atmos|inputs\.atmos_sha.*\n.*ssh-key/);

@@ -9,9 +9,9 @@ on:
         required: true
         type: string
       model_selection_sha256:
-        description: Reviewed staging-only selection digest, or none for ordinary staging
+        description: approved reuses the protected staging selection; none explicitly selects baseline; an exact digest must match approval
         required: false
-        default: none
+        default: approved
         type: string
 permissions:
   contents: read
@@ -21,8 +21,33 @@ concurrency:
   group: weatherx-ui-staging
   cancel-in-progress: false
 jobs:
+  profile:
+    # Resolve only the protected public-metadata approval. This job receives no
+    # Pages, Worker, storage, candidate, production or deployment credential.
+    permissions:
+      contents: read
+    environment:
+      name: ui-staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      model_selection_sha256: ${{ steps.selection.outputs.model_selection_sha256 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Resolve an approved staging profile or explicit baseline opt-out
+        id: selection
+        env:
+          REQUESTED_SELECTION: ${{ inputs.model_selection_sha256 }}
+          APPROVED_SELECTION: ${{ vars.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256 }}
+        run: |
+          selection="$(node --input-type=module -e "import {resolveSelectionRequest} from './cycle/tools/ui-staging-models.mjs'; console.log(resolveSelectionRequest(process.env.REQUESTED_SELECTION,process.env.APPROVED_SELECTION));")"
+          printf 'model_selection_sha256=%s\n' "$selection" >> "$GITHUB_OUTPUT"
   build:
     # No deployment environment, CF token, decryption key or promotion-signing key.
+    needs: profile
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -31,7 +56,7 @@ jobs:
       UI_BUILDS_ENABLED: ${{ vars.UI_BUILDS_ENABLED }}
       UI_BUILD_PUBLIC_KEY: ${{ vars.UI_BUILD_PUBLIC_KEY }}
       ATMOS_SHA: ${{ inputs.atmos_sha }}
-      MODEL_SELECTION_SHA256: ${{ inputs.model_selection_sha256 }}
+      MODEL_SELECTION_SHA256: ${{ needs.profile.outputs.model_selection_sha256 }}
       VITE_FUSION_CALIBRATION_ENABLED: ${{ vars.FUSION_CALIBRATION_RUNTIME_ENABLED == 'true' && '1' || '0' }}
       VITE_PLATFORM_ACCOUNT: '0'
       VITE_MODEL_EXPANSION_QUALIFICATION: '0'
@@ -48,7 +73,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Andrewegao/atmos
-          ref: ${{ inputs.model_selection_sha256 == 'none' && 'dbc97a26bc239398ffa9ec157a094148961b6451' || '58eab1895966c547227bf8440565b4c94a7a0c89' }}
+          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && 'dbc97a26bc239398ffa9ec157a094148961b6451' || '58eab1895966c547227bf8440565b4c94a7a0c89' }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
           path: control
@@ -109,7 +134,7 @@ jobs:
           retention-days: 1
           compression-level: 0
   qualify:
-    needs: build
+    needs: [profile, build]
     # A fresh runner executes pinned controller code only, never candidate source.
     environment:
       name: ui-staging
@@ -121,7 +146,7 @@ jobs:
       UI_ISOLATION_APPROVED: ${{ vars.UI_ISOLATION_APPROVED }}
       UI_DEPLOYMENT_HOLD_UNTIL: ${{ vars.UI_DEPLOYMENT_HOLD_UNTIL }}
       ATMOS_SHA: ${{ inputs.atmos_sha }}
-      MODEL_SELECTION_SHA256: ${{ inputs.model_selection_sha256 }}
+      MODEL_SELECTION_SHA256: ${{ needs.profile.outputs.model_selection_sha256 }}
       UI_STAGING_MODEL_SELECTION_APPROVED_SHA256: ${{ vars.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -130,7 +155,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Andrewegao/atmos
-          ref: ${{ inputs.model_selection_sha256 == 'none' && 'dbc97a26bc239398ffa9ec157a094148961b6451' || '58eab1895966c547227bf8440565b4c94a7a0c89' }}
+          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && 'dbc97a26bc239398ffa9ec157a094148961b6451' || '58eab1895966c547227bf8440565b4c94a7a0c89' }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
           path: control
