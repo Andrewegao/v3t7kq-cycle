@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {BASELINE_PROFILE,MODELS,GRIDS,variables,displayPaths,digest,canonical,profileFor,validateProfile,requireProductionProfile,validateSelection,readSelection,validateCandidateSelection,requireStagingApproval,browserEnvironment,validateBrowserReceipt} from '../tools/ui-staging-models.mjs';
-import {browserCandidateReady,discardedResponseBody,layerActivationNeeded,matrixProofPlan,pixelDifference,responseBodyOrFallback,responseCaptureNeeded,validateFetchedObject} from '../tools/ui-staging-model-browser.mjs';
+import {browserCandidateReady,discardedResponseBody,layerActivationNeeded,matrixProofPlan,pixelDifference,responseBodyOrFallback,responseCaptureNeeded,validateFetchedObject,validateIndependentPointSource} from '../tools/ui-staging-model-browser.mjs';
 import {createCandidate,hash,eligibleRun,REPOSITORY,CONTROL_SHA,STAGING_CONTROL_SHA,controlShaFor} from '../tools/ui-candidate.mjs';
 import {eligibleBuild} from '../tools/ui-build-transfer.mjs';
 import {publicBuildEnvironment,requiredSourceGuard,weatherFeedVerificationRequired} from '../tools/ui-release.mjs';
@@ -114,6 +114,14 @@ test('model matrix ensures an active layer without toggling an already-visible l
   assert.equal(layerActivationNeeded({wind:{visible:false}},'wind'),true);
   assert.equal(layerActivationNeeded({},'wind'),true);
 });
+test('regional map layers retain an independently attributed global point forecast without joining fusion',()=>{
+  for(const source of ['ECMWF IFS 0.25°','NOAA GFS 0.25°','WeatherX Fusion','Open-Meteo fallback'])assert.deepEqual(
+    validateIndependentPointSource('Point forecast is separate from the map layer.',source,'nam'),
+    {kind:'independent-global',source,mapModelFusionEligible:false},
+  );
+  assert.throws(()=>validateIndependentPointSource('Verified point forecast not yet published.','ECMWF IFS 0.25°','nam'),/retain the independent point forecast/);
+  assert.throws(()=>validateIndependentPointSource('Point forecast is separate from the map layer.','NAM','nam'),/unexpected independent point source/);
+});
 test('model byte proof is armed for every exact field frame before performance warming can run',()=>{
   const entries=['icon','nam'].map((model,i)=>entry(model,i)),plan=matrixProofPlan(entries,NOW);
   assert.equal(plan.rows.length,2);assert.equal(plan.required.size,12);
@@ -153,7 +161,7 @@ test('staging can bootstrap an old site but every uploaded candidate must pass w
 });
 test('browser receipt proves each selected model plus the exact latest-selection race',()=>{
   const body=selection(['icon','nam']),bundle=validateSelection(body,digest(body),NOW),selected=e=>({model:e.model,init:e.init,base:e.manifestPath.slice(0,-'manifest.json'.length)});
-  const model=e=>({model:e.model,catalogId:e.catalogId,init:e.init,selected:selected(e),layers:['temp','wind','mslp'].map(field=>({field,changedRatio:.02,point:'explicit-unavailable',fusionEligible:false})),domain:{}});
+  const model=e=>({model:e.model,catalogId:e.catalogId,init:e.init,selected:selected(e),layers:['temp','wind','mslp'].map(field=>({field,changedRatio:.02,point:{kind:'independent-global',source:'ECMWF IFS 0.25°',mapModelFusionEligible:false}})),domain:{}});
   const receipt={schemaVersion:1,origin:'https://staging.weatherx.org',sourceSha:SHA,releaseId:`git-${SHA.slice(0,12)}-run-123`,selectionSha256:digest(body),qualifiedAt:new Date(NOW).toISOString(),models:[...bundle.entries.map(model),{rapidModelSequence:['icon','nam'],finalModel:'nam'}],verifiedObjectCount:12};
   const bytes=Buffer.from(JSON.stringify(receipt));validateBrowserReceipt(bytes,bundle,{sourceSha:SHA,releaseId:receipt.releaseId,selectionSha256:digest(body)},NOW);
   for(const mutate of [r=>r.models.pop(),r=>r.models.at(-1).finalModel='icon',r=>r.verifiedObjectCount=11]){const bad=structuredClone(receipt);mutate(bad);assert.throws(()=>validateBrowserReceipt(Buffer.from(JSON.stringify(bad)),bundle,{sourceSha:SHA,releaseId:receipt.releaseId,selectionSha256:digest(body)},NOW));}
