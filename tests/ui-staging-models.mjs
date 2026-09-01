@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {BASELINE_PROFILE,MODELS,GRIDS,variables,displayPaths,digest,canonical,profileFor,validateProfile,requireProductionProfile,validateSelection,readSelection,validateCandidateSelection,requireStagingApproval,browserEnvironment,validateBrowserReceipt} from '../tools/ui-staging-models.mjs';
-import {browserCandidateReady,discardedResponseBody,layerActivationNeeded,pixelDifference,responseBodyOrFallback,responseCaptureNeeded,validateFetchedObject} from '../tools/ui-staging-model-browser.mjs';
+import {browserCandidateReady,discardedResponseBody,layerActivationNeeded,matrixProofPlan,pixelDifference,responseBodyOrFallback,responseCaptureNeeded,validateFetchedObject} from '../tools/ui-staging-model-browser.mjs';
 import {createCandidate,hash,eligibleRun,REPOSITORY} from '../tools/ui-candidate.mjs';
 import {eligibleBuild} from '../tools/ui-build-transfer.mjs';
 import {publicBuildEnvironment,requiredSourceGuard,weatherFeedVerificationRequired} from '../tools/ui-release.mjs';
@@ -111,6 +111,17 @@ test('model matrix ensures an active layer without toggling an already-visible l
   assert.equal(layerActivationNeeded({wind:{visible:true}},'wind'),false);
   assert.equal(layerActivationNeeded({wind:{visible:false}},'wind'),true);
   assert.equal(layerActivationNeeded({},'wind'),true);
+});
+test('model byte proof is armed for every exact field frame before performance warming can run',()=>{
+  const entries=['icon','nam'].map((model,i)=>entry(model,i)),plan=matrixProofPlan(entries,NOW);
+  assert.equal(plan.rows.length,2);assert.equal(plan.required.size,12);
+  const icon=plan.rows[0];assert.equal(icon.lead,9);assert.equal(icon.cursor,Date.parse('2026-08-31T21:30:00Z'));
+  assert.deepEqual(icon.paths.temp,[
+    `/data/_catalog/${entries[0].catalogId}/icon/runs/${INIT}/temp/009.png`,
+    `/data/_catalog/${entries[0].catalogId}/icon/runs/${INIT}/temp/010.png`,
+  ]);
+  assert.equal(responseCaptureNeeded(plan.required,new Map(),new Set(),icon.paths.temp[0]),true,'an early warm response must already be captured');
+  assert.throws(()=>matrixProofPlan(entries,NOW+41*3600000),/stale\/future model selection/);
 });
 test('browser byte proof ignores stale responses, captures once, and narrowly recovers a discarded CDP body',async()=>{
   const path='/data/_catalog/current/temp/001.png',required=new Set([path]),observed=new Map(),capturing=new Set();

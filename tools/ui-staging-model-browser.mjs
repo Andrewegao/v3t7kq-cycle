@@ -19,6 +19,15 @@ export function pixelDifference(on,off){
 }
 export function layerActivationNeeded(layers,field){return layers?.[field]?.visible!==true;}
 export function responseCaptureNeeded(required,observed,capturing,path){return required.has(path)&&!observed.has(path)&&!capturing.has(path);}
+export function matrixProofPlan(entries,nowMs){
+  const rows=entries.map(entry=>{
+    const init=cycleTime(entry.init,nowMs),lead=Math.ceil((nowMs-init)/3600000)+1;assert.ok(lead>=0&&lead+1<=48);
+    const paths=Object.fromEntries(['temp','wind','mslp'].map(field=>[field,[lead,lead+1].map(i=>`/data/_catalog/${entry.catalogId}/${entry.model}/runs/${entry.init}/${field}/${String(i).padStart(3,'0')}.png`)]));
+    return {model:entry.model,init,lead,cursor:init+(lead+.5)*3600000,paths};
+  });
+  const required=new Set(rows.flatMap(row=>Object.values(row.paths).flat()));assert.equal(required.size,entries.length*6);
+  return {rows,required};
+}
 const DISCARDED_BODY='Protocol error (Network.getResponseBody): No data found for resource with given identifier';
 export function discardedResponseBody(error){return String(error).endsWith(DISCARDED_BODY);}
 export async function responseBodyOrFallback(response,fallback){
@@ -48,7 +57,11 @@ export async function runMatrix(env){
   const {chromium}=await import(pathToFileURL(resolve(env.UI_CONTROL_ROOT,'app/node_modules/playwright/index.mjs')));
   const {PNG}=await import(pathToFileURL(resolve(env.UI_CONTROL_ROOT,'app/node_modules/pngjs/lib/png.js')));
   const browser=await chromium.launch({args:['--enable-gpu','--ignore-gpu-blocklist']});
-  const results=[],errors=[],network=[],observed=new Map(),required=new Set(),capturing=new Set(),pending=new Set();
+  // Pre-arm every exact field/frame the matrix will prove before the page can warm any of them.
+  // A valid performance warm may fetch a later-selected field before its row begins; arming lazily
+  // discarded that already-verified response and made a healthy painted field look unverified.
+  const proofPlan=matrixProofPlan(bundle.entries,Date.now()),plans=new Map(proofPlan.rows.map(row=>[row.model,row]));
+  const results=[],errors=[],network=[],observed=new Map(),required=proofPlan.required,capturing=new Set(),pending=new Set();
   const context=await browser.newContext({viewport:{width:1440,height:900},locale:'en-US'});
   await context.addInitScript(()=>{
     sessionStorage.setItem('atmos-boot-shown','1');localStorage.setItem('atmos-ai-code','central');localStorage.setItem('atmos-ai-scope','central');
@@ -172,12 +185,10 @@ export async function runMatrix(env){
       await page.evaluate(()=>{const s=window.__atmos.store.getState();s.setPlaying(false);s.setParticlesOverlay(false);});
     }
     for(const entry of bundle.entries){
-      validateSelection(bytes,env.UI_SELECTION_SHA256);const init=cycleTime(entry.init),lead=Math.ceil((Date.now()-init)/3600000)+1,cursor=init+(lead+.5)*3600000;assert.ok(lead+1<=48);
-      const requiredFor=field=>[lead,lead+1].map(i=>`/data/_catalog/${entry.catalogId}/${entry.model}/runs/${entry.init}/${field}/${String(i).padStart(3,'0')}.png`);
+      validateSelection(bytes,env.UI_SELECTION_SHA256);const {cursor,paths}=plans.get(entry.model);const requiredFor=field=>paths[field];
       // activateLayer is intentionally a toggle: calling it when wind is already visible clears
       // every weather layer and removes the model selector. The matrix needs idempotent "ensure",
       // not a second user toggle, between model rows.
-      for(const path of requiredFor('wind'))required.add(path);
       await ensureLayer('wind');await openModel(entry.model);
       await page.waitForFunction(model=>window.__atmos.store.getState().manifest?.model===model,entry.model,{timeout:45000});
       await page.evaluate(cursor=>{window.__stagingGateCommits=[];const s=window.__atmos.store.getState();s.select(null);s.setCursor(cursor);s.setPlaying(false);s.setParticlesOverlay(false);},cursor);
@@ -188,7 +199,7 @@ export async function runMatrix(env){
       }
       const layers=[];
       for(const field of ['temp','wind','mslp']){
-        const fieldPaths=requiredFor(field);for(const path of fieldPaths)required.add(path);
+        const fieldPaths=requiredFor(field);
         await page.evaluate(()=>{window.__stagingGateCommits=[];});await ensureLayer(field);await settled(entry,field,cursor);
         const before=await snapshot(),clip={x:300,y:160,width:650,height:470},on=PNG.sync.read(await page.screenshot({clip}));
         const opacity=await page.evaluate(field=>{const s=window.__atmos.store.getState(),v=s.layers[field].opacity;s.setLayerOpacity(field,0);return v;},field);
