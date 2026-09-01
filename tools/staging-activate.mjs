@@ -284,12 +284,18 @@ export async function activatePrepared(ctx, io, { validatePoints, validateServin
   const [oldReleaseObject, oldCatalogPointerObject] = await check('current-pointers-read', () => Promise.all(POINTERS.map(key => get(io, key))));
   // Refuse before any write if the transport cannot round-trip prior metadata.
   await check('restore-metadata-preflight', async () => { for (const previous of [oldReleaseObject, oldCatalogPointerObject]) await io.validateRestore(previous); });
-  const oldRelease = parse(oldReleaseObject), oldPointer = parse(oldCatalogPointerObject);
-  identifier(oldRelease.releaseId); identifier(oldPointer.catalogId);
-  const oldManifest = parse(await check('current-manifest-read', () => get(io, `releases/${oldRelease.releaseId}/manifest.json`)));
+  const { oldRelease, oldPointer } = await check('current-pointers-validation', () => {
+    const release = parse(oldReleaseObject), pointer = parse(oldCatalogPointerObject);
+    identifier(release.releaseId); identifier(pointer.catalogId);
+    return { oldRelease: release, oldPointer: pointer };
+  });
+  const oldManifestObject = await check('current-manifest-read', () => get(io, `releases/${oldRelease.releaseId}/manifest.json`));
+  const oldManifest = await check('current-manifest-validation', () => parse(oldManifestObject));
   const oldCatalogObject = await check('current-catalog-read', () => get(io, `catalogs/snapshots/${oldPointer.catalogId}.json`));
-  assert.equal(hash(oldCatalogObject.body), oldPointer.catalogSha256, 'previous catalog integrity failure');
-  const oldCatalog = parse(oldCatalogObject);
+  const oldCatalog = await check('current-catalog-validation', () => {
+    assert.equal(hash(oldCatalogObject.body), oldPointer.catalogSha256, 'previous catalog integrity failure');
+    return parse(oldCatalogObject);
+  });
   await check('non-regression', () => assertNonRegression({ release: oldRelease, manifest: oldManifest, catalogPointer: oldPointer, catalog: oldCatalog }, prepared));
   const serving = await check('serving-catalog-build', () => buildServingCatalog(ctx, oldPointer, oldCatalog, prepared.catalog, now()));
   // R2 ETags may identify content, not metadata revisions. The staging-only body
@@ -300,24 +306,36 @@ export async function activatePrepared(ctx, io, { validatePoints, validateServin
     return { ...pointer, stagingActivation: { id: ctx.activationId, sourceSha: ctx.sourceSha } };
   });
   await check('serving-pointer-validation', () => validateServingPointers({ release: stagedPointers[0], catalogPointer: stagedPointers[1], catalog: serving.catalog }));
-  const previous = [oldReleaseObject, oldCatalogPointerObject];
-  const next = [prepared.releaseObject, prepared.catalogPointerObject].map((value, index) => ({ ...value, body: json(stagedPointers[index]) }));
-  const intent = { schemaVersion: 1, activationId: ctx.activationId, sourceSha: ctx.sourceSha, selection: ctx.selection,
-    servingCatalog: serving.pointer, receiptSha256: ctx.receiptSha256, pointers: POINTERS.map((key, index) => ({ key, previous: stored(previous[index]), next: stored(next[index]),
-      previousSha256: hash(previous[index].body), nextSha256: hash(next[index].body) })) };
-  const intentBytes = json(intent), intentSha256 = hash(intentBytes);
-  for (const body of [intentBytes, serving.body, ...next.map(p => p.body)])
-    assert.ok(body.length <= WRITE_LIMIT, 'activation control write exceeds budget');
+  const { intent, intentBytes, intentSha256 } = await check('intent-construction', () => {
+    const previous = [oldReleaseObject, oldCatalogPointerObject];
+    const next = [prepared.releaseObject, prepared.catalogPointerObject].map((value, index) => ({ ...value, body: json(stagedPointers[index]) }));
+    const value = { schemaVersion: 1, activationId: ctx.activationId, sourceSha: ctx.sourceSha, selection: ctx.selection,
+      servingCatalog: serving.pointer, receiptSha256: ctx.receiptSha256, pointers: POINTERS.map((key, index) => ({ key, previous: stored(previous[index]), next: stored(next[index]),
+        previousSha256: hash(previous[index].body), nextSha256: hash(next[index].body) })) };
+    const bytes = json(value);
+    for (const body of [bytes, serving.body, ...next.map(pointer => pointer.body)])
+      assert.ok(body.length <= WRITE_LIMIT, 'activation control write exceeds budget');
+    return { intent: value, intentBytes: bytes, intentSha256: hash(bytes) };
+  });
   const snapshotKey = `catalogs/snapshots/${serving.pointer.catalogId}.json`;
-  const snapshot = await get(io, snapshotKey, false);
+  const snapshot = await check('immutable-snapshot-read', () => get(io, snapshotKey, false));
   if (snapshot) {
-    assert.equal(hash(snapshot.body), serving.pointer.catalogSha256); assert.equal(snapshot.customMetadata.sha256, serving.pointer.catalogSha256, 'existing immutable snapshot lacks verified metadata');
+    await check('immutable-snapshot-validation', () => {
+      assert.equal(hash(snapshot.body), serving.pointer.catalogSha256);
+      assert.equal(snapshot.customMetadata.sha256, serving.pointer.catalogSha256, 'existing immutable snapshot lacks verified metadata');
+    });
   } else {
-    await put(io, snapshotKey, serving.body, { ifNoneMatch: '*', customMetadata: { sha256: serving.pointer.catalogSha256 }, httpMetadata: { contentType: 'application/json' } });
-    const saved = await get(io, snapshotKey); assert.equal(hash(saved.body), serving.pointer.catalogSha256); assert.equal(saved.customMetadata.sha256, serving.pointer.catalogSha256);
+    await check('immutable-snapshot-create-readback', async () => {
+      await put(io, snapshotKey, serving.body, { ifNoneMatch: '*', customMetadata: { sha256: serving.pointer.catalogSha256 }, httpMetadata: { contentType: 'application/json' } });
+      const saved = await get(io, snapshotKey);
+      assert.equal(hash(saved.body), serving.pointer.catalogSha256);
+      assert.equal(saved.customMetadata.sha256, serving.pointer.catalogSha256);
+    });
   }
-  await put(io, `${root(ctx)}intent.json`, intentBytes, { ifNoneMatch: '*' });
-  assert.equal(hash((await get(io, `${root(ctx)}intent.json`)).body), intentSha256, 'durable intent readback failed');
+  await check('durable-intent-create-readback', async () => {
+    await put(io, `${root(ctx)}intent.json`, intentBytes, { ifNoneMatch: '*' });
+    assert.equal(hash((await get(io, `${root(ctx)}intent.json`)).body), intentSha256, 'durable intent readback failed');
+  });
   let journalEtag;
   const journal = async value => { journalEtag = await put(io, `${root(ctx)}journal.json`, json({ schemaVersion: 1, intentSha256, ...value }),
     journalEtag ? { ifMatch: journalEtag } : { ifNoneMatch: '*' }); };

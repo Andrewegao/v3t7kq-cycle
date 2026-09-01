@@ -236,8 +236,11 @@ test('whole and component non-regression reject newer previous authorities', asy
 test('existing immutable snapshot requires exact bytes and hash metadata, never overwritten to repair it', async () => {
   for (const [body, metadata] of [[Buffer.from('wrong'), {}], [null, {}], [null, { sha256: 'f'.repeat(64) }]]) {
     const f = fixture(); const candidate = buildServingCatalog(f.ctx, currentJSON(f, 'catalogs/current.json'), f.oldCatalog, f.catalog, now);
+    const events = [];
     f.save(DATA, 'catalogs/snapshots/37-staging-100-1.json', body ?? candidate.body, metadata);
-    await assert.rejects(activatePrepared(f.ctx, f.io, f.deps)); assert.equal(f.writes.length, 0);
+    await assert.rejects(activatePrepared(f.ctx, f.io, { ...f.deps, report: event => events.push(event) }));
+    assert.deepEqual(events.at(-1), { stage: 'activation:immutable-snapshot-validation', state: 'failed', kind: 'assertion' });
+    assert.equal(f.writes.length, 0);
   }
 });
 test('oversized durable intent and invalid staging lineage fail before the first write', async () => {
@@ -251,7 +254,11 @@ test('oversized durable intent and invalid staging lineage fail before the first
     const old = currentJSON(f, 'catalogs/current.json'), catalog = clone(f.oldCatalog); catalog.rollbackEpoch = -1;
     old.catalogSha256 = hash(encode(catalog)); f.save(DATA, 'catalogs/current.json', encode(old)); f.save(DATA, 'catalogs/snapshots/36-old.json', encode(catalog));
   }]) {
-    const f = fixture(); mutate(f); await assert.rejects(activatePrepared(f.ctx, f.io, f.deps)); assert.equal(f.writes.length, 0);
+    const f = fixture(), events = []; mutate(f);
+    await assert.rejects(activatePrepared(f.ctx, f.io, { ...f.deps, report: event => events.push(event) }));
+    assert.equal(events.at(-1)?.state, 'failed');
+    assert.ok(['activation:intent-construction', 'activation:non-regression', 'activation:serving-catalog-build'].includes(events.at(-1)?.stage));
+    assert.equal(f.writes.length, 0);
   }
 });
 test('freshness expiring during live verification causes rollback rather than accepting expired data', async () => {
