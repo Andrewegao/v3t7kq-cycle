@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {BASELINE_PROFILE,MODELS,GRIDS,variables,displayPaths,digest,canonical,profileFor,validateProfile,requireProductionProfile,validateSelection,readSelection,validateCandidateSelection,requireStagingApproval,browserEnvironment,validateBrowserReceipt} from '../tools/ui-staging-models.mjs';
-import {browserCandidateReady,layerActivationNeeded,pixelDifference} from '../tools/ui-staging-model-browser.mjs';
+import {browserCandidateReady,layerActivationNeeded,pixelDifference,responseCaptureNeeded} from '../tools/ui-staging-model-browser.mjs';
 import {createCandidate,hash,eligibleRun,REPOSITORY} from '../tools/ui-candidate.mjs';
 import {eligibleBuild} from '../tools/ui-build-transfer.mjs';
 import {publicBuildEnvironment,requiredSourceGuard,weatherFeedVerificationRequired} from '../tools/ui-release.mjs';
@@ -111,6 +111,16 @@ test('model matrix ensures an active layer without toggling an already-visible l
   assert.equal(layerActivationNeeded({wind:{visible:true}},'wind'),false);
   assert.equal(layerActivationNeeded({wind:{visible:false}},'wind'),true);
   assert.equal(layerActivationNeeded({},'wind'),true);
+});
+test('browser byte proof ignores canceled stale-race responses but captures each required object once',()=>{
+  const required=new Set(['/data/_catalog/current/temp/001.png']),observed=new Map(),capturing=new Set();
+  assert.equal(responseCaptureNeeded(required,observed,capturing,'/data/_catalog/stale/temp/001.png'),false);
+  assert.equal(responseCaptureNeeded(required,observed,capturing,'/data/_catalog/current/temp/001.png'),true);
+  capturing.add('/data/_catalog/current/temp/001.png');
+  assert.equal(responseCaptureNeeded(required,observed,capturing,'/data/_catalog/current/temp/001.png'),false);
+  capturing.clear();
+  observed.set('/data/_catalog/current/temp/001.png',DIGEST);
+  assert.equal(responseCaptureNeeded(required,observed,capturing,'/data/_catalog/current/temp/001.png'),false);
 });
 test('staging can bootstrap an old site but every uploaded candidate must pass weather-feed verification',()=>{
   assert.equal(weatherFeedVerificationRequired('staging','preflight'),false);
