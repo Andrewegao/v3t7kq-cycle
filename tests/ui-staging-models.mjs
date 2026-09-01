@@ -6,7 +6,7 @@ import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {BASELINE_PROFILE,MODELS,GRIDS,variables,displayPaths,digest,canonical,profileFor,validateProfile,requireProductionProfile,validateSelection,readSelection,validateCandidateSelection,requireStagingApproval,browserEnvironment,validateBrowserReceipt} from '../tools/ui-staging-models.mjs';
 import {browserCandidateReady,discardedResponseBody,layerActivationNeeded,matrixProofPlan,pixelDifference,responseBodyOrFallback,responseCaptureNeeded,validateFetchedObject} from '../tools/ui-staging-model-browser.mjs';
-import {createCandidate,hash,eligibleRun,REPOSITORY} from '../tools/ui-candidate.mjs';
+import {createCandidate,hash,eligibleRun,REPOSITORY,CONTROL_SHA,STAGING_CONTROL_SHA,controlShaFor} from '../tools/ui-candidate.mjs';
 import {eligibleBuild} from '../tools/ui-build-transfer.mjs';
 import {publicBuildEnvironment,requiredSourceGuard,weatherFeedVerificationRequired} from '../tools/ui-release.mjs';
 
@@ -79,10 +79,12 @@ test('manual staging defaults to baseline and only its protected environment can
 test('build flags select mutually exclusive production or exact staging-experiment release guards',()=>{
   const body=selection(['icon']),sha=digest(body),profile=profileFor(sha),source={bytes:body};
   const staging=publicBuildEnvironment(profile,source,{KEEP:'yes'});
+  assert.equal(controlShaFor(profile),STAGING_CONTROL_SHA);
   assert.equal(staging.ATMOS_PUBLIC_RELEASE,'0');assert.equal(staging.ATMOS_STAGING_EXPERIMENT_RELEASE,'1');
   assert.equal(staging.VITE_MODEL_EXPANSION_QUALIFICATION,'1');assert.equal(staging.VITE_STAGING_MODEL_ADMISSION,'1');
   assert.equal(staging.VITE_STAGING_MODEL_SELECTION_SHA256,sha);assert.equal(staging.VITE_PLATFORM_ACCOUNT,'0');assert.equal(staging.VITE_MODEL_LOCAL_BASE,'');assert.equal(staging.KEEP,'yes');
   const baseline=publicBuildEnvironment(BASELINE_PROFILE,null,{});
+  assert.equal(controlShaFor(BASELINE_PROFILE),CONTROL_SHA);
   assert.equal(baseline.ATMOS_PUBLIC_RELEASE,'1');assert.equal(baseline.ATMOS_STAGING_EXPERIMENT_RELEASE,'0');
   assert.equal(baseline.VITE_MODEL_EXPANSION_QUALIFICATION,'0');assert.equal(baseline.VITE_STAGING_MODEL_ADMISSION,'0');assert.equal(baseline.VITE_STAGING_MODEL_SELECTION_SHA256,'');
   assert.equal(requiredSourceGuard(profile),'164a469189da2c8303c997d4020b3ae20da84cd7');assert.equal(requiredSourceGuard(BASELINE_PROFILE),null);

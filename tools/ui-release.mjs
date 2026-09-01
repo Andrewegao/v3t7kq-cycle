@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, chmodSync, existsSync, unlinkSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { CONTROL_SHA, REPOSITORY, MAX_BYTES, gate, hash, createCandidate, validateCandidate,
+import { controlShaFor, REPOSITORY, MAX_BYTES, gate, hash, createCandidate, validateCandidate,
   readTree, validateFiles, seal, unseal, restore, eligibleRun } from './ui-candidate.mjs';
 import { packBuild, unpackBuild, eligibleBuild } from './ui-build-transfer.mjs';
 import {profileFor,validateProfile,readSelection,requireProductionProfile,requireStagingApproval,SELECTION_ASSET,browserEnvironment,validateBrowserReceipt} from './ui-staging-models.mjs';
@@ -26,10 +26,10 @@ export const pipelineDigest = (profile=profileFor()) => hash(POLICY_FILES.map(p 
 const stateFile = () => resolve(process.env.RUNNER_TEMP, 'ui-candidate.json');
 function save(file, value) { mkdirSync(dirname(file), { recursive: true, mode: 0o700 }); writeFileSync(file, JSON.stringify(value), { mode: 0o600 }); }
 function candidate() { const c = JSON.parse(readFileSync(stateFile())); validateCandidate(c); return c; }
-function controller() {
+function controller(profile = profileFor(process.env.MODEL_SELECTION_SHA256)) {
   assert.equal(git(['rev-parse','HEAD']),process.env.GITHUB_SHA, 'release workflow checkout changed');
   git(['diff','--exit-code','HEAD']);
-  assert.equal(git(['rev-parse','HEAD'], CONTROL), CONTROL_SHA, 'unqualified release controller');
+  assert.equal(git(['rev-parse','HEAD'], CONTROL), controlShaFor(profile), 'unqualified release controller');
   git(['diff','--exit-code','HEAD'], CONTROL);
 }
 async function get(url, token, limit = 2 * 1024 * 1024) {
