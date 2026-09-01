@@ -111,14 +111,15 @@ export function validatePublicModes(origin, health, data) {
   assert.equal(data.ok, true); assert.equal(data.catalogMode, 'serve');
   if (origin === ORIGINS.staging) assert.equal(data.authMode, 'public');
 }
-export function weatherFeedVerificationRequired(stage, phase) {
+export function standaloneWeatherFeedVerificationRequired(stage, phase) {
   assert.ok(Object.hasOwn(ORIGINS, stage), 'unknown UI target');
   assert.ok(['preflight','candidate','rollback'].includes(phase), 'unknown UI verification phase');
-  // Production must already be healthy before a release starts. Staging may be
-  // bootstrapped from an older deployment that predates a newly required feed,
-  // but the uploaded candidate must satisfy the same verifier before it can be
-  // accepted. Rollback must remain able to restore the exact prior deployment.
-  return phase === 'candidate' || (phase === 'preflight' && stage === 'production');
+  // Production must already be healthy before a release starts. Candidate feed
+  // checks run inside verify-platform-production.sh's bounded consecutive soak;
+  // do not append a second single-shot probe that can reject a healthy soak on
+  // one transient upstream response. Rollback verifies the exact prior build's
+  // approved capabilities and therefore never adds a candidate-only feed probe.
+  return phase === 'preflight' && stage === 'production';
 }
 function verifyWeatherFeeds(stage) {
   run('node', [resolve(CONTROL,'ops/release/verify-weather-feeds.mjs'), ORIGINS[stage]]);
@@ -140,7 +141,7 @@ async function preflight(stage) {
   else requireStagingApproval(c,process.env);
   gate(process.env); controller();
   await projectSnapshot(stage); await publicModes(ORIGINS[stage]);
-  if (weatherFeedVerificationRequired(stage, 'preflight')) verifyWeatherFeeds(stage);
+  if (standaloneWeatherFeedVerificationRequired(stage, 'preflight')) verifyWeatherFeeds(stage);
 }
 export function requiredSourceGuard(profile) {
   validateProfile(profile); return profile.stagingOnly ? STAGING_RELEASE_GUARD_SHA : null;
@@ -289,7 +290,6 @@ async function verify(stage) {
   controller(); await projectSnapshot(stage); await publicModes(ORIGINS[stage]);
   if (stage === 'production' && phase !== 'rollback') await exactStaging(candidate());
   run('bash',[resolve(CONTROL,'ops/release/verify-platform-production.sh'),ORIGINS[stage]]);
-  if (weatherFeedVerificationRequired(stage, phase)) verifyWeatherFeeds(stage);
   if (phase !== 'rollback') {
     // Real built-site checks inside the rollback transaction, not after declaring success.
     run('node',[resolve(CONTROL,'app/e2e/weather-lab-only-runtime.mjs')], {cwd:resolve(CONTROL,'app'),env:{...process.env,BASE:ORIGINS[stage]}});
