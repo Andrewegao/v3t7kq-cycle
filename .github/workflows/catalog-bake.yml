@@ -18,7 +18,7 @@ on:
         options: [staging]
 jobs:
   model:
-    environment: production
+    environment: data-staging
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.target == 'staging' }}
     concurrency:
       group: weatherx-component-${{ github.event_name == 'workflow_dispatch' && inputs.target || vars.CATALOG_DEFAULT_TARGET || 'staging' }}-${{ matrix.model }}
