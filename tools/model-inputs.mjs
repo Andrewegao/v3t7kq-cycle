@@ -27,9 +27,10 @@ function cycleTime(init,now){
 }
 export function gate(env,now=Date.now()){
   for(const [k,v] of Object.entries({GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_REPOSITORY:'Andrewegao/v3t7kq-cycle',
-    GITHUB_JOB:'collect',GITHUB_WORKFLOW_REF:'Andrewegao/v3t7kq-cycle/.github/workflows/model-inputs.yml@refs/heads/main',
+    GITHUB_WORKFLOW_REF:'Andrewegao/v3t7kq-cycle/.github/workflows/model-inputs.yml@refs/heads/main',
     GITHUB_EVENT_NAME:'workflow_dispatch',GITHUB_REF:'refs/heads/main',STAGING_DATA_ISOLATION_APPROVED:'true',
     STAGING_MODEL_COLLECTION_ENABLED:'true',STAGING_R2_ACCOUNT_ID:ACCOUNT}))assert.equal(env[k],v,k);
+  assert.ok(['collect','collect-independent'].includes(env.GITHUB_JOB),'GITHUB_JOB');
   assert.match(env.MODEL_SOURCE_SHA??'',COMMIT);assert.equal(env.MODEL_SOURCE_SHA,env.STAGING_MODEL_APPROVED_SOURCE_SHA,'unapproved collector');
   assert.ok(MODELS.includes(env.MODEL_ID),'unqualified model');cycleTime(env.MODEL_INIT,now);
   assert.match(env.GITHUB_RUN_ID??'',/^[1-9]\d{0,19}$/);assert.match(env.GITHUB_RUN_ATTEMPT??'',/^[1-9]\d{0,3}$/);
