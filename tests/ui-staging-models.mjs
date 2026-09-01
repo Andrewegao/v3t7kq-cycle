@@ -8,7 +8,7 @@ import {BASELINE_PROFILE,MODELS,GRIDS,variables,displayPaths,digest,canonical,pr
 import {browserCandidateReady,discardedResponseBody,layerActivationNeeded,matrixProofPlan,pixelDifference,responseBodyOrFallback,responseCaptureNeeded,validateFetchedObject,validateIndependentPointSource} from '../tools/ui-staging-model-browser.mjs';
 import {createCandidate,hash,eligibleRun,REPOSITORY,CONTROL_SHA,STAGING_CONTROL_SHA,controlShaFor} from '../tools/ui-candidate.mjs';
 import {eligibleBuild} from '../tools/ui-build-transfer.mjs';
-import {publicBuildEnvironment,requiredSourceGuard,weatherFeedVerificationRequired} from '../tools/ui-release.mjs';
+import {publicBuildEnvironment,requiredSourceGuard,standaloneWeatherFeedVerificationRequired} from '../tools/ui-release.mjs';
 
 const NOW=Date.parse('2026-08-31T20:00:00Z'),INIT='2026083112',SHA='a'.repeat(40),DIGEST='b'.repeat(64);
 function entry(model,n){
@@ -149,15 +149,15 @@ test('browser byte proof ignores stale responses, captures once, and narrowly re
   assert.throws(()=>validateFetchedObject(path,{...expected,bytes:bytes.length+1},fetched,bytes));assert.throws(()=>validateFetchedObject(path,{...expected,sha256:'0'.repeat(64)},fetched,bytes));
   capturing.clear();observed.set(path,DIGEST);assert.equal(responseCaptureNeeded(required,observed,capturing,path),false);
 });
-test('staging can bootstrap an old site but every uploaded candidate must pass weather-feed verification',()=>{
-  assert.equal(weatherFeedVerificationRequired('staging','preflight'),false);
-  assert.equal(weatherFeedVerificationRequired('production','preflight'),true);
-  assert.equal(weatherFeedVerificationRequired('staging','candidate'),true);
-  assert.equal(weatherFeedVerificationRequired('production','candidate'),true);
-  assert.equal(weatherFeedVerificationRequired('staging','rollback'),false);
-  assert.equal(weatherFeedVerificationRequired('production','rollback'),false);
-  assert.throws(()=>weatherFeedVerificationRequired('preview','preflight'));
-  assert.throws(()=>weatherFeedVerificationRequired('staging','unknown'));
+test('only production preflight adds a standalone weather-feed probe',()=>{
+  assert.equal(standaloneWeatherFeedVerificationRequired('staging','preflight'),false);
+  assert.equal(standaloneWeatherFeedVerificationRequired('production','preflight'),true);
+  assert.equal(standaloneWeatherFeedVerificationRequired('staging','candidate'),false);
+  assert.equal(standaloneWeatherFeedVerificationRequired('production','candidate'),false);
+  assert.equal(standaloneWeatherFeedVerificationRequired('staging','rollback'),false);
+  assert.equal(standaloneWeatherFeedVerificationRequired('production','rollback'),false);
+  assert.throws(()=>standaloneWeatherFeedVerificationRequired('preview','preflight'));
+  assert.throws(()=>standaloneWeatherFeedVerificationRequired('staging','unknown'));
 });
 test('browser receipt proves each selected model plus the exact latest-selection race',()=>{
   const body=selection(['icon','nam']),bundle=validateSelection(body,digest(body),NOW),selected=e=>({model:e.model,init:e.init,base:e.manifestPath.slice(0,-'manifest.json'.length)});
