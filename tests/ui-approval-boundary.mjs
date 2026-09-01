@@ -29,6 +29,10 @@ test('both data bakes and legacy backfill have no UI credential or dispatch capa
   assertDataOnly(workflows['verify-backfill.yml'], ['ATMOS_DEPLOY_KEY']);
   assert.match(workflows['bake.yml'], /DATA_PUBLISH_MODE: r2-release/);
   assert.match(workflows['catalog-bake.yml'], /bash ops\/bake-model-component\.sh/);
+  const stagingBake=workflows['catalog-bake.yml'].slice(workflows['catalog-bake.yml'].indexOf('Bake, validate, upload, and CAS-promote one staging model'));
+  assert.match(stagingBake,/CATALOG_R2_REMOTE: weatherx:weatherx-data-staging/);
+  assert.match(stagingBake,/COMPONENT_R2_REMOTE: weatherx:weatherx-components-staging/);
+  assert.doesNotMatch(stagingBake,/production|R2_PRODUCTION|CATALOG_ENDPOINT_PRODUCTION/);
 });
 
 test('boundary contracts reject legacy key, new UI key, dispatch, inherited secrets and direct upload', () => {

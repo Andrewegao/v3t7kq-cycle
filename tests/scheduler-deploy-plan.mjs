@@ -37,6 +37,7 @@ test('classifier precedes protected deployment and immutable fast-source verific
   assert.ok(changes);assert.doesNotMatch(changes,/environment:|secrets\./);assert.match(changes,/fetch-depth: 0/);
   assert.match(workflow,/run: npm run check/);assert.match(workflow,/run: npm run verify:live/);
   const catalog=readFileSync(new URL('../.github/workflows/catalog-bake.yml',import.meta.url),'utf8');
-  assert.match(catalog,/ref: 4e5177d925f0fc32fe57d17e478daf3c9e31dc7c/);
-  assert.match(catalog,/test "\$\(git rev-parse HEAD\)" = "4e5177d925f0fc32fe57d17e478daf3c9e31dc7c"/);
+  assert.match(catalog,/ref: 532b63edaab2ac7b40aa9f308cfcb3e425e26370/);
+  assert.match(catalog,/test "\$\(git rev-parse HEAD\)" = "532b63edaab2ac7b40aa9f308cfcb3e425e26370"/);
+  assert.doesNotMatch(catalog,/schedule:|target == 'production'|R2_PRODUCTION|CATALOG_ENDPOINT_PRODUCTION/);
 });

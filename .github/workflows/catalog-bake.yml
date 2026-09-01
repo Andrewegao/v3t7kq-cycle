@@ -96,6 +96,7 @@ jobs:
           PUBLISH: '1'
           DATA_PUBLISH_MODE: component-catalog
           LIVE: https://atmos-platform-dnp.pages.dev
+          CATALOG_R2_REMOTE: weatherx:weatherx-data-staging
           COMPONENT_R2_REMOTE: weatherx:weatherx-components-staging
           RCLONE_CONFIG_WEATHERX_TYPE: s3
           RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
