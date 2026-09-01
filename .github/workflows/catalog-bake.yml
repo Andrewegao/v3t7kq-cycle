@@ -1,63 +1,51 @@
-name: WeatherX component bake
+name: WeatherX candidate component bake (staging only)
 permissions:
   contents: read
 on:
   workflow_dispatch:
     inputs:
       model:
-        description: Model published by the provider notifier
+        description: Exact candidate model and point-series pair to publish to staging
         type: choice
         required: true
         default: all
-        options: [all, slow, ecmwf, gfs, hrrr, aifs]
+        options: [all, ecmwf, gfs]
       target:
-        description: Isolated catalog and component bucket set to publish
+        description: Safety lock; this temporary workflow cannot publish production
         type: choice
         required: true
         default: staging
-        options: [staging, production]
-      bootstrap_missing:
-        description: Seed missing production components from the verified immutable whole-release fallback
-        type: boolean
-        required: false
-        default: false
-  schedule:
-    # GitHub may delay or drop schedules on busy round-number boundaries. Keep the
-    # ten-minute provider poll cadence, but offset it to a quieter minute.
-    - cron: '8-59/10 * * * *'
-    - cron: '7 * * * *'
+        options: [staging]
 jobs:
   model:
     environment: production
-    # Fail open: native schedules remain a publisher unless an operator explicitly
-    # disables the fallback after the Cloudflare trigger set is verified live.
-    if: ${{ github.event_name == 'workflow_dispatch' || vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.target == 'staging' }}
     concurrency:
       group: weatherx-component-${{ github.event_name == 'workflow_dispatch' && inputs.target || vars.CATALOG_DEFAULT_TARGET || 'staging' }}-${{ matrix.model }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 2
       matrix:
-        model: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.model == 'slow' && '["ecmwf","gfs","aifs"]' || github.event_name == 'workflow_dispatch' && inputs.model != 'all' && format('["{0}"]', inputs.model) || github.event_name == 'workflow_dispatch' && '["ecmwf","gfs","hrrr","aifs"]' || github.event.schedule == '8-59/10 * * * *' && '["hrrr"]' || '["ecmwf","gfs","aifs"]') }}
+        model: ${{ fromJSON(inputs.model == 'all' && '["ecmwf","gfs"]' || format('["{0}"]', inputs.model)) }}
     runs-on: ubuntu-latest
     timeout-minutes: 210
     env:
-      CATALOG_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || vars.CATALOG_DEFAULT_TARGET || 'staging' }}
+      CATALOG_TARGET: staging
     steps:
       - name: Checkout WeatherX
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Andrewegao/atmos
-          # Qualified fast-lane source, independent of experimental app master.
-          ref: 4e5177d925f0fc32fe57d17e478daf3c9e31dc7c
+          # Exact CI-green WeatherX candidate; this temporary lane is staging-only.
+          ref: 532b63edaab2ac7b40aa9f308cfcb3e425e26370
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: atmos
           persist-credentials: false
       - name: Verify approved immutable component collector
         working-directory: atmos
         run: |
-          test "$(git rev-parse HEAD)" = "4e5177d925f0fc32fe57d17e478daf3c9e31dc7c"
+          test "$(git rev-parse HEAD)" = "532b63edaab2ac7b40aa9f308cfcb3e425e26370"
           git diff --exit-code HEAD
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22 }
@@ -79,16 +67,10 @@ jobs:
           python -m venv data/.venv
           data/.venv/bin/pip install -r data/requirements.txt
       - name: Reject an unknown publication target
-        env:
-          BOOTSTRAP_MISSING: ${{ inputs.bootstrap_missing || false }}
-          REQUESTED_MODEL: ${{ inputs.model || '' }}
         run: |
-          test "$CATALOG_TARGET" = staging || test "$CATALOG_TARGET" = production
-          if [ "$BOOTSTRAP_MISSING" = true ]; then
-            test "$GITHUB_EVENT_NAME" = workflow_dispatch
-            test "$CATALOG_TARGET" = production
-            test "$REQUESTED_MODEL" = all
-          fi
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$CATALOG_TARGET" = staging
+          case "${{ matrix.model }}" in ecmwf|gfs) ;; *) exit 1 ;; esac
       - name: Restore only this model's last-known-good staging component
         if: ${{ env.CATALOG_TARGET == 'staging' }}
         working-directory: atmos
@@ -103,22 +85,6 @@ jobs:
           RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
           RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
-          RCLONE_CONFIG_WEATHERX_REGION: auto
-        run: bash ops/platform/hydrate-r2-component.sh
-      - name: Restore only this model's last-known-good production component
-        if: ${{ env.CATALOG_TARGET == 'production' }}
-        working-directory: atmos
-        env:
-          COMPONENT_ID: ${{ matrix.model }}
-          ALLOW_MISSING_COMPONENT: ${{ inputs.bootstrap_missing && '1' || '0' }}
-          HYDRATE_MISSING_FROM_RELEASE: ${{ inputs.bootstrap_missing && '1' || '0' }}
-          CATALOG_R2_REMOTE: weatherx:weatherx-data-production
-          COMPONENT_R2_REMOTE: weatherx:weatherx-components-production
-          RCLONE_CONFIG_WEATHERX_TYPE: s3
-          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
-          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
           RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
           RCLONE_CONFIG_WEATHERX_REGION: auto
         run: bash ops/platform/hydrate-r2-component.sh
@@ -139,22 +105,4 @@ jobs:
           RCLONE_CONFIG_WEATHERX_REGION: auto
           CATALOG_ENDPOINT: ${{ secrets.CATALOG_ENDPOINT }}
           CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY }}
-        run: bash ops/bake-model-component.sh
-      - name: Bake, validate, upload, and CAS-promote one production model
-        if: ${{ env.CATALOG_TARGET == 'production' }}
-        working-directory: atmos
-        env:
-          MODEL: ${{ matrix.model }}
-          PUBLISH: '1'
-          DATA_PUBLISH_MODE: component-catalog
-          LIVE: https://weatherx.org
-          COMPONENT_R2_REMOTE: weatherx:weatherx-components-production
-          RCLONE_CONFIG_WEATHERX_TYPE: s3
-          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
-          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
-          RCLONE_CONFIG_WEATHERX_REGION: auto
-          CATALOG_ENDPOINT: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
-          CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
         run: bash ops/bake-model-component.sh
