@@ -19,6 +19,16 @@ export function pixelDifference(on,off){
 }
 export function layerActivationNeeded(layers,field){return layers?.[field]?.visible!==true;}
 export function responseCaptureNeeded(required,observed,capturing,path){return required.has(path)&&!observed.has(path)&&!capturing.has(path);}
+const DISCARDED_BODY='Protocol error (Network.getResponseBody): No data found for resource with given identifier';
+export function discardedResponseBody(error){return String(error).endsWith(DISCARDED_BODY);}
+export async function responseBodyOrFallback(response,fallback){
+  try{return await response.body();}
+  catch(error){if(!discardedResponseBody(error))throw error;return fallback();}
+}
+export function validateFetchedObject(path,expected,response,body){
+  const final=new URL(response.url);assert.equal(final.origin,STAGING_ORIGIN);assert.equal(final.pathname,path);assert.equal(final.search,'');assert.equal(response.status,200);
+  assert.equal(response.headers.get('x-weatherx-catalog'),expected.catalogId);assert.equal(body.length,expected.bytes);assert.equal(digest(body),expected.sha256);return body;
+}
 export function browserCandidateReady(state,expected){
   return state?.origin===STAGING_ORIGIN&&state?.releaseStatus===200&&state?.selectionStatus===200
     &&state?.sourceSha===expected.sourceSha&&state?.releaseId===expected.releaseId
@@ -52,16 +62,16 @@ export async function runMatrix(env){
     errors.push('unexpected production request');return route.abort();
   });
   const byPath=new Map(bundle.entries.flatMap(e=>e.displayInventory.map(f=>[`/data/_catalog/${e.catalogId}/${e.model}/${f.path}`,{...f,catalogId:e.catalogId}])));
+  async function fallbackBody(path,expected){
+    const url=new URL(path,STAGING_ORIGIN),r=await fetch(url,{redirect:'error',signal:AbortSignal.timeout(20000),headers:{'Cache-Control':'no-cache'}});
+    const parts=[];let count=0;for await(const b of r.body){count+=b.length;assert.ok(count<=expected.bytes);parts.push(b);}const body=Buffer.concat(parts);
+    return validateFetchedObject(path,expected,r,body);
+  }
   page.on('response',r=>{
-    const url=new URL(r.url()),expected=byPath.get(url.pathname);if(!expected)return;
-    // The rapid-selection regression intentionally cancels the first model's
-    // in-flight generation. Chromium may discard those superseded bodies before
-    // Playwright can read them. Hash only objects that the sequential matrix has
-    // explicitly required; every required object is still proven exactly once.
-    if(!responseCaptureNeeded(required,observed,capturing,url.pathname))return;
+    const url=new URL(r.url()),expected=byPath.get(url.pathname);if(!expected||!responseCaptureNeeded(required,observed,capturing,url.pathname))return;
     capturing.add(url.pathname);
-    const promise=(async()=>{assert.equal(url.origin,STAGING_ORIGIN);assert.equal(r.status(),200);assert.equal((await r.allHeaders())['x-weatherx-catalog'],expected.catalogId);
-      const body=await r.body();assert.equal(body.length,expected.bytes);assert.equal(digest(body),expected.sha256);observed.set(url.pathname,expected.sha256);
+    const promise=(async()=>{assert.equal(url.origin,STAGING_ORIGIN);assert.equal(url.search,'');assert.equal(r.status(),200);assert.equal((await r.allHeaders())['x-weatherx-catalog'],expected.catalogId);
+      const body=await responseBodyOrFallback(r,()=>fallbackBody(url.pathname,expected));assert.equal(body.length,expected.bytes);assert.equal(digest(body),expected.sha256);observed.set(url.pathname,expected.sha256);
     })().catch(e=>network.push(`${url.pathname}: ${String(e)}`)).finally(()=>{capturing.delete(url.pathname);pending.delete(promise);});pending.add(promise);
   });
   async function drainResponses(){
@@ -178,7 +188,7 @@ export async function runMatrix(env){
       }
       const layers=[];
       for(const field of ['temp','wind','mslp']){
-        for(const path of requiredFor(field))required.add(path);
+        const fieldPaths=requiredFor(field);for(const path of fieldPaths)required.add(path);
         await page.evaluate(()=>{window.__stagingGateCommits=[];});await ensureLayer(field);await settled(entry,field,cursor);
         const before=await snapshot(),clip={x:300,y:160,width:650,height:470},on=PNG.sync.read(await page.screenshot({clip}));
         const opacity=await page.evaluate(field=>{const s=window.__atmos.store.getState(),v=s.layers[field].opacity;s.setLayerOpacity(field,0);return v;},field);
@@ -188,7 +198,7 @@ export async function runMatrix(env){
         const after=await snapshot();assert.equal(after.model,before.model);assert.equal(after.init,before.init);assert.equal(after.base,before.base);assert.equal(after.cursor,before.cursor);assert.deepEqual(after.center,before.center);
         const changed=pixelDifference(on,off);assert.ok(changed>.01,'weather raster failed >1% visible-pixel proof');
         await drainResponses();assert.equal(network.length,0,network.join(';'));
-        for(const path of requiredFor(field))assert.ok(observed.has(path),'selected field bytes were not verified');
+        for(const path of fieldPaths)assert.ok(observed.has(path),'selected field bytes were not verified');
         await page.locator('.maplibregl-canvas').first().click({position:{x:650,y:400}});
         const card=page.locator('.datalens .dl-card');await card.waitFor({state:'visible',timeout:15000});const text=await card.innerText();
         assert.match(text,/verified point forecast.*not yet published/i,'unqualified model must explicitly abstain from point/fusion issuance');assert.ok(text.includes(entry.model.toUpperCase()));
