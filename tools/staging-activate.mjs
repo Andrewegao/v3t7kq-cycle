@@ -169,22 +169,27 @@ export async function inspectPrepared(ctx, io, { validatePoints, now = Date.now,
   let bytes = await check('release-validation', () => validateRelease(release, manifest, ctx.selection, now()));
   await check('point-validation', () => validatePoints(manifest)); // Must use the pinned deployed consumer's actual v2 validator.
   const catalog = await check('catalog-validation', () => validateCatalog(catalogPointer, catalogObject.body, ctx.selection, now()));
-  const whole = await check('whole-inventory', () => readInventory(io, STAGING_DATA_BUCKET, `releases/${ctx.selection.releaseId}/`));
-  const expected = [...manifest.objects.map(o => ({ path: o.path, size: o.bytes, sha256: o.sha256 })),
-    { path: 'manifest.json', size: manifestObject.body.length, sha256: hash(manifestObject.body) }].sort(order);
-  await check('whole-inventory-compare', () => assert.deepEqual(whole, expected, 'whole release inventory/readback mismatch'));
+  // Check the smaller component trees first. This preserves every byte gate but
+  // makes a component-specific failure observable without first rereading the
+  // much larger whole release.
   for (const c of Object.values(catalog.components)) {
     const name = identifier(c.componentId);
     const metadata = await check(`component:${name}:metadata`, () => get(io, c.manifestKey, true, STAGING_COMPONENT_BUCKET));
     await check(`component:${name}:validation`, () => validateComponent(c, metadata.body));
     const all = await check(`component:${name}:inventory`, () => readInventory(io, STAGING_COMPONENT_BUCKET, c.rootPrefix));
     const values = all.filter(x => x.path !== 'component.json');
-    await check(`component:${name}:compare`, () => {
+    await check(`component:${name}:manifest-entry`, () => {
       assert.deepEqual(all.find(x => x.path === 'component.json'), { path: 'component.json', size: metadata.body.length, sha256: c.manifestSha256 });
-      assert.equal(values.length, c.objectCount); assert.equal(hash(JSON.stringify(values)), c.inventorySha256, 'component inventory/readback mismatch');
     });
+    await check(`component:${name}:object-count`, () => assert.equal(values.length, c.objectCount, 'component object count mismatch'));
+    await check(`component:${name}:inventory-hash`, () =>
+      assert.equal(hash(JSON.stringify(values)), c.inventorySha256, 'component inventory/readback mismatch'));
     bytes += values.reduce((n, x) => n + x.size, 0); assert.ok(bytes <= MAX_BYTES, 'combined byte budget exceeded');
   }
+  const whole = await check('whole-inventory', () => readInventory(io, STAGING_DATA_BUCKET, `releases/${ctx.selection.releaseId}/`));
+  const expected = [...manifest.objects.map(o => ({ path: o.path, size: o.bytes, sha256: o.sha256 })),
+    { path: 'manifest.json', size: manifestObject.body.length, sha256: hash(manifestObject.body) }].sort(order);
+  await check('whole-inventory-compare', () => assert.deepEqual(whole, expected, 'whole release inventory/readback mismatch'));
   await check('receipt-compare', () => assert.deepEqual(receipt, { schemaVersion: 1, candidateId: ctx.candidateId, selection: ctx.selection,
     objects: manifest.objectCount + Object.values(catalog.components).reduce((n, c) => n + c.objectCount, 0), bytes,
     collected: false, processed: false, activated: false, productionWritten: false,
