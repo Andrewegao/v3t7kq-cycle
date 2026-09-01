@@ -13,6 +13,7 @@ on:
       - ".github/workflows/ui-staging.yml"
       - ".github/workflows/staging-follow-master.yml"
       - ".github/workflows/staging-data.yml"
+      - ".github/workflows/staging-current-selection.yml"
       - ".github/workflows/model-inputs.yml"
       - ".github/workflows/staging-model-components.yml"
       - ".github/workflows/staging-model-selection.yml"
