@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {BASELINE_PROFILE,MODELS,GRIDS,variables,displayPaths,digest,canonical,profileFor,validateProfile,requireProductionProfile,validateSelection,readSelection,validateCandidateSelection,requireStagingApproval,browserEnvironment,validateBrowserReceipt} from '../tools/ui-staging-models.mjs';
-import {browserCandidateReady,pixelDifference} from '../tools/ui-staging-model-browser.mjs';
+import {browserCandidateReady,layerActivationNeeded,pixelDifference} from '../tools/ui-staging-model-browser.mjs';
 import {createCandidate,hash,eligibleRun,REPOSITORY} from '../tools/ui-candidate.mjs';
 import {eligibleBuild} from '../tools/ui-build-transfer.mjs';
 import {publicBuildEnvironment,requiredSourceGuard,weatherFeedVerificationRequired} from '../tools/ui-release.mjs';
@@ -106,6 +106,11 @@ test('browser admission requires one coherent exact candidate in its own page co
     s=>s.modelButtonVisible=false,s=>s.lit=false,s=>s.bootSettled=false,s=>s.atmosReady=false]){
     const state=structuredClone(ready);mutate(state);assert.equal(browserCandidateReady(state,expected),false);
   }
+});
+test('model matrix ensures an active layer without toggling an already-visible layer off',()=>{
+  assert.equal(layerActivationNeeded({wind:{visible:true}},'wind'),false);
+  assert.equal(layerActivationNeeded({wind:{visible:false}},'wind'),true);
+  assert.equal(layerActivationNeeded({},'wind'),true);
 });
 test('staging can bootstrap an old site but every uploaded candidate must pass weather-feed verification',()=>{
   assert.equal(weatherFeedVerificationRequired('staging','preflight'),false);
