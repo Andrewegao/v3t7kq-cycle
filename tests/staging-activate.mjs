@@ -3,7 +3,8 @@ import test from 'node:test';
 import { setImmediate } from 'node:timers/promises';
 import { ACCOUNT, MODELS, hash } from '../tools/shared-data.mjs';
 import { activationGate, activatePrepared, recoverActivation, inspectPrepared, assertLiveProof, buildServingCatalog, checked,
-  STAGING_DATA_BUCKET as DATA, STAGING_COMPONENT_BUCKET as COMPONENTS, STAGING_ORIGIN as ORIGIN } from '../tools/staging-activate.mjs';
+  componentInventoryOrder, STAGING_DATA_BUCKET as DATA, STAGING_COMPONENT_BUCKET as COMPONENTS,
+  STAGING_ORIGIN as ORIGIN } from '../tools/staging-activate.mjs';
 
 const now = Date.parse('2026-08-31T15:00:00Z'), iso = delta => new Date(now + delta).toISOString();
 const encode = value => Buffer.from(JSON.stringify(value) + '\n');
@@ -21,6 +22,14 @@ test('diagnostics retain only bounded stage, state and error category', async ()
     { stage: 'candidate:whole-inventory', state: 'failed', kind: 'assertion' },
   ]);
   await assert.rejects(checked('not allowed', async () => {}), /invalid diagnostic stage/);
+});
+test('component inventory recreates producer recursive directory order from flat S3 paths', () => {
+  const values = ['grid.json', 'grid/1.bin', 'grid/10.bin', 'grid/2.bin', 'runs/z.bin', 'runs.json']
+    .map(path => ({ path }));
+  assert.deepEqual([...values].sort(componentInventoryOrder).map(x => x.path),
+    ['grid/1.bin', 'grid/10.bin', 'grid/2.bin', 'grid.json', 'runs/z.bin', 'runs.json']);
+  assert.notDeepEqual([...values].sort((a, b) => a.path.localeCompare(b.path)).map(x => x.path),
+    [...values].sort(componentInventoryOrder).map(x => x.path));
 });
 
 // All numeric values and inventories below are synthetic protocol fixtures, not
