@@ -7,12 +7,17 @@ import { resolve, dirname } from 'node:path';
 import {BASELINE_PROFILE,validateProfile,validateCandidateSelection,requireProductionProfile} from './ui-staging-models.mjs';
 
 export const CONTROL_SHA = 'dbc97a26bc239398ffa9ec157a094148961b6451';
+export const STAGING_CONTROL_SHA = 'da03272530383cade4a456dc9ce58c2b52aebab8';
 export const REPOSITORY = 'Andrewegao/v3t7kq-cycle';
 export const FREEZE_UNTIL = '2026-08-31T11:00:00Z';
 export const MAX_BYTES = 96 * 1024 * 1024;
 export const MAX_FILES = 5000;
 export const hash = value => createHash('sha256').update(value).digest('hex');
 export const PROFILE = BASELINE_PROFILE;
+export function controlShaFor(profile = PROFILE) {
+  validateProfile(profile);
+  return profile.stagingOnly ? STAGING_CONTROL_SHA : CONTROL_SHA;
+}
 const SHA = /^[a-f0-9]{40}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
 const ID = /^[1-9][0-9]{0,19}$/;
@@ -81,7 +86,8 @@ export function validateFiles(files) {
 
 export function createCandidate(root, context) {
   const files = readTree(root), { digest } = validateFiles(files);
-  const candidate = { schemaVersion: 1, controlSha: CONTROL_SHA, profile: context.profile ?? PROFILE,
+  const profile = context.profile ?? PROFILE;
+  const candidate = { schemaVersion: 1, controlSha: controlShaFor(profile), profile,
     sourceSha: context.sourceSha, runId: context.runId, attempt: context.attempt,
     workflowSha: context.workflowSha, pipelineDigest: context.pipelineDigest, artifactDigest: digest, files };
   validateCandidate(candidate);
@@ -90,8 +96,8 @@ export function createCandidate(root, context) {
 
 export function validateCandidate(candidate) {
   assert.equal(candidate.schemaVersion, 1);
-  assert.equal(candidate.controlSha, CONTROL_SHA, 'unreviewed release controller');
   validateProfile(candidate.profile);
+  assert.equal(candidate.controlSha, controlShaFor(candidate.profile), 'unreviewed release controller');
   assert.match(candidate.sourceSha, SHA); assert.match(candidate.workflowSha, SHA);
   assert.match(candidate.runId, ID); assert.match(candidate.attempt, ID);
   assert.match(candidate.pipelineDigest, DIGEST);
