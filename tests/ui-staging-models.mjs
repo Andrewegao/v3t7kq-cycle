@@ -4,7 +4,7 @@ import {mkdtempSync,mkdirSync,writeFileSync,realpathSync,readFileSync} from 'nod
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
-import {BASELINE_PROFILE,MODELS,GRIDS,variables,displayPaths,digest,canonical,cycleTime,profileFor,validateProfile,requireProductionProfile,validateSelection,readSelection,validateCandidateSelection,requireStagingApproval,browserEnvironment,validateBrowserReceipt} from '../tools/ui-staging-models.mjs';
+import {BASELINE_PROFILE,MODELS,GRIDS,variables,displayPaths,digest,canonical,cycleTime,resolveSelectionRequest,profileFor,validateProfile,requireProductionProfile,validateSelection,readSelection,validateCandidateSelection,requireStagingApproval,browserEnvironment,validateBrowserReceipt} from '../tools/ui-staging-models.mjs';
 import {browserCandidateReady,discardedResponseBody,layerActivationNeeded,matrixProofPlan,pixelDifference,responseBodyOrFallback,responseCaptureNeeded,validateFetchedObject,validateIndependentPointSource} from '../tools/ui-staging-model-browser.mjs';
 import {createCandidate,hash,eligibleRun,REPOSITORY,CONTROL_SHA,STAGING_CONTROL_SHA,controlShaFor} from '../tools/ui-candidate.mjs';
 import {eligibleBuild} from '../tools/ui-build-transfer.mjs';
@@ -35,6 +35,14 @@ test('baseline remains exact while experimental profile binds one content digest
   assert.deepEqual(profileFor(),BASELINE_PROFILE);assert.deepEqual(profileFor('none'),BASELINE_PROFILE);requireProductionProfile(BASELINE_PROFILE);
   const p=profileFor(DIGEST);validateProfile(p);assert.equal(p.stagingOnly,true);assert.throws(()=>requireProductionProfile(p));
   for(const bad of ['',{},'x'.repeat(64),{...p,account:true},{...p,extra:true}])assert.throws(()=>validateProfile(typeof bad==='string'?profileFor(bad):bad));
+});
+test('ordinary staging resolves the protected approval while baseline remains an explicit opt-out',()=>{
+  assert.equal(resolveSelectionRequest(undefined,DIGEST),DIGEST);
+  assert.equal(resolveSelectionRequest('approved',DIGEST),DIGEST);
+  assert.equal(resolveSelectionRequest(DIGEST,DIGEST),DIGEST);
+  assert.equal(resolveSelectionRequest('none',undefined),'none');
+  for(const [requested,approved] of [['approved',undefined],['approved','x'],['',DIGEST],['0'.repeat(64),DIGEST]])
+    assert.throws(()=>resolveSelectionRequest(requested,approved));
 });
 test('all seven exact data-qualified entries validate without granting browser/fusion authority',()=>{
   const body=selection(),sha=digest(body),bundle=validateSelection(body,sha,NOW);assert.deepEqual(bundle.entries.map(e=>e.model),MODELS);
@@ -78,9 +86,12 @@ test('isolated publisher binds protected input profile to the exact same-attempt
   const context={runId:'123',attempt:'1',workflowSha:c.workflowSha,sourceSha:SHA,pipelineDigest:c.pipelineDigest,profile};
   eligibleBuild(c,run,jobs,artifacts,context);assert.throws(()=>eligibleBuild(c,run,jobs,artifacts,{...context,profile:BASELINE_PROFILE}),/differs from requested profile/);
 });
-test('manual staging defaults to baseline and only its protected environment can approve an experiment',()=>{
+test('manual staging defaults to protected approval and only explicit none selects baseline',()=>{
   const root=new URL('../',import.meta.url),staging=readFileSync(new URL('.github/workflows/ui-staging.yml',root),'utf8'),production=readFileSync(new URL('.github/workflows/ui-release.yml',root),'utf8');
-  assert.match(staging,/model_selection_sha256:[\s\S]*?default: none/);assert.match(staging,/name: ui-staging[\s\S]*?UI_STAGING_MODEL_SELECTION_APPROVED_SHA256: \$\{\{ vars\.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256 \}\}/);
+  assert.match(staging,/model_selection_sha256:[\s\S]*?default: approved/);
+  assert.match(staging,/\n  profile:\n[\s\S]*?environment:\s*\n\s*name: ui-staging[\s\S]*?APPROVED_SELECTION: \$\{\{ vars\.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256 \}\}/);
+  assert.equal(staging.split('needs.profile.outputs.model_selection_sha256').length-1,4);
+  assert.match(staging,/name: ui-staging[\s\S]*?UI_STAGING_MODEL_SELECTION_APPROVED_SHA256: \$\{\{ vars\.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256 \}\}/);
   assert.doesNotMatch(production,/model_selection_sha256|UI_STAGING_MODEL_SELECTION_APPROVED_SHA256|VITE_STAGING_MODEL_ADMISSION/);
 });
 test('build flags select mutually exclusive production or exact staging-experiment release guards',()=>{

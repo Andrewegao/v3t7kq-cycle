@@ -12,6 +12,13 @@ export const MODELS=['icon','hrrr-ak','hrdps','nam','nam-hi','nam-ak','arome-ant
 const HASH=/^[a-f0-9]{64}$/,COMMIT=/^[a-f0-9]{40}$/,RUN=/^[1-9]\d{0,19}$/,ATTEMPT=/^[1-9]\d{0,3}$/;
 export const digest=body=>createHash('sha256').update(body).digest('hex');
 export const BASELINE_PROFILE=Object.freeze({product:'lab',account:false,expandedModels:false,data:false});
+export function resolveSelectionRequest(requested='approved',approved){
+  assert.ok(requested==='approved'||requested==='none'||HASH.test(requested??''),'invalid staging selection request');
+  if(requested==='none')return 'none';
+  assert.match(approved??'',HASH,'protected staging selection approval required');
+  if(requested!=='approved')assert.equal(requested,approved,'requested staging selection differs from protected approval');
+  return approved;
+}
 export function canonical(value){
   if(Array.isArray(value))return '['+value.map(canonical).join(',')+']';
   if(value&&typeof value==='object')return '{'+Object.keys(value).sort().map(k=>JSON.stringify(k)+':'+canonical(value[k])).join(',')+'}';
