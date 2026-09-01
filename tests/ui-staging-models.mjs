@@ -4,11 +4,12 @@ import {mkdtempSync,mkdirSync,writeFileSync,realpathSync,readFileSync} from 'nod
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
-import {BASELINE_PROFILE,MODELS,GRIDS,variables,displayPaths,digest,canonical,profileFor,validateProfile,requireProductionProfile,validateSelection,readSelection,validateCandidateSelection,requireStagingApproval,browserEnvironment,validateBrowserReceipt} from '../tools/ui-staging-models.mjs';
+import {BASELINE_PROFILE,MODELS,GRIDS,variables,displayPaths,digest,canonical,cycleTime,profileFor,validateProfile,requireProductionProfile,validateSelection,readSelection,validateCandidateSelection,requireStagingApproval,browserEnvironment,validateBrowserReceipt} from '../tools/ui-staging-models.mjs';
 import {browserCandidateReady,discardedResponseBody,layerActivationNeeded,matrixProofPlan,pixelDifference,responseBodyOrFallback,responseCaptureNeeded,validateFetchedObject,validateIndependentPointSource} from '../tools/ui-staging-model-browser.mjs';
 import {createCandidate,hash,eligibleRun,REPOSITORY,CONTROL_SHA,STAGING_CONTROL_SHA,controlShaFor} from '../tools/ui-candidate.mjs';
 import {eligibleBuild} from '../tools/ui-build-transfer.mjs';
 import {publicBuildEnvironment,requiredSourceGuard,standaloneWeatherFeedVerificationRequired} from '../tools/ui-release.mjs';
+import {requireSelectionMargin} from '../tools/ui-staging-preflight.mjs';
 
 const NOW=Date.parse('2026-08-31T20:00:00Z'),INIT='2026083112',SHA='a'.repeat(40),DIGEST='b'.repeat(64);
 function entry(model,n){
@@ -38,10 +39,16 @@ test('baseline remains exact while experimental profile binds one content digest
 test('all seven exact data-qualified entries validate without granting browser/fusion authority',()=>{
   const body=selection(),sha=digest(body),bundle=validateSelection(body,sha,NOW);assert.deepEqual(bundle.entries.map(e=>e.model),MODELS);
   for(const change of [b=>b.entries=[],b=>b.entries[0].grid.width++,b=>b.entries[0].fusionEligible=true,b=>b.entries[0].displayInventory.pop(),
-    b=>b.entries[0].component.artifactId='other',b=>b.entries[0].createdAt='2025-01-01T00:00:00.000Z']){
+    b=>b.entries[0].component.artifactId='other',b=>b.entries[0].createdAt='2025-01-01T00:00:00.000Z',b=>b.entries[0].createdAt='2026-08-31T20:00:00.001Z']){
     const changed=Buffer.from(JSON.stringify((()=>{const v=structuredClone(bundle);change(v);return v;})()));assert.throws(()=>validateSelection(changed,digest(changed),NOW));
   }
   assert.throws(()=>validateSelection(body,'0'.repeat(64),NOW));assert.throws(()=>validateSelection(body,sha,NOW+24*3600000));
+});
+test('selection preflight rejects a cycle with less than the reserved pipeline lifetime',()=>{
+  const body=selection(['icon']),sha=digest(body),bundle=validateSelection(body,sha,NOW),expires=Date.parse('2026-09-01T00:00:00.000Z');
+  assert.doesNotThrow(()=>requireSelectionMargin(bundle,expires-25*60_000));
+  assert.throws(()=>requireSelectionMargin(bundle,expires-25*60_000+1),/will expire during qualification/);
+  assert.throws(()=>cycleTime('2026090100',NOW),/stale\/future model selection/);
 });
 test('cycle-owned content-addressed source refuses symlinks and mismatched file identity',()=>{
   const root=realpathSync(mkdtempSync(resolve(tmpdir(),'wx-stage-selection-'))),folder=resolve(root,'staging-selections'),body=selection(['icon']),sha=digest(body);mkdirSync(folder);writeFileSync(resolve(folder,sha+'.json'),body);

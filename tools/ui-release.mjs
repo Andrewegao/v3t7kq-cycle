@@ -16,13 +16,13 @@ const STAGING_RELEASE_GUARD_SHA = '164a469189da2c8303c997d4020b3ae20da84cd7';
 const ACCOUNT = 'a89f9a1af485021fbc60a68b163c7c6e';
 const ORIGINS = { staging: 'https://staging.weatherx.org', production: 'https://weatherx.org' };
 const PROJECTS = { staging: 'weatherx-platform-staging', production: 'atmos-platform' };
-const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workflows/ui-release.yml',
+export const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workflows/ui-release.yml',
   'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh',
-  'tools/ui-staging-models.mjs','tools/ui-staging-model-browser.mjs'];
+  'tools/ui-staging-models.mjs','tools/ui-staging-model-browser.mjs','tools/ui-staging-preflight.mjs'];
 const run = (command, args, options = {}) => execFileSync(command, args, { stdio: 'inherit', ...options });
 const git = (args, cwd = ROOT) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore','pipe','pipe'] }).trim();
-export const pipelineDigest = (profile=profileFor()) => hash(POLICY_FILES.map(p => `${p}\0${hash(readFileSync(resolve(ROOT,p)))}`)
-  .concat(profile.stagingOnly?[`staging-selections/${profile.modelSelectionSha256}.json\0${hash(readSelection(ROOT,profile,null).bytes)}`]:[]).join('\n'));
+export const pipelineDigest = (profile=profileFor(),root=ROOT) => hash(POLICY_FILES.map(p => `${p}\0${hash(readFileSync(resolve(root,p)))}`)
+  .concat(profile.stagingOnly?[`staging-selections/${profile.modelSelectionSha256}.json\0${hash(readSelection(root,profile,null).bytes)}`]:[]).join('\n'));
 const stateFile = () => resolve(process.env.RUNNER_TEMP, 'ui-candidate.json');
 function save(file, value) { mkdirSync(dirname(file), { recursive: true, mode: 0o700 }); writeFileSync(file, JSON.stringify(value), { mode: 0o600 }); }
 function candidate() { const c = JSON.parse(readFileSync(stateFile())); validateCandidate(c); return c; }
