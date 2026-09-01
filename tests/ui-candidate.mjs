@@ -9,7 +9,7 @@ import { gate, FREEZE_UNTIL, REPOSITORY, hash, createCandidate, validateCandidat
 import { configurationDigest, pipelineDigest } from '../tools/ui-release.mjs';
 
 const key='ab'.repeat(32), sha='c'.repeat(40), workflow='d'.repeat(40), now=Date.parse('2026-09-01T12:00Z');
-function fixture() {
+function fixture({ ground = false } = {}) {
   const root=mkdtempSync(resolve(tmpdir(),'wx-ui-artifact-test-'));
   const content={'index.html':'<title>WeatherX</title><div id="root"></div>',
     '_worker.js':'export default {fetch: () => new Response("private function implementation")}',
@@ -18,6 +18,10 @@ function fixture() {
   for(const path of Object.keys(content).sort()){
     const raw=Buffer.from(content[path]);digest.update(path).update('\0').update(String(raw.length)).update('\0').update(raw).update('\0');
     mkdirSync(resolve(root,path,'..'),{recursive:true});writeFileSync(resolve(root,path),raw);
+  }
+  if (ground) {
+    mkdirSync(resolve(root,'basemap-ground/0/0'),{recursive:true});
+    writeFileSync(resolve(root,'basemap-ground/0/0/0.jpg'),Buffer.from('reviewed-staging-ground'));
   }
   const receipt={schemaVersion:1,gitSha:sha,workflowRunId:'123',releaseId:`git-${sha.slice(0,12)}-run-123`,
     shellSha256:digest.digest('hex'),indexSha256:hash(content['index.html']),shellFileCount:4,
@@ -48,6 +52,14 @@ test('ciphertext round-trip restores exact tested bytes, not rebuilt source',()=
   assert.deepEqual(decoded,c); assert.ok(!blob.includes(Buffer.from('private function implementation')));
   const dest=resolve(mkdtempSync(resolve(tmpdir(),'wx-ui-restore-test-')),'dist');restore(decoded,dest);
   assert.deepEqual(readTree(dest),readTree(root));assert.throws(()=>restore(decoded,dest));check(decoded);
+});
+test('ground files remain artifact-authenticated but outside the shell timing receipt',()=>{
+  const {c}=fixture({ground:true});
+  assert.ok(c.files.some(file=>file.path==='basemap-ground/0/0/0.jpg'));
+  assert.doesNotThrow(()=>validateCandidate(c));
+  const changed=structuredClone(c),tile=changed.files.find(file=>file.path==='basemap-ground/0/0/0.jpg');
+  tile.base64=Buffer.from('changed-ground').toString('base64');tile.bytes=14;tile.sha256=hash(Buffer.from('changed-ground'));
+  assert.throws(()=>validateCandidate(changed),'ground bytes remain bound by artifactDigest');
 });
 test('encryption is randomized and authenticates contents, header, IV and key',()=>{
   const {c}=fixture(), blob=seal(c,key);assert.ok(!blob.equals(seal(c,key)));

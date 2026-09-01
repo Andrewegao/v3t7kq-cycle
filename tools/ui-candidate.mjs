@@ -101,7 +101,11 @@ export function validateCandidate(candidate) {
   assert.equal(receipt.gitSha, candidate.sourceSha);
   assert.equal(receipt.workflowRunId, candidate.runId);
   assert.equal(receipt.releaseId, `git-${candidate.sourceSha.slice(0,12)}-run-${candidate.runId}`);
-  const shell = candidate.files.filter(f => f.path !== 'health/release.json').sort((a,b) => a.path < b.path ? -1 : 1);
+  // build-release-receipt intentionally excludes the retained ground package from
+  // its shell timing digest. The candidate inventory still hashes and authenticates
+  // every ground tile through artifactDigest; mirror only the receipt's scope here.
+  const shell = candidate.files.filter(f => f.path !== 'health/release.json' && !f.path.startsWith('basemap-ground/'))
+    .sort((a,b) => a.path < b.path ? -1 : 1);
   const digest = createHash('sha256');
   for (const f of shell) digest.update(f.path).update('\0').update(String(f.bytes)).update('\0').update(Buffer.from(f.base64,'base64')).update('\0');
   assert.equal(digest.digest('hex'), receipt.shellSha256, 'source receipt shell hash mismatch');
