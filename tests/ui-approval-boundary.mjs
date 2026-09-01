@@ -61,6 +61,11 @@ test('both UI entry points are manual only; bake completion cannot trigger promo
   }
 });
 
+test('retained ground-package approval is scoped to staging and never production', () => {
+  assert.match(workflows['ui-staging.yml'], /WX_GROUND_QUALIFICATION_SCOPE: staging-qualification-only/);
+  assert.doesNotMatch(workflows['ui-release.yml'], /WX_GROUND_QUALIFICATION_SCOPE/);
+});
+
 test('runtime gate rejects every nonmanual event and every unprotected ref', () => {
   const env = { GITHUB_REPOSITORY: REPOSITORY, GITHUB_EVENT_NAME: 'workflow_dispatch',
     GITHUB_REF: 'refs/heads/main', UI_RELEASES_ENABLED: 'true', UI_ISOLATION_APPROVED: 'true',

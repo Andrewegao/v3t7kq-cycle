@@ -38,6 +38,9 @@ jobs:
       VITE_MODEL_LOCAL_BASE: ''
       VITE_STAGING_MODEL_ADMISSION: '0'
       VITE_STAGING_MODEL_SELECTION_SHA256: ''
+      # The retained ground package is approved only for this staging qualification lane.
+      # Production workflows never receive this scope.
+      WX_GROUND_QUALIFICATION_SCOPE: staging-qualification-only
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { path: cycle, fetch-depth: 0, persist-credentials: false }
