@@ -52,7 +52,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22 }
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with: { python-version: '3.12' }
+        with: { python-version: '3.11' }
       - name: enforce manually enabled isolated build
         run: node cycle/tools/ui-release.mjs build-gate
       - name: checkout exact candidate Atmos source
@@ -72,6 +72,7 @@ jobs:
           test "$ATMOS_SHA" = "$(git rev-parse origin/master)"
       - name: install locked dependencies and browsers
         run: |
+          python3.11 -m pip install pillow
           npm ci --prefix atmos/app
           npm ci --prefix control/platform/edge
           npm ci --prefix control/app
