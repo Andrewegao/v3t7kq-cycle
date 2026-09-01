@@ -27,6 +27,11 @@ export async function runActivation(command,env=process.env){
     }else{
       consumer=loadConsumer(resolve(env.GITHUB_WORKSPACE,'control'));
       const deps=await consumer.dependencies(io),verifyLive=deps.verifyLive;
+      const events=[],diagnosticDir=resolve(env.RUNNER_TEMP,'staging-activation');
+      const report=event=>{
+        events.push(event);mkdirSync(diagnosticDir,{recursive:true,mode:0o700});
+        writeFileSync(resolve(diagnosticDir,'diagnostics.json'),JSON.stringify({schemaVersion:1,events},null,2)+'\n',{mode:0o600});
+      };
       let retainedProofHash;
       deps.verifyLive=async(...args)=>{
         const proof=await verifyLive(...args),body=JSON.stringify(proof);
@@ -34,7 +39,7 @@ export async function runActivation(command,env=process.env){
         writeFileSync(resolve(dir,'live-proof.json'),body,{mode:0o600});
         retainedProofHash=hash(body);return proof;
       };
-      result=await activatePrepared(ctx,io,deps);
+      result=await activatePrepared(ctx,io,{...deps,report});
       assert.equal(result.liveProofSha256,retainedProofHash,'retained live evidence hash mismatch');
     }
     const output=resolve(env.RUNNER_TEMP,'staging-activation');mkdirSync(output,{recursive:true,mode:0o700});
