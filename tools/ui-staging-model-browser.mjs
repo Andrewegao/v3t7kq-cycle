@@ -18,6 +18,7 @@ export function pixelDifference(on,off){
   return changed/(on.width*on.height);
 }
 export function layerActivationNeeded(layers,field){return layers?.[field]?.visible!==true;}
+export function responseCaptureNeeded(required,observed,capturing,path){return required.has(path)&&!observed.has(path)&&!capturing.has(path);}
 export function browserCandidateReady(state,expected){
   return state?.origin===STAGING_ORIGIN&&state?.releaseStatus===200&&state?.selectionStatus===200
     &&state?.sourceSha===expected.sourceSha&&state?.releaseId===expected.releaseId
@@ -37,7 +38,7 @@ export async function runMatrix(env){
   const {chromium}=await import(pathToFileURL(resolve(env.UI_CONTROL_ROOT,'app/node_modules/playwright/index.mjs')));
   const {PNG}=await import(pathToFileURL(resolve(env.UI_CONTROL_ROOT,'app/node_modules/pngjs/lib/png.js')));
   const browser=await chromium.launch({args:['--enable-gpu','--ignore-gpu-blocklist']});
-  const results=[],errors=[],network=[],observed=new Map(),pending=new Set();
+  const results=[],errors=[],network=[],observed=new Map(),required=new Set(),capturing=new Set(),pending=new Set();
   const context=await browser.newContext({viewport:{width:1440,height:900},locale:'en-US'});
   await context.addInitScript(()=>{
     sessionStorage.setItem('atmos-boot-shown','1');localStorage.setItem('atmos-ai-code','central');localStorage.setItem('atmos-ai-scope','central');
@@ -53,9 +54,15 @@ export async function runMatrix(env){
   const byPath=new Map(bundle.entries.flatMap(e=>e.displayInventory.map(f=>[`/data/_catalog/${e.catalogId}/${e.model}/${f.path}`,{...f,catalogId:e.catalogId}])));
   page.on('response',r=>{
     const url=new URL(r.url()),expected=byPath.get(url.pathname);if(!expected)return;
+    // The rapid-selection regression intentionally cancels the first model's
+    // in-flight generation. Chromium may discard those superseded bodies before
+    // Playwright can read them. Hash only objects that the sequential matrix has
+    // explicitly required; every required object is still proven exactly once.
+    if(!responseCaptureNeeded(required,observed,capturing,url.pathname))return;
+    capturing.add(url.pathname);
     const promise=(async()=>{assert.equal(url.origin,STAGING_ORIGIN);assert.equal(r.status(),200);assert.equal((await r.allHeaders())['x-weatherx-catalog'],expected.catalogId);
       const body=await r.body();assert.equal(body.length,expected.bytes);assert.equal(digest(body),expected.sha256);observed.set(url.pathname,expected.sha256);
-    })().catch(e=>network.push(String(e))).finally(()=>pending.delete(promise));pending.add(promise);
+    })().catch(e=>network.push(`${url.pathname}: ${String(e)}`)).finally(()=>{capturing.delete(url.pathname);pending.delete(promise);});pending.add(promise);
   });
   async function drainResponses(){
     for(let i=0;i<100;i++){
@@ -147,12 +154,20 @@ export async function runMatrix(env){
       await page.waitForTimeout(2000);await drainResponses();const final=await snapshot();assert.equal(final.model,last.model);assert.equal(final.base,last.manifestPath.slice(0,-'manifest.json'.length));
       if(last.model!=='icon'){const mid=(last.grid.lon0+last.grid.lon1)/2,lon=final.center[0]+360*Math.round((mid-final.center[0])/360);assert.ok(lon>=last.grid.lon0&&lon<=last.grid.lon1&&final.center[1]>=last.grid.lat1&&final.center[1]<=last.grid.lat0,'stale regional camera overrode latest model');}
       rapid={rapidModelSequence:[first.model,last.model],finalModel:final.model};
+      // Start the sequential byte/pixel matrix in a new document. Otherwise the
+      // winning rapid-choice frames can survive in the app's memory cache and
+      // satisfy rendering without a new response that the exact-byte gate can
+      // observe. Page routing already disables Chromium's HTTP cache.
+      await loadExactBrowserCandidate();
+      await page.evaluate(()=>{const s=window.__atmos.store.getState();s.setPlaying(false);s.setParticlesOverlay(false);});
     }
     for(const entry of bundle.entries){
       validateSelection(bytes,env.UI_SELECTION_SHA256);const init=cycleTime(entry.init),lead=Math.ceil((Date.now()-init)/3600000)+1,cursor=init+(lead+.5)*3600000;assert.ok(lead+1<=48);
+      const requiredFor=field=>[lead,lead+1].map(i=>`/data/_catalog/${entry.catalogId}/${entry.model}/runs/${entry.init}/${field}/${String(i).padStart(3,'0')}.png`);
       // activateLayer is intentionally a toggle: calling it when wind is already visible clears
       // every weather layer and removes the model selector. The matrix needs idempotent "ensure",
       // not a second user toggle, between model rows.
+      for(const path of requiredFor('wind'))required.add(path);
       await ensureLayer('wind');await openModel(entry.model);
       await page.waitForFunction(model=>window.__atmos.store.getState().manifest?.model===model,entry.model,{timeout:45000});
       await page.evaluate(cursor=>{window.__stagingGateCommits=[];const s=window.__atmos.store.getState();s.select(null);s.setCursor(cursor);s.setPlaying(false);s.setParticlesOverlay(false);},cursor);
@@ -163,6 +178,7 @@ export async function runMatrix(env){
       }
       const layers=[];
       for(const field of ['temp','wind','mslp']){
+        for(const path of requiredFor(field))required.add(path);
         await page.evaluate(()=>{window.__stagingGateCommits=[];});await ensureLayer(field);await settled(entry,field,cursor);
         const before=await snapshot(),clip={x:300,y:160,width:650,height:470},on=PNG.sync.read(await page.screenshot({clip}));
         const opacity=await page.evaluate(field=>{const s=window.__atmos.store.getState(),v=s.layers[field].opacity;s.setLayerOpacity(field,0);return v;},field);
@@ -172,7 +188,7 @@ export async function runMatrix(env){
         const after=await snapshot();assert.equal(after.model,before.model);assert.equal(after.init,before.init);assert.equal(after.base,before.base);assert.equal(after.cursor,before.cursor);assert.deepEqual(after.center,before.center);
         const changed=pixelDifference(on,off);assert.ok(changed>.01,'weather raster failed >1% visible-pixel proof');
         await drainResponses();assert.equal(network.length,0,network.join(';'));
-        for(const i of [lead,lead+1])assert.ok(observed.has(`/data/_catalog/${entry.catalogId}/${entry.model}/runs/${entry.init}/${field}/${String(i).padStart(3,'0')}.png`),'selected field bytes were not verified');
+        for(const path of requiredFor(field))assert.ok(observed.has(path),'selected field bytes were not verified');
         await page.locator('.maplibregl-canvas').first().click({position:{x:650,y:400}});
         const card=page.locator('.datalens .dl-card');await card.waitFor({state:'visible',timeout:15000});const text=await card.innerText();
         assert.match(text,/verified point forecast.*not yet published/i,'unqualified model must explicitly abstain from point/fusion issuance');assert.ok(text.includes(entry.model.toUpperCase()));
