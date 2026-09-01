@@ -34,10 +34,12 @@ function fixture() {
 }
 test('only seven additions on approved hosted manual main and exact fresh source',()=>{
   assert.equal(MODELS.length,7); assert.equal(gate(env(),now).model,'icon');
-  for(const name of Object.keys(env()))assert.throws(()=>gate({...env(),[name]:''},now),name);
+  assert.equal(gate({...env(),GITHUB_JOB:'collect-independent'},now).model,'icon');
+  for(const name of Object.keys(env()))assert.throws(()=>gate({...env(),[name]:''},now),undefined,name);
   for(const patch of [{MODEL_ID:'access-g3'},{MODEL_ID:'ecmwf'},{MODEL_INIT:'2026023012'},{MODEL_INIT:'2026083113'},
     {MODEL_INIT:'2026083100'},{MODEL_INIT:'2026083118',GITHUB_EVENT_NAME:'schedule'},
-    {STAGING_R2_ACCOUNT_ID:'b'.repeat(32)},{MODEL_SOURCE_SHA:'b'.repeat(40)},{GITHUB_REF:'refs/heads/experiment'}])
+    {STAGING_R2_ACCOUNT_ID:'b'.repeat(32)},{MODEL_SOURCE_SHA:'b'.repeat(40)},{GITHUB_REF:'refs/heads/experiment'},
+    {GITHUB_JOB:'collect-noaa'},{GITHUB_JOB:'collect-independent-extra'}])
     assert.throws(()=>gate({...env(),...patch},now));
 });
 test('ciphertext authenticates key, object identity, digest and every byte',()=>{

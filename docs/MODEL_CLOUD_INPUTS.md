@@ -1,9 +1,13 @@
 # Additional-model cloud inputs — no serving activation
 
 `model-inputs.yml` is a separate manual, cloud-only pipeline for ICON, HRRR Alaska,
-HRDPS, NAM CONUS/Hawaii/Alaska and AROME Antilles. Seven independent hosted runners
-use a maximum of three concurrent jobs; each collects one explicit model/cycle
-with at most two lead workers. This neither duplicates the four-model production
+HRDPS, NAM CONUS/Hawaii/Alaska and AROME Antilles. Four provider-aware hosted runners
+may run together: DWD, ECCC and Meteo-France each have one independent model runner,
+while one NOAA runner acquires HRRR Alaska and the three NAM nests sequentially.
+Every collector still uses at most two lead workers. Each completed NOAA acquisition
+is immutably archived even when a sibling fails, in joined pairs of no more than two.
+A final step without archive credentials still fails the job on any acquisition or
+archive failure. Missing or partial roots are never archived. This neither duplicates the four-model production
 bake nor changes its source, schedules, credentials, outputs or UI release gates.
 
 The workflow is disabled by default. Its protected `data-staging` environment must
@@ -19,6 +23,9 @@ staging S3 credentials and a dedicated 32-byte hexadecimal `MODEL_INPUT_ARCHIVE_
 That key must be securely retained for future archive recovery. Completion records
 include its nonsecret key fingerprint; changing the key does not migrate old inputs.
 No secret or raw/private artifact is uploaded to public GitHub Actions artifacts/cache.
+The workflow caches only public package-manager downloads, pinned by the checked-out
+`requirements.txt` and `package-lock.json`; model bytes, receipts, raw caches and output
+directories remain outside Actions caches.
 
 ## Data and privacy contract
 
@@ -26,7 +33,8 @@ The original scientific validators must substantiate all 49 hourly leads (0–48
 grid identity, earth-relative paired winds, native masks, source bytes, quantitative
 data and exact producer receipts. Existing source receipt holds are unchanged.
 The new receipt says `COLLECTED` and `unqualified`, not browser-qualified or serving.
-An incomplete or failed source does not cancel other independent model jobs.
+An incomplete or failed source does not cancel other independent model jobs or discard
+completed NOAA siblings; their immutable staging archives remain independently usable.
 
 All retained files, including original GRIB, quantitative arrays and private
 receipts, are encrypted with AES-256-GCM. Fresh random nonces and authenticated
@@ -47,10 +55,21 @@ an existing object must decrypt to the expected bytes, never be overwritten.
 Transfer failure can leave encrypted unselected objects but no success record.
 
 Budgets: 30 GiB total retained data, 100,000 files, 512 MiB per file, two archive
-transfers at a time, 45-minute acquisition step, 30-minute archive step and a
-90-minute per-model job. Existing per-source resource limits still apply, including
+transfers per model, at most two NOAA model archives at once, 45 minutes per NOAA
+acquisition, 30 minutes per NOAA model archive, and 90 minutes per independent-model
+job. The combined NOAA runner has a 120-minute fail-closed cap. Existing per-source resource limits still apply, including
 NOAA's 20 GiB free-disk check. Actual runner capacity must be measured; no local
 timing or synthetic fixture establishes cloud throughput or a completion SLA.
+
+The successful 2026-09-01 06Z run took 55 minutes with a generic three-runner pool.
+Its measured NOAA acquisitions totalled 13.89 minutes; two joined archive pairs project
+22.53 minutes from the same run's archive timings. Including one shared setup gives a
+37–38 minute NOAA path, while the independent HRDPS path measured 34.48 minutes. The
+expected critical path is therefore about 38 minutes (roughly 17 minutes, or 31%,
+shorter). Dependency-cache hits may save another measured 0.5–1.5 minutes, but are not
+part of the scientific or publication acceptance contract. Disjoint append-only
+per-model qualification approvals could remove a later 10–17 minute serialization;
+that authority redesign is deliberately not included here.
 
 ## What is deliberately not done here
 
