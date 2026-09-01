@@ -17,6 +17,7 @@ export function pixelDifference(on,off){
   let changed=0;for(let i=0;i<on.data.length;i+=4)if(Math.max(...[0,1,2].map(c=>Math.abs(on.data[i+c]-off.data[i+c])))>8)changed++;
   return changed/(on.width*on.height);
 }
+export function layerActivationNeeded(layers,field){return layers?.[field]?.visible!==true;}
 export function browserCandidateReady(state,expected){
   return state?.origin===STAGING_ORIGIN&&state?.releaseStatus===200&&state?.selectionStatus===200
     &&state?.sourceSha===expected.sourceSha&&state?.releaseId===expected.releaseId
@@ -107,6 +108,11 @@ export async function runMatrix(env){
     const option=page.locator('#forecast-model-dialog [role="radio"]').filter({has:page.locator('.wy-model-name',{hasText:new RegExp('^'+LABELS[model]+'$')})});
     await option.waitFor({state:'visible',timeout:15000});assert.equal(await option.isDisabled(),false);await option.click();
   }
+  async function ensureLayer(field){
+    const layers=await page.evaluate(()=>window.__atmos.store.getState().layers);
+    if(layerActivationNeeded(layers,field))await page.evaluate(field=>window.__atmos.activateLayer(field),field);
+    await page.waitForFunction(field=>window.__atmos.store.getState().layers[field]?.visible===true,field,{timeout:15000});
+  }
   async function settled(e,field,cursor){
     await page.waitForFunction(({model,init,field,id,cursor})=>{
       const a=window.__atmos,s=a?.store.getState(),m=s?.manifest;
@@ -144,7 +150,10 @@ export async function runMatrix(env){
     }
     for(const entry of bundle.entries){
       validateSelection(bytes,env.UI_SELECTION_SHA256);const init=cycleTime(entry.init),lead=Math.ceil((Date.now()-init)/3600000)+1,cursor=init+(lead+.5)*3600000;assert.ok(lead+1<=48);
-      await page.evaluate(()=>window.__atmos.activateLayer('wind'));await openModel(entry.model);
+      // activateLayer is intentionally a toggle: calling it when wind is already visible clears
+      // every weather layer and removes the model selector. The matrix needs idempotent "ensure",
+      // not a second user toggle, between model rows.
+      await ensureLayer('wind');await openModel(entry.model);
       await page.waitForFunction(model=>window.__atmos.store.getState().manifest?.model===model,entry.model,{timeout:45000});
       await page.evaluate(cursor=>{window.__stagingGateCommits=[];const s=window.__atmos.store.getState();s.select(null);s.setCursor(cursor);s.setPlaying(false);s.setParticlesOverlay(false);},cursor);
       await settled(entry,'wind',cursor);const selected=await snapshot();assert.equal(selected.base,entry.manifestPath.slice(0,-'manifest.json'.length));
@@ -154,7 +163,7 @@ export async function runMatrix(env){
       }
       const layers=[];
       for(const field of ['temp','wind','mslp']){
-        await page.evaluate(field=>{window.__stagingGateCommits=[];return window.__atmos.activateLayer(field);},field);await settled(entry,field,cursor);
+        await page.evaluate(()=>{window.__stagingGateCommits=[];});await ensureLayer(field);await settled(entry,field,cursor);
         const before=await snapshot(),clip={x:300,y:160,width:650,height:470},on=PNG.sync.read(await page.screenshot({clip}));
         const opacity=await page.evaluate(field=>{const s=window.__atmos.store.getState(),v=s.layers[field].opacity;s.setLayerOpacity(field,0);return v;},field);
         await page.waitForFunction(id=>window.__atmos.deckSnapshot().find(d=>d.id===id)?.opacity===0,DECK[field],{timeout:15000});
@@ -169,7 +178,7 @@ export async function runMatrix(env){
         assert.match(text,/verified point forecast.*not yet published/i,'unqualified model must explicitly abstain from point/fusion issuance');assert.ok(text.includes(entry.model.toUpperCase()));
         await page.evaluate(()=>window.__atmos.store.getState().select(null));layers.push({field,changedRatio:changed,point:'explicit-unavailable',fusionEligible:false});
       }
-      await page.evaluate(()=>window.__atmos.activateLayer('wind'));await settled(entry,'wind',cursor);
+      await ensureLayer('wind');await settled(entry,'wind',cursor);
       const domain=await page.evaluate(g=>{const a=window.__atmos;let good=null;for(const x of [.25,.5,.75])for(const y of [.25,.5,.75]){
         const lon=g.lon0+(g.lon1-g.lon0)*x,lat=g.lat1+(g.lat0-g.lat1)*y,value=a.sampleWind(lon,lat);if(Number.isFinite(value))good={lon,lat,value,west:a.sampleWind(lon-360,lat),east:a.sampleWind(lon+360,lat)};}
         return {good,outside:a.sampleWind((g.lon0+g.lon1)/2,g.lat1-1)};},entry.grid);
