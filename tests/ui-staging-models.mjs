@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {BASELINE_PROFILE,MODELS,GRIDS,variables,displayPaths,digest,canonical,profileFor,validateProfile,requireProductionProfile,validateSelection,readSelection,validateCandidateSelection,requireStagingApproval,browserEnvironment,validateBrowserReceipt} from '../tools/ui-staging-models.mjs';
-import {browserCandidateReady,layerActivationNeeded,pixelDifference,responseCaptureNeeded} from '../tools/ui-staging-model-browser.mjs';
+import {browserCandidateReady,discardedResponseBody,layerActivationNeeded,pixelDifference,responseBodyOrFallback,responseCaptureNeeded,validateFetchedObject} from '../tools/ui-staging-model-browser.mjs';
 import {createCandidate,hash,eligibleRun,REPOSITORY} from '../tools/ui-candidate.mjs';
 import {eligibleBuild} from '../tools/ui-build-transfer.mjs';
 import {publicBuildEnvironment,requiredSourceGuard,weatherFeedVerificationRequired} from '../tools/ui-release.mjs';
@@ -112,15 +112,21 @@ test('model matrix ensures an active layer without toggling an already-visible l
   assert.equal(layerActivationNeeded({wind:{visible:false}},'wind'),true);
   assert.equal(layerActivationNeeded({},'wind'),true);
 });
-test('browser byte proof ignores canceled stale-race responses but captures each required object once',()=>{
-  const required=new Set(['/data/_catalog/current/temp/001.png']),observed=new Map(),capturing=new Set();
+test('browser byte proof ignores stale responses, captures once, and narrowly recovers a discarded CDP body',async()=>{
+  const path='/data/_catalog/current/temp/001.png',required=new Set([path]),observed=new Map(),capturing=new Set();
   assert.equal(responseCaptureNeeded(required,observed,capturing,'/data/_catalog/stale/temp/001.png'),false);
-  assert.equal(responseCaptureNeeded(required,observed,capturing,'/data/_catalog/current/temp/001.png'),true);
-  capturing.add('/data/_catalog/current/temp/001.png');
-  assert.equal(responseCaptureNeeded(required,observed,capturing,'/data/_catalog/current/temp/001.png'),false);
-  capturing.clear();
-  observed.set('/data/_catalog/current/temp/001.png',DIGEST);
-  assert.equal(responseCaptureNeeded(required,observed,capturing,'/data/_catalog/current/temp/001.png'),false);
+  assert.equal(responseCaptureNeeded(required,observed,capturing,path),true);capturing.add(path);assert.equal(responseCaptureNeeded(required,observed,capturing,path),false);
+  let fallbacks=0;const discarded={body:async()=>{throw Error('response.body: Protocol error (Network.getResponseBody): No data found for resource with given identifier');}};
+  assert.equal(discardedResponseBody(await discarded.body().catch(e=>e)),true);
+  assert.deepEqual(await responseBodyOrFallback(discarded,async()=>{fallbacks++;return Buffer.from('exact');}),Buffer.from('exact'));assert.equal(fallbacks,1);
+  const other={body:async()=>{throw Error('HTTP body truncated');}};await assert.rejects(()=>responseBodyOrFallback(other,async()=>{fallbacks++;return Buffer.from('wrong');}),/truncated/);assert.equal(fallbacks,1);
+  const bytes=Buffer.from('exact'),expected={catalogId:'current',bytes:bytes.length,sha256:digest(bytes)},headers={get:name=>name==='x-weatherx-catalog'?'current':null};
+  const fetched={url:'https://staging.weatherx.org'+path,status:200,headers};assert.deepEqual(validateFetchedObject(path,expected,fetched,bytes),bytes);
+  for(const mutate of [r=>r.url='https://weatherx.org'+path,r=>r.url+='?redirected=1',r=>r.status=206,r=>r.headers={get:()=> 'stale'}]){
+    const bad={...fetched};mutate(bad);assert.throws(()=>validateFetchedObject(path,expected,bad,bytes));
+  }
+  assert.throws(()=>validateFetchedObject(path,{...expected,bytes:bytes.length+1},fetched,bytes));assert.throws(()=>validateFetchedObject(path,{...expected,sha256:'0'.repeat(64)},fetched,bytes));
+  capturing.clear();observed.set(path,DIGEST);assert.equal(responseCaptureNeeded(required,observed,capturing,path),false);
 });
 test('staging can bootstrap an old site but every uploaded candidate must pass weather-feed verification',()=>{
   assert.equal(weatherFeedVerificationRequired('staging','preflight'),false);
