@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { configurationDigest, validateProjectSnapshot } from '../tools/ui-release.mjs';
+import { configurationDigest, stagingEnvVarAllowed, validateProjectSnapshot } from '../tools/ui-release.mjs';
 
 function project(stage = 'staging') {
   return { name: stage === 'staging' ? 'weatherx-platform-staging' : 'atmos-platform', production_branch: 'main', source: null,
@@ -79,4 +79,20 @@ test('existing exact name/branch/runtime/canonical deployment/config-digest chec
   }
   assert.throws(() => validateProjectSnapshot('unknown', project(), '0'.repeat(64)));
   const p = project(); assert.throws(() => validateProjectSnapshot('staging', p, '0'.repeat(64)), /configuration changed/);
+});
+test('staging admits exactly the noncommercial forecast fallback variable and nothing else', () => {
+  for (const context of ['production', 'preview']) {
+    const p = project(); p.deployment_configs[context].env_vars = { FORECAST_FALLBACK_ACCESS: { type: 'plain_text', value: 'non-commercial' } };
+    assert.equal(validate(p), p, context + ' plain_text non-commercial');
+    p.deployment_configs[context].env_vars = { FORECAST_FALLBACK_ACCESS: { type: 'secret_text' } };
+    assert.equal(validate(p), p, context + ' secret_text by name');
+    for (const bad of [{ type: 'plain_text', value: 'customer' }, { type: 'plain_text', value: 'non-commercial', extra: 1 }, { value: 'non-commercial' }, { type: 'json', value: 'non-commercial' }]) {
+      p.deployment_configs[context].env_vars = { FORECAST_FALLBACK_ACCESS: bad };
+      assert.throws(() => validate(p), /env_vars\.FORECAST_FALLBACK_ACCESS/);
+    }
+    p.deployment_configs[context].env_vars = { FORECAST_FALLBACK_ACCESS: { type: 'plain_text', value: 'non-commercial' }, FORECAST_FALLBACK_KEY: { type: 'secret_text' } };
+    assert.throws(() => validate(p), /env_vars\.FORECAST_FALLBACK_KEY/);
+  }
+  assert.equal(stagingEnvVarAllowed('FORECAST_FALLBACK_ACCESS', { type: 'plain_text', value: 'non-commercial' }), true);
+  assert.equal(stagingEnvVarAllowed('CLOUDFLARE_API_TOKEN', { type: 'secret_text' }), false);
 });

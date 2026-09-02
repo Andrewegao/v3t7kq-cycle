@@ -61,6 +61,15 @@ export function configurationDigest(project) {
   return hash(JSON.stringify(canonical({ name: project.name, production_branch: project.production_branch,
     source: project.source ?? null, domains: project.domains, config: project.deployment_configs?.production })));
 }
+export const STAGING_ALLOWED_ENV_VARS = Object.freeze({ FORECAST_FALLBACK_ACCESS: 'non-commercial' });
+export function stagingEnvVarAllowed(name, entry) {
+  if (!Object.hasOwn(STAGING_ALLOWED_ENV_VARS, name) || entry === null || typeof entry !== 'object' || Array.isArray(entry)) return false;
+  // A plain_text entry must carry exactly the approved value; a secret_text entry (set through
+  // `wrangler pages secret put`) carries no value in the API payload and is accepted by name only.
+  if (entry.type === 'plain_text') return entry.value === STAGING_ALLOWED_ENV_VARS[name] && Object.keys(entry).every(key => key === 'type' || key === 'value');
+  if (entry.type === 'secret_text') return Object.keys(entry).every(key => key === 'type' || key === 'value');
+  return false;
+}
 export function validateStagingPagesBindings(project) {
   // Pages "production" means the main branch of THIS staging project, not WeatherX
   // production. Neither context may give the public shell writable backend access.
@@ -77,6 +86,12 @@ export function validateStagingPagesBindings(project) {
     assert.ok(record(config), 'invalid staging Pages configuration');
     for (const [field, value] of Object.entries(config)) {
       if (runtimeFields.has(field)) continue;
+      if (field === 'env_vars' && record(value)) {
+        // WeatherX is noncommercial and the Open-Meteo point fallback is intended on staging.
+        // Exactly one named, non-sensitive variable may exist; nothing else may be bound.
+        for (const [name, entry] of Object.entries(value)) assert.ok(stagingEnvVarAllowed(name, entry), `staging Pages ${context}.env_vars.${name} bindings/resources must be empty (only FORECAST_FALLBACK_ACCESS=non-commercial is approved)`);
+        continue;
+      }
       assert.ok(value === null || value === undefined || (record(value) && Object.keys(value).length === 0),
         `staging Pages ${context}.${field} bindings/resources must be empty`);
     }
