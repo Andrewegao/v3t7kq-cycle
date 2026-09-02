@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 const root=new URL('../',import.meta.url);
 const read=p=>readFileSync(new URL(p,root),'utf8');
-const staging=read('.github/workflows/ui-staging.yml'), prod=read('.github/workflows/ui-release.yml'), source=read('tools/ui-release.mjs');
+const staging=read('.github/workflows/ui-staging.yml'), prod=read('.github/workflows/ui-release.yml'), source=read('tools/ui-release.mjs'), candidate=read('tools/ui-candidate.mjs');
 const {installPagesWorker}=await import('../tools/ui-release.mjs');
 test('staging rejects stale public point data before expensive build work while production remains isolated',()=>{
   const preflight='node cycle/tools/ui-staging-preflight.mjs';
@@ -24,6 +24,7 @@ test('staging workflow leaves release-mode activation to the exact-profile contr
   assert.doesNotMatch(prod,/ATMOS_STAGING_EXPERIMENT_RELEASE|MODEL_SELECTION_SHA256|VITE_STAGING_MODEL_ADMISSION/);
   const stagedController="ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && 'dbc97a26bc239398ffa9ec157a094148961b6451' || '847ca21e104604ad61993846455a0007cfd9b825' }}";
   assert.equal(staging.split(stagedController).length-1,2);
+  assert.match(candidate,/STAGING_CONTROL_SHA = '847ca21e104604ad61993846455a0007cfd9b825'/);
   assert.match(prod,/ref: dbc97a26bc239398ffa9ec157a094148961b6451/);
   assert.doesNotMatch(prod,/847ca21e104604ad61993846455a0007cfd9b825/);
 });
