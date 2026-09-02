@@ -212,11 +212,25 @@ export async function runMatrix(env){
         const fieldPaths=requiredFor(field);
         step(`model ${entry.model} field ${field}`);await page.evaluate(()=>{window.__stagingGateCommits=[];});await ensureLayer(field);await settled(entry,field,cursor);
         const before=await snapshot(),clip={x:300,y:160,width:650,height:470},on=PNG.sync.read(await page.screenshot({clip}));
-        const opacity=await page.evaluate(field=>{const s=window.__atmos.store.getState(),v=s.layers[field].opacity;s.setLayerOpacity(field,0);return v;},field);
-        try{await page.waitForFunction(id=>window.__atmos.deckSnapshot().find(d=>d.id===id)?.opacity===0,DECK[field],{timeout:30000});}
-        catch(error){throw Error(`${entry.model}/${field} deck opacity did not reach 0: ${JSON.stringify(await snapshot())}; ${error.message}`);}
+        // The Wind speed field paints at a fixed authored opacity (0.96 × zoom fade); the store's
+        // wind opacity governs the particles, so an opacity-0 probe never blanks the field. Prove
+        // Wind pixels by actually hiding the layer, exactly as a user toggle does; scalar fields
+        // honour their store opacity and keep the opacity probe.
+        step(`model ${entry.model} field ${field} off-state`);
+        if(field==='wind'){
+          await page.evaluate(()=>window.__atmos.store.getState().setLayerVisible('wind',false));
+          try{await page.waitForFunction(id=>!window.__atmos.deckSnapshot().some(d=>d.id===id)&&!window.__atmos.store.getState().layers.wind?.visible,DECK[field],{timeout:30000});}
+          catch(error){throw Error(`${entry.model}/wind did not hide: ${JSON.stringify(await snapshot())}; ${error.message}`);}
+        } else {
+          const opacity=await page.evaluate(field=>{const s=window.__atmos.store.getState(),v=s.layers[field].opacity;s.setLayerOpacity(field,0);return v;},field);
+          try{await page.waitForFunction(id=>window.__atmos.deckSnapshot().find(d=>d.id===id)?.opacity===0,DECK[field],{timeout:30000});}
+          catch(error){throw Error(`${entry.model}/${field} deck opacity did not reach 0: ${JSON.stringify(await snapshot())}; ${error.message}`);}
+          page.__restoreOpacity={field,opacity};
+        }
         await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));const off=PNG.sync.read(await page.screenshot({clip}));
-        await page.evaluate(({field,opacity})=>window.__atmos.store.getState().setLayerOpacity(field,opacity),{field,opacity});await settled(entry,field,cursor);
+        if(field==='wind')await ensureLayer('wind');
+        else await page.evaluate(({field,opacity})=>window.__atmos.store.getState().setLayerOpacity(field,opacity),page.__restoreOpacity);
+        await settled(entry,field,cursor);
         const after=await snapshot();assert.equal(after.model,before.model);assert.equal(after.init,before.init);assert.equal(after.base,before.base);assert.equal(after.cursor,before.cursor);assert.deepEqual(after.center,before.center);
         const changed=pixelDifference(on,off);assert.ok(changed>.01,'weather raster failed >1% visible-pixel proof');
         await drainResponses();assert.equal(network.length,0,network.join(';'));
