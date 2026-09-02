@@ -89,7 +89,7 @@ export function validateStagingPagesBindings(project) {
       if (field === 'env_vars' && record(value)) {
         // WeatherX is noncommercial and the Open-Meteo point fallback is intended on staging.
         // Exactly one named, non-sensitive variable may exist; nothing else may be bound.
-        for (const [name, entry] of Object.entries(value)) assert.ok(stagingEnvVarAllowed(name, entry), `staging Pages ${context}.env_vars.${name} is not an approved variable`);
+        for (const [name, entry] of Object.entries(value)) assert.ok(stagingEnvVarAllowed(name, entry), `staging Pages ${context}.env_vars.${name} bindings/resources must be empty (only FORECAST_FALLBACK_ACCESS=non-commercial is approved)`);
         continue;
       }
       assert.ok(value === null || value === undefined || (record(value) && Object.keys(value).length === 0),
