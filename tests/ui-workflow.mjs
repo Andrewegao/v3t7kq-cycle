@@ -22,10 +22,10 @@ test('staging workflow leaves release-mode activation to the exact-profile contr
   assert.match(source,/publicBuildEnvironment\(profile,selection/);
   assert.match(source,/merge-base','--is-ancestor',requiredSourceGuard\(profile\),'HEAD'/);
   assert.doesNotMatch(prod,/ATMOS_STAGING_EXPERIMENT_RELEASE|MODEL_SELECTION_SHA256|VITE_STAGING_MODEL_ADMISSION/);
-  const stagedController="ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && 'dbc97a26bc239398ffa9ec157a094148961b6451' || '24941bdc4767ea3f20e2764a93c1ac6ab00c2989' }}";
+  const stagedController="ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && 'dbc97a26bc239398ffa9ec157a094148961b6451' || '82ff2d7ece07e1257888c1c9d8f247feef34c8d3' }}";
   assert.equal(staging.split(stagedController).length-1,2);
   assert.match(prod,/ref: dbc97a26bc239398ffa9ec157a094148961b6451/);
-  assert.doesNotMatch(prod,/24941bdc4767ea3f20e2764a93c1ac6ab00c2989/);
+  assert.doesNotMatch(prod,/82ff2d7ece07e1257888c1c9d8f247feef34c8d3/);
 });
 test('guard upload adapter preserves args and disables rebundling without invoking a real CLI',()=>{
   const temp=mkdtempSync(resolve(tmpdir(),'wx-ui-adapter-test-'));

@@ -7,7 +7,7 @@ import { resolve, dirname } from 'node:path';
 import {BASELINE_PROFILE,validateProfile,validateCandidateSelection,requireProductionProfile} from './ui-staging-models.mjs';
 
 export const CONTROL_SHA = 'dbc97a26bc239398ffa9ec157a094148961b6451';
-export const STAGING_CONTROL_SHA = '24941bdc4767ea3f20e2764a93c1ac6ab00c2989';
+export const STAGING_CONTROL_SHA = '82ff2d7ece07e1257888c1c9d8f247feef34c8d3';
 export const REPOSITORY = 'Andrewegao/v3t7kq-cycle';
 export const FREEZE_UNTIL = '2026-08-31T11:00:00Z';
 export const MAX_BYTES = 96 * 1024 * 1024;
