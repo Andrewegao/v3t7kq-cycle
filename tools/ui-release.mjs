@@ -97,13 +97,22 @@ export function validateStagingPagesBindings(project) {
     }
   }
 }
+export function describeConfiguration(project) {
+  const prod = project.deployment_configs?.production ?? {};
+  const vars = Object.entries(prod.env_vars ?? {}).map(([name, entry]) => `${name}:${entry?.type ?? 'unknown'}`).sort();
+  return `production_branch=${project.production_branch}, domains=[${(project.domains ?? []).join(',')}], env_vars=[${vars.join(',')}], compatibility_date=${prod.compatibility_date}`;
+}
 export function validateProjectSnapshot(stage, p, expectedDigest) {
   assert.ok(Object.hasOwn(PROJECTS, stage), 'unknown UI target');
   const project = PROJECTS[stage];
   assert.equal(p.name, project); assert.equal(p.production_branch, 'main');
   assert.ok(p.source === null || p.source === undefined, 'Git-linked Pages projects cannot bypass staging/manual gates');
   if (stage === 'staging') validateStagingPagesBindings(p);
-  assert.equal(configurationDigest(p), expectedDigest, 'Pages configuration changed or is not approved');
+  const observedDigest = configurationDigest(p);
+  // The refusal names both digests and the non-sensitive shape of the change (variable names and
+  // types, domains, compatibility) so the reviewer can approve without a Cloudflare token; values
+  // are never printed.
+  assert.equal(observedDigest, expectedDigest, `Pages configuration changed or is not approved (observed ${observedDigest}, approved ${expectedDigest ?? 'none'}; ${describeConfiguration(p)})`);
   assert.equal(p.deployment_configs?.production?.compatibility_date, '2026-06-23', 'compile/runtime compatibility mismatch');
   assert.deepEqual(p.deployment_configs?.production?.compatibility_flags ?? [], [], 'unreviewed compatibility flags');
   assert.equal(p.canonical_deployment?.latest_stage?.status, 'success');
