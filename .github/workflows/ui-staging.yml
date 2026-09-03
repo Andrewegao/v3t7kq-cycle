@@ -73,7 +73,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Andrewegao/atmos
-          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && 'dbc97a26bc239398ffa9ec157a094148961b6451' || 'a759a3246679742565ae1c56e78fa9c8524b7752' }}
+          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && 'dbc97a26bc239398ffa9ec157a094148961b6451' || 'e7cf798460b1bba5bde7e9d3b24b8bf1ca988433' }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
           path: control
@@ -155,7 +155,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Andrewegao/atmos
-          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && 'dbc97a26bc239398ffa9ec157a094148961b6451' || 'a759a3246679742565ae1c56e78fa9c8524b7752' }}
+          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && 'dbc97a26bc239398ffa9ec157a094148961b6451' || 'e7cf798460b1bba5bde7e9d3b24b8bf1ca988433' }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
           path: control
