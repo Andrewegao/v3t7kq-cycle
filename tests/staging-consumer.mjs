@@ -13,6 +13,12 @@ test('locked controller dependencies are installed before the gate module is imp
   const gate=workflow.indexOf("import {consumerGate} from './cycle/tools/staging-consumer.mjs'");
   assert.ok(install >= 0 && gate > install);
 });
+test('the full edge check receives its pinned Python and image dependency first',()=>{
+  const setup=workflow.indexOf('actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065');
+  const pillow=workflow.indexOf('python -m pip install pillow');
+  const check=workflow.indexOf('npm run check --prefix control/platform/edge');
+  assert.ok(setup >= 0 && pillow > setup && check > pillow);
+});
 test('workflow supplies the existing read-only credential only to the inactive upload step',()=>{
   const execute=workflow.split('      - name: Guarded staging-only inactive upload and public-mode repair\n')[1]?.split('\n      - ')[0]??'';
   assert.match(execute,/SHARED_READ_ACCESS_KEY_ID: \$\{\{ secrets\.SHARED_R2_READ_ACCESS_KEY_ID \}\}/);

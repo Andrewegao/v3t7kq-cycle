@@ -30,6 +30,8 @@ jobs:
         with: { path: cycle, persist-credentials: false }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22 }
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with: { python-version: '3.12' }
       - name: Install locked staging controller dependencies before importing the gate
         run: npm ci --ignore-scripts --prefix cycle/staging-controller
       - name: Refuse any unapproved target, source or invocation
@@ -44,7 +46,9 @@ jobs:
           persist-credentials: false
       - name: Install locked dependencies without a deployment credential
         working-directory: control/platform/edge
-        run: npm ci
+        run: |
+          npm ci
+          python -m pip install pillow
       - name: Full consumer checks and controller rollback contracts
         run: |
           npm run check --prefix control/platform/edge
