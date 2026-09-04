@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {consumerGate,SOURCE_SHA,WORKER,EXISTING_ROUTES,configForStaging,desiredSettings,settingsState,guardedRepair,consumerSnapshot} from '../tools/staging-consumer.mjs';
+import {consumerGate,SOURCE_SHA,WORKER,EXISTING_ROUTES,configForStaging,desiredSettings,settingsState,guardedRepair,consumerSnapshot,assertAllowedTransition} from '../tools/staging-consumer.mjs';
+import {normalizedBindings} from '../tools/consumer-refresh.mjs';
+import {SHARED_READ_SECRETS,SHARED_READ_VARS} from '../tools/staging-shared-read.mjs';
 const OLD='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',NEW='bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',OTHER='cccccccc-cccc-cccc-cccc-cccccccccccc';
 const env={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_REPOSITORY:'Andrewegao/v3t7kq-cycle',GITHUB_REF:'refs/heads/main',GITHUB_EVENT_NAME:'workflow_dispatch',GITHUB_JOB:'refresh',GITHUB_WORKFLOW_REF:'Andrewegao/v3t7kq-cycle/.github/workflows/staging-consumer-refresh.yml@refs/heads/main',STAGING_CONSUMER_ENABLED:'true',STAGING_CONSUMER_SOURCE_SHA:SOURCE_SHA,CONFIRM:'REFRESH-STAGING-CONSUMER',STAGING_R2_ACCOUNT_ID:'a89f9a1af485021fbc60a68b163c7c6e',STAGING_CONSUMER_APPROVED_VERSION:OLD,STAGING_CONSUMER_APPROVED_SETTINGS_SHA256:'a'.repeat(64),GITHUB_RUN_ID:'1',GITHUB_RUN_ATTEMPT:'1'};
 const settings={bindings:[{name:'AUTH_MODE',type:'plain_text',text:'enforce'},{name:'BILLING_MODE',type:'plain_text',text:'enabled'},{name:'DATA_BUCKET',type:'r2_bucket',bucket_name:'weatherx-data-staging'}],compatibility_date:'2026-08-15'};
@@ -14,7 +16,32 @@ test('configuration target cannot be switched to production or another resource'
   const namedZone=structuredClone(base);delete namedZone.env.staging.routes[0].zone_id;namedZone.env.staging.routes[0].zone_name='weatherx.org';
   assert.equal(configForStaging(namedZone).name,WORKER);
   namedZone.env.staging.routes[0].zone_name='another.org';assert.throws(()=>configForStaging(namedZone));
-  for(const mutation of [b=>b.env.staging.name='weatherx-platform-edge-production',b=>b.env.staging.r2_buckets[0].bucket_name='weatherx-data-production',b=>b.env.staging.vars.AUTH_MODE='observe',b=>b.env.staging.routes[0].pattern='weatherx.org/data/*']){const v=structuredClone(base);mutation(v);assert.throws(()=>configForStaging(v));}
+  for(const mutation of [b=>b.env.staging.name='weatherx-platform-edge-production',b=>b.env.staging.r2_buckets[0].bucket_name='weatherx-data-production',b=>b.env.staging.vars.AUTH_MODE='observe',b=>b.env.staging.routes[0].pattern='weatherx.org/data/*',
+    b=>b.env.staging.r2_buckets.push({binding:'SHARED',bucket_name:'weatherx-data-production'}),b=>b.env.staging.vars.DATA_SOURCE_MODE='mirror',b=>b.env.staging.vars.SHARED_READ_DATA_BUCKET='weatherx-data-production']){const v=structuredClone(base);mutation(v);assert.throws(()=>configForStaging(v));}
+});
+function sharedBase(){
+  return {name:'base',workers_dev:false,compatibility_date:settings.compatibility_date,env:{staging:{name:WORKER,secrets:{required:['AUTH_HASH_KEY',...SHARED_READ_SECRETS]},vars:{APP_ORIGIN:'https://staging.weatherx.org',AUTH_MODE:'public',BILLING_MODE:'disabled',DATA_CATALOG_MODE:'serve',...SHARED_READ_VARS},
+    r2_buckets:[{binding:'DATA_BUCKET',bucket_name:'weatherx-data-staging'},{binding:'COMPONENT_BUCKET',bucket_name:'weatherx-components-staging'}],d1_databases:[{binding:'PLATFORM_DB',database_id:'9501827a-7e4c-4249-806b-d45d5857d9e5'}],routes:[{pattern:'staging.weatherx.org/data/*',zone_name:'weatherx.org'}]}}};
+}
+test('shared-read staging shape is complete or refused; production buckets stay unbindable',()=>{
+  assert.equal(configForStaging(sharedBase()).vars.DATA_SOURCE_MODE,'shared');
+  for(const mutation of [b=>delete b.env.staging.vars.SHARED_READ_ACCOUNT_ID,b=>b.env.staging.vars.SHARED_READ_ACCOUNT_ID='b'.repeat(32),b=>b.env.staging.vars.SHARED_READ_DATA_BUCKET='weatherx-data-staging',
+    b=>b.env.staging.vars.SHARED_READ_EXTRA='x',b=>b.env.staging.secrets.required=['AUTH_HASH_KEY'],b=>b.env.staging.r2_buckets.push({binding:'SHARED_DATA_BUCKET',bucket_name:'weatherx-data-production'})]){const v=sharedBase();mutation(v);assert.throws(()=>configForStaging(v));}
+});
+test('shared-read rollout adds exactly the reviewed variables and secrets on top of the public-mode pair',()=>{
+  // The live Worker before rollout: public-mode pair still old, no shared-read bindings at all.
+  const live=[...settings.bindings,{name:'AUTH_HASH_KEY',type:'secret_text'},{name:'COMPONENT_BUCKET',type:'r2_bucket',bucket_name:'weatherx-components-staging'},
+    {name:'APP_ORIGIN',type:'plain_text',text:'https://staging.weatherx.org'},{name:'DATA_CATALOG_MODE',type:'plain_text',text:'serve'},{name:'PLATFORM_DB',type:'d1',id:'9501827a-7e4c-4249-806b-d45d5857d9e5'}];
+  const config=configForStaging(sharedBase()),state=settingsState({...settings,bindings:live},['staging.weatherx.org/data/*'],[]);
+  const desired=desiredSettings(state,config);
+  for(const [name,text] of Object.entries(SHARED_READ_VARS))assert.deepEqual(desired.bindings.find(b=>b.name===name),{name,type:'plain_text',text});
+  for(const name of SHARED_READ_SECRETS)assert.deepEqual(desired.bindings.find(b=>b.name===name),{name,type:'secret_text'});
+  assert.deepEqual(desired.bindings,normalizedBindings(desired.bindings),'desired bindings must be normalized for comparison');
+  assertAllowedTransition(config,state,desired);
+  assert.throws(()=>assertAllowedTransition(config,state,{...desired,bindings:[...desired.bindings,{name:'SHARED_DATA_BUCKET',type:'r2_bucket',bucket_name:'weatherx-data-production'}]}));
+  assert.throws(()=>assertAllowedTransition(config,state,{...desired,bindings:desired.bindings.filter(b=>b.name!=='SHARED_READ_SECRET_ACCESS_KEY')}));
+  const ownConfig=configForStaging({name:'base',workers_dev:false,env:{staging:{...sharedBase().env.staging,vars:{APP_ORIGIN:'https://staging.weatherx.org',AUTH_MODE:'public',BILLING_MODE:'disabled',DATA_CATALOG_MODE:'serve'}}}});
+  assert.ok(!desiredSettings(state,ownConfig).bindings.some(b=>b.name.startsWith('SHARED_READ_')),'own-copy configuration adds nothing');
 });
 test('only the two known mode values change; snapshots survive JSON receipt serialization',()=>{
   const state=settingsState(settings,['staging.weatherx.org/data/*'],['17 3 * * *']);

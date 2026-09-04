@@ -1,5 +1,10 @@
 # Same-account shared weather data and isolated staging
 
+> **2026-09-04:** the copy model below is superseded by a read-only shared read of the
+> production release, designed and implemented in [`STAGING_SHARED_READ.md`](STAGING_SHARED_READ.md)
+> (not yet activated). The lanes in this document stay as the rollback path and as the way to
+> seed staging's own buckets; they are no longer the routine way to keep staging fresh.
+
 ## Current implementation versus activation
 
 `staging-data.yml` prepares an immutable copy of already-published weather data on a

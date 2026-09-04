@@ -9,7 +9,7 @@ export function stagingKey(bucket, key) {
   safePath(key.replace(/\/$/, ''));
   assert.ok(bucket === 'weatherx-data-staging' || bucket === 'weatherx-components-staging', 'staging bucket required');
   assert.ok(bucket === 'weatherx-components-staging' ? key.startsWith('components/') :
-    /^(releases|catalogs|staging-candidates)\//.test(key), 'object outside staging publication prefixes');
+    /^(releases|catalogs|staging-candidates|shared-read)\//.test(key), 'object outside staging publication prefixes');
   return { Bucket: bucket, Key: key };
 }
 const etag = value => { assert.match(value ?? '', /^"[A-Za-z0-9-]+"$/, 'missing/unsafe object ETag'); return value; };
@@ -100,7 +100,7 @@ export function createStagingS3(env, injectedClient, { pause = delay } = {}) {
     async put(bucket, key, body, options) {
       const target = stagingKey(bucket, key);
       assert.equal(bucket, 'weatherx-data-staging', 'activation cannot modify model components');
-      assert.ok(key === 'releases/current.json' || key === 'catalogs/current.json' ||
+      assert.ok(key === 'releases/current.json' || key === 'catalogs/current.json' || key === 'shared-read/pin.json' ||
         /^catalogs\/snapshots\/[A-Za-z0-9._-]+\.json$/.test(key) || /^staging-candidates\/[a-f0-9]{64}\/activations\//.test(key), 'write outside activation allowlist');
       assert.ok(Buffer.isBuffer(body) || typeof body === 'string'); assert.ok(Buffer.byteLength(body) <= 2 * 1024 ** 2);
       assert.ok(Boolean(options?.ifMatch) !== Boolean(options?.ifNoneMatch), 'exactly one CAS precondition required');

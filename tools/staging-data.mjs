@@ -10,6 +10,10 @@ export function validateHealth(platform, data) {
   assert.equal(data?.ok, true);
   assert.equal(data?.authMode, 'public');
   assert.equal(data?.catalogMode, 'serve', 'staging must serve its catalog');
+  assert.ok(data.dataSource === undefined || ['own', 'shared'].includes(data.dataSource), 'unknown staging data source');
+  // A shared-read Worker without its read credential answers 503 for every frame; refuse it here
+  // so the guarded consumer lane rolls back instead of leaving staging dark.
+  if (data.dataSource === 'shared') assert.equal(data.sharedReadConfigured, true, 'staging shared-read credential is missing');
 }
 
 async function readHealth(path, fetcher) {

@@ -9,6 +9,10 @@ test('actual old staging auth/billing modes fail before spending on collection',
   assert.throws(() => validateHealth({ ok: true, authMode: 'enforce', billingMode: 'enabled' }, data));
   assert.throws(() => validateHealth({ ...platform, billingMode: 'enabled' }, data));
   assert.throws(() => validateHealth(platform, { ...data, catalogMode: 'shadow' }));
+  validateHealth(platform, { ...data, dataSource: 'shared', sharedReadConfigured: true, pin: null });
+  assert.throws(() => validateHealth(platform, { ...data, dataSource: 'shared', sharedReadConfigured: false }), /credential/);
+  assert.throws(() => validateHealth(platform, { ...data, dataSource: 'shared' }), /credential/);
+  assert.throws(() => validateHealth(platform, { ...data, dataSource: 'mirror' }));
 });
 test('preflight only GETs fixed staging health URLs, without credentials or redirects', async () => {
   const calls = [];

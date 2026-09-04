@@ -1,0 +1,71 @@
+# Writes exactly one staging-owned object, shared-read/pin.json, with staging-scoped S3
+# credentials and a compare-and-swap. It freezes staging on one already-published
+# production release/catalog for a canary; production storage is never read or written.
+name: WeatherX staging shared-read canary pin
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: pin (freeze staging on the identities below) or unpin (follow production again)
+        required: true
+        type: choice
+        options: [pin, unpin]
+      release_id:
+        description: Production whole release to pin (blank = keep following current release)
+        required: false
+        type: string
+      catalog_id:
+        description: Production component catalog to pin (blank = keep following current catalog)
+        required: false
+        type: string
+      hours:
+        description: Pin lifetime in hours (1-48); the pin expires by itself
+        required: false
+        default: '6'
+        type: string
+      reason:
+        description: Short ASCII note recorded in the pin
+        required: false
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-staging-shared-read-pin
+  cancel-in-progress: false
+jobs:
+  pin:
+    environment:
+      name: data-staging
+      url: https://staging.weatherx.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      STAGING_DATA_ISOLATION_APPROVED: ${{ vars.STAGING_DATA_ISOLATION_APPROVED }}
+      STAGING_SHARED_READ_PIN_ENABLED: ${{ vars.STAGING_SHARED_READ_PIN_ENABLED }}
+      STAGING_R2_ACCOUNT_ID: ${{ vars.STAGING_R2_ACCOUNT_ID }}
+      PIN_RELEASE_ID: ${{ inputs.release_id }}
+      PIN_CATALOG_ID: ${{ inputs.catalog_id }}
+      PIN_HOURS: ${{ inputs.hours }}
+      PIN_REASON: ${{ inputs.reason }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Install integrity-locked S3 client without credentials
+        run: npm ci --ignore-scripts --prefix cycle/staging-controller
+      - name: Verify pin contracts without credentials
+        run: node --test cycle/tests/staging-shared-read.mjs cycle/tests/staging-s3.mjs
+      - name: Write or release the staging canary pin (compare-and-swap, staging bucket only)
+        env:
+          STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
+          STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
+        run: node cycle/tools/staging-shared-read.mjs "${{ inputs.action }}"
+      - name: Retain non-secret pin receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: staging-shared-read-pin-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/staging-shared-read/*.json
+          if-no-files-found: ignore
+          retention-days: 14
