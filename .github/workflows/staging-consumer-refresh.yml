@@ -56,6 +56,8 @@ jobs:
         timeout-minutes: 9
         env:
           STAGING_WORKER_API_TOKEN: ${{ secrets.STAGING_WORKER_API_TOKEN }}
+          SHARED_READ_ACCESS_KEY_ID: ${{ secrets.SHARED_R2_READ_ACCESS_KEY_ID }}
+          SHARED_READ_SECRET_ACCESS_KEY: ${{ secrets.SHARED_R2_READ_SECRET_ACCESS_KEY }}
         run: node cycle/tools/staging-consumer.mjs execute control "$RUNNER_TEMP/staging-consumer/receipt.json"
       - name: Recover prior staging version after interrupted activation
         if: ${{ always() && (steps.refresh.outcome == 'failure' || steps.refresh.outcome == 'cancelled') }}
