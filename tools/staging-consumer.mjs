@@ -17,10 +17,12 @@ export const WORKER = 'weatherx-platform-edge-staging';
 const ZONE = '9dc4df7c3c094ab9a11dd00d378adc26';
 const BASE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/workers/scripts/${WORKER}`;
 const UUID=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
-// Actual deployed route set audited before this repair. Source additionally names
-// three ancillary routes; this code-only refresh must not install those implicitly.
+// Actual deployed route set re-audited after the hazard-feed repair. Preserve the
+// ancillary feeds as part of the strict boundary; this refresh must not add or
+// remove any route implicitly.
 export const EXISTING_ROUTES=['staging.weatherx.org/api/platform/*','staging.weatherx.org/api/v1/*',
-  'staging.weatherx.org/cdn/*','staging.weatherx.org/data-atmos/*','staging.weatherx.org/data/*'];
+  'staging.weatherx.org/cdn/*','staging.weatherx.org/data-atmos/*','staging.weatherx.org/data/*',
+  'staging.weatherx.org/api/tc/*','staging.weatherx.org/api/gdacs/*','staging.weatherx.org/api/eonet/*'];
 const execute=promisify(execFile);
 const sorted=v=>[...v].sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
 

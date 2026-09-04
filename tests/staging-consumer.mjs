@@ -8,6 +8,14 @@ const OLD='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',NEW='bbbbbbbb-bbbb-bbbb-bbbb-bb
 const env={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_REPOSITORY:'Andrewegao/v3t7kq-cycle',GITHUB_REF:'refs/heads/main',GITHUB_EVENT_NAME:'workflow_dispatch',GITHUB_JOB:'refresh',GITHUB_WORKFLOW_REF:'Andrewegao/v3t7kq-cycle/.github/workflows/staging-consumer-refresh.yml@refs/heads/main',STAGING_CONSUMER_ENABLED:'true',STAGING_CONSUMER_SOURCE_SHA:SOURCE_SHA,CONFIRM:'REFRESH-STAGING-CONSUMER',STAGING_R2_ACCOUNT_ID:'a89f9a1af485021fbc60a68b163c7c6e',STAGING_CONSUMER_APPROVED_VERSION:OLD,STAGING_CONSUMER_APPROVED_SETTINGS_SHA256:'a'.repeat(64),GITHUB_RUN_ID:'1',GITHUB_RUN_ATTEMPT:'1'};
 const settings={bindings:[{name:'AUTH_MODE',type:'plain_text',text:'enforce'},{name:'BILLING_MODE',type:'plain_text',text:'enabled'},{name:'DATA_BUCKET',type:'r2_bucket',bucket_name:'weatherx-data-staging'}],compatibility_date:'2026-08-15'};
 const workflow=readFileSync(new URL('../.github/workflows/staging-consumer-refresh.yml',import.meta.url),'utf8');
+test('staging refresh preserves the complete live weather and hazard route boundary',()=>{
+  assert.deepEqual([...EXISTING_ROUTES].sort(),[
+    'staging.weatherx.org/api/eonet/*','staging.weatherx.org/api/gdacs/*',
+    'staging.weatherx.org/api/platform/*','staging.weatherx.org/api/tc/*',
+    'staging.weatherx.org/api/v1/*','staging.weatherx.org/cdn/*',
+    'staging.weatherx.org/data-atmos/*','staging.weatherx.org/data/*',
+  ]);
+});
 test('locked controller dependencies are installed before the gate module is imported',()=>{
   const install=workflow.indexOf('npm ci --ignore-scripts --prefix cycle/staging-controller');
   const gate=workflow.indexOf("import {consumerGate} from './cycle/tools/staging-consumer.mjs'");
