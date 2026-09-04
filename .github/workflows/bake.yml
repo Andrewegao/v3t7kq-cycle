@@ -112,6 +112,14 @@ jobs:
             echo "reason=preflight-command-failed" >> "$GITHUB_OUTPUT"
             echo "preflight failed; continuing with the full bake"
           fi
+      - name: pinned ground verifier runtime
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        if: ${{ steps.bake_plan.outputs.skip != 'true' }}
+        with: { python-version: '3.11' }
+      - name: ground verifier image dependency
+        if: ${{ steps.bake_plan.outputs.skip != 'true' }}
+        run: python3.11 -m pip install pillow
+      # Restore the data runtime after provisioning the separately pinned ground verifier.
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         with: { python-version: '3.12' }
@@ -168,6 +176,17 @@ jobs:
       - name: app deps (Weather Lab and release gates)
         if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         run: npm ci --prefix app
+      - name: preflight temporary browser-test bundle before weather downloads
+        if: ${{ steps.bake_plan.outputs.skip != 'true' }}
+        env:
+          VITE_PRODUCT: lab
+          VITE_APP: lab
+          WX_GROUND_QUALIFICATION_SCOPE: staging-qualification-only
+        run: |
+          gate_build="$(mktemp -d "$RUNNER_TEMP/weatherx-gate-build.XXXXXX")"
+          trap 'rm -rf "$gate_build"' EXIT
+          cd app
+          npx vite build --outDir "$gate_build/dist"
       - name: identify committed maintenance input producer
         id: maintenance_checkpoint
         if: ${{ steps.bake_plan.outputs.skip != 'true' }}
