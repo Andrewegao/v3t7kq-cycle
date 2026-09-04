@@ -2,7 +2,7 @@
 // deployment is embedded here. The trusted hosted adapter must enforce every CAS
 // option below and stream hashObject() rather than trusting R2 ETags as digests.
 import assert from 'node:assert/strict';
-import { gate as sharedGate, hash, identifier, safePath, validateRelease, validateCatalog, validateComponent } from './shared-data.mjs';
+import { gate as sharedGate, hash, identifier, pointModelSet, safePath, validateRelease, validateCatalog, validateComponent } from './shared-data.mjs';
 
 export const STAGING_DATA_BUCKET = 'weatherx-data-staging';
 export const STAGING_COMPONENT_BUCKET = 'weatherx-components-staging';
@@ -218,13 +218,16 @@ export function assertLiveProof(proof, prepared, ctx, servingCatalog) {
   health(proof); assert.deepEqual(proof.selection, ctx.selection);
   assert.ok(servingCatalog && servingCatalog.catalogId); assert.deepEqual(proof.servingCatalog, servingCatalog, 'live staging catalog identity differs');
   assert.equal(proof.sourceVerified, true, 'real decoded source comparison required');
-  assert.ok(Array.isArray(proof.points) && proof.points.length >= 14, 'fourteen real point responses required');
-  for (const model of ['ecmwf', 'gfs']) {
+  // Every point model the prepared release carries (ECMWF/GFS always; AIFS/ICON once
+  // admitted upstream) needs its own seven real decoded responses.
+  const pointModels = pointModelSet(prepared.manifest.pointSeries?.models);
+  assert.ok(Array.isArray(proof.points) && proof.points.length >= 7 * pointModels.length, 'seven real point responses per point model required');
+  for (const model of pointModels) {
     const points = proof.points.filter(p => p.model === model);
     assert.ok(points.length >= 7 && new Set(points.map(p => JSON.stringify(p.coordinates))).size >= 7, 'seven distinct points per model required');
   }
   for (const point of proof.points) {
-    assert.ok(['ecmwf', 'gfs'].includes(point.model)); assert.equal(point.status, 200); assert.equal(point.complete, true);
+    assert.ok(pointModels.includes(point.model)); assert.equal(point.status, 200); assert.equal(point.complete, true);
     assert.equal(point.releaseId, ctx.selection.releaseId); assert.equal(point.runId, prepared.manifest.pointSeries.models[point.model].runId);
     assert.ok(Array.isArray(point.coordinates) && point.coordinates.length === 2 && point.coordinates.every(Number.isFinite));
     assert.ok(Math.abs(point.coordinates[0]) <= 180 && Math.abs(point.coordinates[1]) <= 90);

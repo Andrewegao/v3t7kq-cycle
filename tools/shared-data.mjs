@@ -9,6 +9,11 @@ import { pathToFileURL } from 'node:url';
 
 export const ACCOUNT = 'a89f9a1af485021fbc60a68b163c7c6e';
 export const MODELS = ['aifs', 'ecmwf', 'gfs', 'hrrr'];
+// Point-series admission for the whole-release descriptor and for `point-<model>` catalog
+// components. Membership is a contract allowlist, not proof that a producer exists.
+export const POINT_MODELS = ['aifs', 'ecmwf', 'gfs', 'icon'];
+export const REQUIRED_POINT_MODELS = ['ecmwf', 'gfs'];
+const POINT_FRESHNESS_MARGIN_MS = 30 * 60_000;
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
 const SHA = /^[a-f0-9]{64}$/;
 const MAX_OBJECTS = 100_000, MAX_BYTES = 40 * 1024 ** 3;
@@ -17,6 +22,7 @@ const MAX_OBJECTS = 100_000, MAX_BYTES = 40 * 1024 ** 3;
 // recursive listing's metadata memory. Source and readback byte gates are unchanged.
 const BULK_TRANSFERS = '16', BULK_CHECKERS = '16';
 const checks = ['manifest', 'inventory', 'remote_bytes', 'coverage', 'freshness', 'live_superset', 'horizon', 'cadence', 'grid', 'referenced_bytes'];
+const pointChecks = ['manifest', 'inventory', 'remote_bytes', 'point_series'];
 export const hash = x => createHash('sha256').update(x).digest('hex');
 export function identifier(value) { assert.match(value ?? '', ID); assert.ok(!value.includes('..')); return value; }
 export function safePath(value) {
@@ -62,6 +68,30 @@ function inventory(items, sizeKey) {
   }
   return total;
 }
+export function pointModelSet(models) {
+  const ids = Object.keys(models ?? {}).sort();
+  assert.ok(REQUIRED_POINT_MODELS.every(model => ids.includes(model)), 'required point-series models missing');
+  assert.ok(ids.every(model => POINT_MODELS.includes(model)), 'unqualified point-series model expansion');
+  return ids;
+}
+function assertPointFreshness(descriptor, model, now) {
+  assert.ok(descriptor && Date.parse(descriptor.freshUntil) > now + POINT_FRESHNESS_MARGIN_MS, `point source lacks freshness margin: ${model}`);
+}
+function compactRun(value) {
+  const d = new Date(value);
+  return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}${String(d.getUTCHours()).padStart(2, '0')}`;
+}
+// Mirrors the upstream catalog promotion rule for a point-series route: canonical
+// `point-<model>` identity, its own mount, a WXPS1 descriptor bound to the generation run.
+function validatePointComponent(model, c, now) {
+  assert.deepEqual(c.mounts, [`point-series/v2/${model}/`], 'point-series component mount');
+  assert.ok(pointChecks.every(x => c.quality.checks?.includes(x)), 'missing original point-series component gates');
+  const p = c.pointSeries;
+  assert.ok(p && p.schemaVersion === 1 && p.modelId === model && p.descriptor, 'point-series component descriptor identity');
+  assert.equal(p.descriptor.storage?.format, 'WXPS1', 'point-series component storage format');
+  assert.equal(p.descriptor.runId, compactRun(c.generationTime), 'point-series component run identity');
+  assertPointFreshness(p.descriptor, model, now);
+}
 export function validateRelease(pointer, manifest, pin, now = Date.now()) {
   assert.equal(pointer.schemaVersion, 1); assert.equal(pointer.releaseId, pin.releaseId);
   assert.equal(pointer.manifestSha256, pin.releaseManifestSha256);
@@ -76,10 +106,8 @@ export function validateRelease(pointer, manifest, pin, now = Date.now()) {
   // inventory. These preliminary checks refuse missing point products before transfer.
   assert.equal(manifest.pointSeries?.schemaVersion, 2, 'qualified v2 point products required');
   assert.deepEqual(pointer.pointSeries, manifest.pointSeries);
-  for (const model of ['ecmwf', 'gfs']) {
-    const m = manifest.pointSeries.models?.[model];
-    assert.ok(m && Date.parse(m.freshUntil) > now + 30 * 60_000, 'point source lacks freshness margin');
-  }
+  const pointModels = pointModelSet(manifest.pointSeries.models);
+  for (const model of pointModels) assertPointFreshness(manifest.pointSeries.models[model], model, now);
   const paths = new Set(manifest.objects.filter(o => o.bytes > 0).map(o => o.path));
   for (const path of ['data/ledger/index.json', 'data/verify/index.json', 'data/ledger/accuracy/current.json', 'data/ledger/accuracy/current.txt'])
     assert.ok(paths.has(path), `required whole-release product missing: ${path}`);
@@ -94,15 +122,23 @@ export function validateCatalog(pointer, raw, pin, now = Date.now()) {
   assert.equal(catalog.parentCatalogId, pointer.previousCatalogId);
   assert.equal(catalog.rollbackOfCatalogId ?? null, pointer.rollbackOfCatalogId ?? null);
   date(catalog.createdAt, now);
-  assert.deepEqual(Object.keys(catalog.components ?? {}).sort(), MODELS, 'unqualified model/catalog expansion');
+  // Exactly the four model components, plus optional `point-<model>` components published
+  // atomically with a model by the fast lane. Point components carry no map mount.
+  const ids = Object.keys(catalog.components ?? {}).sort();
+  const pointIds = ids.filter(id => id.startsWith('point-'));
+  assert.deepEqual(ids.filter(id => !pointIds.includes(id)), MODELS, 'unqualified model/catalog expansion');
+  assert.ok(pointIds.every(id => POINT_MODELS.includes(id.slice('point-'.length))), 'unqualified point-series component expansion');
   for (const [id, c] of Object.entries(catalog.components)) {
     assert.equal(c.schemaVersion, 1); assert.equal(c.componentId, id); identifier(c.artifactId);
     assert.equal(c.rootPrefix, `components/${id}/${c.artifactId}/`);
-    assert.equal(c.manifestKey, `${c.rootPrefix}component.json`); assert.deepEqual(c.mounts, [`data/${id}/`]);
+    assert.equal(c.manifestKey, `${c.rootPrefix}component.json`);
     assert.match(c.manifestSha256, SHA); assert.match(c.inventorySha256, SHA);
     assert.ok(Number.isSafeInteger(c.objectCount) && c.objectCount > 0 && c.objectCount <= MAX_OBJECTS);
     assert.ok(now - date(c.generationTime, now) <= 48 * 3600_000, 'component generation too old'); date(c.completedAt, now);
-    assert.equal(c.quality?.status, 'passed'); assert.ok(checks.every(x => c.quality.checks?.includes(x)), 'missing original component gates');
+    assert.equal(c.quality?.status, 'passed');
+    if (pointIds.includes(id)) { validatePointComponent(id.slice('point-'.length), c, now); continue; }
+    assert.deepEqual(c.mounts, [`data/${id}/`]);
+    assert.ok(checks.every(x => c.quality.checks?.includes(x)), 'missing original component gates');
   }
   return catalog;
 }

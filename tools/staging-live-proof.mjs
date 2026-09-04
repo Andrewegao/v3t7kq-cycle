@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { registerHooks, stripTypeScriptTypes } from 'node:module';
 import { execFileSync } from 'node:child_process';
-import { hash } from './shared-data.mjs';
+import { hash, pointModelSet } from './shared-data.mjs';
 import { assertPointPayload } from './consumer-refresh.mjs';
 import { preflight as checkHealth } from './staging-data.mjs';
 import { SOURCE_SHA } from './staging-consumer.mjs';
@@ -55,7 +55,7 @@ export async function verifyStaging({selection,manifest,catalog,servingCatalog},
     const bytes=cache.get(key);return {size:bytes.length,arrayBuffer:async()=>bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.length)};
   }}};
   const start=new Date(Math.ceil(now()/3_600_000)*3_600_000),end=new Date(+start+12*3_600_000),references=[];
-  for(const model of ['ecmwf','gfs'])for(const [name,lat,lon] of [['Chicago',41.88,-87.63],['Fairbanks',64.84,-147.72],['Honolulu',21.31,-157.86],['Montreal',45.50,-73.57],['SanJuan',18.47,-66.11],['Dateline',0,180],['Polar',89.5,15]]){
+  for(const model of pointModelSet(manifest.pointSeries?.models))for(const [name,lat,lon] of [['Chicago',41.88,-87.63],['Fairbanks',64.84,-147.72],['Honolulu',21.31,-157.86],['Montreal',45.50,-73.57],['SanJuan',18.47,-66.11],['Dateline',0,180],['Polar',89.5,15]]){
     const descriptor=manifest.pointSeries.models[model];assert.ok(Date.parse(descriptor.freshUntil)>now()+30*60_000);
     const query=new URLSearchParams({lat:String(lat),lon:String(lon),run:descriptor.runId,variables:'temperature,wind_speed,wind_direction,precipitation',start:start.toISOString(),end:end.toISOString()});
     const url=`${ORIGIN}/api/v1/point-series/${model}?${query}`;usedPack=null;
