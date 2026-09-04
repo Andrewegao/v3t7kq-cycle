@@ -164,7 +164,7 @@ qualification remain separate operations; this is not a local or duplicate meteo
 The separate Atmos staging repair makes staging weather reads public/cacheable, disables
 billing and adds its missing data-health route. It changes no production configuration.
 That source change is not a Worker deployment. `staging-consumer-refresh.yml` is the separate
-manual repair, pinned to qualified Atmos `4e5177d925f0fc32fe57d17e478daf3c9e31dc7c`.
+manual repair, pinned to qualified Atmos `a58eff158b56ef2ba25189d2b859315b00893a14`.
 It admits only the AUTH_MODE/BILLING_MODE change, audits all existing bindings, and uploads
 an inactive version before activation. Three public-mode probes and complete settings
 verification are required; failure restores its own previous version. Deployment tokens

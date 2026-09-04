@@ -36,13 +36,13 @@ jobs:
         with:
           repository: Andrewegao/atmos
           # Must equal the bake job's approved commit: the bake refuses a pack collected elsewhere.
-          ref: 3e13c7aa5962ebd40867ae9427a76090cd7500f7
+          ref: a58eff158b56ef2ba25189d2b859315b00893a14
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 32
           persist-credentials: false
       - name: Verify approved immutable regional collector before running source
         run: |
-          test "$(git rev-parse HEAD)" = "3e13c7aa5962ebd40867ae9427a76090cd7500f7"
+          test "$(git rev-parse HEAD)" = "a58eff158b56ef2ba25189d2b859315b00893a14"
           git diff --exit-code HEAD
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with: { python-version: '3.12' }
@@ -88,15 +88,15 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Andrewegao/atmos
-          # Approved by successful whole release33374594299. Upgrade through PR;
-          # unrelated master/UI/model experiments must not change this collector.
-          ref: 3e13c7aa5962ebd40867ae9427a76090cd7500f7
+          # Approved by full Atmos CI. The whole release produced below must pass
+          # its own gates before any staging or production consumer can select it.
+          ref: a58eff158b56ef2ba25189d2b859315b00893a14
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 32 # bound checkout cost; unknown checkpoint ancestry is a cache miss
           persist-credentials: false
       - name: Verify approved immutable collector before running source
         run: |
-          test "$(git rev-parse HEAD)" = "3e13c7aa5962ebd40867ae9427a76090cd7500f7"
+          test "$(git rev-parse HEAD)" = "a58eff158b56ef2ba25189d2b859315b00893a14"
           git diff --exit-code HEAD
       - name: plan conservative no-change fast path
         id: bake_plan
