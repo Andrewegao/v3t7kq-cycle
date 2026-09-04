@@ -12,7 +12,7 @@ import { ACCOUNT, hash } from './shared-data.mjs';
 import { preflight as publicHealth } from './staging-data.mjs';
 import { SHARED_READ_SECRETS, SHARED_READ_VARS } from './staging-shared-read.mjs';
 
-export const SOURCE_SHA = '4e5177d925f0fc32fe57d17e478daf3c9e31dc7c';
+export const SOURCE_SHA = 'a58eff158b56ef2ba25189d2b859315b00893a14';
 export const WORKER = 'weatherx-platform-edge-staging';
 const ZONE = '9dc4df7c3c094ab9a11dd00d378adc26';
 const BASE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/workers/scripts/${WORKER}`;

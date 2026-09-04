@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { registerHooks, stripTypeScriptTypes } from 'node:module';
 import { ACCOUNT, MODELS, hash, objectKey, unseal, validateReceipt, createArchiveS3 } from './model-inputs.mjs';
 
-export const READER_SHA = '4e5177d925f0fc32fe57d17e478daf3c9e31dc7c';
+export const READER_SHA = 'a58eff158b56ef2ba25189d2b859315b00893a14';
 export const DATA = 'weatherx-data-staging', COMPONENTS = 'weatherx-components-staging';
 export const SCIENCE = ['coverage','freshness','horizon','cadence','grid','referenced_bytes','native_wind','source_binding'];
 const SHA = /^[a-f0-9]{64}$/, COMMIT = /^[a-f0-9]{40}$/, ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
