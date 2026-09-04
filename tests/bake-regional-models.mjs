@@ -17,6 +17,8 @@ test('family jobs run per provider, bounded, on the same approved commit as the 
   assert.match(regional,/fail-fast: false/);assert.match(regional,/max-parallel: 4/);
   assert.match(regional,/timeout-minutes: 55/);assert.match(regional,/timeout-minutes: 45/,'collection step is bounded below the job timeout');
   assert.match(regional,/environment: production/);
+  assert.equal((workflow.match(/repository: weatherx-hq\/atmos/g)||[]).length,2,
+    'both private SSH checkouts must use the current repository owner');
   const refs=[...workflow.matchAll(/^          ref: ([a-f0-9]{40})$/gm)].map(m=>m[1]);
   assert.equal(refs.length,2,'two atmos checkouts: the family job and the bake job');
   assert.equal(refs[0],refs[1],'a pack collected from another commit is refused at install; pin both together');

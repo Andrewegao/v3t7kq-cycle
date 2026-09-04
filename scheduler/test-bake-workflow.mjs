@@ -31,6 +31,12 @@ assert.doesNotMatch(workflow, /mirror-live-data\.sh/,
 assert.match(workflow, /fetch-depth: 32/,
   'checkpoint source ancestry must be verifiable across reviewed gate-only commits');
 assert.match(workflow, /persist-credentials: false/);
+const publishStep = workflow.split('      - name: bake → gate → publish immutable data release')[1]?.split('      - name:')[0];
+assert.match(publishStep, /CATALOG_ENDPOINT: \$\{\{ secrets\.CATALOG_ENDPOINT_PRODUCTION \}\}/);
+assert.match(publishStep, /CATALOG_PROMOTION_KEY: \$\{\{ secrets\.CATALOG_PROMOTION_KEY_PRODUCTION \}\}/);
+const publicationPreflight = workflow.split('      - name: preflight conditional data publication credentials')[1]?.split('      - name:')[0];
+assert.match(publicationPreflight, /test -n "\$CATALOG_ENDPOINT" && test -n "\$CATALOG_PROMOTION_KEY"/);
+assert.doesNotMatch(publicationPreflight, /curl|submit-catalog|publish|echo.*\$CATALOG/);
 assert.match(workflow, /name: pinned ground verifier runtime[\s\S]*?python-version: '3.11'/);
 assert.match(workflow, /run: python3\.11 -m pip install pillow/);
 assert.ok(workflow.indexOf('name: ground verifier image dependency') < workflow.indexOf("with: { python-version: '3.12' }", workflow.indexOf('\n  bake:')),
