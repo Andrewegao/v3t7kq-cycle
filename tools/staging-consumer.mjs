@@ -77,7 +77,10 @@ export function desiredSettings(before,config) {
     }
     desired.bindings=normalizedBindings(desired.bindings);
   }
-  return desired;
+  // Receipts are the review boundary between preflight and execution. Canonicalize
+  // away optional undefined properties now so a JSON round-trip cannot turn an
+  // identical Cloudflare binding into an apparent configuration change.
+  return JSON.parse(JSON.stringify(desired));
 }
 export function settingsState(settings,routes,crons) {
   return JSON.parse(JSON.stringify({bindings:normalizedBindings(settings.bindings),compatibility_date:settings.compatibility_date,

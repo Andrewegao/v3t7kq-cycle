@@ -65,8 +65,10 @@ test('shared-read rollout adds exactly the reviewed variables and secrets on top
   const desired=desiredSettings(state,config);
   for(const [name,text] of Object.entries(SHARED_READ_VARS))assert.deepEqual(desired.bindings.find(b=>b.name===name),{name,type:'plain_text',text});
   for(const name of SHARED_READ_SECRETS)assert.deepEqual(desired.bindings.find(b=>b.name===name),{name,type:'secret_text'});
-  assert.deepEqual(desired.bindings,normalizedBindings(desired.bindings),'desired bindings must be normalized for comparison');
+  assert.deepEqual(desired.bindings,JSON.parse(JSON.stringify(normalizedBindings(desired.bindings))),'desired bindings must be normalized for comparison');
   assertAllowedTransition(config,state,desired);
+  const reviewed=JSON.parse(JSON.stringify(desired));
+  assertAllowedTransition(config,state,reviewed);
   assert.throws(()=>assertAllowedTransition(config,state,{...desired,bindings:[...desired.bindings,{name:'SHARED_DATA_BUCKET',type:'r2_bucket',bucket_name:'weatherx-data-production'}]}));
   assert.throws(()=>assertAllowedTransition(config,state,{...desired,bindings:desired.bindings.filter(b=>b.name!=='SHARED_READ_SECRET_ACCESS_KEY')}));
   const ownConfig=configForStaging({name:'base',workers_dev:false,env:{staging:{...sharedBase().env.staging,vars:{APP_ORIGIN:'https://staging.weatherx.org',AUTH_MODE:'public',BILLING_MODE:'disabled',DATA_CATALOG_MODE:'serve'}}}});
