@@ -43,7 +43,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Andrewegao/atmos
-          ref: e4c2ed3db09d01cb8c5cf7549d2d4b039fa2c76d
+          ref: 83a9d8f6f2f838769dbbecd80d2e97f0b12618d2
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
           path: control
