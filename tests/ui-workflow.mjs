@@ -7,6 +7,10 @@ import { tmpdir } from 'node:os';
 const root=new URL('../',import.meta.url);
 const read=p=>readFileSync(new URL(p,root),'utf8');
 const staging=read('.github/workflows/ui-staging.yml'), prod=read('.github/workflows/ui-release.yml'), source=read('tools/ui-release.mjs'), candidate=read('tools/ui-candidate.mjs');
+test('staging private checkouts use the current Atmos repository owner',()=>{
+  assert.equal((staging.match(/repository: weatherx-hq\/atmos/g)||[]).length,3);
+  assert.doesNotMatch(staging,/repository: Andrewegao\/atmos/);
+});
 const {installPagesWorker}=await import('../tools/ui-release.mjs');
 test('staging rejects stale public point data before expensive build work while production remains isolated',()=>{
   const preflight='node cycle/tools/ui-staging-preflight.mjs';

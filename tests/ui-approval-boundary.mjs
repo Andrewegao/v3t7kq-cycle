@@ -9,6 +9,9 @@ const workflows = Object.fromEntries(readdirSync(directory).filter(n => /\.ya?ml
 const executable = source => source.split('\n').filter(l => !/^\s*#/.test(l)).join('\n');
 const dataKeys = ['ATMOS_DEPLOY_KEY', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY',
   'R2_PRODUCTION_ACCESS_KEY_ID', 'R2_PRODUCTION_SECRET_ACCESS_KEY'];
+// Whole-release publication now uses the same production-only catalog CAS authority.
+// These credentials cannot deploy a Pages application.
+const maintenanceKeys = [...dataKeys, 'CATALOG_ENDPOINT_PRODUCTION', 'CATALOG_PROMOTION_KEY_PRODUCTION'];
 const componentKeys = [...dataKeys, 'CATALOG_ENDPOINT', 'CATALOG_ENDPOINT_PRODUCTION',
   'CATALOG_PROMOTION_KEY', 'CATALOG_PROMOTION_KEY_PRODUCTION'];
 
@@ -24,7 +27,7 @@ function assertDataOnly(source, allowedKeys) {
 }
 
 test('both data bakes and legacy backfill have no UI credential or dispatch capability', () => {
-  assertDataOnly(workflows['bake.yml'], dataKeys);
+  assertDataOnly(workflows['bake.yml'], maintenanceKeys);
   assertDataOnly(workflows['catalog-bake.yml'], componentKeys);
   assertDataOnly(workflows['verify-backfill.yml'], ['ATMOS_DEPLOY_KEY']);
   assert.match(workflows['bake.yml'], /DATA_PUBLISH_MODE: r2-release/);
@@ -33,11 +36,12 @@ test('both data bakes and legacy backfill have no UI credential or dispatch capa
 
 test('boundary contracts reject legacy key, new UI key, dispatch, inherited secrets and direct upload', () => {
   for (const violation of ['TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
+    'TOKEN: ${{ secrets.CATALOG_PROMOTION_KEY }}',
     'TOKEN: ${{ secrets.UI_PRODUCTION_PAGES_TOKEN }}', 'TOKEN: ${{ secrets[inputs.key] }}',
     'secrets: inherit', 'actions: write', 'run: gh workflow run ui-release.yml',
     'run: curl https://api.github.com/repos/owner/repo/actions/workflows/ui-release.yml/dispatches',
     'run: npx wrangler pages deploy dist', 'run: bash deploy-atmos.sh']) {
-    assert.throws(() => assertDataOnly(`${workflows['bake.yml']}\n${violation}`, dataKeys), violation);
+    assert.throws(() => assertDataOnly(`${workflows['bake.yml']}\n${violation}`, maintenanceKeys), violation);
   }
 });
 
