@@ -72,7 +72,7 @@ jobs:
       - name: checkout reviewed release controller
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: Andrewegao/atmos
+          repository: weatherx-hq/atmos
           ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && 'a58eff158b56ef2ba25189d2b859315b00893a14' || 'a58eff158b56ef2ba25189d2b859315b00893a14' }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
@@ -90,7 +90,7 @@ jobs:
       - name: checkout exact candidate Atmos source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: Andrewegao/atmos
+          repository: weatherx-hq/atmos
           ref: ${{ inputs.atmos_sha }}
           fetch-depth: 0
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
@@ -154,7 +154,7 @@ jobs:
       - name: checkout pinned controller, NOT candidate source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: Andrewegao/atmos
+          repository: weatherx-hq/atmos
           ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && 'a58eff158b56ef2ba25189d2b859315b00893a14' || 'a58eff158b56ef2ba25189d2b859315b00893a14' }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false

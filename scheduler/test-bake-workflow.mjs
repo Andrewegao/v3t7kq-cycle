@@ -31,6 +31,23 @@ assert.doesNotMatch(workflow, /mirror-live-data\.sh/,
 assert.match(workflow, /fetch-depth: 32/,
   'checkpoint source ancestry must be verifiable across reviewed gate-only commits');
 assert.match(workflow, /persist-credentials: false/);
+const publishStep = workflow.split('      - name: bake → gate → publish immutable data release')[1]?.split('      - name:')[0];
+assert.match(publishStep, /CATALOG_ENDPOINT: \$\{\{ secrets\.CATALOG_ENDPOINT_PRODUCTION \}\}/);
+assert.match(publishStep, /CATALOG_PROMOTION_KEY: \$\{\{ secrets\.CATALOG_PROMOTION_KEY_PRODUCTION \}\}/);
+const publicationPreflight = workflow.split('      - name: preflight conditional data publication credentials')[1]?.split('      - name:')[0];
+assert.match(publicationPreflight, /test -n "\$CATALOG_ENDPOINT" && test -n "\$CATALOG_PROMOTION_KEY"/);
+assert.doesNotMatch(publicationPreflight, /curl|submit-catalog|publish|echo.*\$CATALOG/);
+assert.match(workflow, /name: pinned ground verifier runtime[\s\S]*?python-version: '3.11'/);
+assert.match(workflow, /run: python3\.11 -m pip install pillow/);
+assert.ok(workflow.indexOf('name: ground verifier image dependency') < workflow.indexOf("with: { python-version: '3.12' }", workflow.indexOf('\n  bake:')),
+  'data preparation still uses Python3.12 after installing the pinned ground verifier');
+const buildPreflight = workflow.split('      - name: preflight temporary browser-test bundle before weather downloads')[1]?.split('      - name:')[0];
+assert.ok(buildPreflight, 'build errors must surface before expensive weather processing');
+assert.match(buildPreflight, /WX_GROUND_QUALIFICATION_SCOPE: staging-qualification-only/);
+assert.match(buildPreflight, /mktemp -d/);
+assert.match(buildPreflight, /npx vite build --outDir "\$gate_build\/dist"/);
+assert.doesNotMatch(buildPreflight, /secrets\.|wrangler|deploy|publish|R2_/);
+assert.ok(workflow.indexOf('name: preflight temporary browser-test bundle before weather downloads') < workflow.indexOf('name: hydrate and verify current production R2 release'));
 assert.match(workflow, /python3 ops\/maintenance_checkpoint\.py fingerprint/);
 assert.match(workflow, /name: restore unqualified maintenance checkpoint[\s\S]*?actions\/cache\/restore@[a-f0-9]{40}/);
 assert.match(workflow, /maintenance-inputs-v1-\$\{\{ steps\.maintenance_checkpoint\.outputs\.producer \}\}/,
