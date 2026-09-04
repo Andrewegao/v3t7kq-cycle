@@ -1,11 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {consumerGate,SOURCE_SHA,WORKER,EXISTING_ROUTES,configForStaging,desiredSettings,settingsState,guardedRepair,consumerSnapshot,assertAllowedTransition} from '../tools/staging-consumer.mjs';
+import { readFileSync } from 'node:fs';
+import {consumerGate,SOURCE_SHA,WORKER,EXISTING_ROUTES,configForStaging,desiredSettings,settingsState,guardedRepair,consumerSnapshot,assertAllowedTransition,sharedSecretsForUpload} from '../tools/staging-consumer.mjs';
 import {normalizedBindings} from '../tools/consumer-refresh.mjs';
 import {SHARED_READ_SECRETS,SHARED_READ_VARS} from '../tools/staging-shared-read.mjs';
 const OLD='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',NEW='bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',OTHER='cccccccc-cccc-cccc-cccc-cccccccccccc';
 const env={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_REPOSITORY:'Andrewegao/v3t7kq-cycle',GITHUB_REF:'refs/heads/main',GITHUB_EVENT_NAME:'workflow_dispatch',GITHUB_JOB:'refresh',GITHUB_WORKFLOW_REF:'Andrewegao/v3t7kq-cycle/.github/workflows/staging-consumer-refresh.yml@refs/heads/main',STAGING_CONSUMER_ENABLED:'true',STAGING_CONSUMER_SOURCE_SHA:SOURCE_SHA,CONFIRM:'REFRESH-STAGING-CONSUMER',STAGING_R2_ACCOUNT_ID:'a89f9a1af485021fbc60a68b163c7c6e',STAGING_CONSUMER_APPROVED_VERSION:OLD,STAGING_CONSUMER_APPROVED_SETTINGS_SHA256:'a'.repeat(64),GITHUB_RUN_ID:'1',GITHUB_RUN_ATTEMPT:'1'};
 const settings={bindings:[{name:'AUTH_MODE',type:'plain_text',text:'enforce'},{name:'BILLING_MODE',type:'plain_text',text:'enabled'},{name:'DATA_BUCKET',type:'r2_bucket',bucket_name:'weatherx-data-staging'}],compatibility_date:'2026-08-15'};
+const workflow=readFileSync(new URL('../.github/workflows/staging-consumer-refresh.yml',import.meta.url),'utf8');
+test('workflow supplies the existing read-only credential only to the inactive upload step',()=>{
+  const execute=workflow.split('      - name: Guarded staging-only inactive upload and public-mode repair\n')[1]?.split('\n      - ')[0]??'';
+  assert.match(execute,/SHARED_READ_ACCESS_KEY_ID: \$\{\{ secrets\.SHARED_R2_READ_ACCESS_KEY_ID \}\}/);
+  assert.match(execute,/SHARED_READ_SECRET_ACCESS_KEY: \$\{\{ secrets\.SHARED_R2_READ_SECRET_ACCESS_KEY \}\}/);
+  assert.equal((workflow.match(/secrets\.SHARED_R2_READ_ACCESS_KEY_ID/g)??[]).length,1);
+  assert.equal((workflow.match(/secrets\.SHARED_R2_READ_SECRET_ACCESS_KEY/g)??[]).length,1);
+  assert.doesNotMatch(workflow,/R2_PRODUCTION_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY)/);
+});
 test('guard requires hosted manual main, exact workflow/job/source/settings approval',()=>{
   consumerGate(env);
   for(const key of Object.keys(env)){assert.throws(()=>consumerGate({...env,[key]:'wrong'}),key);}
@@ -42,6 +52,14 @@ test('shared-read rollout adds exactly the reviewed variables and secrets on top
   assert.throws(()=>assertAllowedTransition(config,state,{...desired,bindings:desired.bindings.filter(b=>b.name!=='SHARED_READ_SECRET_ACCESS_KEY')}));
   const ownConfig=configForStaging({name:'base',workers_dev:false,env:{staging:{...sharedBase().env.staging,vars:{APP_ORIGIN:'https://staging.weatherx.org',AUTH_MODE:'public',BILLING_MODE:'disabled',DATA_CATALOG_MODE:'serve'}}}});
   assert.ok(!desiredSettings(state,ownConfig).bindings.some(b=>b.name.startsWith('SHARED_READ_')),'own-copy configuration adds nothing');
+});
+test('shared-read upload requires both bounded secret values while own-copy needs none',()=>{
+  const config=configForStaging(sharedBase());
+  const values={SHARED_READ_ACCESS_KEY_ID:'access-key-id-value',SHARED_READ_SECRET_ACCESS_KEY:'secret-access-key-value'};
+  assert.deepEqual(sharedSecretsForUpload(config,values),values);
+  for(const name of SHARED_READ_SECRETS)assert.throws(()=>sharedSecretsForUpload(config,{...values,[name]:''}),name);
+  const own={vars:{DATA_SOURCE_MODE:'own'}};
+  assert.equal(sharedSecretsForUpload(own,{}),null);
 });
 test('only the two known mode values change; snapshots survive JSON receipt serialization',()=>{
   const state=settingsState(settings,['staging.weatherx.org/data/*'],['17 3 * * *']);

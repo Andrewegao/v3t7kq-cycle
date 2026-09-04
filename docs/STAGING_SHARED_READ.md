@@ -169,12 +169,13 @@ Preconditions: this PR and the Atmos PR are merged; nothing has been dispatched.
    mint a second one with the identical scope for the Worker so GitHub and Worker copies can be
    rotated independently. Re-run the 2026-08-31 proof: a read in each production bucket
    succeeds, a `PutObject` and a read of `weatherx-data-staging` return 403.
-2. **Worker secrets (staging only).** From the merged Atmos checkout:
-   `npx wrangler secret put SHARED_READ_ACCESS_KEY_ID --env staging` and
-   `npx wrangler secret put SHARED_READ_SECRET_ACCESS_KEY --env staging`.
-   Secrets must exist before the version upload; the guarded refresh compares the uploaded
-   version's bindings with the reviewed configuration and refuses activation if either secret
-   binding is missing. Nothing is deployed by this step.
+2. **Worker secrets (staging only).** Keep the existing bucket-scoped values in the
+   `data-staging` environment as `SHARED_R2_READ_ACCESS_KEY_ID` and
+   `SHARED_R2_READ_SECRET_ACCESS_KEY`. The guarded refresh supplies them with Wrangler's
+   `--secrets-file` option only while creating the inactive candidate version. It then compares
+   that version's bindings with the reviewed configuration and refuses activation if either
+   secret binding is missing. Do not run `wrangler secret put`: that command deploys a new
+   version immediately and would bypass the lane's inactive-version and rollback checks.
 3. **Pin the guarded refresh to the merged Atmos SHA.** Update `SOURCE_SHA` in
    `tools/staging-consumer.mjs` (`tools/staging-live-proof.mjs` imports it) and the
    `ref:`/`STAGING_CONSUMER_SOURCE_SHA` pair in `staging-consumer-refresh.yml`, in a reviewed

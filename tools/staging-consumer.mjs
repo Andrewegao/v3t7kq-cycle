@@ -3,8 +3,9 @@
 import assert from 'node:assert/strict';
 import { execFileSync, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { normalizedBindings, assertSettings, activeVersion } from './consumer-refresh.mjs';
 import { ACCOUNT, hash } from './shared-data.mjs';
@@ -86,6 +87,16 @@ export function assertAllowedTransition(config,before,after) {
   const wanted=desiredSettings(before,config);assertSettings(config,wanted);
   assert.deepEqual(after,wanted,'staging change exceeds the approved public-mode and shared-read bindings');
 }
+export function sharedSecretsForUpload(config,env) {
+  if(config?.vars?.DATA_SOURCE_MODE!=='shared')return null;
+  const values={};
+  for(const name of SHARED_READ_SECRETS){
+    const value=env[name];
+    assert.ok(typeof value==='string'&&value.length>=16&&value.length<=4096,`missing or invalid ${name}`);
+    values[name]=value;
+  }
+  return values;
+}
 export async function guardedRepair({before,desired,upload,snapshot,getVersion=async()=> (await snapshot()).version,activate,verify,rollback,persist}) {
   const receipt={schemaVersion:1,sourceSha:SOURCE_SHA,worker:WORKER,before,desired,status:'preflight-passed'};
   await persist(receipt);
@@ -160,11 +171,19 @@ export async function main(command,atmos,receiptPath,env=process.env){
   assert.equal(stored.before.version,env.STAGING_CONSUMER_APPROVED_VERSION);
   assert.equal(hash(JSON.stringify(stored.before.state)),env.STAGING_CONSUMER_APPROVED_SETTINGS_SHA256);
   assert.equal(stored.workflowRun,env.GITHUB_RUN_ID);assert.equal(stored.workflowAttempt,env.GITHUB_RUN_ATTEMPT);
-  const run=async(args)=>{
+  const run=async(args,options={})=>{
+    let secretDir,secretPath;
+    if(options.secrets){
+      secretDir=mkdtempSync(join(tmpdir(),'weatherx-staging-secrets-'));
+      secretPath=join(secretDir,'secrets.json');
+      writeFileSync(secretPath,JSON.stringify(options.secrets),{mode:0o600});
+      args=[...args,'--secrets-file',secretPath];
+    }
     try{return (await execute(process.execPath,[resolve(croot,'node_modules/wrangler/bin/wrangler.js'),...args,'--config','wrangler.jsonc','--env','staging'],{
       cwd:croot,encoding:'utf8',timeout:180_000,maxBuffer:8*1024**2,
       env:{PATH:env.PATH,HOME:env.HOME,CI:'true',NO_COLOR:'1',CLOUDFLARE_ACCOUNT_ID:ACCOUNT,CLOUDFLARE_API_TOKEN:token}})).stdout;}
     catch{throw Error('Guarded staging version operation failed');}
+    finally{if(secretDir)rmSync(secretDir,{recursive:true,force:true});}
   };
   const restore=async version=>{
     await run(['versions','deploy',`${version}@100%`,'--yes','--message','Restore prior staging consumer']);
@@ -184,7 +203,7 @@ export async function main(command,atmos,receiptPath,env=process.env){
     upload:async()=>{
       // Deliberately omit --keep-vars: the ONLY admitted variable delta is the
       // reviewed AUTH/BILLING pair; staged version bindings are checked before activation.
-      const output=await run(['versions','upload','--tag',`staging-${SOURCE_SHA.slice(0,12)}`]);
+      const output=await run(['versions','upload','--tag',`staging-${SOURCE_SHA.slice(0,12)}`],{secrets:sharedSecretsForUpload(config,env)});
       const id=output.match(/Worker Version ID:\s*([a-f0-9-]{36})/)?.[1];assert.match(id??'',UUID);
       const v=await jsonGet(BASE+`/versions/${id}`,token);assert.equal(v.id,id);
       assertSettings(config,{...v.resources.script_runtime,bindings:v.resources.bindings});
