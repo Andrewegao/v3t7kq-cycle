@@ -26,12 +26,12 @@ test('actual pinned readers accept explicit staging activation markers and deriv
 
 // Synthetic dependency test ONLY: proves orchestration/comparison, not WXPS
 // meteorology. The guarded workflow separately decodes actual immutable packs.
-function proofFixture(){
+function proofFixture(pointModels=['ecmwf','gfs']){
   const now=Date.parse('2026-08-31T15:00:00Z'),releaseId='cycle-test',selection={releaseId,releaseManifestSha256:'a'.repeat(64),catalogId:'34-source',catalogSha256:'b'.repeat(64)},servingCatalog={schemaVersion:2,catalogId:'37-staging-1-1'},objects=[],store=new Map();
   const put=(path,body)=>{const b=Buffer.from(body);store.set(`releases/${releaseId}/${path}`,b);objects.push({path,bytes:b.length,sha256:hash(b)});};
   for(const path of ['ledger/index.json','verify/index.json','ledger/accuracy/current.json','ledger/accuracy/current.txt'])put('data/'+path,'synthetic-'+path);
   const models={},components={};
-  for(const model of ['ecmwf','gfs']){
+  for(const model of pointModels){
     models[model]={runId:'run-test',freshUntil:new Date(now+2*3600_000).toISOString()};
     put(`point-series/v2/${model}/run-test/chunks/0/0.bin.gz`,'synthetic-'+model);
     components[model]={rootPrefix:`components/${model}/test/`};store.set(components[model].rootPrefix+'index.json',Buffer.from(model));
@@ -55,6 +55,15 @@ test('public proof binds14points, sourcepacks, four ancillary products and indep
   const f=proofFixture(),proof=await verifyStaging(f.args,f.io,f.serve,{fetcher:f.fetcher,pause:async()=>{},now:f.now});
   assert.equal(proof.points.length,14);assert.equal(proof.sourceVerified,true);assert.deepEqual(proof.servingCatalog,f.args.servingCatalog);
   assert.equal(f.calls.filter(u=>u.includes('/point-series/')).length,28);
+});
+test('an admitted AIFS point model adds its own seven decoded points; an unknown point model refuses',async()=>{
+  const f=proofFixture(['aifs','ecmwf','gfs']),proof=await verifyStaging(f.args,f.io,f.serve,{fetcher:f.fetcher,pause:async()=>{},now:f.now});
+  assert.equal(proof.points.length,21);assert.equal(proof.points.filter(p=>p.model==='aifs').length,7);
+  assert.equal(f.calls.filter(u=>u.includes('/point-series/aifs')).length,14);
+  const g=proofFixture(['ecmwf','gfs','nam']);
+  await assert.rejects(verifyStaging(g.args,g.io,g.serve,{fetcher:g.fetcher,pause:async()=>{},now:g.now}),/unqualified point-series model/);
+  const h=proofFixture(['ecmwf']);
+  await assert.rejects(verifyStaging(h.args,h.io,h.serve,{fetcher:h.fetcher,pause:async()=>{},now:h.now}),/required point-series models/);
 });
 test('wrong point bytes, source IDs or catalog authority never qualify',async()=>{
   for(const change of ['value','release','catalog']){

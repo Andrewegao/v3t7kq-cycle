@@ -294,9 +294,9 @@ jobs:
           if [ -n "$log_file" ] && [ -f "$log_file" ]; then
             awk '
               /^checkpoint: / { print substr($0, 1, 512); next }
-              /^model-input resource (ecmwf|gfs|hrrr|aifs) peak-rss-kib=[0-9]+ elapsed-seconds=[0-9.]+$/ { print; next }
-              /^\[[0-9T:.+Z-]+\] model-input start (ecmwf|gfs|hrrr|aifs)$/ { print; next }
-              /^\[[0-9T:.+Z-]+\] model-input end (ecmwf|gfs|hrrr|aifs) exit=-?[0-9]+$/ { print; next }
+              /^model-input resource (ecmwf|gfs|hrrr|aifs|icon) peak-rss-kib=[0-9]+ elapsed-seconds=[0-9.]+$/ { print; next }
+              /^\[[0-9T:.+Z-]+\] model-input start (ecmwf|gfs|hrrr|aifs|icon)$/ { print; next }
+              /^\[[0-9T:.+Z-]+\] model-input end (ecmwf|gfs|hrrr|aifs|icon) exit=-?[0-9]+$/ { print; next }
               /^\[[0-9T:.+Z-]+\] regional-model install (icon|hrrr-ak|hrdps|nam|nam-hi|nam-ak|arome-antilles) status=(fresh|carried|absent)/ { print substr($0, 1, 512) }
             ' "$log_file" || true
             tail -n 200 "$log_file" || true
