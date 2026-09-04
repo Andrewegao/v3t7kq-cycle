@@ -33,6 +33,10 @@ export function validateProfile(profile){
   if(profile?.expandedModels===false){assert.deepEqual(profile,BASELINE_PROFILE);return profile;}
   assert.deepEqual(profile,profileFor(profile?.modelSelectionSha256));return profile;
 }
+// The baseline profile builds production with expandedModels:false. Since 2026-09-04 that no longer
+// means "no regional models": the seven regional packs ride the immutable data release and the app
+// admits them from the release-carried data/model-roster.json (data admission), never from a UI
+// build flag or a staging selection. Only a hash-pinned staging experiment remains profile-gated.
 export function requireProductionProfile(profile){assert.deepEqual(profile,BASELINE_PROFILE,'staging experiment cannot enter production');}
 export function cycleTime(init,now=Date.now()){
   assert.match(init??'',/^\d{8}(00|06|12|18)$/);const iso=`${init.slice(0,4)}-${init.slice(4,6)}-${init.slice(6,8)}T${init.slice(8)}:00:00.000Z`,time=Date.parse(iso);

@@ -96,3 +96,17 @@ immutable private destinations, full readback, tampered inputs and late mutation
 stale completion refusal, credential/command isolation, pagination and truncated
 transport. Operational acceptance additionally requires exact-head CI, current
 source availability, measured cloud output and independently reviewed receipts.
+
+## Production path (2026-09-04, feat/models: regional models in the production release)
+
+The manual staging pipeline above is unchanged. Production collection of the same seven models
+now lives inside `bake.yml`: a `regional` job matrix (icon, hrdps, arome-antilles, noaa) runs
+`data/bake_regional_models.py collect` on the bake's approved Atmos commit, each family on its own
+runner, and hands 150-file public display packs (never raw GRIB) to the `bake` job as one-day
+Actions artifacts. The bake job's `data/bake.sh` installs verified packs as `data/<model>/`, carries
+a previous release's pack forward while its run is under 24 h, and writes `data/model-roster.json`
+(fresh / carried / absent with the collector's attempts). The bake job joins the families with
+`needs: regional` + `if: always()`, so a late provider only makes its model abstain. Cycle policy:
+newest six-hour cycle, then one older cycle inside the collectors' unchanged 12 h window; AROME
+tries the older cycle first (measured 7 h lag). No R2, Pages or catalog credential reaches the
+family jobs. Tests: `node --test tests/bake-regional-models.mjs`.
