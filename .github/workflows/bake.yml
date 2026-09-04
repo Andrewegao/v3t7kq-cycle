@@ -13,36 +13,32 @@ concurrency:
   group: weatherx-data-maintenance
   cancel-in-progress: false        # never abort a half-written run
 jobs:
-  # 区域七家的采集：ICON（DWD）、HRDPS（ECCC）、AROME 安的列斯（Meteo-France）各占一台 runner，
-  # NOAA 四嵌套（HRRR Alaska、NAM CONUS/Hawaii/Alaska）在一台 runner 上顺序跑。每台只跑
-  # data/bake_regional_models.py collect：最新的六小时时次，源站没发完就退一个时次再试一次，
-  # 再不成就写弃权收据。产物是 150 文件的显示包（公开地图字节，不是原始 GRIB），以 artifact
-  # 交给上面的 bake 作业装入发布；这些作业没有任何 R2、Pages 或 catalog 凭据。
-  regional:
+  # Eleven isolated model collectors start together. Only the joined bake job can publish.
+  # ECMWF and GFS each get a full runner instead of competing for shared memory.
+  core:
     environment: production
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 70
     strategy:
       fail-fast: false
       max-parallel: 4
       matrix:
-        family: [icon, hrdps, arome-antilles, noaa]
+        model: [ecmwf, gfs, hrrr, aifs]
     env:
-      REGIONAL_FAMILY: ${{ matrix.family }}
+      CORE_MODEL: ${{ matrix.model }}
       PYTHONUNBUFFERED: '1'
     steps:
-      - name: checkout atmos regional collector (same approved commit, read-only deploy key)
+      - name: checkout atmos core collector (same approved commit, read-only deploy key)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          # Must equal the bake job's approved commit: the bake refuses a pack collected elsewhere.
-          ref: ac61b692f261008bafe3f8120db52e3b39f853fa
+          ref: 49dc566625dfe284cb31c79ccdddfc06d47cc5c5
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 32
           persist-credentials: false
-      - name: Verify approved immutable regional collector before running source
+      - name: Verify approved immutable core collector before running source
         run: |
-          test "$(git rev-parse HEAD)" = "ac61b692f261008bafe3f8120db52e3b39f853fa"
+          test "$(git rev-parse HEAD)" = "49dc566625dfe284cb31c79ccdddfc06d47cc5c5"
           git diff --exit-code HEAD
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with: { python-version: '3.12' }
@@ -54,23 +50,75 @@ jobs:
         run: |
           python -m venv data/.venv
           data/.venv/bin/pip install -r data/requirements.txt
-      - name: collect the family for the newest complete cycle (one older-cycle fallback)
+      - name: collect one core model and seal its map, point and float inputs
+        timeout-minutes: 60
+        run: |
+          data/.venv/bin/python data/bake_model_inputs.py --model "$CORE_MODEL"
+          data/.venv/bin/python ops/core_model_artifact.py seal \
+            --model "$CORE_MODEL" --source-sha "$(git rev-parse HEAD)" \
+            --root "$GITHUB_WORKSPACE" --run-id "$GITHUB_RUN_ID" \
+            --output "$RUNNER_TEMP/core-model-packs"
+      - name: retain only sealed core model inputs for the joined bake
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: core-model-packs-${{ matrix.model }}
+          path: ${{ runner.temp }}/core-model-packs
+          compression-level: 1
+          include-hidden-files: true # allowlisted float/point directories, never a workspace upload
+          retention-days: 1
+          if-no-files-found: error
+  # Every regional model has an isolated runner; provider misses still yield explicit abstention.
+  regional:
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      max-parallel: 7
+      matrix:
+        model: [icon, hrdps, arome-antilles, hrrr-ak, nam, nam-hi, nam-ak]
+    env:
+      REGIONAL_MODEL: ${{ matrix.model }}
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - name: checkout atmos regional collector (same approved commit, read-only deploy key)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          # Must equal the bake job's approved commit: the bake refuses a pack collected elsewhere.
+          ref: 49dc566625dfe284cb31c79ccdddfc06d47cc5c5
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          fetch-depth: 32
+          persist-credentials: false
+      - name: Verify approved immutable regional collector before running source
+        run: |
+          test "$(git rev-parse HEAD)" = "49dc566625dfe284cb31c79ccdddfc06d47cc5c5"
+          git diff --exit-code HEAD
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with: { python-version: '3.12' }
+      - name: system eccodes
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeccodes-dev
+      - name: venv + python deps
+        run: |
+          python -m venv data/.venv
+          data/.venv/bin/pip install -r data/requirements.txt
+      - name: collect one regional model for the newest complete cycle (one older-cycle fallback)
         timeout-minutes: 45
         run: |
           df -h "$RUNNER_TEMP"
-          case "$REGIONAL_FAMILY" in
-            noaa) models="--model hrrr-ak --model nam --model nam-hi --model nam-ak" ;;
-            icon|hrdps|arome-antilles) models="--model $REGIONAL_FAMILY" ;;
-            *) echo "unknown regional family: $REGIONAL_FAMILY" >&2; exit 2 ;;
+          case "$REGIONAL_MODEL" in
+            icon|hrdps|arome-antilles|hrrr-ak|nam|nam-hi|nam-ak) ;;
+            *) echo "unknown regional model: $REGIONAL_MODEL" >&2; exit 2 ;;
           esac
-          # shellcheck disable=SC2086
-          data/.venv/bin/python data/bake_regional_models.py collect $models \
+          data/.venv/bin/python data/bake_regional_models.py collect --model "$REGIONAL_MODEL" \
             --source-sha "$(git rev-parse HEAD)" --workers 2 --output "$RUNNER_TEMP/regional-packs"
       - name: hand the display packs (or abstention receipts) to the bake job
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: regional-packs-${{ matrix.family }}
+          name: regional-packs-${{ matrix.model }}
           path: ${{ runner.temp }}/regional-packs
           retention-days: 1
           if-no-files-found: warn
@@ -78,11 +126,10 @@ jobs:
     environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 300
-    # The seven regional models are collected by the family jobs below and handed over as display
-    # packs. The release never waits for a provider: a family that fails or times out simply makes
-    # its models abstain in data/model-roster.json, so this job runs whatever happened up there.
-    needs: regional
-    if: ${{ always() }}
+    # Join bounded collectors before assembling one release. Missing regional inputs abstain
+    # in the roster; missing core inputs withhold this candidate. Only this job can publish.
+    needs: [core, regional]
+    if: ${{ always() && !cancelled() && needs.core.result == 'success' }}
     steps:
       - name: checkout atmos (private, read-only deploy key)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -90,13 +137,13 @@ jobs:
           repository: weatherx-hq/atmos
           # Approved by full Atmos CI. The whole release produced below must pass
           # its own gates before any staging or production consumer can select it.
-          ref: ac61b692f261008bafe3f8120db52e3b39f853fa
+          ref: 49dc566625dfe284cb31c79ccdddfc06d47cc5c5
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 32 # bound checkout cost; unknown checkpoint ancestry is a cache miss
           persist-credentials: false
       - name: Verify approved immutable collector before running source
         run: |
-          test "$(git rev-parse HEAD)" = "ac61b692f261008bafe3f8120db52e3b39f853fa"
+          test "$(git rev-parse HEAD)" = "49dc566625dfe284cb31c79ccdddfc06d47cc5c5"
           git diff --exit-code HEAD
       - name: plan conservative no-change fast path
         id: bake_plan
@@ -112,6 +159,10 @@ jobs:
             echo "reason=preflight-command-failed" >> "$GITHUB_OUTPUT"
             echo "preflight failed; continuing with the full bake"
           fi
+          # This plan only compares core/live state. It cannot discard freshly collected
+          # regional artifacts or certify all eleven models; the joined gates must run.
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "reason=distributed-model-inputs-require-qualification" >> "$GITHUB_OUTPUT"
       - name: preflight conditional data publication credentials
         if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         env:
@@ -236,11 +287,19 @@ jobs:
           pattern: regional-packs-*
           path: ${{ runner.temp }}/regional-packs
           merge-multiple: true
+      - name: receive sealed core model inputs from all four collectors
+        if: ${{ steps.bake_plan.outputs.skip != 'true' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: core-model-packs-*
+          path: ${{ runner.temp }}/core-model-packs
+          merge-multiple: true
       - name: bake → gate → publish immutable data release
         if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         env:
           WEATHERX_LIVE_ORIGIN: https://weatherx.org
           REGIONAL_PACKS_DIR: ${{ runner.temp }}/regional-packs
+          CORE_MODEL_PACKS_DIR: ${{ runner.temp }}/core-model-packs
           BAKE_PREFLIGHT_PLAN: ${{ runner.temp }}/weatherx-bake-plan.json
           DATA_PUBLISH_MODE: r2-release
           R2_REMOTE: weatherx:weatherx-data-production
