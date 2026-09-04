@@ -30,6 +30,8 @@ jobs:
         with: { path: cycle, persist-credentials: false }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22 }
+      - name: Install locked staging controller dependencies before importing the gate
+        run: npm ci --ignore-scripts --prefix cycle/staging-controller
       - name: Refuse any unapproved target, source or invocation
         run: node --input-type=module -e "import {consumerGate} from './cycle/tools/staging-consumer.mjs'; consumerGate(process.env)"
       - name: Checkout only the fixed already-qualified staging consumer
