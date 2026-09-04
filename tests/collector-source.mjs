@@ -21,7 +21,11 @@ test('production maintenance uses an immutable approved source before any source
   assert.match(validateCollectorSource(workflow),/^[a-f0-9]{40}$/);
 });
 test('missing, floating, mismatched and dirty-source guards are rejected',()=>{
-  const pinned=workflow.replace(/^          ref: [a-f0-9]{40}$/m,'          ref: '+'a'.repeat(40)).replace(/test "\$\(git rev-parse HEAD\)" = "[a-f0-9]{40}"/,'test "$(git rev-parse HEAD)" = "'+'a'.repeat(40)+'"');
+  // Mutate the production bake job's own checkout, not the regional family checkout that precedes it.
+  const at=workflow.indexOf('      - name: checkout atmos (private, read-only deploy key)');assert.ok(at>0);
+  const mutate=(fn)=>workflow.slice(0,at)+fn(workflow.slice(at));
+  const pinned=mutate(t=>t.replace(/^          ref: [a-f0-9]{40}$/m,'          ref: '+'a'.repeat(40)).replace(/test "\$\(git rev-parse HEAD\)" = "[a-f0-9]{40}"/,'test "$(git rev-parse HEAD)" = "'+'a'.repeat(40)+'"'));
   validateCollectorSource(pinned);
-  for(const candidate of [pinned.replace(/^          ref:.*\n/m,''),pinned.replace(/^          ref:.*$/m,'          ref: master'),pinned.replace(/^          ref:.*$/m,'          ref: ${{ vars.COLLECTOR_SHA }}'),pinned.replace('git diff --exit-code HEAD','true'),pinned.replace('test "$(git rev-parse HEAD)"','test "wrong"')])assert.throws(()=>validateCollectorSource(candidate));
+  const tail=pinned.slice(at),head=pinned.slice(0,at);
+  for(const candidate of [tail.replace(/^          ref:.*\n/m,''),tail.replace(/^          ref:.*$/m,'          ref: master'),tail.replace(/^          ref:.*$/m,'          ref: ${{ vars.COLLECTOR_SHA }}'),tail.replace('git diff --exit-code HEAD','true'),tail.replace('test "$(git rev-parse HEAD)"','test "wrong"')])assert.throws(()=>validateCollectorSource(head+candidate));
 });

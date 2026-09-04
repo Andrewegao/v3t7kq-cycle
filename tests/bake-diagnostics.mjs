@@ -20,8 +20,9 @@ try {
   const resource = 'model-input resource ecmwf peak-rss-kib=12345 elapsed-seconds=456.78';
   const checkpoint = 'checkpoint: uncommitted input producer changes';
   const privateMarker = 'DO_NOT_DUMP_UNRELATED_EARLY_LOG_CONTENT';
+  const regional = '[2026-08-30T18:13:00Z] regional-model install arome-antilles status=carried init=2026083012 reason=collector abstained: 2026083018 failed ValueError';
   await writeFile(join(fixture, 'ops/logs/bake-20260830.log'), [
-    privateMarker, resource, checkpoint,
+    privateMarker, resource, checkpoint, regional,
     '[2026-08-30T18:12:00+00:00] model-input start ecmwf',
     '[2026-08-30T19:12:00+00:00] model-input end ecmwf exit=0',
     ...Array.from({ length: 240 }, (_, i) => `browser detail ${i}`),
@@ -29,7 +30,7 @@ try {
   ].join('\n'));
   const result = spawnSync('bash', ['-e', '-c', diagnosticScript], { cwd: fixture, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
-  for (const expected of [resource, checkpoint, 'model-input start ecmwf', 'model-input end ecmwf exit=0', 'WEATHER LAB GATE FAILED']) {
+  for (const expected of [resource, checkpoint, regional, 'model-input start ecmwf', 'model-input end ecmwf exit=0', 'WEATHER LAB GATE FAILED']) {
     assert.ok(result.stdout.includes(expected), `retained diagnostic: ${expected}`);
   }
   assert.ok(!result.stdout.includes(privateMarker), 'do not dump all old internal log content');
