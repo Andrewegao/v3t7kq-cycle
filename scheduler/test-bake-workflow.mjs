@@ -2,6 +2,12 @@ import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 
 const workflow = await readFile(new URL('../.github/workflows/bake.yml', import.meta.url), 'utf8');
+const bake = workflow.slice(workflow.indexOf('\n  bake:'));
+const noChange = bake.split('      - name: plan conservative no-change fast path')[1]?.split('      - name:')[0];
+assert.ok(noChange);
+assert.ok(noChange.lastIndexOf('echo "skip=false" >> "$GITHUB_OUTPUT"') > noChange.indexOf('\n          fi'),
+  'the core-only duplicate probe cannot suppress fresh distributed model artifacts');
+assert.match(noChange,/reason=distributed-model-inputs-require-qualification/);
 
 assert.match(workflow, /actions\/setup-python@[a-f0-9]{40} # v5\n\s+if: \$\{\{ steps\.bake_plan\.outputs\.skip != 'true' \}\}/);
 assert.doesNotMatch(workflow, /code_only|Road crop deps/,
@@ -54,7 +60,9 @@ assert.match(workflow, /maintenance-inputs-v1-\$\{\{ steps\.maintenance_checkpoi
   'different data producer versions must not share completed-input checkpoint keys');
 assert.match(workflow, /MAINTENANCE_CHECKPOINT_ENABLED: '1'/);
 assert.match(workflow, /MAINTENANCE_MODEL_PARALLELISM: '2'/,
-  'model concurrency on a shared maintenance runner must be explicitly bounded');
+  'the standalone fallback remains memory bounded; the workflow supplies isolated artifacts');
+assert.match(publishStep, /CORE_MODEL_PACKS_DIR: \$\{\{ runner\.temp \}\}\/core-model-packs/,
+  'the main data orchestrator must install sealed inputs instead of recollecting them');
 assert.ok(workflow.indexOf('name: hydrate and verify current production R2 release')
   < workflow.indexOf('name: bake → gate → publish immutable data release'),
   'checkpoint validation must compare against freshly hydrated production bytes');
