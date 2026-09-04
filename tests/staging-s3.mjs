@@ -52,7 +52,8 @@ test('CAS writes have exact bucket, key, metadata and precondition; no credentia
   await io.put(bucket,'catalogs/current.json','{}',{ifMatch:'"old"',customMetadata:{'activation-id':'123-1'}});
   assert.equal(commands[0].input.IfMatch,'"old"');assert.equal(commands[0].input.IfNoneMatch,undefined);
   assert.equal(commands[0].input.Bucket,bucket);assert.deepEqual(commands[0].input.Metadata,{'activation-id':'123-1'});
-  for(const key of ['vault/x','releases/x/manifest.json','catalogs/unreviewed.json'])await assert.rejects(io.put(bucket,key,'{}',{ifNoneMatch:'*'}));
+  for(const key of ['vault/x','releases/x/manifest.json','catalogs/unreviewed.json','shared-read/other.json'])await assert.rejects(io.put(bucket,key,'{}',{ifNoneMatch:'*'}));
+  await io.put(bucket,'shared-read/pin.json','{}',{ifNoneMatch:'*'});assert.equal(commands.at(-1).input.Key,'shared-read/pin.json');
   await assert.rejects(io.put(bucket,'releases/current.json','{}',{}));
   await assert.rejects(io.put(bucket,'releases/current.json','{}',{ifMatch:'"old"',ifNoneMatch:'*'}));
   assert.throws(()=>createStagingS3({...env,STAGING_R2_WRITE_SECRET_ACCESS_KEY:''}));

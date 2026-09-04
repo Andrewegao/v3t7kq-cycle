@@ -1,0 +1,49 @@
+# Read-only: proves staging.weatherx.org serves exactly production's current release and
+# catalog through the shared read path. No write credential, no collector, no deployment.
+name: WeatherX staging shared-read follow probe
+on:
+  schedule:
+    - cron: '25,55 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-staging-shared-read-probe
+  cancel-in-progress: false
+jobs:
+  probe:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.STAGING_SHARED_READ_PROBE_ENABLED == 'true' }}
+    environment:
+      name: data-staging
+      url: https://staging.weatherx.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Install checksum-pinned read-only S3 client
+        run: |
+          archive="$RUNNER_TEMP/rclone-v1.75.0-linux-amd64.zip"
+          curl --fail --silent --show-error --location \
+            https://github.com/rclone/rclone/releases/download/v1.75.0/rclone-v1.75.0-linux-amd64.zip \
+            --output "$archive"
+          printf '%s  %s\n' 'aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa' "$archive" | sha256sum --check --status
+          unzip -q "$archive" -d "$RUNNER_TEMP"
+          sudo install -m 0755 "$RUNNER_TEMP/rclone-v1.75.0-linux-amd64/rclone" /usr/local/bin/rclone
+      - name: Verify probe contracts without credentials
+        run: node --test cycle/tests/staging-shared-read.mjs
+      - name: Compare production current pointers with what staging serves
+        env:
+          SHARED_R2_READ_ACCESS_KEY_ID: ${{ secrets.SHARED_R2_READ_ACCESS_KEY_ID }}
+          SHARED_R2_READ_SECRET_ACCESS_KEY: ${{ secrets.SHARED_R2_READ_SECRET_ACCESS_KEY }}
+        run: node cycle/tools/staging-shared-read.mjs probe
+      - name: Retain non-secret follow receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: staging-shared-read-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/staging-shared-read/probe.json
+          if-no-files-found: ignore
+          retention-days: 14
