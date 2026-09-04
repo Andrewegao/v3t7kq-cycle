@@ -6,9 +6,10 @@ read-only and runs its own `ops/bake-weatherx.sh` cycle — all bake logic lives
 the app, so the laptop launchd loop and this workflow can never drift apart.
 
 **Cycle (4×/day, ~20 min after each ECMWF publication):**
-mirror live data tree → fetch ECMWF/GFS/HRRR → enrich GFS add-on layers → marine +
-air bakes → freshness/variable gate vs live → one atomic Cloudflare Pages deploy.
-Any failure keeps the live site untouched.
+regional family jobs (ICON / HRDPS / AROME Antilles / NOAA nests → display packs) ∥ bake job:
+hydrate current release → fetch ECMWF/GFS/HRRR/AIFS → install regional packs + roster → enrich
+GFS add-on layers → air bakes → freshness/variable gate vs live → one immutable R2 data release.
+Any failure keeps the live site untouched; a late regional provider only abstains in the roster.
 
 **Secrets**
 - `ATMOS_DEPLOY_KEY` — read-only deploy key on the private app repo (configured).
