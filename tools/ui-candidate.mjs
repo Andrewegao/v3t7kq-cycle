@@ -6,8 +6,8 @@ import { lstatSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from '
 import { resolve, dirname } from 'node:path';
 import {BASELINE_PROFILE,validateProfile,validateCandidateSelection,requireProductionProfile} from './ui-staging-models.mjs';
 
-export const CONTROL_SHA = '9add0bd44ef893279137cef3e2b3314583f16b4d';
-export const STAGING_CONTROL_SHA = '9add0bd44ef893279137cef3e2b3314583f16b4d';
+export const CONTROL_SHA = '3e13c7aa5962ebd40867ae9427a76090cd7500f7';
+export const STAGING_CONTROL_SHA = '3e13c7aa5962ebd40867ae9427a76090cd7500f7';
 export const REPOSITORY = 'Andrewegao/v3t7kq-cycle';
 export const FREEZE_UNTIL = '2026-08-31T11:00:00Z';
 export const MAX_BYTES = 96 * 1024 * 1024;

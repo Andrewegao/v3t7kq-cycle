@@ -73,7 +73,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Andrewegao/atmos
-          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && '9add0bd44ef893279137cef3e2b3314583f16b4d' || '9add0bd44ef893279137cef3e2b3314583f16b4d' }}
+          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && '3e13c7aa5962ebd40867ae9427a76090cd7500f7' || '3e13c7aa5962ebd40867ae9427a76090cd7500f7' }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
           path: control
@@ -155,7 +155,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Andrewegao/atmos
-          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && '9add0bd44ef893279137cef3e2b3314583f16b4d' || '9add0bd44ef893279137cef3e2b3314583f16b4d' }}
+          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && '3e13c7aa5962ebd40867ae9427a76090cd7500f7' || '3e13c7aa5962ebd40867ae9427a76090cd7500f7' }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
           path: control
