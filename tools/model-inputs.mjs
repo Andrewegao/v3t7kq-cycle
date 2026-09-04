@@ -172,5 +172,9 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
       const root=resolve(process.env.RUNNER_TEMP,'weatherx-model-inputs',pin.model);
       const io=await createArchiveS3(process.env,pin);try{console.log(JSON.stringify(await archiveInputs({root,pin,key:process.env.MODEL_INPUT_ARCHIVE_KEY,io,log:x=>console.log(JSON.stringify(x))})));}finally{io.close();}
     }else throw Error('unsupported command');
-  }catch{console.error('Model input gate/archive failed; no serving activation is performed.');process.exitCode=1;}
+  }catch(e){
+    // Name only the controller's own assertion texts; S3 and transport errors stay redacted.
+    const known=['unlisted remote input object','remote decrypted bytes mismatch','source changed before transfer','source changed during transfer','incomplete remote inventory','existing completion differs','completion readback failed','immutable archive collision','staging archive S3 operation failed','archive budget exceeded','invalid receipt','stale'];
+    const reason=known.find(k=>String(e?.message??'').includes(k))??(e?.code==='ERR_ASSERTION'?'controller assertion failed':'unspecified');
+    console.error(`Model input gate/archive failed (${reason}); no serving activation is performed.`);process.exitCode=1;}
 }
