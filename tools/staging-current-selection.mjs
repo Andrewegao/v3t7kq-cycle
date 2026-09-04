@@ -6,7 +6,7 @@ import {execFileSync} from 'node:child_process';
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {createTransport,hash,validateCatalog,validateRelease} from './shared-data.mjs';
+import {createTransport,hash,pointModelSet,validateCatalog,validateRelease} from './shared-data.mjs';
 
 const REPOSITORY='Andrewegao/v3t7kq-cycle';
 const VALIDATOR_SHA='dbc97a26bc239398ffa9ec157a094148961b6451';
@@ -34,6 +34,7 @@ export async function discoverCurrentSelection(io,validatePoints,now=Date.now())
   return {schemaVersion:1,kind:'weatherx-current-staging-source-selection',selection:pin,
     selectionSha256:hash(JSON.stringify(pin)),releasePublishedAt:release.publishedAt,
     catalogPublishedAt:catalogPointer.publishedAt,objectCount:manifest.objectCount,
+    pointModels:pointModelSet(manifest.pointSeries?.models),pointComponents:Object.keys(JSON.parse(catalogRaw).components??{}).filter(id=>id.startsWith('point-')).sort(),
     discoveredAt:new Date(now).toISOString(),collected:false,processed:false,activated:false,
     stagingWritten:false,productionWritten:false};
 }

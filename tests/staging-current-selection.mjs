@@ -34,6 +34,7 @@ test('discovers and validates both exact current identities without writing',asy
   const receipt=await discoverCurrentSelection(f.io,(descriptor,objects)=>{assert.deepEqual(descriptor,f.manifest.pointSeries);assert.deepEqual(objects,f.manifest.objects);validations++;},now);
   assert.equal(validations,1);assert.deepEqual(f.reads,['releases/current.json','catalogs/current.json',`releases/${f.release.releaseId}/manifest.json`,`catalogs/snapshots/${f.catalogPointer.catalogId}.json`]);
   assert.equal(receipt.selectionSha256,hash(JSON.stringify(receipt.selection)));assert.equal(receipt.stagingWritten,false);assert.equal(receipt.productionWritten,false);
+  assert.deepEqual(receipt.pointModels,['ecmwf','gfs']);assert.deepEqual(receipt.pointComponents,[]);
 });
 
 test('pointer, manifest, catalog and point validation failures stop discovery',async()=>{
