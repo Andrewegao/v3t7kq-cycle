@@ -359,6 +359,20 @@ test('numeric proof must match each model/run/release/source pack and contain fi
     const proof = clone(f.proof); mutate(proof); assert.throws(() => assertLiveProof(proof, prepared, f.ctx, f.proof.servingCatalog));
   }
 });
+test('an admitted AIFS point model in the prepared release requires its own seven decoded proofs', async () => {
+  const f = fixture(), prepared = await inspectPrepared(f.ctx, f.io, f.deps), runId = prepared.manifest.pointSeries.models.gfs.runId;
+  const packPath = `point-series/v2/aifs/${runId}/chunks/0/0.bin.gz`, pack = { path: packPath, bytes: 3, sha256: hash('aifs-pack') };
+  const manifest = { ...prepared.manifest, objects: [...prepared.manifest.objects, pack],
+    pointSeries: { ...prepared.manifest.pointSeries, models: { ...prepared.manifest.pointSeries.models, aifs: { ...prepared.manifest.pointSeries.models.gfs } } } };
+  const withAifs = { ...prepared, manifest };
+  assert.throws(() => assertLiveProof(f.proof, withAifs, f.ctx, f.proof.servingCatalog), /seven real point responses per point model/);
+  const aifsPoints = f.proof.points.filter(p => p.model === 'gfs').map(p => ({ ...p, model: 'aifs', packPath, packSha256: pack.sha256 }));
+  assertLiveProof({ ...f.proof, points: [...f.proof.points, ...aifsPoints] }, withAifs, f.ctx, f.proof.servingCatalog);
+  assert.throws(() => assertLiveProof({ ...f.proof, points: [...f.proof.points, ...aifsPoints.slice(0, 6)] }, withAifs, f.ctx, f.proof.servingCatalog), /seven real point responses per point model/);
+  assert.throws(() => assertLiveProof({ ...f.proof, points: [...f.proof.points, ...aifsPoints.map(p => ({ ...p, coordinates: [0, 0] }))] }, withAifs, f.ctx, f.proof.servingCatalog), /seven distinct points/);
+  const unknown = { ...prepared, manifest: { ...manifest, pointSeries: { ...manifest.pointSeries, models: { ...manifest.pointSeries.models, nam: manifest.pointSeries.models.gfs } } } };
+  assert.throws(() => assertLiveProof({ ...f.proof, points: [...f.proof.points, ...aifsPoints] }, unknown, f.ctx, f.proof.servingCatalog), /unqualified point-series model/);
+});
 test('tampered recovery intent or journal is rejected before pointer writes', async () => {
   for (const part of ['intent', 'journal']) {
     const f = fixture(); let crashed = false;

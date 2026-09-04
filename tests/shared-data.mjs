@@ -3,7 +3,7 @@ import test from 'node:test';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { ACCOUNT, MODELS, hash, gate, safePath, selection, validateRelease, validateCatalog, validateComponent,
+import { ACCOUNT, MODELS, POINT_MODELS, REQUIRED_POINT_MODELS, hash, gate, safePath, selection, validateRelease, validateCatalog, validateComponent, pointModelSet,
   localInventory, compareInventory, transferEnvironment, createTransport, prepare } from '../tools/shared-data.mjs';
 
 const now = Date.parse('2026-08-31T15:00:00Z'), time = new Date(now).toISOString();
@@ -87,6 +87,39 @@ test('unsupported catalog, component mounts and original gate receipts fail clos
     const c=copy(f.catalog); mutate(c); const raw=encoded(c), sha=hash(raw);
     assert.throws(() => validateCatalog({...f.catalogPointer,catalogSha256:sha},raw,{...f.pin,catalogSha256:sha},now));
   }
+});
+test('AIFS and ICON point models are admitted in the whole-release descriptor only with freshness', () => {
+  assert.deepEqual(POINT_MODELS, ['aifs', 'ecmwf', 'gfs', 'icon']); assert.deepEqual(REQUIRED_POINT_MODELS, ['ecmwf', 'gfs']);
+  const f=fixture(), withPoints=(mutate)=>{ const m=copy(f.manifest); mutate(m); const digest=hash(JSON.stringify(m));
+    return [{...f.release,manifestSha256:digest,pointSeries:m.pointSeries},m,{...f.pin,releaseManifestSha256:digest}]; };
+  const add=(m,id,freshUntil=new Date(now+3600_000).toISOString())=>{ m.pointSeries.models[id]={...m.pointSeries.models.gfs,freshUntil}; };
+  validateRelease(...withPoints(m=>{add(m,'aifs');add(m,'icon');}),now);
+  assert.deepEqual(pointModelSet(withPoints(m=>{add(m,'icon');add(m,'aifs');})[1].pointSeries.models),['aifs','ecmwf','gfs','icon']);
+  assert.throws(()=>validateRelease(...withPoints(m=>add(m,'aifs',time)),now),/freshness margin: aifs/);
+  assert.throws(()=>validateRelease(...withPoints(m=>add(m,'nam')),now),/unqualified point-series model/);
+  assert.throws(()=>validateRelease(...withPoints(m=>{add(m,'aifs');delete m.pointSeries.models.gfs;}),now),/required point-series models/);
+});
+test('point-series catalog components are admitted only in their canonical qualified form', () => {
+  const f=fixture(), generationTime='2026-08-31T12:00:00Z';
+  const pointComponent=(model,patch={})=>{ const descriptor={...f.manifest.pointSeries.models.gfs, storage:{format:'WXPS1',missing:-32768,leadHours:[0,1],fields:[{id:'temperature',scaleInv:100}]}};
+    const m={schemaVersion:1,componentId:`point-${model}`,artifactId:`point-${model}-2026083112-1`,generationTime,completedAt:time,
+      rootPrefix:`components/point-${model}/point-${model}-2026083112-1/`,mounts:[`point-series/v2/${model}/`],objectCount:2,inventorySha256:hash('packs'),
+      quality:{status:'passed',checks:['manifest','inventory','remote_bytes','point_series']},pointSeries:{schemaVersion:1,modelId:model,descriptor},...patch};
+    return {...m,manifestKey:`${m.rootPrefix}component.json`,manifestSha256:hash(JSON.stringify(m))}; };
+  const check=(mutate)=>{ const c=copy(f.catalog); mutate(c); const raw=encoded(c), sha=hash(raw);
+    return validateCatalog({...f.catalogPointer,catalogSha256:sha},raw,{...f.pin,catalogSha256:sha},now); };
+  const admitted=check(c=>{ for (const model of ['gfs','aifs','icon']) c.components[`point-${model}`]=pointComponent(model); });
+  assert.deepEqual(Object.keys(admitted.components).sort(),['aifs','ecmwf','gfs','hrrr','point-aifs','point-gfs','point-icon']);
+  for (const [why,mutate] of [
+    ['unknown point model', c=>c.components['point-nam']=pointComponent('nam')],
+    ['map mount', c=>c.components['point-gfs']=pointComponent('gfs',{mounts:['data/gfs/']})],
+    ['missing point_series gate', c=>c.components['point-gfs']=pointComponent('gfs',{quality:{status:'passed',checks:['manifest','inventory','remote_bytes']}})],
+    ['run identity', c=>c.components['point-gfs']=pointComponent('gfs',{generationTime:'2026-08-31T06:00:00Z'})],
+    ['model identity', c=>{ const p=pointComponent('gfs'); p.pointSeries={...p.pointSeries,modelId:'ecmwf'}; c.components['point-gfs']=p; }],
+    ['json storage', c=>{ const p=pointComponent('gfs'); p.pointSeries={...p.pointSeries,descriptor:{...p.pointSeries.descriptor,storage:undefined}}; c.components['point-gfs']=p; }],
+    ['stale point run', c=>{ const p=pointComponent('gfs'); p.pointSeries={...p.pointSeries,descriptor:{...p.pointSeries.descriptor,freshUntil:time}}; c.components['point-gfs']=p; }],
+    ['point component replacing a model', c=>{ delete c.components.gfs; c.components['point-gfs']=pointComponent('gfs'); }],
+  ]) assert.throws(()=>check(mutate),why);
 });
 test('preparation runs no producer and never activates either environment', async () => {
   const f=fixture(); let validations=0;

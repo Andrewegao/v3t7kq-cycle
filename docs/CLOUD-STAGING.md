@@ -36,9 +36,16 @@ This is byte-preserving reuse of previously published data, not a new meteorolog
 assessment, full point-pack re-decode or attestation of a collector SHA absent from upstream
 receipts. New model source admission is not implied.
 
-Only ECMWF/GFS/HRRR/AIFS components are admitted by this initial reuse lane. No weather
-producer, Python dependency install, Pages token, Worker token, UI dispatch or local fallback
-exists in the workflow. Synthetic local tests exercise orchestration, not weather collection.
+Only ECMWF/GFS/HRRR/AIFS map components are admitted by this reuse lane. The whole-release
+point-series descriptor must carry ECMWF and GFS and may additionally carry AIFS and ICON; each
+present point model needs a 30-minute freshness margin at preparation and again at activation,
+and each gets seven real decoded point responses in the live proof. Optional `point-<model>`
+catalog components for those four models are admitted only in their canonical qualified form
+(`point-series/v2/<model>/` mount, `point_series` receipt, WXPS1 descriptor bound to the
+generation run). See `POINT_SERIES_MODELS.md` for the producer-side prerequisites and the
+owner runbook. No weather producer, Python dependency install, Pages token, Worker token, UI
+dispatch or local fallback exists in the workflow. Synthetic local tests exercise orchestration,
+not weather collection.
 
 No destination upload starts until the entire acquired snapshot passes. Transfers use
 immutable-copy mode and download/readback verification. An interrupted upload can leave
