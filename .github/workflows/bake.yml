@@ -44,13 +44,13 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          ref: 3aea993c74f616e4428cbabbf216b4442734c9cf
+          ref: 9fa2a0065552da05976d99447fedc42dc0c96487
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 32
           persist-credentials: false
       - name: Verify approved immutable core collector before running source
         run: |
-          test "$(git rev-parse HEAD)" = "3aea993c74f616e4428cbabbf216b4442734c9cf"
+          test "$(git rev-parse HEAD)" = "9fa2a0065552da05976d99447fedc42dc0c96487"
           git diff --exit-code HEAD
       - name: checkout this reviewed recovery controller
         if: ${{ inputs.recovery_run_id != '' }}
@@ -129,13 +129,13 @@ jobs:
         with:
           repository: weatherx-hq/atmos
           # Must equal the bake job's approved commit: the bake refuses a pack collected elsewhere.
-          ref: 3aea993c74f616e4428cbabbf216b4442734c9cf
+          ref: 9fa2a0065552da05976d99447fedc42dc0c96487
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 32
           persist-credentials: false
       - name: Verify approved immutable regional collector before running source
         run: |
-          test "$(git rev-parse HEAD)" = "3aea993c74f616e4428cbabbf216b4442734c9cf"
+          test "$(git rev-parse HEAD)" = "9fa2a0065552da05976d99447fedc42dc0c96487"
           git diff --exit-code HEAD
       - name: checkout this reviewed recovery controller
         if: ${{ inputs.recovery_run_id != '' }}
@@ -207,13 +207,13 @@ jobs:
           repository: weatherx-hq/atmos
           # Approved by full Atmos CI. The whole release produced below must pass
           # its own gates before any staging or production consumer can select it.
-          ref: 3aea993c74f616e4428cbabbf216b4442734c9cf
+          ref: 9fa2a0065552da05976d99447fedc42dc0c96487
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 32 # bound checkout cost; unknown checkpoint ancestry is a cache miss
           persist-credentials: false
       - name: Verify approved immutable collector before running source
         run: |
-          test "$(git rev-parse HEAD)" = "3aea993c74f616e4428cbabbf216b4442734c9cf"
+          test "$(git rev-parse HEAD)" = "9fa2a0065552da05976d99447fedc42dc0c96487"
           git diff --exit-code HEAD
       - name: plan conservative no-change fast path
         id: bake_plan
