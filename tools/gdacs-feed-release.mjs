@@ -125,6 +125,22 @@ export async function buildSource(atmos,sha) {
   assert.ok(bytes.length>0&&bytes.length<1024*1024,'unexpected module size');
   return {bytes,source:{sha,inventorySha256:inventory.inventorySha256,bundleSha256:sha256(bytes),bundleBytes:bytes.length,esbuildVersion:esbuild.version,inputs:sorted(Object.keys(bundle.metafile.inputs))}};
 }
+// Never retain remote text, URLs, headers or configuration in diagnostics. Keep
+// only fixed classes and bounded numbers, and re-sanitize before persistence.
+export function safeFailureDiagnostic(error){
+  const value=error?.safeDiagnostic;
+  if(['cloudflare-api','cloudflare-response'].includes(value?.kind))return {
+    kind:value.kind,httpStatus:Number.isInteger(value.httpStatus)&&value.httpStatus>=100&&value.httpStatus<=599?value.httpStatus:null,
+    errorCodes:[...new Set((Array.isArray(value.errorCodes)?value.errorCodes:[]).filter(code=>Number.isSafeInteger(code)&&code>=1000&&code<=999999999))].slice(0,8),
+  };
+  if(value?.kind==='transport')return {kind:'transport'};
+  return {kind:error?.code==='ERR_ASSERTION'?'local-validation':'unexpected'};
+}
+function apiFailure(kind,status,codes=[]){
+  const error=new Error('Cloudflare operation rejected');
+  error.safeDiagnostic=safeFailureDiagnostic({safeDiagnostic:{kind,httpStatus:status,errorCodes:codes}});
+  return error;
+}
 export function createTransport({fetchImpl=globalThis.fetch,deadline=()=>Date.now()+30_000,signal=()=>undefined,tokens=process.env}={}) {
   async function request(url,init={},max=8*1024*1024){
     const signals=[AbortSignal.timeout(timeout(60_000,deadline())),signal(),init.signal].filter(Boolean);
@@ -137,10 +153,12 @@ export function createTransport({fetchImpl=globalThis.fetch,deadline=()=>Date.no
     assert.ok(tokens[tokenName],`missing ${tokenName}`);
     const headers={Authorization:`Bearer ${tokens[tokenName]}`};
     if(body && !(body instanceof FormData)){headers['Content-Type']='application/json';body=JSON.stringify(body);}
-    const response=await request(API+path,{method,headers,body});
-    const json=JSON.parse(response.body);
-    if(allowAbsent && response.status===404 && json.success===false && json.errors?.some(error=>error.code===10007))return null;
-    assert.ok(response.status>=200&&response.status<300&&json.success===true,'Cloudflare operation rejected');
+    let response;
+    try{response=await request(API+path,{method,headers,body});}catch{throw apiFailure('transport');}
+    let json;
+    try{json=JSON.parse(response.body);}catch{throw apiFailure('cloudflare-response',response.status);}
+    if(allowAbsent && response.status===404 && json?.success===false && Array.isArray(json.errors)&&json.errors.some(error=>error?.code===10007))return null;
+    if(!(response.status>=200&&response.status<300&&json?.success===true))throw apiFailure('cloudflare-api',response.status,Array.isArray(json?.errors)?json.errors.map(error=>error?.code):[]);
     return json.result;
   }
   async function object(key,max=16*1024*1024){

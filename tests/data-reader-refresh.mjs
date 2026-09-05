@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createTransport,safeFailureDiagnostic } from '../tools/gdacs-feed-release.mjs';
 import { execute,recover,assertClosure,CLOSURE,assertVersion,makeOperations,SCRIPT,assertBoundary,versionAnnotations } from '../tools/data-reader-refresh.mjs';
 const old='00000000-0000-0000-0000-000000000001',ro='00000000-0000-0000-0000-000000000002',full='00000000-0000-0000-0000-000000000003',foreign='00000000-0000-0000-0000-000000000004';
 function fixture(){
@@ -89,7 +90,33 @@ test('direct API operations only upload inactive version or deploy exact data sc
   const ops=makeOperations(transport,'unused',{bundles:{readonly:{bytes:Buffer.from('code')}}});
   await ops.upload('readonly',f.receipt);await ops.deploy(ro);
   assert.deepEqual(calls.map(x=>[x[0],x[1],x[2].method]),[[SCRIPT+'/versions?bindings_inherit=strict','DATA_EDGE_TOKEN','POST'],[SCRIPT+'/deployments','DATA_EDGE_TOKEN','POST']]);
-  const metadata=JSON.parse(await calls[0][2].body.get('metadata').text());
+  assert.equal(typeof calls[0][2].body.get('metadata'),'string','metadata is an ordinary multipart string field, not a file');
+  const metadata=JSON.parse(calls[0][2].body.get('metadata'));
   assert.deepEqual(metadata.bindings,[{name:'CATALOG_PROMOTION_KEY',type:'inherit',version_id:old}]);assert.ok(!JSON.stringify(metadata).includes('secret-value'));
-  assert.deepEqual(metadata.placement,{});assert.equal(metadata.usage_model,'standard');assert.ok(!Object.hasOwn(metadata,'observability'));
+  assert.ok(!Object.hasOwn(metadata,'placement'));assert.equal(metadata.usage_model,'standard');assert.ok(!Object.hasOwn(metadata,'observability'));
+  f.receipt.boundary.data.settings.placement={mode:'smart',hint:'wnam'};
+  await ops.upload('readonly',f.receipt);
+  assert.deepEqual(JSON.parse(calls[2][2].body.get('metadata')).placement,{mode:'smart',hint:'wnam'});
+});
+test('API upload refusal retains only numeric status/codes through the durable receipt',async()=>{
+  const f=fixture();const transport=createTransport({tokens:{DATA_EDGE_TOKEN:'never-print-token'},fetchImpl:async()=>Response.json({success:false,errors:[{code:10021,message:'never-print-message',source:{pointer:'never-print-config'}},{code:'never-print-code'},{code:10021},{code:10000}]},{status:400})});
+  f.ops.upload=async()=>transport.api(SCRIPT+'/versions','DATA_EDGE_TOKEN',{method:'POST'});
+  await assert.rejects(execute(f.receipt,f.ops,f.persist));
+  assert.deepEqual(f.receipt.failure,{kind:'cloudflare-api',httpStatus:400,errorCodes:[10021,10000]});
+  assert.ok(!JSON.stringify(f.receipt).includes('never-print'));assert.equal(f.receipt.failedStage,'upload-readonly');assert.equal(f.receipt.recovery,'no-active-mutation');assert.equal(f.getActive(),old);
+});
+test('local version assertion differs from API rejection without leaking its message or actual data',async()=>{
+  const f=fixture();f.ops.upload=async()=>{assert.equal('never-print-actual','never-print-expected');};
+  await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.deepEqual(f.receipt.failure,{kind:'local-validation'});assert.ok(!JSON.stringify(f.receipt).includes('never-print'));
+});
+test('non-JSON API errors and network errors keep bounded safe distinct diagnostics',async()=>{
+  for(const [fetchImpl,expected] of [[async()=>new Response('never-print-html',{status:502}),{kind:'cloudflare-response',httpStatus:502,errorCodes:[]}],[async()=>{throw Error('never-print-token/url');},{kind:'transport'}]]){
+    const transport=createTransport({tokens:{DATA_EDGE_TOKEN:'never-print-token'},fetchImpl});
+    await assert.rejects(transport.api(SCRIPT+'/versions','DATA_EDGE_TOKEN'),error=>{assert.deepEqual(error.safeDiagnostic,expected);assert.ok(!String(error).includes('never-print'));return true;});
+  }
+});
+test('diagnostic persistence rejects remote strings and bounds numeric fields',()=>{
+  const diagnostic=safeFailureDiagnostic({safeDiagnostic:{kind:'cloudflare-api',httpStatus:'never-print',errorCodes:[null,-1,NaN,Infinity,'never-print',...Array.from({length:20},(_,i)=>1000+i)],body:'never-print',message:'never-print'}});
+  assert.deepEqual(diagnostic,{kind:'cloudflare-api',httpStatus:null,errorCodes:Array.from({length:8},(_,i)=>1000+i)});
+  assert.deepEqual(safeFailureDiagnostic({safeDiagnostic:{kind:'never-print'}}),{kind:'unexpected'});
 });
