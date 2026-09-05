@@ -211,6 +211,7 @@ export async function execute(receipt,ops,persist){
         assert.equal(await ops.active(),receipt.versions[kind],'verification deployment changed');
         assertBoundary(await ops.boundary(),receipt);
         await verifyHistory(ops,receipt);
+        assert.equal(await ops.active(),receipt.versions[kind],'active changed during qualification history check');
       }
     });
     receipt.status='passed';receipt.completedAt=new Date().toISOString();receipt.afterPointers=await ops.pointers();persist();

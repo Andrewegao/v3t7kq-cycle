@@ -81,6 +81,14 @@ test('foreign activation during the last pre-activation history check is never o
   f.ops.history=async()=>{if(f.writes.includes('upload:full')&&++reads===2)f.setActive(foreign);return history();};
   await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.equal(f.getActive(),foreign);assert.ok(!f.writes.some(x=>x.startsWith('deploy')));
 });
+test('foreign activation during the final full qualification history read cannot mark passed or be overwritten',async()=>{
+  const f=fixture(),history=f.ops.history;
+  f.ops.history=async()=>{if(f.events.filter(x=>x==='verify:full').length===3)f.setActive(foreign);return history();};
+  await assert.rejects(execute(f.receipt,f.ops,f.persist));
+  assert.equal(f.getActive(),foreign);assert.equal(f.receipt.status,'failed');
+  assert.equal(f.receipt.recovery,'manual-forward-repair-required');
+  assert.deepEqual(f.writes.filter(x=>x.startsWith('deploy')),[`deploy:${ro}`,`deploy:${full}`]);
+});
 test('recovery rechecks active ownership after history and refuses a racing foreign deployment',async()=>{
   const f=fixture();await execute(f.receipt,f.ops,f.persist);f.receipt.status='failed';
   const history=f.ops.history;let reads=0;
