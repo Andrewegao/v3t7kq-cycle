@@ -8,12 +8,12 @@ import {MODELS, collectEvidence, buildReport, markdown, readJobLog, validateRun,
 const runId='123',attempt=1,headSha='a'.repeat(40),sourceSha='b'.repeat(40);
 const step=(name,conclusion='success')=>({name,conclusion});
 function fixture(){
-  const jobs=MODELS.map(model=>({id:MODELS.indexOf(model)+1,name:`${MODELS.indexOf(model)<4?'core':'regional'} (${model})`,conclusion:'success',steps:[
+  const jobs=MODELS.map(model=>({id:MODELS.indexOf(model)+1,name:`${MODELS.indexOf(model)<4?'core':'regional'} (${model}) / collector`,conclusion:'success',steps:[
     step('collect one core model and seal its map, point and float inputs'),step('retain only sealed core model inputs for the joined bake'),
     step('collect one regional model for the newest complete cycle (one older-cycle fallback)'),step('hand the display packs (or abstention receipts) to the bake job')]}));
   jobs.push({id:12,name:'bake',conclusion:'success',steps:[step('bake → gate → publish immutable data release')]});
   const evidence=Object.fromEntries(jobs.map(job=>[job.name,{}]));
-  for(const model of MODELS.slice(4))evidence[`regional (${model})`]={collectedRun:'2026090512'};
+  for(const model of MODELS.slice(4))evidence[`regional (${model}) / collector`]={collectedRun:'2026090512'};
   evidence.bake={coreInstalled:true,installed:Object.fromEntries(MODELS.slice(4).map(model=>[model,{status:'fresh',run:'2026090512'}])),promoted:true,completed:true};
   return {runId,attempt,headSha,sourceSha,jobs,evidence};
 }
@@ -24,14 +24,14 @@ test('all eleven rows distinguish published inclusion from live usability',()=>{
   assert.match(markdown(report),/not a current freshness, point-forecast, or browser-health check/);
 });
 test('green abstention is not collection or publication success for that model',()=>{
-  const f=fixture();f.evidence['regional (nam-hi)']={abstained:true};f.evidence.bake.installed['nam-hi']={status:'absent',run:null};
+  const f=fixture();f.evidence['regional (nam-hi) / collector']={abstained:true};f.evidence.bake.installed['nam-hi']={status:'absent',run:null};
   const r=buildReport(f),row=r.models.find(v=>v.model==='nam-hi');
   assert.equal(row.collection,'abstained');assert.equal(row.installed,'absent');assert.equal(row.published,'not-included');assert.equal(r.publishedMapCount,10);
   assert.equal(r.outcome,'published-partial');
 });
 test('successful recovery cache miss with fresh collection and unavailable logs is not recovered',()=>{
   for(const kind of ['core','regional'])for(const readStatus of ['unavailable','oversized']){
-    const f=fixture(),model=kind==='core'?'ecmwf':'nam-hi',job=f.jobs.find(j=>j.name===`${kind} (${model})`);
+    const f=fixture(),model=kind==='core'?'ecmwf':'nam-hi',job=f.jobs.find(j=>j.name===`${kind} (${model}) / collector`);
     const collection=kind==='core'?'collect one core model and seal its map, point and float inputs':'collect one regional model for the newest complete cycle (one older-cycle fallback)';
     job.steps.push(step(`recover only compatible completed ${kind} inputs`));
     f.evidence[job.name]={readStatus};
@@ -50,7 +50,7 @@ test('failed optional collection can carry an existing qualified map without rel
 });
 test('each failed/cancelled/skipped core or regional job remains individually visible',()=>{
   for(const model of MODELS)for(const conclusion of ['failure','cancelled','skipped']){
-    const f=fixture();f.jobs.find(v=>v.name.endsWith(`(${model})`)).conclusion=conclusion;
+    const f=fixture();f.jobs.find(v=>v.name.startsWith(`${MODELS.indexOf(model)<4?'core':'regional'} (${model})`)).conclusion=conclusion;
     assert.equal(buildReport(f).models.find(v=>v.model===model).collection,`job-${conclusion}`);
   }
 });
@@ -126,9 +126,9 @@ test('end-to-end read-only run/attempt report retains no raw diagnostic and prod
 test('report job is read-only, always reports all dependencies and does not change release guards',()=>{
   const workflow=readFileSync(new URL('../.github/workflows/bake.yml',import.meta.url),'utf8');
   const report=workflow.split('\n  model-status:\n')[1];assert.ok(report);
-  assert.match(report,/needs: \[core, regional, bake\]/);assert.match(report,/if: \$\{\{ always\(\) \}\}/);
+  assert.match(report,/needs: \[core-ecmwf, core-gfs, core-hrrr, core-aifs,/);assert.match(report,/if: \$\{\{ always\(\) \}\}/);
   assert.match(report,/actions: read/);assert.match(report,/contents: read/);
   assert.doesNotMatch(report,/secrets\.|environment:|R2_|CLOUDFLARE|CATALOG_|PAGES|workflow_dispatch/);
-  assert.match(workflow,/needs\.core\.result == 'success'/);assert.match(workflow,/cron: '30 2,8,14,20 \* \* \*'/);
+  assert.match(workflow,/needs\.core-ecmwf\.result == 'success'/);assert.match(workflow,/cron: '30 2,8,14,20 \* \* \*'/);
   assert.match(workflow,/installed-unqualified-inputs/);assert.match(workflow,/promoted cycle-/);
 });

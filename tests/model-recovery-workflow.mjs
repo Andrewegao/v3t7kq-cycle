@@ -7,8 +7,8 @@ import test from 'node:test';
 
 const workflow = readFileSync(new URL('../.github/workflows/bake.yml', import.meta.url), 'utf8');
 const sections = {
-  core: workflow.slice(workflow.indexOf('\n  core:'), workflow.indexOf('\n  regional:')),
-  regional: workflow.slice(workflow.indexOf('\n  regional:'), workflow.indexOf('\n  bake:')),
+  core: readFileSync(new URL('../.github/workflows/collect-core-model.yml', import.meta.url), 'utf8'),
+  regional: readFileSync(new URL('../.github/workflows/collect-regional-model.yml', import.meta.url), 'utf8'),
 };
 const step = (job, name) => {
   const value = job.split(`      - name: ${name}\n`)[1]?.split('      - name:')[0];
@@ -50,7 +50,7 @@ for (const [kind, job] of Object.entries(sections)) {
       ['33925520386', 'workflow_dispatch', 'refs/heads/feature', 1],
     ]) {
       const result = spawnSync('/bin/bash', ['-ec', script], {encoding: 'utf8', env: {
-        RECOVERY_RUN_ID: run, GITHUB_EVENT_NAME: event, GITHUB_REF: ref, PATH: '/usr/bin:/bin',
+        RECOVERY_RUN_ID: run, CORE_MODEL: 'ecmwf', REGIONAL_MODEL: 'icon', GITHUB_EVENT_NAME: event, GITHUB_REF: ref, PATH: '/usr/bin:/bin',
       }});
       assert.equal(result.status, status, `${kind} ${run} ${event} ${ref}: ${result.stderr}`);
     }
@@ -86,8 +86,11 @@ test('only an optional manual input enables recovery; one publisher and all gate
   assert.match(workflow, /recovery_run_id:[\s\S]*?required: false\n\s+default: ''/);
   assert.match(workflow, /permissions:\n\s+contents: read\n\s+actions: read/);
   assert.equal((workflow.match(/run: bash ops\/bake-weatherx.sh/g) || []).length, 1);
-  assert.match(workflow, /needs: \[core, regional\]/);
-  assert.match(workflow, /needs\.core\.result == 'success' && \(inputs\.recovery_run_id == '' \|\| needs\.regional\.result == 'success'\)/);
+  assert.match(workflow, /needs: \[core-ecmwf, core-gfs, core-hrrr, core-aifs,/);
+  for (const model of ['core-ecmwf','core-gfs','core-hrrr','core-aifs']) {
+    assert.match(workflow, new RegExp(`needs\\.${model}\\.result == 'success'`));
+  }
+  assert.match(workflow, /inputs\.recovery_run_id == '' \|\| \(needs\.regional-icon\.result == 'success'/);
   const regionalDownload = step(workflow, 'receive regional display packs from the family jobs');
   assert.match(regionalDownload, /continue-on-error: \$\{\{ inputs\.recovery_run_id == '' \}\}/);
   const transfer = step(workflow, 'verify every recovery transfer before assembly');

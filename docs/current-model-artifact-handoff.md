@@ -1,7 +1,8 @@
 # Current-run per-model artifact handoff
 
-Status: source foundation only. This helper does not publish, activate a catalog,
-change a workflow pin, or authorize a candidate for production.
+Status: guarded source foundation only. The eleven reusable publishers are
+structurally disabled while their Atmos SHA remains the unqualified `77487534`
+placeholder. No workflow pin, environment variable, or catalog was changed.
 
 ## Purpose
 
@@ -24,8 +25,8 @@ artifact. It requires:
 - `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT`, and `GITHUB_SHA` to exactly match the
   requested run, attempt, and Cycle controller;
 - pristine Cycle and Atmos checkouts at those exact SHAs;
-- every Atmos checkout in the local `bake.yml` to use the same exact producer /
-  consumer SHA;
+- exactly one Atmos checkout in each of `bake.yml` and the three reusable
+  workflows, all using the same exact producer / consumer SHA;
 - an authenticated GitHub run from repository `1301196656`, the exact workflow
   path, and the exact attempt-specific successful model job;
 - successful source-verification, collection, and artifact-upload steps in order;
@@ -43,20 +44,20 @@ as `status=withheld`. Malformed provenance, archive bytes, receipts, checkouts, 
 baseline evidence is fatal. A security failure never falls through as an optional
 model absence.
 
-## Regional baseline
+## Shared production-data baseline
 
-Regional replacement needs a last-good model manifest for non-regression. The
-caller cannot provide a locally generated expectation. The helper invokes the
-exact-source Atmos `hydrate-r2-component.sh` against only the staging catalog and
-component remotes in an owned temporary directory. The hydrate path authenticates
-the catalog pointer/snapshot/component manifest; if that component is absent it
-authenticates the immutable whole-release pointer, manifest, inventory and bytes.
+The transport helper deliberately never reads staging or production data. After
+an artifact is authenticated, the reusable publisher hydrates the current model
+from the hard-coded production data/component buckets under the protected
+`production` environment. This is the data source actually read by production,
+staging, and the shared-data localhost preview. No Pages/UI credential exists in
+this lane.
 
-For a catalog component the helper independently derives the downloaded tree's
-ordered byte inventory and matches its object count and inventory SHA-256 to the
-authenticated component manifest. For either path it binds and copies the active
-model manifest into the handoff. The output records whether evidence came from a
-catalog component or whole-release fallback and its immutable identity/hash.
+Regional replacement binds the hydrated last-good manifest into the unchanged
+Atmos regional installer. Missing components may fall back only through the
+authenticated immutable whole-production-release path. Activation therefore
+requires the Atmos fix that verifies the catalog pointer and snapshot hash before
+examining component absence.
 
 ## Interface
 
@@ -78,23 +79,38 @@ The output is created atomically outside both source checkouts:
 current-model-handoff/
   handoff.json
   packs/...
-  baseline-manifest.json   # regional only
 ```
 
 `handoff.json` is a non-authorizing envelope (`publicationAuthorized: false`). It
 binds the original GitHub run/attempt/controller/job/artifact and Atmos source,
-the preserved receipt hashes, and regional baseline evidence. A future publisher
-must consume this envelope without weakening its own current scientific, numeric,
+the preserved receipt hashes, and forecast run. The protected publisher must
+consume this envelope without weakening its own current scientific, numeric,
 freshness, point-companion, upload, and final-CAS checks.
 
 ## Required orchestration before activation
 
-The future workflow should place a publisher after each model's own collector (or
-in a per-model reusable workflow), with per-model concurrency. It must inspect the
-selected row rather than `needs` on the aggregate matrix. Report each model as one
-of `published`, `unchanged`, `withheld`, or `failed`; never claim the entire roster
-online because some rows succeeded. The legacy whole-release publisher and all
-production controls remain unchanged until that separate integration is reviewed.
+`bake.yml` now has eleven explicit reusable collector callers and eleven matching
+publisher callers. Each publisher depends on only its own collector; a sibling
+failure cannot hide or delay a healthy model. The original joined maintenance
+publisher still receives the same eleven artifact names and retains its existing
+production lock and behavior. Publication reports each model independently as
+`published`, `unchanged`, `withheld`, or `failed`.
+
+Activation requires the repository caller flag plus the matching protected
+production-environment settings (environment-only flags cannot unlock caller jobs):
+
+- `CURRENT_RUN_COMPONENT_PUBLISH_ENABLED=true`
+- `CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA=<the exact qualified common SHA>`
+
+The publisher also refuses the current placeholder SHA even if both variables are
+mis-set. Update all three reusable Atmos checkout refs and the whole-bake ref,
+including their exact source assertions, together. There are no duplicate legacy
+collector matrices. Run a publication-disabled cloud canary to confirm GitHub's
+exact compound job names (`core (MODEL) / collector` and
+`regional (MODEL) / collector`) before enabling publication.
+The canary still needs the read-only source checkout key; it must not execute
+the production component-publishing jobs. Ordinary whole-data publication remains
+an explicitly authorized separate job, not a credential-free simulation.
 
 Activation must pin an exact final Atmos SHA whose `hydrate-r2-component.sh`
 validates the catalog pointer/snapshot hash and identity before its missing-component
@@ -102,11 +118,33 @@ whole-release fallback. The handoff's common-source guard makes that prerequisit
 structural: it must not be wired against the older helper ordering where absence was
 examined before catalog integrity.
 
+That SHA must also include the reviewed core and regional artifact consumers,
+regional pair-CAS/final freshness headroom, ECMWF same-run repair, normalized
+authenticated retained-baseline proof, and all component scientific gates. The
+staged catalog/UI reader must already be merged. Owner review of the protected
+environment guard is mandatory. This lane repairs shared weather data only; it
+cannot deploy the production or staging UI.
+
 ## Local evidence
 
 ```text
 python -m unittest tests.test_current_model_artifact
 ```
 
-The suite is hermetic: it uses synthetic GitHub metadata/ZIPs and mocked staging
-hydration, performs no provider downloads, cloud writes, dispatches, or deploys.
+The suite is hermetic: it uses synthetic GitHub metadata/ZIPs and mocked hydration,
+performs no provider downloads, cloud writes, dispatches, or deploys.
+
+Latest local evidence: 18 Python handoff tests pass, including twelve per-file
+missing/duplicate/drifted checkout mutations. Scheduler types, 23 unit tests,
+workflow contracts and Worker deployment dry-run pass. The matching CI Node
+contract selection passes 471 tests, with four pre-existing opt-in skips. An
+initial broader ad-hoc run lacked the staging-controller SDK dependencies and
+used the system rclone 1.74.3 for an opt-in 1.75.0 throughput experiment; that is
+not a passing throughput measurement. No cloud latency improvement is claimed
+from these local tests.
+
+Same-commit reusable-workflow semantics are documented by
+[GitHub](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows).
+The immutable-action guard recognizes only these three exact local data calls
+from bake.yml, scans every callee's external actions, and still rejects floating
+references and local calls from the production UI workflow.

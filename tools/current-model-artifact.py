@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Prepare one authenticated current-run model artifact for a future component publisher.
 
-This helper does not publish. It copies one successful collector artifact and, for a
-regional model, an authenticated staging baseline into an atomic handoff bundle.
+This helper does not publish or read a data catalog. It copies one successful
+collector artifact into an atomic handoff bundle. The protected production
+publisher is solely responsible for hydrating and authenticating its baseline.
 """
 import sys
 
@@ -63,6 +64,12 @@ exec(compile(LEGACY_PATH.read_bytes(), str(LEGACY_PATH), "exec"), legacy.__dict_
 REPO = legacy.REPO
 REPO_ID = legacy.REPO_ID
 WORKFLOW = ".github/workflows/bake.yml"
+WORKFLOW_CLOSURE = (
+    WORKFLOW,
+    ".github/workflows/collect-core-model.yml",
+    ".github/workflows/collect-regional-model.yml",
+    ".github/workflows/publish-current-model-production.yml",
+)
 CORE = ("ecmwf", "gfs", "hrrr", "aifs")
 REGIONAL = ("icon", "hrdps", "arome-antilles", "hrrr-ak", "nam", "nam-hi", "nam-ak")
 MODELS = CORE + REGIONAL
@@ -71,6 +78,9 @@ SHA256 = re.compile(r"[a-f0-9]{64}")
 RUN = re.compile(r"[1-9][0-9]*")
 SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}")
 MAX_JSON = 2 * 1024**2
+# Retained only for the separately tested legacy hydration primitive. The
+# transfer path above never invokes it; production publication owns baseline
+# hydration in the protected reusable workflow.
 STAGING_CATALOG = "weatherx:weatherx-data-staging"
 STAGING_COMPONENTS = "weatherx:weatherx-components-staging"
 
@@ -161,8 +171,30 @@ def atmos_refs(workflow):
                 break
         require(found is not None, "atmos-workflow-ref-missing")
         refs.append(found)
-    require(len(refs) >= 3, "atmos-workflow-checkout-count")
     return refs
+
+
+def verify_workflow_closure(source_sha):
+    documents = {}
+    for name in WORKFLOW_CLOSURE:
+        path = REPO_ROOT / name
+        require(path.is_file() and not path.is_symlink(), "workflow-closure-missing")
+        documents[name] = path.read_text()
+    bake = documents[WORKFLOW]
+    calls = {
+        name: len(re.findall(rf"^\s+uses:\s+\./{re.escape(name)}\s*$", bake, re.M))
+        for name in WORKFLOW_CLOSURE[1:]
+    }
+    require(calls[WORKFLOW_CLOSURE[1]] == 4
+            and calls[WORKFLOW_CLOSURE[2]] == 7
+            and calls[WORKFLOW_CLOSURE[3]] == 11,
+            "workflow-closure-call-count")
+    require(not re.search(r"^\s+uses:\s+\./\.github/workflows/[^\s]+@", bake, re.M),
+            "workflow-closure-floating-call")
+    for name in WORKFLOW_CLOSURE:
+        # Exactly one checkout in each of the whole bake, two reusable collectors,
+        # and reusable publisher. Retired matrices must not collect a second time.
+        require(atmos_refs(documents[name]) == [source_sha], "atmos-workflow-source-mismatch")
 
 
 def artifact_name(kind, model):
@@ -177,6 +209,10 @@ def expected_steps(kind):
     return ("Verify approved immutable regional collector before running source",
             "collect one regional model for the newest complete cycle (one older-cycle fallback)",
             "hand the display packs (or abstention receipts) to the bake job")
+
+
+def expected_job_name(kind, model):
+    return f"{kind} ({model}) / collector"
 
 
 def one_step(job, name):
@@ -211,7 +247,7 @@ def exact_job(client, run_id, attempt, controller_sha, kind, model):
     jobs = page.get("jobs")
     require(isinstance(jobs, list) and page.get("total_count") == len(jobs) and len(jobs) <= 100,
             "collector-job-page-incomplete")
-    selected = [job for job in jobs if job.get("name") == f"{kind} ({model})"]
+    selected = [job for job in jobs if job.get("name") == expected_job_name(kind, model)]
     if not selected:
         raise Withheld("collector-job-not-complete")
     require(len(selected) == 1, "collector-job-duplicate")
@@ -273,7 +309,8 @@ def inspect_pack(packs, kind, model, source_sha, run_id):
                 and str(receipt.get("runId")) == run_id and isinstance(receipt.get("forecastRun"), str)
                 and isinstance(receipt.get("files"), list), "core-artifact-receipt-identity")
         return {"receipt": str(receipt_path.relative_to(packs)),
-                "receiptSha256": hash_file(receipt_path, MAX_JSON)["sha256"]}
+                "receiptSha256": hash_file(receipt_path, MAX_JSON)["sha256"],
+                "forecastRun": receipt["forecastRun"]}
     receipt_path = packs / model / "pack-receipt.json"
     receipt = read_json(receipt_path, "regional-artifact-receipt-invalid")
     require(receipt.get("schemaVersion") == 1 and receipt.get("kind") == "weatherx-regional-model-pack"
@@ -407,7 +444,7 @@ def hydrate_baseline(atmos_root, model, destination, runner=subprocess.run):
     return evidence
 
 
-def transfer(args, client, now, hydrate=hydrate_baseline):
+def transfer(args, client, now):
     kind = "core" if args.model in CORE else "regional"
     require(args.kind == kind, "model-kind-mismatch")
     exact_run(client, args.run_id, args.run_attempt, args.controller_sha)
@@ -434,21 +471,9 @@ def transfer(args, client, now, hydrate=hydrate_baseline):
             raise Withheld("collector-artifact-unavailable-during-download") from None
         legacy.extract(archive, packs, kind, args.model)
         pack = inspect_pack(packs, kind, args.model, args.atmos_source_sha, args.run_id)
-        baseline = None
-        if kind == "regional":
-            baseline_tree = scratch / "baseline" / args.model
-            baseline_tree.parent.mkdir()
-            baseline = hydrate(args.atmos_root, args.model, baseline_tree)
         assert_clean_checkout(args.atmos_root, args.atmos_source_sha, "atmos")
         bundle.mkdir()
         packs.rename(bundle / "packs")
-        if baseline:
-            destination = bundle / "baseline-manifest.json"
-            shutil.copyfile(baseline["manifest"], destination)
-            require(hash_file(destination, MAX_JSON)["sha256"] == baseline["manifestSha256"],
-                    "baseline-manifest-copy-mismatch")
-            baseline = {key: value for key, value in baseline.items() if key != "manifest"}
-            baseline["bundledManifest"] = "baseline-manifest.json"
         handoff = {"schemaVersion": 1, "kind": "weatherx-current-model-artifact-handoff",
             "status": "ready", "publicationAuthorized": False, "model": args.model,
             "componentKind": kind, "origin": {"repository": REPO, "repositoryId": REPO_ID,
@@ -457,7 +482,7 @@ def transfer(args, client, now, hydrate=hydrate_baseline):
                 "jobId": job["id"], "jobName": job["name"], "artifactId": artifact["id"],
                 "artifactName": artifact["name"], "artifactSha256": artifact["digest"][7:],
                 "artifactBytes": artifact["size_in_bytes"], "artifactCreatedAt": artifact["created_at"]},
-            "pack": pack, **({"regionalBaseline": baseline} if baseline else {})}
+            "pack": pack}
         body = (json.dumps(handoff, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode()
         (bundle / "handoff.json").write_bytes(body)
         bundle.rename(output)
@@ -497,8 +522,7 @@ def main():
                 "current-workflow-identity")
         assert_clean_checkout(REPO_ROOT, args.controller_sha, "controller")
         assert_clean_checkout(args.atmos_root, args.atmos_source_sha, "atmos")
-        workflow = (REPO_ROOT / WORKFLOW).read_text()
-        require(set(atmos_refs(workflow)) == {args.atmos_source_sha}, "atmos-workflow-source-mismatch")
+        verify_workflow_closure(args.atmos_source_sha)
         handoff = transfer(args, legacy.GitHub(os.environ.get("GH_TOKEN", "")),
                            datetime.now(timezone.utc))
         write_outputs(args.github_output, {"status": "ready", "reason": "authenticated-current-model-artifact",

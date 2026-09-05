@@ -47,7 +47,7 @@ def metadata(kind="core", model="gfs", overall="failure"):
            "repository": {"id": subject.REPO_ID, "full_name": subject.REPO},
            "head_repository": {"id": subject.REPO_ID, "full_name": subject.REPO}}
     job = {"id": 1234, "run_id": int(RUN_ID), "run_attempt": ATTEMPT,
-           "head_sha": CONTROLLER, "name": f"{kind} ({model})", "status": "completed",
+           "head_sha": CONTROLLER, "name": subject.expected_job_name(kind, model), "status": "completed",
            "conclusion": "success", "steps": steps}
     artifact = {"id": 5678, "name": subject.artifact_name(kind, model),
                 "size_in_bytes": 123, "digest": "sha256:" + "c" * 64,
@@ -131,7 +131,7 @@ class CurrentModelArtifactTests(unittest.TestCase):
             self.assertEqual(subject.artifact_name("regional", model), f"regional-packs-{model}")
         self.assertNotEqual(subject.expected_steps("core"), subject.expected_steps("regional"))
 
-    def test_workflow_source_parser_requires_common_pinned_atmos_source(self):
+    def test_workflow_source_parser_reads_exact_pinned_atmos_source(self):
         workflow = """
       - uses: actions/checkout@pinned
         with:
@@ -145,10 +145,37 @@ class CurrentModelArtifactTests(unittest.TestCase):
           ref: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 """
         self.assertEqual(subject.atmos_refs(workflow), [SOURCE] * 3)
-        with self.assertRaisesRegex(subject.Refusal, "checkout-count"):
-            subject.atmos_refs(workflow.split("      - with:")[0])
+        self.assertEqual(subject.atmos_refs("name: no checkout\n"), [])
         with self.assertRaisesRegex(subject.Refusal, "ref-missing"):
             subject.atmos_refs(workflow.replace("ref: " + SOURCE, "ref: main", 1))
+
+    def test_versioned_reusable_workflow_closure_is_exact(self):
+        pinned = "77487534a6ff0a17bf4e5d55f9ab5c06938138d4"
+        subject.verify_workflow_closure(pinned)
+        with self.assertRaisesRegex(subject.Refusal, "source-mismatch"):
+            subject.verify_workflow_closure("0" * 40)
+
+    def test_each_reusable_source_ref_is_required_once_and_cannot_drift(self):
+        pinned = "77487534a6ff0a17bf4e5d55f9ab5c06938138d4"
+        documents = {name: (subject.REPO_ROOT / name).read_text() for name in subject.WORKFLOW_CLOSURE}
+        for name in subject.WORKFLOW_CLOSURE:
+            for defect in ("drift", "missing", "duplicate"):
+                with self.subTest(workflow=name, defect=defect), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    for filename, original in documents.items():
+                        text = original
+                        if filename == name:
+                            if defect == "drift":
+                                text = text.replace("ref: " + pinned, "ref: " + "0" * 40)
+                            elif defect == "missing":
+                                text = text.replace("repository: weatherx-hq/atmos", "repository: unrelated/source")
+                            else:
+                                text += "\n      - with:\n          repository: weatherx-hq/atmos\n          ref: " + pinned + "\n"
+                        target = root / filename
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_text(text)
+                    with patch.object(subject, "REPO_ROOT", root), self.assertRaisesRegex(subject.Refusal, "source-mismatch"):
+                        subject.verify_workflow_closure(pinned)
 
     def test_failed_aggregate_does_not_hide_successful_model_job(self):
         run, jobs, artifacts = metadata(overall="failure")
@@ -196,10 +223,10 @@ class CurrentModelArtifactTests(unittest.TestCase):
             with self.subTest(job=key), self.assertRaises(subject.Refusal):
                 subject.exact_job(Client([jobs]), RUN_ID, ATTEMPT, CONTROLLER, "core", "gfs")
             job[key] = original
-        job["name"] = "core (aifs)"
+        job["name"] = subject.expected_job_name("core", "aifs")
         with self.assertRaises(subject.Withheld):
             subject.exact_job(Client([jobs]), RUN_ID, ATTEMPT, CONTROLLER, "core", "gfs")
-        job["name"] = "core (gfs)"
+        job["name"] = subject.expected_job_name("core", "gfs")
         _, upload = subject.exact_job(Client([jobs]), RUN_ID, ATTEMPT, CONTROLLER, "core", "gfs")
         artifact = artifacts["artifacts"][0]
         for key, value in (("digest", "sha256:" + "z" * 64), ("size_in_bytes", 0),
@@ -235,25 +262,17 @@ class CurrentModelArtifactTests(unittest.TestCase):
             receipt = output / "packs" / handoff["pack"]["receipt"]
             self.assertEqual(hashlib.sha256(receipt.read_bytes()).hexdigest(), handoff["pack"]["receiptSha256"])
 
-    def test_regional_bundle_requires_bound_point_stage_and_authenticated_baseline(self):
+    def test_regional_bundle_requires_bound_point_stage_and_never_reads_a_catalog(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run, jobs, artifacts = metadata("regional", "nam-hi")
             client = Client([run, jobs, artifacts], regional_archive())
             arguments = args(root, "regional", "nam-hi")
-            def hydrate(_atmos, model, destination):
-                manifest = destination.parent / "source-manifest.json"
-                manifest.write_text(json.dumps({"model": model, "init_time": "2026-09-05T12:00:00Z"}))
-                digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
-                return {"source": "catalog", "identity": "catalog-1", "objectCount": 150,
-                        "inventorySha256": "e" * 64, "forecastRun": "2026090512",
-                        "manifest": str(manifest), "manifestSha256": digest,
-                        "componentManifestSha256": "f" * 64}
             with patch.object(subject, "assert_clean_checkout"):
-                handoff = subject.transfer(arguments, client, NOW, hydrate)
+                handoff = subject.transfer(arguments, client, NOW)
             output = Path(arguments.output)
-            self.assertEqual(handoff["regionalBaseline"]["source"], "catalog")
-            self.assertTrue((output / "baseline-manifest.json").is_file())
+            self.assertNotIn("regionalBaseline", handoff)
+            self.assertFalse((output / "baseline-manifest.json").exists())
             self.assertTrue((output / "packs/point-stages/nam-hi/point-stage-receipt.json").is_file())
             broken = root / "broken"
             broken.mkdir()
@@ -270,12 +289,10 @@ class CurrentModelArtifactTests(unittest.TestCase):
             root = Path(directory)
             run, jobs, artifacts = metadata("regional", "nam-hi")
             arguments = args(root, "regional", "nam-hi")
-            hydrate = unittest.mock.Mock(side_effect=AssertionError("must not hydrate"))
             with patch.object(subject, "assert_clean_checkout"):
                 with self.assertRaisesRegex(subject.Withheld, "provider-abstained"):
                     subject.transfer(arguments, Client([run, jobs, artifacts], regional_archive(status="abstained")),
-                                     NOW, hydrate)
-            hydrate.assert_not_called()
+                                     NOW)
             self.assertFalse(Path(arguments.output).exists())
 
     def test_artifact_disappearance_during_download_withholds_but_bad_bytes_are_fatal(self):

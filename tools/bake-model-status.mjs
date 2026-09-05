@@ -11,7 +11,7 @@ const CORE=MODELS.slice(0,4), REGIONAL=MODELS.slice(4);
 const REPO='Andrewegao/v3t7kq-cycle', API=`https://api.github.com/repos/${REPO}`;
 const PUBLISH='bake → gate → publish immutable data release';
 const safeConclusion=value=>['success','failure','cancelled','skipped','timed_out','action_required','neutral','stale','startup_failure'].includes(value)?value:'unknown';
-const jobName=model=>`${CORE.includes(model)?'core':'regional'} (${model})`;
+const jobName=model=>`${CORE.includes(model)?'core':'regional'} (${model}) / collector`;
 const succeeded=(job,name)=>job?.steps?.some(step=>step.name===name&&step.conclusion==='success');
 
 export function validateRun(run,{runId,attempt,headSha}){
@@ -114,7 +114,8 @@ export async function main(env=process.env,fetcher=fetch){
   assert.equal(env.GITHUB_ACTIONS,'true');assert.equal(env.GITHUB_REPOSITORY,REPO);assert.equal(env.GITHUB_JOB,'model-status');
   const runId=env.GITHUB_RUN_ID,attempt=Number(env.GITHUB_RUN_ATTEMPT),headSha=env.GITHUB_SHA;
   assert.match(runId??'',/^[1-9]\d*$/);assert.ok(Number.isSafeInteger(attempt)&&attempt>0);assert.match(headSha??'',/^[a-f0-9]{40}$/);
-  const workflow=readFileSync(new URL('../.github/workflows/bake.yml',import.meta.url),'utf8');
+  const workflow=['bake.yml','collect-core-model.yml','collect-regional-model.yml'].map(name=>
+    readFileSync(new URL(`../.github/workflows/${name}`,import.meta.url),'utf8')).join('\n');
   const sources=[...workflow.matchAll(/^          ref: ([a-f0-9]{40})$/gm)].map(match=>match[1]);
   assert.equal(sources.length,3);assert.equal(new Set(sources).size,1);const sourceSha=sources[0];
   const token=env.GH_TOKEN;assert.ok(token);let jobs=[],evidence={},readStatus='complete';
