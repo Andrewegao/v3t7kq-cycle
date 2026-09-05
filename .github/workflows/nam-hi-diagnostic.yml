@@ -15,6 +15,7 @@ concurrency:
 jobs:
   diagnose:
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    environment: staging
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:

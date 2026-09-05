@@ -14,7 +14,9 @@ allocation, 20 GiB free-space admission, all 49 leads and scientific validation
 remain unchanged. The outer process budget is 21 minutes, with process-group
 termination and reaping. No automatic retry or alternative cycle is attempted.
 
-Only the read-only Atmos checkout step receives a credential. The child receives
+The job uses the existing protected staging environment, as required for any
+secret-bearing workflow. Only the read-only Atmos checkout step receives a
+credential; no staging publication secret is referenced. The child receives
 an allowlisted Python runtime environment and no Actions/cloud/checkout tokens.
 No R2, Worker, Pages, serving-pointer or route authority is present in this lane.
 

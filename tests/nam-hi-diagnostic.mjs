@@ -114,7 +114,8 @@ test('exit zero alone cannot claim qualification, release or publication',()=>{
 });
 test('manual workflow has no production authority and retains only the encrypted receipt',()=>{
   const w=readFileSync(new URL('../.github/workflows/nam-hi-diagnostic.yml',import.meta.url),'utf8');
-  assert.match(w,/workflow_dispatch:/);assert.doesNotMatch(w,/schedule:|push:|pull_request:|workflow_run:|environment:|continue-on-error:/);
+  assert.match(w,/workflow_dispatch:/);assert.doesNotMatch(w,/schedule:|push:|pull_request:|workflow_run:|continue-on-error:/);
+  assert.match(w,/^    environment: staging$/m);assert.doesNotMatch(w,/environment: production/);
   assert.deepEqual([...w.matchAll(/secrets\.([A-Z_]+)/g)].map(x=>x[1]),['ATMOS_DEPLOY_KEY']);
   assert.match(w,/persist-credentials: false/);assert.match(w,/permissions:\s*\n  contents: read/);
   assert.match(w,new RegExp(`ref: ${APPROVED_SOURCE}`));
