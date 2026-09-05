@@ -476,6 +476,9 @@ jobs:
           done
           if [ -n "$log_file" ] && [ -f "$log_file" ]; then
             awk '
+              /^\[[0-9T:.+Z-]+\] bake-stage name=[a-zA-Z0-9-]+ event=start$/ { print; next }
+              /^\[[0-9T:.+Z-]+\] bake-stage name=[a-zA-Z0-9-]+ event=end status=[0-9]+ elapsed_seconds=[0-9]+$/ { print; next }
+              /^point-series worker model=(ecmwf|gfs|hrrr|aifs|icon|hrrr-ak|hrdps|nam|nam-hi|nam-ak|arome-antilles) status=(-?[0-9]+|start-failed) seconds=[0-9.]+$/ { print; next }
               /^checkpoint: / { print substr($0, 1, 512); next }
               /^model-input resource (ecmwf|gfs|hrrr|aifs|icon) peak-rss-kib=[0-9]+ elapsed-seconds=[0-9.]+$/ { print; next }
               /^\[[0-9T:.+Z-]+\] model-input start (ecmwf|gfs|hrrr|aifs|icon)$/ { print; next }
