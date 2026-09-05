@@ -46,4 +46,30 @@ storage outages cannot prevent restoration, but cannot produce a passing result.
 Do not retry automatically, weaken history checks, or substitute another
 version if any assertion fails. Investigate the newly retained diagnostic
 phase/probe evidence. There is no assumption that the original failure was
-merely propagation delay, and no propagation retry policy was added here.
+merely propagation delay.
+
+## Bounded activation readiness (explicit reuse only)
+
+Before activation, reuse preflight reads both public health endpoints between
+unchanged full control-plane snapshots. Only the reviewed old public/enabled
+health body and public/serve data-health body without shared-reader markers are
+accepted as the baseline. The receipt binds these exact bodies to this run,
+attempt and prior active version; historical receipt bodies are not substituted.
+
+After activation, readiness may observe that exact old pair for at most 75
+seconds, at intervals of at least 5 seconds. Active version and complete version
+history are checked before and after each pair. An unknown or mixed response,
+HTTP failure, auth/configuration mismatch, foreign version or foreign upload
+refuses immediately. This is not a general retry of a failing qualification.
+Only the exact public/disabled/shared-reader health shape ends readiness.
+
+Every accepted observation records a bounded attempt number, elapsed time,
+owned version ID and allowlisted body markers. An absent legacy shared-reader
+marker is recorded as null, not as proof that configuration is false. No raw
+unexpected response or credential is retained. Timeout or receipt-write failure
+uses the existing guarded restoration; the exclusive-change window remains
+necessary because these checks are not a Cloudflare atomic transaction.
+
+Readiness is not success: all three existing real forecast, numeric, freshness
+and map/point identity verification rounds must still pass, followed by final
+ownership and full snapshot checks. Normal upload behavior is unchanged.
