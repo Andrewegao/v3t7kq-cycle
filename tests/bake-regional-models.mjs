@@ -83,8 +83,8 @@ test('the joined bake requires core artifacts while regional failures remain abs
   assert.match(receive,/pattern: regional-packs-\*/);assert.match(receive,/merge-multiple: true/);
   assert.match(receive,/path: \$\{\{ runner\.temp \}\}\/regional-packs/);
   assert.ok(bake.indexOf('name: receive regional display packs from the family jobs')<bake.indexOf('name: bake → gate → publish immutable data release'));
-  assert.ok(bake.indexOf('name: hydrate and verify current production R2 release')<bake.indexOf('name: receive regional display packs from the family jobs'),
-    'the hydrated release is the carry-forward baseline the installer compares against');
+  assert.ok(bake.indexOf('name: hydrate and verify current production R2 release')<bake.indexOf('name: bake → gate → publish immutable data release'),
+    'the hydrated release is the carry-forward baseline the installer compares against; downloading outside the checkout may precede hydration');
   const receiveCore=bake.split('      - name: receive sealed core model inputs from all four collectors')[1]?.split('      - name:')[0];
   assert.ok(receiveCore);
   assert.match(receiveCore,/pattern: core-model-packs-\*/);assert.match(receiveCore,/merge-multiple: true/);

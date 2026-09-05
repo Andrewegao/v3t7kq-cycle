@@ -275,6 +275,43 @@ jobs:
         run: |
           python -m venv data/.venv
           data/.venv/bin/pip install -r data/requirements.txt
+      # Verify the pristine approved checkout before hydration intentionally updates
+      # tracked data-atmos fixtures. Inputs remain outside the checkout until the bake.
+      - name: receive regional display packs from the family jobs
+        if: ${{ steps.bake_plan.outputs.skip != 'true' }}
+        continue-on-error: ${{ inputs.recovery_run_id == '' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: regional-packs-*
+          path: ${{ runner.temp }}/regional-packs
+          merge-multiple: true
+      - name: receive sealed core model inputs from all four collectors
+        if: ${{ steps.bake_plan.outputs.skip != 'true' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: core-model-packs-*
+          path: ${{ runner.temp }}/core-model-packs
+          merge-multiple: true
+      - name: checkout this reviewed recovery transfer checker
+        if: ${{ inputs.recovery_run_id != '' }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Andrewegao/v3t7kq-cycle
+          ref: ${{ github.sha }}
+          path: cycle-controller
+          persist-credentials: false
+      - name: verify every recovery transfer before assembly
+        if: ${{ inputs.recovery_run_id != '' }}
+        env:
+          RECOVERY_RUN_ID: ${{ inputs.recovery_run_id }}
+        run: |
+          test "$(git -C cycle-controller rev-parse HEAD)" = "$GITHUB_SHA"
+          test ! -e "$RUNNER_TEMP/recovery-controller"
+          mv cycle-controller "$RUNNER_TEMP/recovery-controller"
+          data/.venv/bin/python "$RUNNER_TEMP/recovery-controller/tools/recover-model-inputs.py" \
+            --verify-transfers --run-id "$RECOVERY_RUN_ID" \
+            --current-source-sha "$(git rev-parse HEAD)" --atmos-root "$GITHUB_WORKSPACE" \
+            --core-packs "$RUNNER_TEMP/core-model-packs" --regional-packs "$RUNNER_TEMP/regional-packs"
       # GitHub caches are repository-scoped. The one-off seed used to live in the private atmos
       # repo while this scheduled bake lives here, so every cycle started with an empty cache and
       # rebuilt a 0.75-day archive over the qualified history. Restore/save in THIS repository so
@@ -349,41 +386,6 @@ jobs:
           RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
           RCLONE_CONFIG_WEATHERX_REGION: auto
         run: bash ops/platform/hydrate-r2-release.sh
-      - name: receive regional display packs from the family jobs
-        if: ${{ steps.bake_plan.outputs.skip != 'true' }}
-        continue-on-error: ${{ inputs.recovery_run_id == '' }}
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          pattern: regional-packs-*
-          path: ${{ runner.temp }}/regional-packs
-          merge-multiple: true
-      - name: receive sealed core model inputs from all four collectors
-        if: ${{ steps.bake_plan.outputs.skip != 'true' }}
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          pattern: core-model-packs-*
-          path: ${{ runner.temp }}/core-model-packs
-          merge-multiple: true
-      - name: checkout this reviewed recovery transfer checker
-        if: ${{ inputs.recovery_run_id != '' }}
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: Andrewegao/v3t7kq-cycle
-          ref: ${{ github.sha }}
-          path: cycle-controller
-          persist-credentials: false
-      - name: verify every recovery transfer before assembly
-        if: ${{ inputs.recovery_run_id != '' }}
-        env:
-          RECOVERY_RUN_ID: ${{ inputs.recovery_run_id }}
-        run: |
-          test "$(git -C cycle-controller rev-parse HEAD)" = "$GITHUB_SHA"
-          test ! -e "$RUNNER_TEMP/recovery-controller"
-          mv cycle-controller "$RUNNER_TEMP/recovery-controller"
-          data/.venv/bin/python "$RUNNER_TEMP/recovery-controller/tools/recover-model-inputs.py" \
-            --verify-transfers --run-id "$RECOVERY_RUN_ID" \
-            --current-source-sha "$(git rev-parse HEAD)" --atmos-root "$GITHUB_WORKSPACE" \
-            --core-packs "$RUNNER_TEMP/core-model-packs" --regional-packs "$RUNNER_TEMP/regional-packs"
       - name: bake → gate → publish immutable data release
         if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         env:

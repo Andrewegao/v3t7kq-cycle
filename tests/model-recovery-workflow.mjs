@@ -15,6 +15,28 @@ const step = (job, name) => {
   assert.ok(value, `missing ${name}`);
   return value;
 };
+function assertPristineTransferOrder(source) {
+  const bake = source.slice(source.indexOf('\n  bake:'));
+  const position = name => {
+    const value = bake.indexOf(`name: ${name}`);
+    assert.ok(value >= 0, `missing ${name}`);
+    return value;
+  };
+  const verify = position('verify every recovery transfer before assembly');
+  assert.ok(position('venv + python deps') < verify, 'checker Python is provisioned first');
+  for (const name of ['restore rolling verification cache', 'app deps (Weather Lab and release gates)',
+    'preflight temporary browser-test bundle before weather downloads', 'hydrate and verify current production R2 release']) {
+    assert.ok(verify < position(name), `verify pristine source before ${name}`);
+  }
+  assert.ok(position('hydrate and verify current production R2 release') < position('bake → gate → publish immutable data release'));
+}
+test('strict recovery source verification precedes intentional build/cache/data mutation', () => {
+  assertPristineTransferOrder(workflow);
+  assert.throws(() => assertPristineTransferOrder(workflow.replace('name: verify every recovery transfer before assembly',
+    'name: removed-pristine-check') + '\n      - name: verify every recovery transfer before assembly\n'));
+  const helper = readFileSync(new URL('../tools/recover-model-inputs.py', import.meta.url), 'utf8');
+  assert.match(helper, /\["git", "diff", "--quiet", "HEAD"\]/, 'never waive source cleanliness or ignore hydrated paths');
+});
 for (const [kind, job] of Object.entries(sections)) {
   test(`${kind} rejects unsupported recovery before work, normal schedules remain fresh`, () => {
     const guard = step(job, 'reject unsupported recovery before any collector work');
