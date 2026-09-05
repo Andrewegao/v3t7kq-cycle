@@ -17,7 +17,7 @@ assert.doesNotMatch(joinedBake, /\btee\b|tail -f|tail --follow/, 'do not expose 
 // Run the actual final diagnostic step against a long failed-cycle fixture.
 // Early checkpoint/resource evidence must survive the existing 200-line tail,
 // without uploading the full internal bake log or dumping arbitrary old lines.
-const diagnosticBlock = workflow.split('      - name: cycle log\n')[1];
+const diagnosticBlock = workflow.split('      - name: cycle log\n')[1]?.split('\n  # Reporting')[0];
 assert.ok(diagnosticBlock, 'always-run cycle diagnostic step remains present');
 assert.match(diagnosticBlock, /if: always\(\)/);
 const diagnosticScript = diagnosticBlock.split('        run: |\n')[1]
@@ -33,8 +33,12 @@ try {
   const pointTiming = 'point-series worker model=nam-ak status=0 seconds=1.253';
   const invalidTiming = '[2026-09-05T07:00:00Z] bake-stage name=native-gfs event=end status=0 elapsed_seconds=5 PRIVATE_ARG=hidden';
   const regional = '[2026-08-30T18:13:00Z] regional-model install arome-antilles status=carried init=2026083012 reason=collector abstained: 2026083018 failed ValueError';
+  const installed = JSON.stringify({status:'installed-unqualified-inputs',models:['ecmwf','gfs','hrrr','aifs'],runId:'123',sourceSha:'a'.repeat(40),requiresEnrichment:true}).replaceAll(':', ': ').replaceAll(',', ', ');
+  const promoted = 'promoted cycle-123';
+  const completed = '[2026-09-05T07:00:00Z] === cycle complete ===';
+  const unsafeInstall = installed.slice(0,-1)+', "unexpected": "PRIVATE_DIAGNOSTIC"}';
   await writeFile(join(fixture, 'ops/logs/bake-20260830.log'), [
-    privateMarker, resource, checkpoint, regional, timing, timingStart, pointTiming, invalidTiming,
+    privateMarker, resource, checkpoint, regional, timing, timingStart, pointTiming, invalidTiming, installed, promoted, completed, unsafeInstall,
     '[2026-08-30T18:12:00+00:00] model-input start ecmwf',
     '[2026-08-30T19:12:00+00:00] model-input end ecmwf exit=0',
     'model-input resource icon peak-rss-kib=2345 elapsed-seconds=67.8',
@@ -45,12 +49,13 @@ try {
   ].join('\n'));
   const result = spawnSync('bash', ['-e', '-c', diagnosticScript], { cwd: fixture, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
-  for (const expected of [resource, checkpoint, regional, timing, timingStart, pointTiming, 'model-input start ecmwf', 'model-input end ecmwf exit=0',
+  for (const expected of [resource, checkpoint, regional, timing, timingStart, pointTiming, installed, promoted, completed, 'model-input start ecmwf', 'model-input end ecmwf exit=0',
     'model-input resource icon peak-rss-kib=2345', 'model-input start icon', 'model-input end icon exit=1', 'WEATHER LAB GATE FAILED']) {
     assert.ok(result.stdout.includes(expected), `retained diagnostic: ${expected}`);
   }
   assert.ok(!result.stdout.includes(privateMarker), 'do not dump all old internal log content');
   assert.ok(!result.stdout.includes(invalidTiming), 'structured diagnostics never retain trailing arguments');
+  assert.ok(!result.stdout.includes(unsafeInstall), 'new installation evidence never prints arbitrary properties');
   await rm(join(fixture, 'ops/logs/bake-20260830.log'));
   const missing = spawnSync('bash', ['-e', '-c', diagnosticScript], { cwd: fixture, encoding: 'utf8' });
   assert.equal(missing.status, 0, 'missing log must not hide the original workflow failure');

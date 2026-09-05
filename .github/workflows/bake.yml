@@ -483,6 +483,9 @@ jobs:
               /^\[[0-9T:.+Z-]+\] bake-stage name=[a-zA-Z0-9-]+ event=start$/ { print; next }
               /^\[[0-9T:.+Z-]+\] bake-stage name=[a-zA-Z0-9-]+ event=end status=[0-9]+ elapsed_seconds=[0-9]+$/ { print; next }
               /^point-series worker model=(ecmwf|gfs|hrrr|aifs|icon|hrrr-ak|hrdps|nam|nam-hi|nam-ak|arome-antilles) status=(-?[0-9]+|start-failed) seconds=[0-9.]+$/ { print; next }
+              /^\{"status": "installed-unqualified-inputs", "models": \["ecmwf", "gfs", "hrrr", "aifs"\], "runId": "[0-9]+", "sourceSha": "[a-f0-9]+", "requiresEnrichment": true\}$/ { print; next }
+              /^promoted cycle-[0-9]+$/ { print; next }
+              /^\[[0-9T:.+Z-]+\] === cycle complete ===$/ { print; next }
               /^checkpoint: / { print substr($0, 1, 512); next }
               /^model-input resource (ecmwf|gfs|hrrr|aifs|icon) peak-rss-kib=[0-9]+ elapsed-seconds=[0-9.]+$/ { print; next }
               /^\[[0-9T:.+Z-]+\] model-input start (ecmwf|gfs|hrrr|aifs|icon)$/ { print; next }
@@ -491,3 +494,29 @@ jobs:
             ' "$log_file" || true
             tail -n 200 "$log_file" || true
           fi
+  # Reporting cannot publish, change admission, or turn an abstention into data.
+  model-status:
+    needs: [core, regional, bake]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Explain all eleven outcomes without deployment authority
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node tools/bake-model-status.mjs
+      - name: Retain the small non-secret historical model report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: model-status-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/weatherx-model-status/report.json
+          retention-days: 14
+          if-no-files-found: warn
