@@ -74,7 +74,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && 'a58eff158b56ef2ba25189d2b859315b00893a14' || '9ca597748a520045004a10645fcd28e565bc0c1b' }}
+          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && 'a58eff158b56ef2ba25189d2b859315b00893a14' || '18a298cdf4896e1f2c2116dbecd1cecf8434a609' }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
           path: control
@@ -157,7 +157,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && 'a58eff158b56ef2ba25189d2b859315b00893a14' || '9ca597748a520045004a10645fcd28e565bc0c1b' }}
+          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && 'a58eff158b56ef2ba25189d2b859315b00893a14' || '18a298cdf4896e1f2c2116dbecd1cecf8434a609' }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
           path: control
