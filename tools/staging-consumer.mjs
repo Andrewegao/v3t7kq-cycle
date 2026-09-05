@@ -14,6 +14,10 @@ import { SHARED_READ_SECRETS, SHARED_READ_VARS } from './staging-shared-read.mjs
 
 export const SOURCE_SHA = '0aa9fbed9e179ab2ccb6ac456727b9f33124ddb6';
 export const WORKER = 'weatherx-platform-edge-staging';
+export const OWNED_REUSE=Object.freeze({run:'33988771315',attempt:'1',version:'e3d05c37-01c6-479e-baa8-450a6d3eabac',
+  before:'371277cf-0113-4f9b-91c2-277a31a78d98',receiptSha:'4eb744b4691f0fc76265c30776e9ddde81397058c715c222bc8b3d5cce842b69',
+  artifactId:9975982597,artifactSha:'43ec3ca54e9f0033461d1c753464865cf62b32cbfb3da4199a6bca62acead339',
+  etag:'e9ce28d5818650c1170b27da97f479df2a91e7e4ba9690181e0290a528f787e8'});
 const ZONE = '9dc4df7c3c094ab9a11dd00d378adc26';
 const BASE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/workers/scripts/${WORKER}`;
 const UUID=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
@@ -32,7 +36,8 @@ export function consumerGate(env) {
   assert.equal(env.GITHUB_EVENT_NAME,'workflow_dispatch'); assert.equal(env.GITHUB_JOB,'refresh');
   assert.equal(env.GITHUB_WORKFLOW_REF,'Andrewegao/v3t7kq-cycle/.github/workflows/staging-consumer-refresh.yml@refs/heads/main');
   assert.equal(env.STAGING_CONSUMER_ENABLED,'true'); assert.equal(env.STAGING_CONSUMER_SOURCE_SHA,SOURCE_SHA);
-  assert.equal(env.CONFIRM,'REFRESH-STAGING-CONSUMER'); assert.equal(env.STAGING_R2_ACCOUNT_ID,ACCOUNT);
+  const mode=env.STAGING_CONSUMER_MODE??'upload';assert.ok(['upload','reuse-owned-33988771315'].includes(mode));
+  assert.equal(env.CONFIRM,mode==='upload'?'REFRESH-STAGING-CONSUMER':'REUSE-STAGING-33988771315'); assert.equal(env.STAGING_R2_ACCOUNT_ID,ACCOUNT);
   assert.match(env.STAGING_CONSUMER_APPROVED_VERSION ?? '',UUID);
   assert.match(env.STAGING_CONSUMER_APPROVED_SETTINGS_SHA256 ?? '',/^[a-f0-9]{64}$/);
   for(const name of ['GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT'])assert.match(env[name]??'',/^[1-9][0-9]*$/);
@@ -138,6 +143,36 @@ export async function restoreOwned({before,uploaded,priorHistory,history,getVers
 export async function confirmOwned({uploaded,priorHistory,history,getVersion}){
   assertUploadedHistory(priorHistory,await history(),uploaded);
   assert.equal(await getVersion(),uploaded,'foreign activation during qualification');
+}
+export function readOwnedOrigin(bytes){
+  assert.ok(bytes.length<=65536);assert.equal(hash(bytes),OWNED_REUSE.receiptSha,'unreviewed origin receipt');
+  const origin=JSON.parse(bytes);assert.equal(origin.schemaVersion,1);assert.equal(origin.sourceSha,SOURCE_SHA);
+  assert.equal(origin.worker,WORKER);assert.equal(origin.status,'failed-restored');
+  assert.equal(origin.workflowRun,OWNED_REUSE.run);assert.equal(origin.workflowAttempt,OWNED_REUSE.attempt);
+  assert.equal(origin.uploaded,OWNED_REUSE.version);assert.equal(origin.before.version,OWNED_REUSE.before);
+  assert.equal(origin.versionHistory[0],origin.before.version);return origin;
+}
+export function assertReusableVersion(config,origin,resource){
+  assert.equal(resource.id,OWNED_REUSE.version,'wrong retained version');
+  assert.deepEqual(JSON.parse(JSON.stringify(normalizedBindings(resource.resources?.bindings))),origin.desired.bindings,'retained bindings drift');
+  assert.deepEqual(resource.resources?.script_runtime,origin.before.state.script_runtime,'retained runtime drift');
+  assertRuntimePreserved(config,resource.resources.script_runtime);
+  assertSettings(config,{...resource.resources.script_runtime,bindings:resource.resources.bindings});
+  assert.equal(resource.annotations?.['workers/tag'],`staging-${SOURCE_SHA.slice(0,12)}`,'retained source tag mismatch');
+  assert.equal(resource.annotations?.['workers/triggered_by'],'version_upload');
+  assert.equal(resource.metadata?.created_on,'2026-09-05T20:00:51.429394Z','retained creation differs');
+  // Opaque Cloudflare content identity, NOT a reproducible source-code SHA.
+  assert.equal(resource.resources?.script?.etag,OWNED_REUSE.etag,'retained content identity differs');
+}
+export async function reusablePreflight({config,origin,snapshot,history,readVersion}){
+  const before=await snapshot();assert.deepEqual(before,origin.before,'staging changed since owned restoration');
+  const desired=desiredSettings(before.state,config);assert.deepEqual(desired,origin.desired,'reviewed desired settings changed');
+  assertAllowedTransition(config,before.state,desired);assertRuntimePreserved(config,before.state.script_runtime);
+  assertUploadedHistory(origin.versionHistory,await history(),OWNED_REUSE.version);
+  const resource=await readVersion(OWNED_REUSE.version);assertReusableVersion(config,origin,resource);
+  assert.deepEqual(await snapshot(),before,'staging changed during reuse preflight');
+  assertUploadedHistory(origin.versionHistory,await history(),OWNED_REUSE.version);
+  return {before,desired,versionHistory:origin.versionHistory};
 }
 export function assertRuntimePreserved(config,runtime) {
   assert.ok(runtime&&typeof runtime==='object','missing runtime');
@@ -314,7 +349,10 @@ export async function consumerSnapshot(config,get){
   return {version,state};
 }
 export async function main(command,atmos,receiptPath,env=process.env){
-  assert.ok(['preflight','execute','recover'].includes(command));
+  assert.ok(['preflight','execute','preflight-reuse','execute-reuse','recover'].includes(command));
+  const reuse=['preflight-reuse','execute-reuse'].includes(command)||(command==='recover'&&env.STAGING_CONSUMER_MODE==='reuse-owned-33988771315');
+  if(reuse){consumerGate(env);assert.equal(env.STAGING_CONSUMER_MODE,'reuse-owned-33988771315');}
+  else if(command!=='recover')assert.equal(env.STAGING_CONSUMER_MODE??'upload','upload');
   const croot=resolve(atmos,'platform/edge');
   assert.equal(execFileSync('git',['rev-parse','HEAD'],{cwd:atmos,encoding:'utf8'}).trim(),SOURCE_SHA);
   execFileSync('git',['diff','--exit-code','HEAD'],{cwd:atmos,stdio:'pipe'});
@@ -323,7 +361,15 @@ export async function main(command,atmos,receiptPath,env=process.env){
   const getVersion=async()=>activeVersion(await jsonGet(BASE+'/deployments',token));
   const history=async()=>versionHistory(await jsonGet(BASE+'/versions?page=1&per_page=10',token));
   const snapshot=()=>consumerSnapshot(config,url=>jsonGet(url,token));
+  const readVersion=id=>jsonGet(BASE+`/versions/${id}`,token);
+  const origin=reuse?readOwnedOrigin(readFileSync(join(dirname(receiptPath),'origin.json'))):null;
   const persist=async receipt=>{mkdirSync(dirname(receiptPath),{recursive:true,mode:0o700});writeFileSync(receiptPath,JSON.stringify(receipt,null,2)+'\n',{mode:0o600});};
+  if(command==='preflight-reuse'){
+    const proof=await reusablePreflight({config,origin,snapshot,history,readVersion});
+    const receipt={...proof,sourceSha:SOURCE_SHA,worker:WORKER,at:new Date().toISOString(),
+      workflowRun:env.GITHUB_RUN_ID,workflowAttempt:env.GITHUB_RUN_ATTEMPT,reuseOrigin:{...OWNED_REUSE,receipt:origin}};
+    await persist(receipt);console.log(JSON.stringify({worker:WORKER,version:proof.before.version,reusing:OWNED_REUSE.version,deployed:false}));return receipt;
+  }
   if(command==='preflight'){
     const before=await snapshot(),desired=desiredSettings(before.state,config);
     assertRuntimePreserved(config,before.state.script_runtime);
@@ -337,6 +383,8 @@ export async function main(command,atmos,receiptPath,env=process.env){
   assert.equal(stored.before.version,env.STAGING_CONSUMER_APPROVED_VERSION);
   assert.equal(hash(JSON.stringify(stored.before.state)),env.STAGING_CONSUMER_APPROVED_SETTINGS_SHA256);
   assert.equal(stored.workflowRun,env.GITHUB_RUN_ID);assert.equal(stored.workflowAttempt,env.GITHUB_RUN_ATTEMPT);
+  if(reuse)assert.deepEqual(stored.reuseOrigin,{...OWNED_REUSE,receipt:origin},'reuse provenance changed');
+  else assert.equal(stored.reuseOrigin,undefined,'normal upload cannot reuse receipt');
   const run=async(args,options={})=>{
     let secretDir,secretPath;
     if(options.secrets){
@@ -365,13 +413,23 @@ export async function main(command,atmos,receiptPath,env=process.env){
   }
   const age=Date.now()-Date.parse(stored.at);assert.ok(age>=0&&age<10*60_000,'staging preflight expired');
   assert.deepEqual(await snapshot(),stored.before,'staging changed since reviewed preflight');
-  assert.deepEqual(await history(),stored.versionHistory,'version history changed since reviewed preflight');
-  assert.equal(stored.versionHistory[0],stored.before.version,'latest version does not own reviewed secrets');
+  if(reuse){
+    assertUploadedHistory(stored.versionHistory,await history(),OWNED_REUSE.version);
+    assertReusableVersion(config,origin,await readVersion(OWNED_REUSE.version));
+  }else{
+    assert.deepEqual(await history(),stored.versionHistory,'version history changed since reviewed preflight');
+    assert.equal(stored.versionHistory[0],stored.before.version,'latest version does not own reviewed secrets');
+  }
   assertRuntimePreserved(config,stored.before.state.script_runtime);
   assertAllowedTransition(config,stored.before.state,stored.desired);
   return guardedRepair({before:stored.before,desired:stored.desired,snapshot,getVersion,
-    persist:r=>{stored.uploaded=r.uploaded;return persist({...r,versionHistory:stored.versionHistory,workflowRun:env.GITHUB_RUN_ID,workflowAttempt:env.GITHUB_RUN_ATTEMPT});},
+    persist:r=>{stored.uploaded=r.uploaded;return persist({...r,versionHistory:stored.versionHistory,workflowRun:env.GITHUB_RUN_ID,workflowAttempt:env.GITHUB_RUN_ATTEMPT,...(reuse?{reuseOrigin:stored.reuseOrigin,candidateMode:'reused-owned-version'}:{})});},
     upload:async()=>{
+      if(reuse){
+        // Candidate acquisition only: no upload, no secret lookup or inheritance.
+        assertReusableVersion(config,origin,await readVersion(OWNED_REUSE.version));
+        assertUploadedHistory(stored.versionHistory,await history(),OWNED_REUSE.version);return OWNED_REUSE.version;
+      }
       // Deliberately omit --keep-vars: apply only the reviewed public/shared delta.
       // Existing secrets are inherited (no secrets file) from the exclusively owned
       // latest version; both binding and full runtime readbacks gate activation.
