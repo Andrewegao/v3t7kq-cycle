@@ -1,0 +1,65 @@
+# One model, one cycle, no publication authority and no automatic trigger.
+name: WeatherX NAM-HI cloud diagnostic
+on:
+  workflow_dispatch:
+    inputs:
+      init:
+        description: Exact fresh UTC six-hour NAM-HI cycle YYYYMMDDHH (diagnostic only)
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-nam-hi-diagnostic
+  cancel-in-progress: false
+jobs:
+  diagnose:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DIAGNOSTIC_INIT: ${{ inputs.init }}
+    steps:
+      - name: Checkout exact controller without retained credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: cycle
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Refuse non-cloud, non-manual or invalid cycle before acquisition
+        run: node cycle/tools/nam-hi-diagnostic.mjs gate "$DIAGNOSTIC_INIT"
+      - name: Checkout only the approved read-only scientific source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: 77487534a6ff0a17bf4e5d55f9ab5c06938138d4
+          fetch-depth: 0
+          path: atmos
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          persist-credentials: false
+      - name: Confirm exact merged source before dependency installation
+        run: |
+          test "$(git -C cycle rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C atmos rev-parse HEAD)" = 77487534a6ff0a17bf4e5d55f9ab5c06938138d4
+          git -C atmos diff --exit-code HEAD
+          git -C atmos merge-base --is-ancestor 77487534a6ff0a17bf4e5d55f9ab5c06938138d4 refs/remotes/origin/master
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with: { python-version: '3.12' }
+      - name: Install pinned scientific dependencies without acquisition credentials
+        timeout-minutes: 4
+        run: python -m pip install --disable-pip-version-check -r atmos/data/requirements.txt
+      - name: Check diagnostic privacy, bounds and failure handling without weather downloads
+        run: node --test cycle/tests/nam-hi-diagnostic.mjs
+      - name: Qualify only NAM-HI with bounded private diagnostics
+        timeout-minutes: 23
+        run: node cycle/tools/nam-hi-diagnostic.mjs run "$DIAGNOSTIC_INIT" atmos
+      - name: Retain only small encrypted diagnostic receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nam-hi-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nam-hi-diagnostic-receipt/receipt.json
+          if-no-files-found: ignore
+          retention-days: 3

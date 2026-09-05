@@ -15,6 +15,7 @@ on:
       - ".github/workflows/staging-data.yml"
       - ".github/workflows/staging-current-selection.yml"
       - ".github/workflows/model-inputs.yml"
+      - ".github/workflows/nam-hi-diagnostic.yml"
       - ".github/workflows/staging-model-components.yml"
       - ".github/workflows/staging-model-selection.yml"
       - ".github/workflows/staging-consumer-refresh.yml"
@@ -52,6 +53,7 @@ jobs:
           node --test tests/bake-regional-models.mjs
           node --test tests/model-recovery-workflow.mjs
           python3 tests/test_recover_model_inputs.py
+          node --test tests/nam-hi-diagnostic.mjs
       - name: Staged UI artifact, manual promotion and privacy contracts
         run: node --test tests/ui-*.mjs
       - name: Cloud-only staging data isolation and public-mode contracts
