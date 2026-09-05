@@ -21,7 +21,7 @@ jobs:
     env:
       CONFIRM: ${{ inputs.confirm }}
       STAGING_CONSUMER_ENABLED: ${{ vars.STAGING_CONSUMER_ENABLED }}
-      STAGING_CONSUMER_SOURCE_SHA: a58eff158b56ef2ba25189d2b859315b00893a14
+      STAGING_CONSUMER_SOURCE_SHA: 0aa9fbed9e179ab2ccb6ac456727b9f33124ddb6
       STAGING_R2_ACCOUNT_ID: ${{ vars.STAGING_R2_ACCOUNT_ID }}
       STAGING_CONSUMER_APPROVED_VERSION: ${{ vars.STAGING_CONSUMER_APPROVED_VERSION }}
       STAGING_CONSUMER_APPROVED_SETTINGS_SHA256: ${{ vars.STAGING_CONSUMER_APPROVED_SETTINGS_SHA256 }}
@@ -40,7 +40,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Andrewegao/atmos
-          ref: a58eff158b56ef2ba25189d2b859315b00893a14
+          ref: 0aa9fbed9e179ab2ccb6ac456727b9f33124ddb6
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: control
           persist-credentials: false
