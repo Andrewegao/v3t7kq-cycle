@@ -7,14 +7,20 @@ import {resolve} from 'node:path';
 
 export const STAGING_ORIGIN='https://staging.weatherx.org';
 export const SELECTION_ASSET='assets/staging-model-selection.json';
+export const CORE_RELEASE_REQUEST='release-roster-core-v1';
 export const MAX_SELECTION_BYTES=1024*1024;
 export const MODELS=['icon','hrrr-ak','hrdps','nam','nam-hi','nam-ak','arome-antilles'];
 const HASH=/^[a-f0-9]{64}$/,COMMIT=/^[a-f0-9]{40}$/,RUN=/^[1-9]\d{0,19}$/,ATTEMPT=/^[1-9]\d{0,3}$/;
 export const digest=body=>createHash('sha256').update(body).digest('hex');
 export const BASELINE_PROFILE=Object.freeze({product:'lab',account:false,expandedModels:false,data:false});
-export function resolveSelectionRequest(requested='approved',approved){
-  assert.ok(requested==='approved'||requested==='none'||HASH.test(requested??''),'invalid staging selection request');
+export const CORE_RELEASE_PROFILE=Object.freeze({...BASELINE_PROFILE,expandedModels:true,stagingOnly:true,releaseRosterCore:CORE_RELEASE_REQUEST});
+const rawSelectionProfile=profile=>typeof profile?.modelSelectionSha256==='string';
+export function selectionProfile(profile){validateProfile(profile);return rawSelectionProfile(profile);}
+export function coreReleaseProfile(profile){validateProfile(profile);return profile.releaseRosterCore===CORE_RELEASE_REQUEST;}
+export function resolveSelectionRequest(requested='approved',approved,approvedCore){
+  assert.ok(requested==='approved'||requested==='none'||requested===CORE_RELEASE_REQUEST||HASH.test(requested??''),'invalid staging selection request');
   if(requested==='none')return 'none';
+  if(requested===CORE_RELEASE_REQUEST){assert.equal(approvedCore,CORE_RELEASE_REQUEST,'protected staging core profile approval required');return CORE_RELEASE_REQUEST;}
   assert.match(approved??'',HASH,'protected staging selection approval required');
   if(requested!=='approved')assert.equal(requested,approved,'requested staging selection differs from protected approval');
   return approved;
@@ -27,10 +33,12 @@ export function canonical(value){
 function keys(object,expected){assert.ok(object&&typeof object==='object'&&!Array.isArray(object));assert.deepEqual(Object.keys(object).sort(),expected.split(' ').sort());return object;}
 export function profileFor(selection='none'){
   if(selection===undefined||selection==='none')return BASELINE_PROFILE;
+  if(selection===CORE_RELEASE_REQUEST)return CORE_RELEASE_PROFILE;
   assert.match(selection,HASH);return {...BASELINE_PROFILE,expandedModels:true,stagingOnly:true,modelSelectionSha256:selection};
 }
 export function validateProfile(profile){
   if(profile?.expandedModels===false){assert.deepEqual(profile,BASELINE_PROFILE);return profile;}
+  if(profile?.releaseRosterCore!==undefined){assert.deepEqual(profile,CORE_RELEASE_PROFILE);return profile;}
   assert.deepEqual(profile,profileFor(profile?.modelSelectionSha256));return profile;
 }
 // The baseline profile builds production with expandedModels:false. Since 2026-09-04 that no longer
@@ -75,7 +83,7 @@ export function validateSelection(bytes,expected,now=Date.now()){
   }return b;
 }
 export function readSelection(root,profile,now=Date.now()){
-  validateProfile(profile);if(!profile.stagingOnly)return null;
+  validateProfile(profile);if(!rawSelectionProfile(profile))return null;
   const folder=resolve(root,'staging-selections'),path=resolve(folder,profile.modelSelectionSha256+'.json');
   for(const p of [folder,path]){const s=lstatSync(p);assert.ok(!s.isSymbolicLink());assert.equal(realpathSync(p),p);}
   const stat=lstatSync(path);assert.ok(stat.isFile()&&stat.nlink===1&&stat.size>0&&stat.size<=MAX_SELECTION_BYTES);
@@ -85,13 +93,14 @@ export function readSelection(root,profile,now=Date.now()){
 // and browser qualification explicitly supplies a live clock again.
 export function validateCandidateSelection(candidate,now=null){
   const profile=validateProfile(candidate.profile),asset=candidate.files.find(f=>f.path===SELECTION_ASSET);
-  if(!profile.stagingOnly){assert.equal(asset,undefined,'baseline cannot carry experimental selection');return null;}
+  if(!rawSelectionProfile(profile)){assert.equal(asset,undefined,'non-selection profile cannot carry experimental selection');return null;}
   assert.ok(asset,'experimental selection asset required');return validateSelection(Buffer.from(asset.base64,'base64'),profile.modelSelectionSha256,now);
 }
 export function requireStagingApproval(candidate,env,now=Date.now()){
   const expected=profileFor(env.MODEL_SELECTION_SHA256);assert.deepEqual(candidate.profile,expected,'candidate differs from requested UI profile');
   const bundle=validateCandidateSelection(candidate,now);
-  if(expected.stagingOnly)assert.equal(env.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256,expected.modelSelectionSha256,'protected staging selection approval required');
+  if(rawSelectionProfile(expected))assert.equal(env.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256,expected.modelSelectionSha256,'protected staging selection approval required');
+  if(expected.releaseRosterCore===CORE_RELEASE_REQUEST)assert.equal(env.UI_STAGING_CORE_PROFILE_APPROVED,CORE_RELEASE_REQUEST,'protected staging core profile approval required');
   return bundle;
 }
 export function browserEnvironment(env,extra={}){
@@ -115,5 +124,32 @@ export function validateBrowserReceipt(bytes,bundle,context,now=Date.now()){
       assert.equal(layer.point?.kind,'independent-global');assert.ok(['ECMWF IFS 0.25°','NOAA GFS 0.25°','WeatherX Fusion','Open-Meteo fallback'].includes(layer.point?.source));assert.equal(layer.point?.mapModelFusionEligible,false);}}
   if(bundle.entries.length>1){const sequence=r.models.at(-1),first=bundle.entries[0].model,last=bundle.entries.at(-1).model;
     assert.deepEqual(sequence,{rapidModelSequence:[first,last],finalModel:last});}
+  return r;
+}
+export function validateCoreBrowserReceipt(bytes,context,now=Date.now()){
+  assert.ok(Buffer.isBuffer(bytes)&&bytes.length>0&&bytes.length<=1024*1024);const r=JSON.parse(bytes);
+  keys(r,'schemaVersion kind origin sourceSha releaseId qualifiedAt pointReleaseId releaseRoster models rapidModelSequence finalModel selectionRequests errors');
+  assert.equal(r.schemaVersion,1);assert.equal(r.kind,'weatherx-staging-core-browser-receipt');assert.equal(r.origin,STAGING_ORIGIN);
+  assert.equal(r.sourceSha,context.sourceSha);assert.equal(r.releaseId,context.releaseId);assert.match(r.pointReleaseId??'',/^[A-Za-z0-9._:@+-]{1,160}$/);
+  const at=Date.parse(r.qualifiedAt);assert.ok(Number.isFinite(at)&&at<=now&&now-at<=10*60000);assert.deepEqual(r.errors,[]);assert.deepEqual(r.selectionRequests,[]);
+  assert.ok(Array.isArray(r.releaseRoster)&&r.releaseRoster.length===MODELS.length);assert.deepEqual(r.releaseRoster.map(row=>row?.model),MODELS);
+  for(const row of r.releaseRoster){keys(row,'model status init expectedSelectable visible enabled');assert.ok(['fresh','carried','absent'].includes(row.status));
+    if(row.status==='absent')assert.equal(row.init,null);else assert.match(row.init??'',/^\d{8}(?:00|06|12|18)$/);
+    assert.equal(typeof row.expectedSelectable,'boolean');assert.equal(row.visible,row.expectedSelectable);assert.equal(row.enabled,row.expectedSelectable);}
+  assert.deepEqual(r.rapidModelSequence,['aifs','hrrr']);assert.equal(r.finalModel,'hrrr');assert.ok(Array.isArray(r.models)&&r.models.length===2);
+  const expected={aifs:{field:'wind',deck:'wind-field',windAdmitted:true},hrrr:{field:'temp',deck:'temp-raster',windAdmitted:false}};
+  assert.deepEqual(r.models.map(row=>row?.model).sort(),Object.keys(expected));
+  for(const row of r.models){
+    keys(row,'model status init base catalogId field deck changedRatio finitePointValue pointRunId pointQuality windAdmitted domain');
+    const rule=expected[row.model];assert.ok(rule);assert.match(row.init??'',/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):00:00Z$/);
+    const initTime=Date.parse(row.init);assert.ok(Number.isFinite(initTime));assert.equal(new Date(initTime).toISOString().replace('.000',''),row.init);
+    if(row.model==='aifs')assert.equal(new Date(initTime).getUTCHours()%6,0);
+    assert.equal(row.status,'ready');assert.match(row.catalogId??'',/^[A-Za-z0-9._:@+-]{1,160}$/);
+    assert.equal(row.base,`/data/_catalog/${row.catalogId}/${row.model}/runs/${row.init.replace(/[-:T]/g,'').slice(0,10)}/`);
+    assert.equal(row.field,rule.field);assert.equal(row.deck,rule.deck);assert.equal(row.windAdmitted,rule.windAdmitted);
+    assert.ok(Number.isFinite(row.changedRatio)&&row.changedRatio>.01&&row.changedRatio<=1);assert.ok(Number.isFinite(row.finitePointValue));
+    assert.equal(row.pointRunId,row.init.replace(/[-:T]/g,'').slice(0,10));assert.ok(['complete','partial'].includes(row.pointQuality));
+    keys(row.domain,'inside outside');assert.equal(row.domain.inside,true);assert.equal(row.domain.outside,row.model==='hrrr'?true:null);
+  }
   return r;
 }
