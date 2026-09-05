@@ -7,6 +7,14 @@ import {hash} from '../tools/shared-data.mjs';
 import {fixture} from './shared-data.mjs';
 import {buildServingCatalog} from '../tools/staging-activate.mjs';
 
+test('own-copy activation decoder keeps its independent workflow pin',()=>{
+  const source=readFileSync(new URL('../tools/staging-live-proof.mjs',import.meta.url),'utf8');
+  const workflow=readFileSync(new URL('../.github/workflows/staging-data-activate.yml',import.meta.url),'utf8');
+  const pin=source.match(/const SOURCE_SHA = '([a-f0-9]{40})'/)?.[1];
+  assert.ok(pin);assert.ok(workflow.includes(`ref: ${pin}`));
+  assert.doesNotMatch(source,/import.*SOURCE_SHA.*staging-consumer/);
+});
+
 test('public proof refuses production, redirects, errors and oversized bodies',async()=>{
   await assert.rejects(readPublic('https://weatherx.org/data/a'));
   for(const response of [new Response('bad',{status:403}),new Response('abcd')])await assert.rejects(readPublic('https://staging.weatherx.org/data/a',{fetcher:async()=>response,maxBytes:3}));

@@ -4,10 +4,15 @@ import { readFileSync } from 'node:fs';
 import {consumerGate,SOURCE_SHA,WORKER,EXISTING_ROUTES,configForStaging,desiredSettings,settingsState,guardedRepair,consumerSnapshot,assertAllowedTransition,sharedSecretsForUpload} from '../tools/staging-consumer.mjs';
 import {normalizedBindings} from '../tools/consumer-refresh.mjs';
 import {SHARED_READ_SECRETS,SHARED_READ_VARS} from '../tools/staging-shared-read.mjs';
+import * as repair from '../tools/staging-consumer.mjs';
 const OLD='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',NEW='bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',OTHER='cccccccc-cccc-cccc-cccc-cccccccccccc';
 const env={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_REPOSITORY:'Andrewegao/v3t7kq-cycle',GITHUB_REF:'refs/heads/main',GITHUB_EVENT_NAME:'workflow_dispatch',GITHUB_JOB:'refresh',GITHUB_WORKFLOW_REF:'Andrewegao/v3t7kq-cycle/.github/workflows/staging-consumer-refresh.yml@refs/heads/main',STAGING_CONSUMER_ENABLED:'true',STAGING_CONSUMER_SOURCE_SHA:SOURCE_SHA,CONFIRM:'REFRESH-STAGING-CONSUMER',STAGING_R2_ACCOUNT_ID:'a89f9a1af485021fbc60a68b163c7c6e',STAGING_CONSUMER_APPROVED_VERSION:OLD,STAGING_CONSUMER_APPROVED_SETTINGS_SHA256:'a'.repeat(64),GITHUB_RUN_ID:'1',GITHUB_RUN_ATTEMPT:'1'};
 const settings={bindings:[{name:'AUTH_MODE',type:'plain_text',text:'enforce'},{name:'BILLING_MODE',type:'plain_text',text:'enabled'},{name:'DATA_BUCKET',type:'r2_bucket',bucket_name:'weatherx-data-staging'}],compatibility_date:'2026-08-15'};
 const workflow=readFileSync(new URL('../.github/workflows/staging-consumer-refresh.yml',import.meta.url),'utf8');
+test('workflow checkout and controller approval use the exact reviewed source pin',()=>{
+  assert.equal(workflow.match(/STAGING_CONSUMER_SOURCE_SHA: ([a-f0-9]{40})/)?.[1],SOURCE_SHA);
+  assert.equal(workflow.match(/repository: Andrewegao\/atmos\s+ref: ([a-f0-9]{40})/)?.[1],SOURCE_SHA);
+});
 test('staging refresh preserves the complete live weather and hazard route boundary',()=>{
   assert.deepEqual([...EXISTING_ROUTES].sort(),[
     'staging.weatherx.org/api/eonet/*','staging.weatherx.org/api/gdacs/*',
@@ -155,4 +160,117 @@ test('script-global settings routes and schedules remain guarded independently',
   await assert.rejects(consumerSnapshot(f.config,f.get),/route mismatch/);
   f.routes=EXISTING_ROUTES.map(pattern=>({script:WORKER,pattern}));f.schedules={schedules:[{cron:'* * * * *'}]};
   await assert.rejects(consumerSnapshot(f.config,f.get),/schedules changed/);
+});
+test('existing shared secrets are inherited without reading replacement values; partial state refuses',()=>{
+  const config=configForStaging(sharedBase()),bindings=SHARED_READ_SECRETS.map(name=>({name,type:'secret_text'}));
+  const inaccessible=new Proxy({}, {get(){throw Error('must not read secret values');}});
+  assert.equal(sharedSecretsForUpload(config,inaccessible,{bindings}),null);
+  assert.throws(()=>sharedSecretsForUpload(config,{}, {bindings:bindings.slice(0,1)}),/partial/);
+  assert.equal(repair.sharedSecretState({bindings:[]}),'bootstrap');
+  assert.throws(()=>repair.sharedSecretState({bindings:[{name:SHARED_READ_SECRETS[0],type:'plain_text'},{name:SHARED_READ_SECRETS[1],type:'secret_text'}]}));
+});
+test('latest upload history binds inherited secrets and refuses foreign inactive writes',()=>{
+  assert.deepEqual(repair.versionHistory({items:[{id:OLD}]}),[OLD]);
+  repair.assertUploadedHistory([OLD],[NEW,OLD],NEW);
+  for(const ids of [[OTHER,NEW,OLD],[NEW,OTHER,OLD],[NEW],[OLD,NEW]])assert.throws(()=>repair.assertUploadedHistory([OLD],ids,NEW));
+  assert.throws(()=>repair.versionHistory({items:[{id:OLD},{id:OLD}]}));
+});
+test('activation rechecks rich boundary and active identity after history before deploying',async()=>{
+  const before={version:OLD,state:{approved:true}},calls=[];
+  const ops={before,uploaded:NEW,priorHistory:[OLD],history:async()=>{calls.push('history');return [NEW,OLD];},
+    snapshot:async()=>{calls.push('snapshot');return before;},getVersion:async()=>{calls.push('active');return OLD;},activate:async()=>calls.push('deploy')};
+  await repair.activateOwned(ops);assert.deepEqual(calls,['history','snapshot','active','deploy']);
+  for(const phase of ['snapshot','active']){
+    calls.length=0;const changed={...ops};
+    if(phase==='snapshot')changed.snapshot=async()=>({version:OTHER,state:before.state});
+    else changed.getVersion=async()=>OTHER;
+    await assert.rejects(repair.activateOwned(changed));assert.ok(!calls.includes('deploy'));
+  }
+});
+test('restore checks identity after history, skips already restored, and never overwrites an existing-version foreign activation',async()=>{
+  for(const live of [NEW,OLD,OTHER]){
+    const calls=[];const ops={before:{version:OLD},uploaded:NEW,priorHistory:[OLD],history:async()=>{calls.push('history');return [NEW,OLD];},
+      getVersion:async()=>{calls.push('active');return live;},restore:async id=>{assert.equal(id,OLD);calls.push('restore');}};
+    if(live===OTHER)await assert.rejects(repair.restoreOwned(ops),/foreign activation/);else await repair.restoreOwned(ops);
+    assert.deepEqual(calls,live===NEW?['history','active','restore']:['history','active']);
+  }
+});
+test('qualification cannot pass after a foreign inactive upload or existing-version activation',async()=>{
+  const ops={uploaded:NEW,priorHistory:[OLD],history:async()=>[NEW,OLD],getVersion:async()=>NEW};
+  await repair.confirmOwned(ops);
+  await assert.rejects(repair.confirmOwned({...ops,history:async()=>[OTHER,NEW,OLD]}),/foreign version upload/);
+  await assert.rejects(repair.confirmOwned({...ops,getVersion:async()=>OTHER}),/foreign activation/);
+  const source=readFileSync(new URL('../tools/staging-consumer.mjs',import.meta.url),'utf8');
+  assert.ok(source.indexOf('await confirmOwned(',source.indexOf('verify:async()=>'))>source.indexOf('await verifySharedForecast();'));
+});
+test('full active runtime is recorded and unsupported source preservation fails closed',async()=>{
+  const f=apiFixture();f.version.resources.script_runtime.usage_model='standard';
+  const before=await consumerSnapshot(f.config,f.get);
+  assert.deepEqual(before.state.script_runtime,f.version.resources.script_runtime);
+  repair.assertRuntimePreserved(f.config,before.state.script_runtime);
+  assert.throws(()=>repair.assertRuntimePreserved(f.config,{...before.state.script_runtime,limits:{cpu_ms:500}}),/runtime/);
+  assert.throws(()=>repair.assertRuntimePreserved(f.config,{...before.state.script_runtime,unknown:true}),/runtime/);
+});
+const NOW=Date.parse('2026-09-05T12:00:00Z'),INIT='2026-09-05T06:00:00Z',RUN='2026090506';
+function servingFixture(mutate=()=>{},initializations={}) {
+  const calls=[];
+  const fetcher=async(url,options)=>{
+    assert.equal(options.redirect,'error');assert.equal(options.method,'GET');assert.ok(!options.headers?.Authorization);
+    const u=new URL(url);assert.equal(u.origin,'https://staging.weatherx.org');calls.push(u);
+    const selectedModel=u.pathname.split('/').find(v=>['ecmwf','gfs'].includes(v));
+    const init=initializations[selectedModel]??INIT,run=init.replace(/[-:T]/g,'').slice(0,10);
+    let value,headers={'x-weatherx-data-source':'shared','x-weatherx-catalog':'catalog-1','x-weatherx-release':'whole-1'};
+    if(u.pathname.endsWith('/health'))value={ok:true,authMode:'public',billingMode:'disabled'};
+    else if(u.pathname.endsWith('/data-health'))value={ok:true,authMode:'public',catalogMode:'serve',dataSource:'shared',sharedReadConfigured:true};
+    else if(u.pathname.endsWith('/index.json'))value={schemaVersion:1,model:u.pathname.split('/').at(-2),runs:[{init_time:init,path:`runs/${run}/`}]};
+    else if(u.pathname.endsWith('/manifest.json'))value={init_time:init,frames:[{valid_time:new Date(NOW).toISOString()},{valid_time:new Date(NOW+3*3600000).toISOString()}]};
+    else {const model=u.pathname.split('/').at(-1);headers['x-weatherx-release']='catalog-1';value={schemaVersion:1,model,runId:run,releaseId:'catalog-1',initializedAt:init,freshUntil:new Date(Date.parse(init)+(model==='ecmwf'?30:18)*3600000).toISOString(),quality:'complete',missingFields:[],requestedPoint:{latitude:39.9,longitude:116.4},series:{temperature:{samples:[{validTime:new Date(NOW).toISOString(),value:20},{validTime:new Date(NOW+3600000).toISOString(),value:21}]}}};assert.equal(u.searchParams.get('run'),run);assert.equal(u.searchParams.has('runFallback'),false);}
+    mutate(u,value,headers);return Response.json(value,{headers});
+  };return {fetcher,calls};
+}
+test('live shared proof requires exact map run and finite current point values, including catalog-mounted point identity',async()=>{
+  const f=servingFixture();const result=await repair.verifySharedForecast(f.fetcher,NOW);
+  assert.deepEqual(result.models.map(v=>v.model),['ecmwf','gfs']);assert.equal(f.calls.length,8);
+});
+test('core freshness follows source ECMWF 30h and GFS 18h contracts, not regional or universal 18h policy',async()=>{
+  assert.deepEqual(repair.CORE_FRESH_HOURS,{ecmwf:30,gfs:18});
+  for(const age of [19,24,29]){
+    const init=new Date(NOW-age*3600000).toISOString();
+    await repair.verifySharedForecast(servingFixture(()=>{},{ecmwf:init}).fetcher,NOW);
+  }
+  for(const [model,age] of [['ecmwf',31],['gfs',19]]){
+    const init=new Date(NOW-age*3600000).toISOString();
+    await assert.rejects(repair.verifySharedForecast(servingFixture(()=>{},{[model]:init}).fetcher,NOW),/stale/);
+  }
+  for(const [model,age] of [['ecmwf',30],['gfs',18]]){
+    const init=new Date(NOW-age*3600000).toISOString();
+    await assert.rejects(repair.verifySharedForecast(servingFixture(()=>{},{[model]:init}).fetcher,NOW),/stale point/);
+  }
+  const future=new Date(NOW+2*3600000).toISOString();
+  await assert.rejects(repair.verifySharedForecast(servingFixture(()=>{},{ecmwf:future}).fetcher,NOW),/future/);
+  await assert.rejects(repair.verifySharedForecast(servingFixture((u,v)=>{if(v.series)v.freshUntil=new Date(NOW+100*3600000).toISOString();}).fetcher,NOW),/freshness differs/);
+});
+test('live proof refuses own/stale/mismatched/empty/nonfinite/fallback and traversal responses',async()=>{
+  for(const mutation of [
+    (u,v)=>{if(u.pathname.endsWith('/data-health'))v.dataSource='own';},
+    (u,v,h)=>{if(u.pathname.endsWith('/index.json'))h['x-weatherx-data-source']='own';},
+    (u,v)=>{if(u.pathname.endsWith('/index.json'))v.runs[0].path='../secret/';},
+    (u,v)=>{if(u.pathname.endsWith('/manifest.json'))v.init_time='2026-09-04T06:00:00Z';},
+    (u,v)=>{if(v.series)v.runId='2026090500';},
+    (u,v)=>{if(v.series)v.freshUntil='2026-09-05T00:00:00Z';},
+    (u,v)=>{if(v.series)v.series.temperature.samples=[];},
+    (u,v)=>{if(v.series)v.series.temperature.samples[0].value=null;},
+    (u,v)=>{if(v.series)v.runSelection={mode:'current_fallback'};},
+    (u,v,h)=>{if(v.series)h['x-weatherx-release']='other';},
+    (u,v)=>{if(v.series)v.requestedPoint.longitude=0;},
+    (u,v)=>{if(v.series)v.series.temperature.samples[1].validTime=v.series.temperature.samples[0].validTime;},
+    (u,v)=>{if(v.series)v.quality='partial';},
+  ]) await assert.rejects(repair.verifySharedForecast(servingFixture(mutation).fetcher,NOW));
+});
+test('live proof cancels oversized response bodies and rejects HTML, non-200 and malformed JSON',async()=>{
+  for(const response of [new Response('no',{status:503}),new Response('<html/>',{headers:{'content-type':'text/html'}}),new Response('{',{headers:{'content-type':'application/json'}})])await assert.rejects(repair.verifySharedForecast(async()=>response,NOW));
+  let cancelled=false;
+  const body=new ReadableStream({pull(c){c.enqueue(new Uint8Array(9000));},cancel(){cancelled=true;}});
+  await assert.rejects(repair.verifySharedForecast(async()=>new Response(body,{headers:{'content-type':'application/json'}}),NOW),/oversized/);
+  assert.equal(cancelled,true);
 });

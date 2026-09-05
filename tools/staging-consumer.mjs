@@ -9,10 +9,10 @@ import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { normalizedBindings, assertSettings, activeVersion } from './consumer-refresh.mjs';
 import { ACCOUNT, hash } from './shared-data.mjs';
-import { preflight as publicHealth } from './staging-data.mjs';
+import { validateHealth, ORIGIN } from './staging-data.mjs';
 import { SHARED_READ_SECRETS, SHARED_READ_VARS } from './staging-shared-read.mjs';
 
-export const SOURCE_SHA = 'a58eff158b56ef2ba25189d2b859315b00893a14';
+export const SOURCE_SHA = '0aa9fbed9e179ab2ccb6ac456727b9f33124ddb6';
 export const WORKER = 'weatherx-platform-edge-staging';
 const ZONE = '9dc4df7c3c094ab9a11dd00d378adc26';
 const BASE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/workers/scripts/${WORKER}`;
@@ -86,14 +86,16 @@ export function settingsState(settings,routes,crons) {
   return JSON.parse(JSON.stringify({bindings:normalizedBindings(settings.bindings),compatibility_date:settings.compatibility_date,
     compatibility_flags:sorted(settings.compatibility_flags??[]),observability:settings.observability,
     placement:settings.placement,tail_consumers:settings.tail_consumers,logpush:settings.logpush,
+    script_runtime:settings.script_runtime,
     routes:sorted(routes),crons:sorted(crons)}));
 }
 export function assertAllowedTransition(config,before,after) {
   const wanted=desiredSettings(before,config);assertSettings(config,wanted);
   assert.deepEqual(after,wanted,'staging change exceeds the approved public-mode and shared-read bindings');
 }
-export function sharedSecretsForUpload(config,env) {
+export function sharedSecretsForUpload(config,env,before={bindings:[]}) {
   if(config?.vars?.DATA_SOURCE_MODE!=='shared')return null;
+  if(sharedSecretState(before)==='existing')return null;
   const values={};
   for(const name of SHARED_READ_SECRETS){
     const value=env[name];
@@ -101,6 +103,104 @@ export function sharedSecretsForUpload(config,env) {
     values[name]=value;
   }
   return values;
+}
+export function sharedSecretState(before) {
+  const existing=SHARED_READ_SECRETS.map(name=>before.bindings.find(b=>b.name===name));
+  assert.ok(existing.every(Boolean)||existing.every(v=>!v),'partial shared secret state requires separate repair');
+  if(existing.every(Boolean)){
+    assert.ok(existing.every(b=>b.type==='secret_text'),'shared credential must remain secret');
+    return 'existing'; // Do not even read GitHub values: retain the latest owned version's secrets.
+  }
+  return 'bootstrap';
+}
+export function versionHistory(value){
+  assert.ok(Array.isArray(value?.items)&&value.items.length>0&&value.items.length<=10,'missing version history');
+  const ids=value.items.map(v=>{assert.match(v.id??'',UUID,'invalid version history identity');return v.id;});
+  assert.equal(new Set(ids).size,ids.length,'duplicate version history');return ids;
+}
+export function assertUploadedHistory(before,after,uploaded){
+  assert.match(uploaded,UUID);assert.ok(!before.includes(uploaded),'upload must create a new version');
+  assert.deepEqual(after,[uploaded,...before].slice(0,10),'foreign version upload; secret inheritance no longer owned');
+}
+export async function activateOwned({before,uploaded,priorHistory,history,snapshot,getVersion,activate}){
+  assertUploadedHistory(priorHistory,await history(),uploaded);
+  assert.deepEqual(await snapshot(),before,'staging changed immediately before activation');
+  assert.equal(await getVersion(),before.version,'foreign activation before deploy');
+  return activate(uploaded);
+}
+export async function restoreOwned({before,uploaded,priorHistory,history,getVersion,restore}){
+  assertUploadedHistory(priorHistory,await history(),uploaded);
+  const live=await getVersion();
+  if(live===before.version)return;
+  assert.equal(live,uploaded,'foreign activation; refusing restore');
+  return restore(before.version);
+}
+export async function confirmOwned({uploaded,priorHistory,history,getVersion}){
+  assertUploadedHistory(priorHistory,await history(),uploaded);
+  assert.equal(await getVersion(),uploaded,'foreign activation during qualification');
+}
+export function assertRuntimePreserved(config,runtime) {
+  assert.ok(runtime&&typeof runtime==='object','missing runtime');
+  assert.ok(Object.keys(runtime).every(k=>['compatibility_date','compatibility_flags','usage_model','limits'].includes(k)),'unsupported runtime field');
+  assert.equal(runtime.compatibility_date,config.compatibility_date,'runtime date differs from source');
+  assert.deepEqual(sorted(runtime.compatibility_flags??[]),sorted(config.compatibility_flags??[]),'runtime flags differ from source');
+  // Wrangler's default is standard; explicit nondefault values must be reviewed in source.
+  if(Object.hasOwn(runtime,'usage_model'))assert.equal(runtime.usage_model,config.usage_model??'standard','runtime usage differs from source');
+  assert.deepEqual(runtime.limits,config.limits,'runtime limits cannot be preserved by source upload');
+}
+const SAFE_ID=/^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/;
+const HOUR=3600000;
+// Exact core publication policy: Atmos ops/platform/validate-model-component.py
+// MAX_AGE_HOURS/MAX_FUTURE_SKEW_HOURS and data/build_point_series.py SOURCE.fresh_h.
+// Regional UI admission has a separate, intentionally shorter policy.
+export const CORE_FRESH_HOURS=Object.freeze({ecmwf:30,gfs:18});
+async function forecastJson(path,fetcher,maxBytes=256*1024){
+  const response=await fetcher(ORIGIN+path,{method:'GET',redirect:'error',cache:'no-store',headers:{'Cache-Control':'no-cache'},signal:AbortSignal.timeout(20000)});
+  assert.equal(response.status,200,'staging forecast read failed');
+  assert.match(response.headers.get('content-type')??'',/^application\/json\b/i,'staging forecast must be JSON');
+  assert.ok(response.body,'empty staging forecast');const reader=response.body.getReader(),parts=[];let size=0;
+  try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;assert.ok(size<=maxBytes,'oversized staging forecast');parts.push(Buffer.from(value));}}
+  finally{await reader.cancel();}
+  return {body:JSON.parse(Buffer.concat(parts).toString('utf8')),headers:response.headers};
+}
+export async function verifySharedForecast(fetcher=fetch,now=Date.now()){
+  const platform=await forecastJson('/api/platform/health',fetcher,8192);
+  const data=await forecastJson('/api/platform/data-health',fetcher,8192);
+  validateHealth(platform.body,data.body);
+  assert.equal(data.body.dataSource,'shared','staging must read shared data');
+  assert.equal(data.body.sharedReadConfigured,true,'shared credential not configured');
+  const models=[];
+  for(const model of ['ecmwf','gfs']){
+    const index=await forecastJson(`/data/${model}/index.json`,fetcher);
+    assert.equal(index.headers.get('x-weatherx-data-source'),'shared');
+    assert.equal(index.body.model,model);assert.ok(Array.isArray(index.body.runs)&&index.body.runs.length>0);
+    const latest=index.body.runs[0],match=/^runs\/([0-9]{10})\/$/.exec(latest.path??'');assert.ok(match,'unsafe model run path');
+    const runId=match[1],initialized=Date.parse(latest.init_time);
+    assert.ok(Number.isFinite(initialized)&&initialized<=now+HOUR&&now-initialized<=CORE_FRESH_HOURS[model]*HOUR,'stale or future map run');
+    assert.equal(new Date(initialized).toISOString().replace(/[-:T]/g,'').slice(0,10),runId,'map path/init mismatch');
+    const catalogId=index.headers.get('x-weatherx-catalog');assert.match(catalogId??'',SAFE_ID,'missing map catalog identity');
+    const manifest=await forecastJson(`/data/_catalog/${catalogId}/${model}/${latest.path}manifest.json`,fetcher);
+    assert.equal(manifest.headers.get('x-weatherx-data-source'),'shared');assert.equal(manifest.headers.get('x-weatherx-catalog'),catalogId);
+    assert.equal(manifest.body.init_time,latest.init_time,'manifest run mismatch');
+    const frames=manifest.body.frames;assert.ok(Array.isArray(frames)&&frames.length>1);
+    const times=frames.map(f=>Date.parse(f.valid_time));assert.ok(times.every(Number.isFinite)&&times.every((t,i)=>!i||t>times[i-1]),'invalid map timeline');
+    assert.ok(times[0]<=now&&times.at(-1)>=now+3*HOUR,'map does not cover current forecast');
+    const start=Math.floor(now/HOUR)*HOUR,end=start+6*HOUR;
+    const query=new URLSearchParams({lat:'39.9',lon:'116.4',variables:'temperature',run:runId,start:new Date(start).toISOString(),end:new Date(end).toISOString()});
+    const point=await forecastJson(`/api/v1/point-series/${model}?${query}`,fetcher),body=point.body;
+    assert.equal(point.headers.get('x-weatherx-data-source'),'shared');
+    assert.equal(body.schemaVersion,1);assert.equal(body.model,model);assert.equal(body.runId,runId);assert.equal(Date.parse(body.initializedAt),initialized);
+    // Point mounts may legitimately use a catalog ID instead of the whole-release ID.
+    assert.match(body.releaseId??'',SAFE_ID);assert.equal(point.headers.get('x-weatherx-release'),body.releaseId,'point response identity mismatch');
+    assert.equal(body.quality,'complete');assert.deepEqual(body.missingFields,[]);assert.equal(body.runSelection,undefined,'fallback is not qualification');
+    assert.ok(Number.isFinite(Date.parse(body.freshUntil))&&Date.parse(body.freshUntil)>now,'stale point forecast');
+    assert.equal(Date.parse(body.freshUntil),initialized+CORE_FRESH_HOURS[model]*HOUR,'point freshness differs from source contract');
+    assert.deepEqual(body.requestedPoint,{latitude:39.9,longitude:116.4});
+    const samples=body.series?.temperature?.samples;assert.ok(Array.isArray(samples)&&samples.length>=2&&samples.length<=512,'missing numeric forecast');
+    assert.ok(samples.every((s,i)=>typeof s.value==='number'&&Number.isFinite(s.value)&&Number.isFinite(Date.parse(s.validTime))&&Date.parse(s.validTime)>=start&&Date.parse(s.validTime)<=end&&(!i||Date.parse(s.validTime)>Date.parse(samples[i-1].validTime))),'invalid numeric forecast');
+    models.push({model,runId,catalogId,pointSnapshotId:body.releaseId,samples:samples.length});
+  }
+  return {checkedAt:new Date(now).toISOString(),dataSource:'shared',models};
 }
 export async function guardedRepair({before,desired,upload,snapshot,getVersion=async()=> (await snapshot()).version,activate,verify,rollback,persist}) {
   const receipt={schemaVersion:1,sourceSha:SOURCE_SHA,worker:WORKER,before,desired,status:'preflight-passed'};
@@ -152,7 +252,7 @@ export async function consumerSnapshot(config,get){
   assert.deepEqual(sorted(crons),sorted(config.triggers?.crons??[]),'staging schedules changed');
   // Keep script-global settings, routes and schedules in the strict boundary.
   const state=settingsState({...settings,bindings:resource.resources.bindings,
-    compatibility_date:runtime.compatibility_date,compatibility_flags:runtime.compatibility_flags??[]},patterns,crons);
+    compatibility_date:runtime.compatibility_date,compatibility_flags:runtime.compatibility_flags??[],script_runtime:runtime},patterns,crons);
   assertSettings(config,desiredSettings(state,config));
   return {version,state};
 }
@@ -164,11 +264,15 @@ export async function main(command,atmos,receiptPath,env=process.env){
   const config=configForStaging(JSON.parse(readFileSync(resolve(croot,'wrangler.jsonc'))));
   const token=env.STAGING_WORKER_API_TOKEN;assert.ok(token,'staging Worker credential required');
   const getVersion=async()=>activeVersion(await jsonGet(BASE+'/deployments',token));
+  const history=async()=>versionHistory(await jsonGet(BASE+'/versions?page=1&per_page=10',token));
   const snapshot=()=>consumerSnapshot(config,url=>jsonGet(url,token));
   const persist=async receipt=>{mkdirSync(dirname(receiptPath),{recursive:true,mode:0o700});writeFileSync(receiptPath,JSON.stringify(receipt,null,2)+'\n',{mode:0o600});};
   if(command==='preflight'){
     const before=await snapshot(),desired=desiredSettings(before.state,config);
-    const receipt={sourceSha:SOURCE_SHA,worker:WORKER,before,desired,settingsSha256:hash(JSON.stringify(before.state)),at:new Date().toISOString(),workflowRun:env.GITHUB_RUN_ID??null,workflowAttempt:env.GITHUB_RUN_ATTEMPT??null};
+    assertRuntimePreserved(config,before.state.script_runtime);
+    if(config.vars.DATA_SOURCE_MODE==='shared')sharedSecretState(before.state);
+    const versions=await history();assert.equal(versions[0],before.version,'latest version is not the serving version; secret inheritance is unsafe');
+    const receipt={sourceSha:SOURCE_SHA,worker:WORKER,before,desired,versionHistory:versions,settingsSha256:hash(JSON.stringify(before.state)),at:new Date().toISOString(),workflowRun:env.GITHUB_RUN_ID??null,workflowAttempt:env.GITHUB_RUN_ATTEMPT??null};
     await persist(receipt);console.log(JSON.stringify({worker:WORKER,version:before.version,settingsSha256:receipt.settingsSha256,changes:['AUTH_MODE=public','BILLING_MODE=disabled',...(config.vars.DATA_SOURCE_MODE==='shared'?['DATA_SOURCE_MODE=shared','SHARED_READ_*']:[])],deployed:false}));return receipt;
   }
   consumerGate(env);
@@ -191,7 +295,9 @@ export async function main(command,atmos,receiptPath,env=process.env){
     finally{if(secretDir)rmSync(secretDir,{recursive:true,force:true});}
   };
   const restore=async version=>{
-    await run(['versions','deploy',`${version}@100%`,'--yes','--message','Restore prior staging consumer']);
+    assert.equal(version,stored.before.version);
+    return restoreOwned({before:stored.before,uploaded:stored.uploaded,priorHistory:stored.versionHistory,history,getVersion,
+      restore:id=>run(['versions','deploy',`${id}@100%`,'--yes','--message','Restore prior staging consumer'])});
   };
   if(command==='recover'){
     if(stored.status==='passed'||!stored.uploaded)return;
@@ -200,22 +306,30 @@ export async function main(command,atmos,receiptPath,env=process.env){
     if(liveVersion!==stored.before.version)await restore(stored.before.version);
     assert.deepEqual(await snapshot(),stored.before);stored.status='failed-restored';await persist(stored);return;
   }
-  assert.ok(Date.now()-Date.parse(stored.at)<10*60_000,'staging preflight expired');
+  const age=Date.now()-Date.parse(stored.at);assert.ok(age>=0&&age<10*60_000,'staging preflight expired');
   assert.deepEqual(await snapshot(),stored.before,'staging changed since reviewed preflight');
+  assert.deepEqual(await history(),stored.versionHistory,'version history changed since reviewed preflight');
+  assert.equal(stored.versionHistory[0],stored.before.version,'latest version does not own reviewed secrets');
+  assertRuntimePreserved(config,stored.before.state.script_runtime);
   assertAllowedTransition(config,stored.before.state,stored.desired);
   return guardedRepair({before:stored.before,desired:stored.desired,snapshot,getVersion,
-    persist:r=>persist({...r,workflowRun:env.GITHUB_RUN_ID,workflowAttempt:env.GITHUB_RUN_ATTEMPT}),
+    persist:r=>{stored.uploaded=r.uploaded;return persist({...r,versionHistory:stored.versionHistory,workflowRun:env.GITHUB_RUN_ID,workflowAttempt:env.GITHUB_RUN_ATTEMPT});},
     upload:async()=>{
-      // Deliberately omit --keep-vars: the ONLY admitted variable delta is the
-      // reviewed AUTH/BILLING pair; staged version bindings are checked before activation.
-      const output=await run(['versions','upload','--tag',`staging-${SOURCE_SHA.slice(0,12)}`],{secrets:sharedSecretsForUpload(config,env)});
+      // Deliberately omit --keep-vars: apply only the reviewed public/shared delta.
+      // Existing secrets are inherited (no secrets file) from the exclusively owned
+      // latest version; both binding and full runtime readbacks gate activation.
+      const output=await run(['versions','upload','--tag',`staging-${SOURCE_SHA.slice(0,12)}`],{secrets:sharedSecretsForUpload(config,env,stored.before.state)});
       const id=output.match(/Worker Version ID:\s*([a-f0-9-]{36})/)?.[1];assert.match(id??'',UUID);
+      assertUploadedHistory(stored.versionHistory,await history(),id);
       const v=await jsonGet(BASE+`/versions/${id}`,token);assert.equal(v.id,id);
       assertSettings(config,{...v.resources.script_runtime,bindings:v.resources.bindings});
+      assert.deepEqual(v.resources.script_runtime,stored.before.state.script_runtime,'inactive runtime changed');
       return id;
     },
-    activate:id=>run(['versions','deploy',`${id}@100%`,'--yes','--message','Qualified staging public-weather repair']),
-    verify:async()=>{for(let n=0;n<3;n++){await publicHealth();if(n<2)await new Promise(r=>setTimeout(r,5000));}},rollback:restore});
+    activate:id=>activateOwned({before:stored.before,uploaded:id,priorHistory:stored.versionHistory,history,snapshot,getVersion,
+      activate:version=>run(['versions','deploy',`${version}@100%`,'--yes','--message','Qualified staging public-weather repair'])}),
+    verify:async()=>{for(let n=0;n<3;n++){await verifySharedForecast();if(n<2)await new Promise(r=>setTimeout(r,5000));}
+      await confirmOwned({uploaded:stored.uploaded,priorHistory:stored.versionHistory,history,getVersion});},rollback:restore});
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)
   main(process.argv[2],resolve(process.argv[3]??''),resolve(process.argv[4]??'')).catch(()=>{console.error('Staging consumer repair refused or restored; inspect stage receipt');process.exitCode=1;});
