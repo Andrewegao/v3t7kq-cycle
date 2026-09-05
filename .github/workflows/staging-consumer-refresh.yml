@@ -52,7 +52,7 @@ jobs:
       - name: Full consumer checks and controller rollback contracts
         run: |
           npm run check --prefix control/platform/edge
-          node --test cycle/tests/staging-consumer.mjs
+          node --test cycle/tests/staging-consumer.mjs cycle/tests/staging-consumer-diagnostics.mjs
       - name: Read-only live boundary check
         env:
           STAGING_WORKER_API_TOKEN: ${{ secrets.STAGING_WORKER_API_TOKEN }}
