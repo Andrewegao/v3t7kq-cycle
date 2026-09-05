@@ -27,9 +27,11 @@ test('existing Pages read credential is preferred and checked before expensive w
 });
 test('CLI rejects shell injection and absent owner approval before checkout',()=>{
   const shell=workflow.match(/run: \|\n([\s\S]+?)\n      - name: Checkout exact controller/)[1].split('\n').map(x=>x.slice(10)).join('\n');
-  const env={...process.env,CONFIRM:'REFRESH-DATA-READER-ONLY',ATMOSPHERE_SHA:'a'.repeat(40),BOUNDARY_DIGEST:'b'.repeat(64)};
+  const env={...process.env,CONFIRM:'REFRESH-DATA-READER-ONLY',EXCLUSIVE_WINDOW_CONFIRMATION:'EXCLUSIVE-DATA-WORKER-CONTROL-WINDOW',ATMOSPHERE_SHA:'a'.repeat(40),BOUNDARY_DIGEST:'b'.repeat(64)};
   execFileSync('bash',['-e','-c',shell],{env});
-  for(const bad of [{CONFIRM:'yes'},{ATMOSPHERE_SHA:'main'},{BOUNDARY_DIGEST:'$(touch /tmp/forbidden)'}])assert.throws(()=>execFileSync('bash',['-e','-c',shell],{env:{...env,...bad},stdio:'pipe'}));
+  for(const bad of [{CONFIRM:'yes'},{EXCLUSIVE_WINDOW_CONFIRMATION:''},{EXCLUSIVE_WINDOW_CONFIRMATION:'REFRESH-DATA-READER-ONLY'},{ATMOSPHERE_SHA:'main'},{BOUNDARY_DIGEST:'$(touch /tmp/forbidden)'}])assert.throws(()=>execFileSync('bash',['-e','-c',shell],{env:{...env,...bad},stdio:'pipe'}));
+  assert.match(workflow,/exclusive_window:\n[\s\S]*?required: true/);
+  assert.ok(workflow.includes('EXCLUSIVE_WINDOW_CONFIRMATION: ${{ inputs.exclusive_window }}'));
 });
 test('new controller contracts are registered in existing CI',()=>{const ci=read('.github/workflows/scheduler-ci.yml');assert.ok(ci.includes('.github/workflows/data-reader-refresh.yml'));assert.ok(ci.includes('node --test tests/data-reader-*.mjs'));});
 test('runner-specific receipt path is resolved in a step, never job-level env',()=>{

@@ -15,7 +15,8 @@ version, even when both pointer hashes appear unchanged.
 Both candidates come from the same reviewed merged Atmos SHA. The read-only
 entrypoint delegates all reads to the full reader and refuses the internal
 catalog prefix with 503 `catalog_publication_paused`. Both are first uploaded
-inactive with strict binding inheritance from the recorded preflight version.
+inactive with strict `latest` binding inheritance. The first expected predecessor
+is the reviewed active version; the second is our verified read-only upload.
 The read-only candidate is activated and qualified before the full candidate.
 On failure the only recovery deployment permitted is our own compatible
 read-only version. **Publication is then paused and manual forward repair is
@@ -53,6 +54,13 @@ containment, not a guarantee of atomic rollback against arbitrary external write
    observed digest and safely refuse before upload; re-dispatch only after review.
 4. Dispatch with exact merged SHA, reviewed digest and
    `REFRESH-DATA-READER-ONLY`, through the production approval environment.
+5. Separately confirm an exclusive production **data Worker control-plane**
+   window with `exclusive_window=EXCLUSIVE-DATA-WORKER-CONTROL-WINDOW` for this
+   run. No other actor may upload/deploy code, modify settings, or rotate secrets
+   until this run (including recovery) finishes. This does not authorize UI,
+   platform Worker or route changes. Ordinary R2 weather-data publishers remain
+   separate. The confirmation is explicit per run, not inferred from release
+   approval. Keep the window reserved while a failure needs manual containment.
 
 The private, atomically written receipt binds controller SHA, source SHA, run and
 attempt, exact bundle digests, original catalog/whole pointer hashes, version
@@ -61,13 +69,36 @@ UUIDs and ownership tags. No credential values or signed URLs are retained.
 ## Cloudflare API preservation contract
 
 The [version upload API](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/versions/methods/create/)
-documents inactive upload and `bindings_inherit=strict`; each inherited binding
-uses an explicit recorded prior version UUID, not `latest`. Versioned placement,
+documents inactive upload and `bindings_inherit=strict`. The live classic API
+refused explicit inheritance UUIDs (10057: only literal `latest` supported),
+despite the broader generated schema. Each binding therefore explicitly uses
+`version_id: "latest"` and strict mode remains mandatory. Versioned placement,
 limits, cache options and usage model are carried from the reviewed state. The
 entire returned inactive `script_runtime` must equal the prior active runtime.
 The server-returned script ETag is pinned and re-read for identity; it is not
 misrepresented as a locally computed module SHA256. The receipt separately
 records the exact module bytes SHA256 sent in the authenticated upload.
+
+The initial latest upload must equal the single reviewed 100%-active version.
+Before and after each upload, before each activation, after qualification and
+before containment, the controller checks the ordered version history. Only
+`[owned-full, owned-readonly, original, ...reviewed-history]` is admitted as the
+operation advances; sequential numbers must be original +1 and +2. Every owned
+version is re-read for exact binding/runtime/source/ETag identity. Missing,
+unreadable, duplicated, reordered or foreign history refuses activation. Lost
+upload responses never permit guessing ownership or retrying the upload.
+
+**These checks are not an atomic compare-and-swap or proof of hidden secret
+values.** Secret binding metadata exposes names/types only; version details have
+no inheritance-parent field. Sequential history and ownership tags cannot prove
+cryptographic parentage. Concurrent control-plane writers can race observations,
+and another API can delete versions. The owner-reserved exclusive window is
+therefore required. The four known Cycle lanes (`data-reader-refresh`,
+`consumer-refresh`, `data-edge-deploy`, `point-route-activate`) share the
+`weatherx-production-data-edge` non-cancelling lock; dashboard/manual API and
+other repositories do not. Detected foreign ownership is never overwritten,
+including during recovery. No setting, secret, route or pointer is changed to
+manufacture this exclusion.
 
 The locked Wrangler implementation's `versions upload` path explicitly omits
 non-versioned observability/logpush; ordinary deploy calls a separate settings

@@ -18,6 +18,7 @@ export const PAGES_READ_URL=`https://api.cloudflare.com/client/v4/accounts/${ACC
 const ORIGIN='https://weatherx.org';
 const UUID=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const SHA=/^[a-f0-9]{40}$/;
+export const EXCLUSIVE_WINDOW='EXCLUSIVE-DATA-WORKER-CONTROL-WINDOW';
 export const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const digest=value=>hash(canonical(value));
 const same=(a,b,message)=>assert.ok(canonical(a)===canonical(b),message);
@@ -95,6 +96,7 @@ export function assertBoundary(current,receipt){
 export function assertVersion(version,kind,receipt){
   assert.match(version.id??'',UUID,'version id missing');
   if(receipt.versions?.[kind])assert.equal(version.id,receipt.versions[kind],'recorded version identity changed');
+  if(receipt.beforeHistory)assert.equal(version.number,receipt.beforeHistory[0].number+(kind==='readonly'?1:2),'unexpected version sequence');
   assert.equal(version.annotations?.['workers/tag'],`${receipt.tag}-${kind}`,'version ownership changed');
   assert.equal(version.annotations?.['workers/commit_sha'],receipt.sha,'version source changed');
   same(normalizedBindings(version.resources?.bindings??[]),receipt.boundary.data.settings.bindings,'uploaded bindings changed');
@@ -102,6 +104,28 @@ export function assertVersion(version,kind,receipt){
   same(sorted(version.resources?.script_runtime?.compatibility_flags??[]),receipt.boundary.data.settings.compatibility_flags,'uploaded flags changed');
   same(version.resources?.script_runtime,receipt.boundary.data.runtime,'uploaded version runtime changed');
   if(receipt.versionEtags?.[kind])assert.equal(version.resources?.script?.etag,receipt.versionEtags[kind],'immutable version bytes identity changed');
+}
+
+export function normalizeHistory(value){
+  assert.ok(Array.isArray(value?.items)&&value.items.length>0&&value.items.length<=10,'version history unavailable');
+  const rows=value.items.map(row=>{
+    assert.match(row?.id??'',UUID,'invalid history identity');
+    assert.ok(Number.isSafeInteger(row.number)&&row.number>0,'invalid history sequence');
+    return {id:row.id,number:row.number};
+  });
+  assert.equal(new Set(rows.map(row=>row.id)).size,rows.length,'duplicate version history');
+  assert.ok(rows.every((row,i)=>i===0||row.number<rows[i-1].number),'unordered version history');
+  return rows;
+}
+export function assertHistory(rows,receipt){
+  const before=normalizeHistory({items:receipt.beforeHistory});
+  assert.equal(before[0].id,receipt.beforeVersion,'reviewed latest must equal active version');
+  const owned=['full','readonly'].filter(kind=>receipt.versions?.[kind]).map(kind=>({id:receipt.versions[kind],number:before[0].number+(kind==='readonly'?1:2)}));
+  same(normalizeHistory({items:rows}),[...owned,...before].slice(0,10),'foreign or missing version history');
+}
+async function verifyHistory(ops,receipt){
+  assertHistory(await ops.history(),receipt);
+  for(const kind of ['readonly','full'])if(receipt.versions?.[kind])assertVersion(await ops.version(receipt.versions[kind]),kind,receipt);
 }
 
 // No restore of a pre-upgrade version is ever allowed, even if pointer hashes
@@ -116,6 +140,7 @@ export async function recover(receipt,ops,persist){
     assert.ok(fallback,'owned compatible fallback missing');
     assertVersion(await ops.version(fallback),'readonly',receipt);
     assertBoundary(await ops.boundary(),receipt);
+    await verifyHistory(ops,receipt);
     if(current===receipt.beforeVersion){
       // Response loss before first activation: observation only, never deploy old.
       receipt.recovery='old-version-still-active';persist();return;
@@ -123,12 +148,16 @@ export async function recover(receipt,ops,persist){
     assert.ok(current===fallback||current===receipt.versions.full,'foreign deployment active');
     if(current!==fallback){
       assert.equal(await ops.active(),current,'deployment changed before containment');
+      await verifyHistory(ops,receipt);
+      assert.equal(await ops.active(),current,'deployment changed during containment history check');
       receipt.intent.contain=true;persist();
       try{await ops.deploy(fallback);}catch{receipt.containmentResponseLost=true;persist();}
       assert.equal(await ops.active(),fallback,'compatible fallback activation not observed');
     }
     await ops.verify('readonly',receipt);
+    await verifyHistory(ops,receipt);
     assertBoundary(await ops.boundary(),receipt);
+    assert.equal(await ops.active(),fallback,'compatible fallback changed during qualification');
     receipt.recovery='compatible-readonly-active';receipt.publicationPaused=true;
     receipt.recoveryPointers=await ops.pointers();persist();
   }catch{
@@ -138,14 +167,21 @@ export async function recover(receipt,ops,persist){
 }
 export async function execute(receipt,ops,persist){
   assert.equal(receipt.status,'preflight-passed');
+  assert.equal(receipt.exclusiveWindow,EXCLUSIVE_WINDOW,'exclusive Worker control window required');
   assert.ok(Date.now()-Date.parse(receipt.createdAt)<15*60_000,'preflight expired');
   const step=async(name,fn)=>{receipt.stage=name;persist();try{return await fn();}catch(error){receipt.failedStage=name;receipt.failure=safeFailureDiagnostic(error);persist();throw Error(`data-reader stage failed: ${name}`);}};
   try{
     assertBoundary(await ops.boundary(),receipt);
     assert.equal(await ops.active(),receipt.beforeVersion,'active version changed');
     same(await ops.pointers(),receipt.pointers,'data pointers changed before upload');
+    await verifyHistory(ops,receipt);
     receipt.versions={};receipt.versionEtags={};receipt.intent={};persist();
     for(const kind of ['readonly','full'])await step(`upload-${kind}`,async()=>{
+      assertBoundary(await ops.boundary(),receipt);
+      assert.equal(await ops.active(),receipt.beforeVersion,'active version changed before upload');
+      same(await ops.pointers(),receipt.pointers,'data pointers changed before upload');
+      await verifyHistory(ops,receipt);
+      assert.equal(await ops.active(),receipt.beforeVersion,'active changed during upload history check');
       receipt.intent.upload=kind;persist();
       // Inactive upload response loss cannot be reconciled safely by a label alone.
       // Refuse with old active version untouched; never retry or infer ownership.
@@ -153,6 +189,7 @@ export async function execute(receipt,ops,persist){
       assert.match(version.resources?.script?.etag??'',/^[a-f0-9]{64}$/,'version content identity absent');
       receipt.versionEtags[kind]=version.resources.script.etag;
       receipt.versions[kind]=version.id;persist();
+      await verifyHistory(ops,receipt);
       assertVersion(await ops.version(version.id),kind,receipt);
       assertBoundary(await ops.boundary(),receipt);
       assert.equal(await ops.active(),receipt.beforeVersion,'inactive upload changed active version');
@@ -163,6 +200,8 @@ export async function execute(receipt,ops,persist){
       const expected=kind==='readonly'?receipt.beforeVersion:receipt.versions.readonly;
       assert.equal(await ops.active(),expected,'foreign activation');
       assertVersion(await ops.version(receipt.versions[kind]),kind,receipt);
+      await verifyHistory(ops,receipt);
+      assert.equal(await ops.active(),expected,'active changed during activation history check');
       receipt.intent.activate=kind;persist();
       try{await ops.deploy(receipt.versions[kind]);}catch{receipt.activationResponseLost=kind;persist();}
       assert.equal(await ops.active(),receipt.versions[kind],'activation not observed');
@@ -171,6 +210,8 @@ export async function execute(receipt,ops,persist){
         await ops.verify(kind,receipt);
         assert.equal(await ops.active(),receipt.versions[kind],'verification deployment changed');
         assertBoundary(await ops.boundary(),receipt);
+        await verifyHistory(ops,receipt);
+        assert.equal(await ops.active(),receipt.versions[kind],'active changed during qualification history check');
       }
     });
     receipt.status='passed';receipt.completedAt=new Date().toISOString();receipt.afterPointers=await ops.pointers();persist();
@@ -185,6 +226,7 @@ export function makeOperations(transport,atmos,source){
   const api=(path,options)=>transport.api(path,'DATA_EDGE_TOKEN',options);
   const version=id=>{assert.match(id,UUID);return api(`${SCRIPT}/versions/${id}`);};
   const active=async()=>activeVersion(await api(`${SCRIPT}/deployments`));
+  const history=async()=>normalizeHistory(await api(`${SCRIPT}/versions?page=1&per_page=10`));
   const object=async(bucket,key,max=16*1024*1024)=>{
     assert.ok(['weatherx-data-production','weatherx-components-production'].includes(bucket));
     assert.match(key,/^[A-Za-z0-9._/-]+$/);assert.ok(!key.split('/').some(x=>!x||x==='.'||x==='..'));
@@ -211,12 +253,14 @@ export function makeOperations(transport,atmos,source){
     same(routes.filter(x=>x.script===WORKER).map(x=>x.pattern).sort(),source.settings.routes.map(x=>x.pattern).sort(),'data route policy changed');
     return {...targets,routes,pages:{id:pages.canonical_deployment.id,sha256:digest(pages.canonical_deployment),settingsSha256:digest(pages.deployment_configs)}};
   }
-  return {active,version,object,pointers,boundary,
+  return {active,version,history,object,pointers,boundary,
     upload:async(kind,receipt)=>{
-      const previous=receipt.beforeVersion;assert.match(previous,UUID);
+      // This API supports only latest, NOT explicit UUID inheritance. The
+      // caller brackets each upload with reviewed predecessor/history checks.
+      // Those checks are not CAS; an owner-reserved exclusive window is required.
       const settings=receipt.boundary.data.settings;
       const metadata={main_module:'dataReader.mjs',compatibility_date:settings.compatibility_date,compatibility_flags:settings.compatibility_flags,
-        bindings:settings.bindings.map(x=>({name:x.name,type:'inherit',version_id:previous})),
+        bindings:settings.bindings.map(x=>({name:x.name,type:'inherit',version_id:'latest'})),
         annotations:versionAnnotations(kind,receipt)};
       // Versioned options must survive unchanged. Observability/logpush/tails/tags
       // are non-versioned: never PATCH them (Wrangler versions upload does not).
@@ -243,6 +287,7 @@ export async function main(args=process.argv.slice(2)){
   if(args.length===1&&args[0]==='pages-access')return checkPagesReadAuthority();
   const [command,atmosInput,sha,receiptInput,expectedDigest]=args;
   assert.ok(['preflight','execute','recover'].includes(command));assert.equal(args.length,5);assert.match(sha??'',SHA);assert.match(expectedDigest??'',/^[a-f0-9]{64}$/);
+  if(command!=='recover')assert.equal(process.env.EXCLUSIVE_WINDOW_CONFIRMATION,EXCLUSIVE_WINDOW,'explicit per-run exclusive Worker control window required');
   const atmos=resolve(atmosInput),receiptPath=resolve(receiptInput);
   const source=await build(atmos,sha);
   let end=Date.now()+8*60_000;
@@ -252,8 +297,10 @@ export async function main(args=process.argv.slice(2)){
     const boundary=await ops.boundary(),beforeVersion=await ops.active();const observed=digest({boundary,beforeVersion});
     console.log(`data-reader boundary sha256: ${observed}`);
     assert.equal(observed,expectedDigest,'reviewed boundary digest required');
-    const receipt={schemaVersion:1,sha,controller:process.env.GITHUB_SHA,runId:process.env.GITHUB_RUN_ID,attempt:process.env.GITHUB_RUN_ATTEMPT,tag:`wxdr-${randomUUID()}`,createdAt:new Date().toISOString(),boundary,boundarySha256:observed,pointers:await ops.pointers(),beforeVersion,source:{inventory:source.inventory,esbuildVersion:source.esbuildVersion,bundles:Object.fromEntries(Object.entries(source.bundles).map(([k,v])=>[k,{sha256:v.sha256,inputs:v.inputs}]))}};
+    const receipt={schemaVersion:1,exclusiveWindow:EXCLUSIVE_WINDOW,beforeHistory:await ops.history(),sha,controller:process.env.GITHUB_SHA,runId:process.env.GITHUB_RUN_ID,attempt:process.env.GITHUB_RUN_ATTEMPT,tag:`wxdr-${randomUUID()}`,createdAt:new Date().toISOString(),boundary,boundarySha256:observed,pointers:await ops.pointers(),beforeVersion,source:{inventory:source.inventory,esbuildVersion:source.esbuildVersion,bundles:Object.fromEntries(Object.entries(source.bundles).map(([k,v])=>[k,{sha256:v.sha256,inputs:v.inputs}]))}};
+    await verifyHistory(ops,receipt);
     await ops.verify('preflight',receipt);same(await ops.pointers(),receipt.pointers,'pointer changed during preflight');
+    await verifyHistory(ops,receipt);assert.equal(await ops.active(),beforeVersion,'active changed during preflight');assertBoundary(await ops.boundary(),receipt);
     receipt.status='preflight-passed';saveReceipt(receiptPath,receipt);return;
   }
   assert.equal(process.env.GITHUB_ACTIONS,'true');assert.equal(process.env.GITHUB_REF,'refs/heads/main');assert.equal(process.env.GITHUB_EVENT_NAME,'workflow_dispatch');

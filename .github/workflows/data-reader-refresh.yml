@@ -15,6 +15,10 @@ on:
         description: Type REFRESH-DATA-READER-ONLY
         required: true
         type: string
+      exclusive_window:
+        description: Confirm no other data Worker code/settings/secrets changes until this run finishes; type EXCLUSIVE-DATA-WORKER-CONTROL-WINDOW
+        required: true
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -29,12 +33,14 @@ jobs:
     env:
       ATMOSPHERE_SHA: ${{ inputs.atmosphere_sha }}
       BOUNDARY_DIGEST: ${{ inputs.boundary_digest }}
+      EXCLUSIVE_WINDOW_CONFIRMATION: ${{ inputs.exclusive_window }}
     steps:
       - name: Validate owner confirmation and immutable inputs
         env:
           CONFIRM: ${{ inputs.confirm }}
         run: |
           test "$CONFIRM" = REFRESH-DATA-READER-ONLY
+          test "$EXCLUSIVE_WINDOW_CONFIRMATION" = EXCLUSIVE-DATA-WORKER-CONTROL-WINDOW
           [[ "$ATMOSPHERE_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
           [[ "$BOUNDARY_DIGEST" =~ ^[a-f0-9]{64}$ ]] || exit 1
       - name: Checkout exact controller
