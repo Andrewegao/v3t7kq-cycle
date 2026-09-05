@@ -14,6 +14,7 @@ import { proveReaders, verifySourceImports } from './data-reader-proof.mjs';
 
 export const WORKER='weatherx-data-edge-production';
 export const SCRIPT=`/accounts/${ACCOUNT}/workers/scripts/${WORKER}`;
+export const PAGES_READ_URL=`https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/pages/projects/atmos-platform`;
 const ORIGIN='https://weatherx.org';
 const UUID=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const SHA=/^[a-f0-9]{40}$/;
@@ -22,6 +23,26 @@ const digest=value=>hash(canonical(value));
 const same=(a,b,message)=>assert.ok(canonical(a)===canonical(b),message);
 const sorted=values=>[...values].sort((a,b)=>canonical(a).localeCompare(canonical(b)));
 export const CLOSURE=['access','catalog','catalogApi','crypto','data','dataEdge','db','http','pointSeries','pointSeriesContract','releasePromotion','sharedRead','telemetry','types'].map(x=>`src/${x}.ts`).sort();
+
+// Permission discovery only: this selected existing credential can issue one
+// fixed Pages GET, never a Pages mutation or redirect. Do not log API bodies.
+export async function checkPagesReadAuthority({token=process.env.PAGES_TOKEN,fetchImpl=globalThis.fetch,log=console.log}={}){
+  let status='unavailable';
+  try{
+    assert.ok(token,'missing credential');
+    const response=await fetchImpl(PAGES_READ_URL,{method:'GET',redirect:'error',signal:AbortSignal.timeout(15_000),headers:{Authorization:`Bearer ${token}`}});
+    status=String(response.status);
+    if(response.status!==200){await response.body?.cancel();throw Error('permission refused');}
+    const chunks=[];let size=0;
+    for await(const chunk of response.body??[]){size+=chunk.length;assert.ok(size<=1024*1024,'oversized permission response');chunks.push(chunk);}
+    const body=JSON.parse(Buffer.concat(chunks));
+    assert.ok(body.success===true&&body.result?.name==='atmos-platform','wrong permission response');
+    log('Pages GET authority confirmed (HTTP 200)');
+  }catch{
+    log(`Pages GET authority refused (HTTP ${status})`);
+    throw Error('Existing credential cannot verify the protected Pages boundary; no changes made');
+  }
+}
 
 export function sourceInventory(atmos,sha){
   assert.match(sha,SHA,'exact source required');
@@ -73,6 +94,7 @@ export function assertBoundary(current,receipt){
 }
 export function assertVersion(version,kind,receipt){
   assert.match(version.id??'',UUID,'version id missing');
+  if(receipt.versions?.[kind])assert.equal(version.id,receipt.versions[kind],'recorded version identity changed');
   assert.equal(version.annotations?.['workers/tag'],`${receipt.tag}-${kind}`,'version ownership changed');
   assert.equal(version.annotations?.['workers/commit_sha'],receipt.sha,'version source changed');
   same(normalizedBindings(version.resources?.bindings??[]),receipt.boundary.data.settings.bindings,'uploaded bindings changed');
@@ -214,6 +236,7 @@ export function makeOperations(transport,atmos,source){
 }
 
 export async function main(args=process.argv.slice(2)){
+  if(args.length===1&&args[0]==='pages-access')return checkPagesReadAuthority();
   const [command,atmosInput,sha,receiptInput,expectedDigest]=args;
   assert.ok(['preflight','execute','recover'].includes(command));assert.equal(args.length,5);assert.match(sha??'',SHA);assert.match(expectedDigest??'',/^[a-f0-9]{64}$/);
   const atmos=resolve(atmosInput),receiptPath=resolve(receiptInput);

@@ -36,7 +36,17 @@ containment, not a guarantee of atomic rollback against arbitrary external write
    tests including paired promotion / whole-release promotion / legacy reads.
 2. Confirm existing token capabilities permit Worker version upload/deploy and
    read-only R2/zone/platform/Pages inspection. The lane does not create tokens or
-   broaden authority. Pages token access is read-only in this controller.
+   broaden authority. Pages inspection prefers the existing `PAGES_READ_TOKEN`;
+   if absent, it uses the already-present `CLOUDFLARE_WORKERS_API_TOKEN` only for
+   GET inspection of the fixed account's `atmos-platform` Pages project. A token's
+   name does not prove its permissions: a bounded early GET must succeed before
+   dependency installation, tests, build, or any mutation. Failure stops the lane;
+   it does not grant permissions, retry with UI deployment credentials, or skip
+   the complete Pages boundary proof. The same selected credential is used for
+   every later Pages boundary GET. Only permission/status is printed, never a
+   token or Pages configuration. Cloudflare's
+   [project GET API](https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/get/)
+   accepts existing Pages Read or Pages Write authority; this lane adds neither.
 3. Review a freshly captured boundary digest: complete normalized data/platform
    settings, schedules, subdomains, both active versions, all zone routes,
    Pages canonical deployment and configuration hashes. All zeroes print the

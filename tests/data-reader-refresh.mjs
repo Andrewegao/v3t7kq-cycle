@@ -66,6 +66,11 @@ test('closure admits only exact data modules plus optional fallback wrapper',()=
   assert.throws(()=>assertClosure(Object.fromEntries(CLOSURE.filter(x=>x!=='src/releasePromotion.ts').map(x=>[x,{}])),'full'));
 });
 test('version source/tag/binding drift rejected',async()=>{const f=fixture();const v=await f.ops.version(ro);v.resources.bindings=[];assert.throws(()=>assertVersion(v,'readonly',f.receipt));});
+test('recorded version ID rejects a different valid UUID with otherwise identical proof',async()=>{
+  const f=fixture();f.receipt.versions={readonly:ro};const v=await f.ops.version(ro);
+  assertVersion(v,'readonly',f.receipt);v.id=foreign;
+  assert.throws(()=>assertVersion(v,'readonly',f.receipt),/recorded version identity changed/);
+});
 test('only exact owned version annotation delta is allowed; all other settings stay exact',()=>{
   const f=fixture();f.receipt.versions={readonly:ro};const current=structuredClone(f.receipt.boundary);
   current.data.settings.annotations={...versionAnnotations('readonly',f.receipt),'workers/triggered_by':'api'};

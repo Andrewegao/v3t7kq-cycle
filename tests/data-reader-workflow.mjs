@@ -18,6 +18,13 @@ test('interrupted activation recovery is always attempted and receipts retained'
   assert.match(controller,/receipt\.runId,process\.env\.GITHUB_RUN_ID/);
   assert.match(controller,/receipt\.attempt,process\.env\.GITHUB_RUN_ATTEMPT/);
 });
+test('existing Pages read credential is preferred and checked before expensive work',()=>{
+  const selection='PAGES_TOKEN: ${{ secrets.PAGES_READ_TOKEN || secrets.CLOUDFLARE_WORKERS_API_TOKEN }}';
+  assert.equal(workflow.split(selection).length-1,4);
+  const check=workflow.indexOf('mjs pages-access');assert.ok(check>0);
+  for(const later of ['run: npm ci','run: npm run check','mjs preflight','mjs execute'])assert.ok(check<workflow.indexOf(later),later);
+  assert.ok(!workflow.includes('UI_PRODUCTION_PAGES_TOKEN'));assert.ok(!workflow.includes('UI_STAGING_PAGES_TOKEN'));
+});
 test('CLI rejects shell injection and absent owner approval before checkout',()=>{
   const shell=workflow.match(/run: \|\n([\s\S]+?)\n      - name: Checkout exact controller/)[1].split('\n').map(x=>x.slice(10)).join('\n');
   const env={...process.env,CONFIRM:'REFRESH-DATA-READER-ONLY',ATMOSPHERE_SHA:'a'.repeat(40),BOUNDARY_DIGEST:'b'.repeat(64)};
