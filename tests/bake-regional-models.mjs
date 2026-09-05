@@ -22,7 +22,7 @@ function assertParallelTopology(source){
     assert.match(job,/fail-fast: false/);
   }
   assert.match(jobs.core,/max-parallel: 4/);assert.match(jobs.regional,/max-parallel: 7/);
-  assert.match(jobs.bake,/needs: \[core, regional\]\n\s+if: \$\{\{ always\(\) && !cancelled\(\) && needs\.core\.result == 'success' \}\}/);
+  assert.match(jobs.bake,/needs: \[core, regional\][\s\S]*?if: \$\{\{ always\(\) && !cancelled\(\) && needs\.core\.result == 'success' && \(inputs\.recovery_run_id == '' \|\| needs\.regional\.result == 'success'\) \}\}/);
   assert.equal((source.match(/run: bash ops\/bake-weatherx\.sh/g)||[]).length,1,'one joined publisher');
 }
 
@@ -78,7 +78,7 @@ test('the joined bake requires core artifacts while regional failures remain abs
   const receive=bake.split('      - name: receive regional display packs from the family jobs')[1]?.split('      - name:')[0];
   assert.ok(receive,'bake job receives the packs before baking');
   assert.match(receive,/if: \$\{\{ steps\.bake_plan\.outputs\.skip != 'true' \}\}/);
-  assert.match(receive,/continue-on-error: true/,'a missing artifact set is an abstention, not a failed cycle');
+  assert.match(receive,/continue-on-error: \$\{\{ inputs\.recovery_run_id == '' \}\}/,'only normal cycles may abstain on a missing artifact set; recovery transfer must succeed');
   assert.match(receive,/actions\/download-artifact@[a-f0-9]{40}/);
   assert.match(receive,/pattern: regional-packs-\*/);assert.match(receive,/merge-multiple: true/);
   assert.match(receive,/path: \$\{\{ runner\.temp \}\}\/regional-packs/);
