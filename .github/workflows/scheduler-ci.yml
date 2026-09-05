@@ -49,6 +49,8 @@ jobs:
           node tests/bake-diagnostics.mjs
           node --test tests/collector-source.mjs
           node --test tests/bake-regional-models.mjs
+          node --test tests/model-recovery-workflow.mjs
+          python3 tests/test_recover_model_inputs.py
       - name: Staged UI artifact, manual promotion and privacy contracts
         run: node --test tests/ui-*.mjs
       - name: Cloud-only staging data isolation and public-mode contracts
