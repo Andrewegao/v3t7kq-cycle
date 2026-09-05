@@ -1,0 +1,124 @@
+# Phase 2: one exact route only; existing data code must already be qualified.
+name: WeatherX paired point route activation
+on:
+  workflow_dispatch:
+    inputs:
+      atmosphere_sha:
+        description: Exact merged Atmos SHA already active in the full data Worker
+        required: true
+        type: string
+      data_version_id:
+        description: Approved full data Worker UUID from the Phase 1 receipt
+        required: true
+        type: string
+      script_etag:
+        description: Approved full data Worker script ETag from the Phase 1 receipt
+        required: true
+        type: string
+      boundary_digest:
+        description: Reviewed current route/UI/Worker boundary SHA256 (zeroes safely discover)
+        required: true
+        type: string
+      confirm:
+        description: Type ACTIVATE-POINT-ROUTE-ONLY
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-production-data-edge
+  cancel-in-progress: false
+jobs:
+  point-route:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      ATMOSPHERE_SHA: ${{ inputs.atmosphere_sha }}
+      DATA_VERSION_ID: ${{ inputs.data_version_id }}
+      SCRIPT_ETAG: ${{ inputs.script_etag }}
+      BOUNDARY_DIGEST: ${{ inputs.boundary_digest }}
+    steps:
+      - name: Validate explicit owner confirmation and immutable inputs
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          test "$CONFIRM" = ACTIVATE-POINT-ROUTE-ONLY
+          [[ "$ATMOSPHERE_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          [[ "$DATA_VERSION_ID" =~ ^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$ ]] || exit 1
+          [[ "$SCRIPT_ETAG" =~ ^[a-f0-9]{64}$ ]] || exit 1
+          [[ "$BOUNDARY_DIGEST" =~ ^[a-f0-9]{64}$ ]] || exit 1
+          echo "ROUTE_RECEIPT=$RUNNER_TEMP/point-route/receipt.json" >> "$GITHUB_ENV"
+      - name: Checkout exact controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: cycle
+          persist-credentials: false
+      - name: Checkout exact reviewed source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: ${{ inputs.atmosphere_sha }}
+          fetch-depth: 0
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: atmos
+          persist-credentials: false
+      - name: Verify immutable provenance
+        env:
+          CYCLE_SHA: ${{ github.sha }}
+        run: |
+          test "$(git -C cycle rev-parse HEAD)" = "$CYCLE_SHA"
+          test "$(git -C atmos rev-parse HEAD)" = "$ATMOSPHERE_SHA"
+          git -C atmos merge-base --is-ancestor "$ATMOSPHERE_SHA" refs/remotes/origin/master
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: atmos/platform/edge/package-lock.json
+      - name: Check existing read authority before install or mutation
+        timeout-minutes: 1
+        env:
+          PAGES_TOKEN: ${{ secrets.PAGES_READ_TOKEN || secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+        run: node cycle/tools/data-reader-refresh.mjs pages-access
+      - name: Install locked source dependencies for local reader proof only
+        timeout-minutes: 5
+        working-directory: atmos/platform/edge
+        run: npm ci
+      - name: Run existing and new controller safety contracts
+        timeout-minutes: 2
+        env:
+          WEATHERX_ATMOS_SOURCE: ${{ github.workspace }}/atmos
+        run: node --test cycle/tests/data-reader-*.mjs
+      - name: Validate fresh paired ECMWF and GFS catalog and unchanged boundary
+        timeout-minutes: 8
+        env:
+          DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
+          PLATFORM_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+          PAGES_TOKEN: ${{ secrets.PAGES_READ_TOKEN || secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+        run: node cycle/tools/point-route-activate.mjs preflight atmos "$ATMOSPHERE_SHA" "$DATA_VERSION_ID" "$SCRIPT_ETAG" "$BOUNDARY_DIGEST" "$ROUTE_RECEIPT"
+      - name: Add exact point route and verify live fresh forecasts
+        id: activate
+        timeout-minutes: 12
+        env:
+          DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
+          PLATFORM_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+          PAGES_TOKEN: ${{ secrets.PAGES_READ_TOKEN || secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+        run: node cycle/tools/point-route-activate.mjs execute atmos "$ATMOSPHERE_SHA" "$DATA_VERSION_ID" "$SCRIPT_ETAG" "$BOUNDARY_DIGEST" "$ROUTE_RECEIPT"
+      - name: Remove only acknowledged owned route after failed or interrupted activation
+        if: ${{ always() && (steps.activate.outcome == 'failure' || steps.activate.outcome == 'cancelled') }}
+        timeout-minutes: 4
+        env:
+          DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
+          PLATFORM_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+          PAGES_TOKEN: ${{ secrets.PAGES_READ_TOKEN || secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+        run: node cycle/tools/point-route-activate.mjs recover atmos "$ATMOSPHERE_SHA" "$DATA_VERSION_ID" "$SCRIPT_ETAG" "$BOUNDARY_DIGEST" "$ROUTE_RECEIPT"
+      - name: Retain non-secret route ownership and numerical qualification receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: point-route-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/point-route/receipt.json
+          if-no-files-found: ignore
+          retention-days: 30
