@@ -9,7 +9,9 @@ import { execFileSync } from 'node:child_process';
 import { hash, pointModelSet } from './shared-data.mjs';
 import { assertPointPayload } from './consumer-refresh.mjs';
 import { preflight as checkHealth } from './staging-data.mjs';
-import { SOURCE_SHA } from './staging-consumer.mjs';
+// The independent own-copy activation lane retains its qualified decoder pin.
+// A shared-reader repair must not silently repin this separate publisher.
+const SOURCE_SHA = 'a58eff158b56ef2ba25189d2b859315b00893a14';
 
 const ORIGIN='https://staging.weatherx.org',BUCKET='weatherx-data-staging';
 export async function readPublic(url,{fetcher=fetch,maxBytes=16*1024**2,method='GET'}={}){
