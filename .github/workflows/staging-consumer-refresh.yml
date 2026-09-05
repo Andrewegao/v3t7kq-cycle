@@ -59,7 +59,7 @@ jobs:
       - name: Full consumer checks and controller rollback contracts
         run: |
           npm run check --prefix control/platform/edge
-          node --test cycle/tests/staging-consumer.mjs cycle/tests/staging-consumer-diagnostics.mjs cycle/tests/staging-consumer-reuse.mjs
+          node --test cycle/tests/staging-consumer.mjs cycle/tests/staging-consumer-diagnostics.mjs cycle/tests/staging-consumer-reuse.mjs cycle/tests/staging-consumer-readiness.mjs
           python cycle/tests/staging-consumer-reuse.py
       - name: Admit the exact retained owned receipt without cloud credentials
         if: ${{ inputs.mode == 'reuse-owned-33988771315' }}

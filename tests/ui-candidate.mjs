@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { gate, FREEZE_UNTIL, REPOSITORY, hash, createCandidate, validateCandidate, readTree,
   validateFiles, safePath, seal, unseal, restore, eligibleRun } from '../tools/ui-candidate.mjs';
 import { configurationDigest, pipelineDigest, POLICY_FILES } from '../tools/ui-release.mjs';
+import { CORE_RELEASE_PROFILE } from '../tools/ui-staging-models.mjs';
 
 const key='ab'.repeat(32), sha='c'.repeat(40), workflow='d'.repeat(40), now=Date.parse('2026-09-01T12:00Z');
 function fixture({ ground = false } = {}) {
@@ -39,9 +40,11 @@ const artifactsFixture=()=>[{id:456,name:'ui-candidate-123-1',expired:false,expi
 const check=(c,r=runFixture(),a=artifactsFixture())=>eligibleRun(r,a,{runId:'123',sourceSha:sha,digest:c.artifactDigest,pipelineDigest:pipelineDigest(),candidate:c},now);
 test('pipeline digest binds the executable staging data preflight policy',()=>{
   assert.ok(POLICY_FILES.includes('tools/ui-staging-preflight.mjs'));
+  assert.ok(POLICY_FILES.includes('tools/ui-staging-core-browser.mjs'));
   const copy=mkdtempSync(resolve(tmpdir(),'wx-ui-policy-test-'));
   for(const path of POLICY_FILES){mkdirSync(resolve(copy,path,'..'),{recursive:true});copyFileSync(new URL('../'+path,import.meta.url),resolve(copy,path));}
   const before=pipelineDigest(undefined,copy);writeFileSync(resolve(copy,'tools/ui-staging-preflight.mjs'),'changed policy\n');assert.notEqual(pipelineDigest(undefined,copy),before);
+  assert.notEqual(pipelineDigest(CORE_RELEASE_PROFILE),pipelineDigest(),'staging-only core profile identity must be bound');
 });
 test('disabled, missing or pre-expiry activation fails closed even with all other inputs',()=>{
   const env={GITHUB_REPOSITORY:REPOSITORY,GITHUB_EVENT_NAME:'workflow_dispatch',GITHUB_REF:'refs/heads/main',

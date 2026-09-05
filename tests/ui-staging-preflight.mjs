@@ -4,7 +4,7 @@ import {normalizeLongitude,pointUrl,preflightLocations,requireSelectionMargin,ru
 
 const NOW=Date.parse('2026-09-01T12:30:00Z');
 const payload=(model,change={})=>({schemaVersion:1,model,runId:'2026090106',releaseId:'staging-1',initializedAt:'2026-09-01T06:00:00.000Z',generatedAt:'2026-09-01T10:00:00.000Z',freshUntil:'2026-09-01T18:00:00.000Z',quality:'complete',missingFields:[],requestedPoint:{latitude:35,longitude:104},window:{start:'2026-09-01T12:00:00.000Z',end:'2026-09-15T12:00:00.000Z'},series:{temperature:{samples:[{validTime:'2026-09-01T12:00:00.000Z',value:20}]},wind_speed:{samples:[{validTime:'2026-09-01T12:00:00.000Z',value:4}]},wind_direction:{samples:[{validTime:'2026-09-01T12:00:00.000Z',value:270}]}},...change});
-const response=(url,model,change={})=>({url:String(url),status:200,headers:new Headers({'x-weatherx-release':'staging-1'}),json:async()=>payload(model,change)});
+const response=(url,model,change={})=>{const parsed=new URL(url);return {url:String(url),status:200,headers:new Headers({'x-weatherx-release':'staging-1'}),json:async()=>payload(model,{requestedPoint:{latitude:Number(parsed.searchParams.get('lat')),longitude:Number(parsed.searchParams.get('lon'))},...change})};};
 
 test('staging preflight targets only the staging point API and a bounded 14-day window',()=>{
   const url=pointUrl('ecmwf',{lat:35,lon:104},NOW);assert.equal(url.origin,'https://staging.weatherx.org');assert.match(url.pathname,/\/api\/v1\/point-series\/ecmwf$/);
@@ -35,4 +35,29 @@ test('baseline preflight is credential-free, probes both models, and rejects red
   await assert.rejects(runPreflight({selection:'none',root:'/unused',now:NOW,fetchImpl:async url=>({...response(url,new URL(url).pathname.endsWith('/gfs')?'gfs':'ecmwf'),headers:new Headers()})}));
   await assert.rejects(runPreflight({selection:'none',root:'/unused',now:NOW,fetchImpl:async url=>response(url,new URL(url).pathname.endsWith('/gfs')?'gfs':'ecmwf',{releaseId:'body-other'})}));
   await assert.rejects(runPreflight({selection:'none',root:'/unused',now:NOW,fetchImpl:async url=>{const model=new URL(url).pathname.endsWith('/gfs')?'gfs':'ecmwf',release=model==='gfs'?'release-gfs':'staging-1';return {...response(url,model,{releaseId:release}),headers:new Headers({'x-weatherx-release':release})};}}));
+});
+test('release-roster core preflight reads no selection file and proves AIFS plus HRRR at its CONUS point',async()=>{
+  const calls=[];const receipt=await runPreflight({selection:'release-roster-core-v1',root:'/path/that/does/not/exist',now:NOW,fetchImpl:async(url,init)=>{
+    calls.push({url:new URL(url),init});const model=new URL(url).pathname.split('/').at(-1);return response(url,model);
+  }});
+  assert.equal(receipt.locations,2);assert.equal(receipt.probes,4);assert.deepEqual(receipt.results.map(row=>row.model),['ecmwf','gfs','aifs','hrrr']);
+  assert.deepEqual(calls.map(call=>call.url.pathname),['/api/v1/point-series/ecmwf','/api/v1/point-series/gfs','/api/v1/point-series/aifs','/api/v1/point-series/hrrr']);
+  const hrrr=calls.at(-1).url;assert.equal(hrrr.searchParams.get('lat'),'39.74');assert.equal(hrrr.searchParams.get('lon'),'-104.99');
+  assert.ok(calls.every(call=>call.url.origin==='https://staging.weatherx.org'&&call.init.credentials===undefined));
+});
+test('release-roster core preflight runs and reports every independent core probe when peers fail',async()=>{
+  const calls=[];
+  await assert.rejects(runPreflight({selection:'release-roster-core-v1',root:'/unused',now:NOW,batchSize:4,fetchImpl:async url=>{
+    const parsed=new URL(url),model=parsed.pathname.split('/').at(-1);calls.push(model);
+    if(model==='ecmwf'||model==='hrrr')return {...response(url,model),status:503};
+    return response(url,model);
+  }}),error=>{
+    assert.equal(error instanceof AggregateError,true);assert.equal(error.errors.length,2);
+    assert.deepEqual(error.errors.map(item=>item.message.split('\n',1)[0]),[
+      'ecmwf@china-default: staging point ecmwf/china-default returned 503',
+      'hrrr@hrrr-conus: staging point hrrr/hrrr-conus returned 503',
+    ]);
+    return true;
+  });
+  assert.deepEqual(calls,['ecmwf','gfs','aifs','hrrr'],'AIFS and HRRR must both run even when a peer fails');
 });

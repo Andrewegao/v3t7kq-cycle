@@ -8,6 +8,7 @@ test('candidate execution is on a separate hosted runner with no deployment envi
   const profile=wf.slice(wf.indexOf('\n  profile:\n'),wf.indexOf('\n  build:\n'));
   assert.match(profile,/environment:\s*\n\s*name: ui-staging/);
   assert.match(profile,/UI_STAGING_MODEL_SELECTION_APPROVED_SHA256/);
+  assert.match(profile,/UI_STAGING_CORE_PROFILE_APPROVED/);
   assert.doesNotMatch(profile,/CLOUDFLARE|UI_(?:BUILD_PRIVATE_KEY|BUILD_PUBLIC_KEY|CANDIDATE_KEY|STAGING_PAGES_TOKEN)|STAGING_R2|SHARED_R2|ui-release\.mjs (?:build|deploy|retain)/);
   assert.ok(wf.includes('\n  build:\n'),'separate candidate build job required');
   const build=wf.slice(wf.indexOf('\n  build:\n'),wf.indexOf('\n  qualify:\n'));

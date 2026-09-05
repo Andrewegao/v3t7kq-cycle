@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { controlShaFor, REPOSITORY, MAX_BYTES, gate, hash, createCandidate, validateCandidate,
   readTree, validateFiles, seal, unseal, restore, eligibleRun } from './ui-candidate.mjs';
 import { packBuild, unpackBuild, eligibleBuild } from './ui-build-transfer.mjs';
-import {profileFor,validateProfile,readSelection,requireProductionProfile,requireStagingApproval,SELECTION_ASSET,browserEnvironment,validateBrowserReceipt} from './ui-staging-models.mjs';
+import {profileFor,validateProfile,selectionProfile,coreReleaseProfile,canonical as profileCanonical,readSelection,requireProductionProfile,requireStagingApproval,SELECTION_ASSET,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt} from './ui-staging-models.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONTROL = resolve(ROOT, '../control');
@@ -18,11 +18,12 @@ const ORIGINS = { staging: 'https://staging.weatherx.org', production: 'https://
 const PROJECTS = { staging: 'weatherx-platform-staging', production: 'atmos-platform' };
 export const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workflows/ui-release.yml',
   'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh',
-  'tools/ui-staging-models.mjs','tools/ui-staging-model-browser.mjs','tools/ui-staging-preflight.mjs'];
+  'tools/ui-staging-models.mjs','tools/ui-staging-model-browser.mjs','tools/ui-staging-core-browser.mjs','tools/ui-staging-preflight.mjs'];
 const run = (command, args, options = {}) => execFileSync(command, args, { stdio: 'inherit', ...options });
 const git = (args, cwd = ROOT) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore','pipe','pipe'] }).trim();
 export const pipelineDigest = (profile=profileFor(),root=ROOT) => hash(POLICY_FILES.map(p => `${p}\0${hash(readFileSync(resolve(root,p)))}`)
-  .concat(profile.stagingOnly?[`staging-selections/${profile.modelSelectionSha256}.json\0${hash(readSelection(root,profile,null).bytes)}`]:[]).join('\n'));
+  .concat([`profile\0${hash(Buffer.from(profileCanonical(validateProfile(profile))))}`])
+  .concat(selectionProfile(profile)?[`staging-selections/${profile.modelSelectionSha256}.json\0${hash(readSelection(root,profile,null).bytes)}`]:[]).join('\n'));
 const stateFile = () => resolve(process.env.RUNNER_TEMP, 'ui-candidate.json');
 function save(file, value) { mkdirSync(dirname(file), { recursive: true, mode: 0o700 }); writeFileSync(file, JSON.stringify(value), { mode: 0o600 }); }
 function candidate() { const c = JSON.parse(readFileSync(stateFile())); validateCandidate(c); return c; }
@@ -168,7 +169,9 @@ async function preflight(stage) {
   if (standaloneWeatherFeedVerificationRequired(stage, 'preflight')) verifyWeatherFeeds(stage);
 }
 export function requiredSourceGuard(profile) {
-  validateProfile(profile); return profile.stagingOnly ? STAGING_RELEASE_GUARD_SHA : null;
+  validateProfile(profile);
+  if (coreReleaseProfile(profile)) return 'ed8065275eefa5e6e530ce37d1133a3baf1026c5';
+  return profile.stagingOnly ? STAGING_RELEASE_GUARD_SHA : null;
 }
 function sourceIdentity(profile) {
   assert.match(process.env.ATMOS_SHA ?? '', /^[a-f0-9]{40}$/);
@@ -179,14 +182,15 @@ function sourceIdentity(profile) {
 }
 export function publicBuildEnvironment(profile,selection,env=process.env) {
   validateProfile(profile);
-  if (profile.stagingOnly) {
+  const selected=selectionProfile(profile),core=coreReleaseProfile(profile);
+  if (selected) {
     assert.ok(Buffer.isBuffer(selection?.bytes), 'staging experiment selection bytes are required');
     assert.equal(hash(selection.bytes),profile.modelSelectionSha256,'staging experiment selection differs from profile');
-  } else assert.equal(selection,null,'baseline build cannot carry a staging selection');
+  } else assert.equal(selection,null,'non-selection build cannot carry a staging selection');
   return {...env,ATMOS_CODE_ONLY_BUILD:'1',ATMOS_PUBLIC_RELEASE:profile.stagingOnly?'0':'1',
     ATMOS_STAGING_EXPERIMENT_RELEASE:profile.stagingOnly?'1':'0',VITE_PRODUCT:'lab',VITE_APP:'lab',VITE_PLATFORM_ACCOUNT:'0',
-    VITE_MODEL_EXPANSION_QUALIFICATION:profile.stagingOnly?'1':'0',VITE_MODEL_LOCAL_BASE:'',
-    VITE_STAGING_MODEL_ADMISSION:profile.stagingOnly?'1':'0',VITE_STAGING_MODEL_SELECTION_SHA256:profile.modelSelectionSha256??''};
+    ATMOS_STAGING_RELEASE_ROSTER:core?'1':'0',VITE_MODEL_EXPANSION_QUALIFICATION:profile.stagingOnly?'1':'0',VITE_MODEL_LOCAL_BASE:'',
+    VITE_STAGING_MODEL_ADMISSION:selected?'1':'0',VITE_STAGING_MODEL_SELECTION_SHA256:profile.modelSelectionSha256??''};
 }
 export function installPagesWorker(workerOut,dist) {
   assert.deepEqual(readdirSync(workerOut),['index.js'], 'Pages Functions build emitted unexpected modules');
@@ -299,10 +303,12 @@ async function deploy(stage) {
   if (stage === 'staging') {
     const p = await projectSnapshot(stage); await exactStaging(c);
     const selection=requireStagingApproval(c,process.env),modelProof=c.profile.stagingOnly?readFileSync(resolve(process.env.RUNNER_TEMP,'ui-model-browser.json')):null;
-    if(modelProof)validateBrowserReceipt(modelProof,selection,{sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId,selectionSha256:c.profile.modelSelectionSha256});
+    if(modelProof&&selectionProfile(c.profile))validateBrowserReceipt(modelProof,selection,{sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId,selectionSha256:c.profile.modelSelectionSha256});
+    if(modelProof&&coreReleaseProfile(c.profile))validateCoreBrowserReceipt(modelProof,{sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId});
     c.qualification = {origin:ORIGINS.staging, deploymentId:p.canonical_deployment.id,
       artifactDigest:c.artifactDigest,qualifiedAt:new Date().toISOString(),fullTests:true,weatherLab:true,builtRuntime:true,probes:3};
-    if(modelProof)Object.assign(c.qualification,{modelSelectionSha256:c.profile.modelSelectionSha256,modelBrowserReceiptSha256:hash(modelProof),modelBrowserModels:selection.entries.length});
+    if(modelProof&&selectionProfile(c.profile))Object.assign(c.qualification,{modelSelectionSha256:c.profile.modelSelectionSha256,modelBrowserReceiptSha256:hash(modelProof),modelBrowserModels:selection.entries.length});
+    if(modelProof&&coreReleaseProfile(c.profile))Object.assign(c.qualification,{coreProfile:c.profile.releaseRosterCore,coreBrowserReceiptSha256:hash(modelProof),coreBrowserModels:2});
     save(stateFile(),c);
   }
 }
@@ -318,7 +324,7 @@ async function verify(stage) {
     // Real built-site checks inside the rollback transaction, not after declaring success.
     run('node',[resolve(CONTROL,'app/e2e/weather-lab-only-runtime.mjs')], {cwd:resolve(CONTROL,'app'),env:{...process.env,BASE:ORIGINS[stage]}});
     run('node',[resolve(CONTROL,'app/e2e/layer-switch-tint.mjs')], {cwd:resolve(CONTROL,'app'),env:{...process.env,BASE:ORIGINS[stage]}});
-    if(stage==='staging'&&c.profile.stagingOnly){
+    if(stage==='staging'&&selectionProfile(c.profile)){
       const selectionFile=resolve(process.env.RUNNER_TEMP,'ui-browser-selection.json');
       writeFileSync(selectionFile,Buffer.from(c.files.find(f=>f.path===SELECTION_ASSET).base64,'base64'),{mode:0o600});
       run('node',[resolve(ROOT,'tools/ui-staging-model-browser.mjs')],{cwd:ROOT,env:browserEnvironment(process.env,{
@@ -326,12 +332,16 @@ async function verify(stage) {
         WEATHERX_EXPECTED_RELEASE_ID:validateCandidate(c).releaseId,UI_EXPECTED_SOURCE_SHA:c.sourceSha,
         UI_MODEL_BROWSER_OUTPUT:resolve(process.env.RUNNER_TEMP,'ui-model-browser.json')})});
     }
+    if(stage==='staging'&&coreReleaseProfile(c.profile))run('node',[resolve(ROOT,'tools/ui-staging-core-browser.mjs')],{cwd:ROOT,env:browserEnvironment(process.env,{
+      BASE:ORIGINS.staging,UI_CONTROL_ROOT:CONTROL,WEATHERX_EXPECTED_RELEASE_ID:validateCandidate(c).releaseId,UI_EXPECTED_SOURCE_SHA:c.sourceSha,
+      UI_MODEL_BROWSER_OUTPUT:resolve(process.env.RUNNER_TEMP,'ui-model-browser.json')})});
   }
 }
 function retain() {
   const c=candidate(), out=resolve(process.env.RUNNER_TEMP,'ui-sealed');
   const selection=requireStagingApproval(c,process.env);
-  if(c.profile.stagingOnly){assert.equal(c.qualification?.modelSelectionSha256,c.profile.modelSelectionSha256);assert.equal(c.qualification?.modelBrowserModels,selection.entries.length);assert.match(c.qualification?.modelBrowserReceiptSha256??'',/^[a-f0-9]{64}$/);}
+  if(selectionProfile(c.profile)){assert.equal(c.qualification?.modelSelectionSha256,c.profile.modelSelectionSha256);assert.equal(c.qualification?.modelBrowserModels,selection.entries.length);assert.match(c.qualification?.modelBrowserReceiptSha256??'',/^[a-f0-9]{64}$/);}
+  if(coreReleaseProfile(c.profile)){assert.equal(c.qualification?.coreProfile,c.profile.releaseRosterCore);assert.equal(c.qualification?.coreBrowserModels,2);assert.match(c.qualification?.coreBrowserReceiptSha256??'',/^[a-f0-9]{64}$/);}
   mkdirSync(out,{mode:0o700});
   writeFileSync(resolve(out,'candidate.wxui'),seal(c,process.env.UI_CANDIDATE_KEY),{mode:0o600});
   const summary={sourceSha:c.sourceSha,stagingRunId:c.runId,attempt:c.attempt,artifactDigest:c.artifactDigest,
