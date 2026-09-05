@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createTransport,safeFailureDiagnostic } from '../tools/gdacs-feed-release.mjs';
+import {generateKeyPairSync,privateDecrypt,createDecipheriv} from 'node:crypto';
+import { createTransport,safeFailureDiagnostic,encryptInheritanceDiagnostic } from '../tools/gdacs-feed-release.mjs';
 import { execute,recover,assertClosure,CLOSURE,assertVersion,makeOperations,SCRIPT,assertBoundary,versionAnnotations } from '../tools/data-reader-refresh.mjs';
 const old='00000000-0000-0000-0000-000000000001',ro='00000000-0000-0000-0000-000000000002',full='00000000-0000-0000-0000-000000000003',foreign='00000000-0000-0000-0000-000000000004';
 function fixture(){
@@ -129,8 +130,46 @@ test('inherit refusal retains only known reason and reviewed binding through con
   const transport=createTransport({tokens:{DATA_EDGE_TOKEN:'never-print-token'},fetchImpl:async()=>Response.json({success:false,errors:[{code:10057,message:"inherit binding 'CATALOG_PROMOTION_KEY' is invalid: previous version does not have binding named 'CATALOG_PROMOTION_KEY'"}]},{status:400})});
   f.ops.upload=makeOperations(transport,'unused',{bundles:{readonly:{bytes:Buffer.from('code')}}}).upload;
   await assert.rejects(execute(f.receipt,f.ops,f.persist));
-  assert.deepEqual(f.receipt.failure,{kind:'cloudflare-api',httpStatus:400,errorCodes:[10057],inheritance:[{reason:'missing-binding',binding:'CATALOG_PROMOTION_KEY'}]});
+  const {encryptedInheritance,...publicDiagnostic}=f.receipt.failure;
+  assert.ok(encryptedInheritance);
+  assert.deepEqual(publicDiagnostic,{kind:'cloudflare-api',httpStatus:400,errorCodes:[10057],inheritance:[{reason:'missing-binding',binding:'CATALOG_PROMOTION_KEY'}]});
   assert.equal(f.receipt.recovery,'no-active-mutation');assert.equal(f.getActive(),old);
+});
+const diagnosticKeys=generateKeyPairSync('rsa',{modulusLength:3072,publicKeyEncoding:{type:'spki',format:'pem'},privateKeyEncoding:{type:'pkcs8',format:'pem'}});
+function decryptDiagnostic(envelope){
+  const key=privateDecrypt({key:diagnosticKeys.privateKey,oaepHash:'sha256'},Buffer.from(envelope.wrappedKey,'base64'));
+  const decipher=createDecipheriv('aes-256-gcm',key,Buffer.from(envelope.iv,'base64'));
+  decipher.setAAD(Buffer.from(`weatherx-inherit-diagnostic/v1:${envelope.keySha256}`));
+  decipher.setAuthTag(Buffer.from(envelope.tag,'base64'));
+  return JSON.parse(Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext,'base64')),decipher.final()]));
+}
+test('encrypted diagnostics privately recover exact bounded errors without plaintext disclosure',()=>{
+  const message="inherit binding 'APP_ORIGIN' is invalid: never-print-secret https://never-print.example/token";
+  const errors=[{code:10057,message,source:{secret:'never-print-config'}},{code:10021,message:'never-print-other'}];
+  const envelope=encryptInheritanceDiagnostic(errors,diagnosticKeys.publicKey);
+  assert.deepEqual(decryptDiagnostic(envelope),{version:1,errors:[{code:10057,message}]});
+  assert.ok(!JSON.stringify(envelope).includes('never-print'));
+  assert.notEqual(envelope.ciphertext,encryptInheritanceDiagnostic(errors,diagnosticKeys.publicKey).ciphertext);
+  for(const field of ['ciphertext','tag','iv','wrappedKey']){
+    const changed=structuredClone(envelope),bytes=Buffer.from(changed[field],'base64');bytes[0]^=1;changed[field]=bytes.toString('base64');
+    assert.throws(()=>decryptDiagnostic(changed));
+  }
+  const bounded=encryptInheritanceDiagnostic([{code:'10057',message:'never-print'}, {code:10057,message:'x'.repeat(513)},...Array.from({length:12},()=>({code:10057,message:'x'.repeat(512)}))],diagnosticKeys.publicKey);
+  assert.equal(decryptDiagnostic(bounded).errors.length,8);
+  assert.ok(decryptDiagnostic(bounded).errors.every(x=>x.message.length===512));
+});
+test('encrypted transport capture is restricted to exact opted-in data reader upload refusal',async()=>{
+  for(const changes of [{status:403},{code:'10057'},{code:10021},{path:SCRIPT+'/settings'},{method:'GET'},{tokenName:'PLATFORM_EDGE_TOKEN'},{bindings:[]},{bindings:['never-print']}]){
+    const {status=400,code=10057,path=SCRIPT+'/versions?bindings_inherit=strict',method='POST',tokenName='DATA_EDGE_TOKEN',bindings=['APP_ORIGIN']}=changes;
+    const transport=createTransport({tokens:{DATA_EDGE_TOKEN:'never-print',PLATFORM_EDGE_TOKEN:'never-print'},fetchImpl:async()=>Response.json({success:false,errors:[{code,message:'never-print'}]},{status})});
+    await assert.rejects(transport.api(path,tokenName,{method,inheritanceBindings:bindings}),error=>{assert.ok(!error.safeDiagnostic.encryptedInheritance);assert.ok(!JSON.stringify(error).includes('never-print'));return true;});
+  }
+});
+test('encrypted envelope persistence rejects malformed or plaintext lookalikes',()=>{
+  for(const encryptedInheritance of [{ciphertext:'never-print'}, {version:1,algorithm:'never-print',ciphertext:'never-print'}]){
+    const result=safeFailureDiagnostic({safeDiagnostic:{kind:'cloudflare-api',httpStatus:400,errorCodes:[10057],encryptedInheritance}});
+    assert.ok(!result.encryptedInheritance);assert.ok(!JSON.stringify(result).includes('never-print'));
+  }
 });
 test('inherit no previous version has a fixed classification without reflected text',async()=>{
   assert.deepEqual((await inheritFailure([{code:10057,message:'cannot inherit bindings: no previous version exists'}])).inheritance,[{reason:'no-previous-version'}]);
