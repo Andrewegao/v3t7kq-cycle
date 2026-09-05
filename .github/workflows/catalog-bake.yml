@@ -130,6 +130,7 @@ jobs:
           PUBLISH: '1'
           DATA_PUBLISH_MODE: component-catalog
           LIVE: https://atmos-platform-dnp.pages.dev
+          CATALOG_R2_REMOTE: weatherx:weatherx-data-staging
           COMPONENT_R2_REMOTE: weatherx:weatherx-components-staging
           RCLONE_CONFIG_WEATHERX_TYPE: s3
           RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
@@ -139,7 +140,16 @@ jobs:
           RCLONE_CONFIG_WEATHERX_REGION: auto
           CATALOG_ENDPOINT: ${{ secrets.CATALOG_ENDPOINT }}
           CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY }}
-        run: bash ops/bake-model-component.sh
+        run: |
+          set -euo pipefail
+          # Hydration step env is not inherited. Check CAS re-read transport before collection.
+          : "${CATALOG_R2_REMOTE:?CATALOG_R2_REMOTE required before collection}"
+          : "${COMPONENT_R2_REMOTE:?COMPONENT_R2_REMOTE required before collection}"
+          : "${RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID:?R2 access key required before collection}"
+          : "${RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY:?R2 secret key required before collection}"
+          : "${CATALOG_ENDPOINT:?CATALOG_ENDPOINT required before collection}"
+          : "${CATALOG_PROMOTION_KEY:?CATALOG_PROMOTION_KEY required before collection}"
+          bash ops/bake-model-component.sh
       - name: Bake, validate, upload, and CAS-promote one production model
         if: ${{ env.CATALOG_TARGET == 'production' }}
         working-directory: atmos
@@ -148,6 +158,7 @@ jobs:
           PUBLISH: '1'
           DATA_PUBLISH_MODE: component-catalog
           LIVE: https://weatherx.org
+          CATALOG_R2_REMOTE: weatherx:weatherx-data-production
           COMPONENT_R2_REMOTE: weatherx:weatherx-components-production
           RCLONE_CONFIG_WEATHERX_TYPE: s3
           RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
@@ -157,4 +168,13 @@ jobs:
           RCLONE_CONFIG_WEATHERX_REGION: auto
           CATALOG_ENDPOINT: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
           CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
-        run: bash ops/bake-model-component.sh
+        run: |
+          set -euo pipefail
+          # Hydration step env is not inherited. Check CAS re-read transport before collection.
+          : "${CATALOG_R2_REMOTE:?CATALOG_R2_REMOTE required before collection}"
+          : "${COMPONENT_R2_REMOTE:?COMPONENT_R2_REMOTE required before collection}"
+          : "${RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID:?R2 access key required before collection}"
+          : "${RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY:?R2 secret key required before collection}"
+          : "${CATALOG_ENDPOINT:?CATALOG_ENDPOINT required before collection}"
+          : "${CATALOG_PROMOTION_KEY:?CATALOG_PROMOTION_KEY required before collection}"
+          bash ops/bake-model-component.sh
