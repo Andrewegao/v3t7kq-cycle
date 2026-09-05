@@ -1,0 +1,95 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { execute,recover,assertClosure,CLOSURE,assertVersion,makeOperations,SCRIPT,assertBoundary,versionAnnotations } from '../tools/data-reader-refresh.mjs';
+const old='00000000-0000-0000-0000-000000000001',ro='00000000-0000-0000-0000-000000000002',full='00000000-0000-0000-0000-000000000003',foreign='00000000-0000-0000-0000-000000000004';
+function fixture(){
+  let current=old;const writes=[],events=[],saved=[];
+  const runtime={compatibility_date:'2026-08-28',compatibility_flags:['nodejs_compat'],usage_model:'standard'};
+  const boundary={data:{runtime,settings:{bindings:[{name:'CATALOG_PROMOTION_KEY',type:'secret_text'}],compatibility_date:'2026-08-28',compatibility_flags:['nodejs_compat'],placement:{},usage_model:'standard',observability:{enabled:true},annotations:{'workers/message':'old'}}},routes:['unchanged'],pages:{id:'same'},platform:{version:'unchanged'}};
+  const receipt={status:'preflight-passed',createdAt:new Date().toISOString(),beforeVersion:old,sha:'a'.repeat(40),tag:'owned',boundary,pointers:{catalog:'old',whole:'old'}};
+  const detail=(id,kind)=>({id,annotations:versionAnnotations(kind,receipt),resources:{bindings:boundary.data.settings.bindings,script_runtime:runtime,script:{etag:'e'.repeat(64)}}});
+  const ops={active:async()=>current,boundary:async()=>structuredClone(boundary),pointers:async()=>({...receipt.pointers}),
+    upload:async kind=>{writes.push(`upload:${kind}`);return detail(kind==='readonly'?ro:full,kind);},
+    version:async id=>detail(id,id===ro?'readonly':'full'),
+    deploy:async id=>{writes.push(`deploy:${id}`);current=id;},
+    verify:async kind=>{events.push(`verify:${kind}`);},pause:async()=>{},
+  };
+  return {receipt,ops,writes,events,saved,persist:()=>saved.push(structuredClone(receipt)),setActive:x=>{current=x;},getActive:()=>current};
+}
+test('uploads both inactive, proves fallback before full, preserves all protected boundaries',async()=>{
+  const f=fixture();await execute(f.receipt,f.ops,f.persist);
+  assert.equal(f.receipt.status,'passed');assert.deepEqual(f.writes,[`upload:readonly`,`upload:full`,`deploy:${ro}`,`deploy:${full}`]);
+  assert.deepEqual(f.events,['verify:readonly','verify:readonly','verify:readonly','verify:full','verify:full','verify:full']);
+  assert.ok(f.saved.some(x=>x.intent.activate==='readonly'&&!x.completedAt));
+});
+test('changed pointer before activation refuses and leaves old active',async()=>{
+  const f=fixture();let n=0;f.ops.pointers=async()=>++n===1?f.receipt.pointers:{catalog:'changed',whole:'old'};
+  await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.equal(f.getActive(),old);assert.ok(!f.writes.some(x=>x.startsWith('deploy')));
+});
+for(const key of ['catalog','whole'])test(`after activation changed ${key} pointer never restores incompatible old reader`,async()=>{
+  const f=fixture();const verify=f.ops.verify;f.ops.verify=async kind=>{if(kind==='full'){f.ops.pointers=async()=>({...f.receipt.pointers,[key]:'changed'});throw Error('read failure');}return verify(kind);};
+  await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.equal(f.getActive(),ro);assert.equal(f.receipt.publicationPaused,true);assert.equal(f.receipt.recoveryPointers[key],'changed');assert.ok(!f.writes.includes(`deploy:${old}`));
+});
+test('lost deployment response reconciles own current version',async()=>{
+  const f=fixture(),deploy=f.ops.deploy;f.ops.deploy=async id=>{await deploy(id);throw Error('timeout');};
+  await execute(f.receipt,f.ops,f.persist);assert.equal(f.receipt.status,'passed');assert.equal(f.getActive(),full);
+});
+test('partial inactive upload cannot activate or infer ownership',async()=>{
+  const f=fixture(),upload=f.ops.upload;f.ops.upload=async kind=>{await upload(kind);throw Error('response lost');};
+  await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.equal(f.getActive(),old);assert.equal(f.receipt.recovery,'no-active-mutation');
+});
+test('version read failure before any activation leaves old active',async()=>{
+  const f=fixture();f.ops.version=async()=>{throw Error('read failure');};await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.equal(f.getActive(),old);
+});
+test('recovery gets a fresh deadline after qualification exhaustion',async()=>{
+  const f=fixture();let expired=false,resets=0;const active=f.ops.active;
+  f.ops.active=async()=>{if(expired)throw Error('deadline expired');return active();};
+  f.ops.verify=async kind=>{if(kind==='full'){expired=true;throw Error('deadline expired');}};
+  f.ops.resetRecovery=()=>{expired=false;resets++;};
+  await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.equal(resets,1);assert.equal(f.getActive(),ro);
+});
+test('foreign deployment is never overwritten during containment',async()=>{
+  const f=fixture();f.ops.verify=async()=>{f.setActive(foreign);throw Error('foreign deploy');};
+  await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.equal(f.getActive(),foreign);assert.equal(f.receipt.recovery,'manual-forward-repair-required');assert.deepEqual(f.writes.filter(x=>x.startsWith('deploy')),[`deploy:${ro}`]);
+});
+test('settings/UI/route drift blocks both qualification and unsafe recovery',async()=>{
+  const f=fixture();f.ops.verify=async()=>{f.ops.boundary=async()=>({...f.receipt.boundary,pages:{id:'foreign'}});throw Error('boundary changed');};
+  await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.equal(f.receipt.recovery,'manual-forward-repair-required');assert.ok(!f.writes.includes(`deploy:${old}`));
+});
+test('fallback refusal fails closed without trying older version',async()=>{
+  const f=fixture();f.ops.verify=async()=>{throw Error('all reads unavailable');};await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.equal(f.getActive(),ro);assert.equal(f.receipt.recovery,'manual-forward-repair-required');
+});
+test('expired preflight produces no writes',async()=>{const f=fixture();f.receipt.createdAt=new Date(0).toISOString();await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.deepEqual(f.writes,[]);});
+test('closure admits only exact data modules plus optional fallback wrapper',()=>{
+  assertClosure(Object.fromEntries(CLOSURE.map(x=>[x,{}])),'full');
+  assert.throws(()=>assertClosure(Object.fromEntries([...CLOSURE,'src/index.ts'].map(x=>[x,{}])),'full'));
+  assert.throws(()=>assertClosure(Object.fromEntries(CLOSURE.filter(x=>x!=='src/releasePromotion.ts').map(x=>[x,{}])),'full'));
+});
+test('version source/tag/binding drift rejected',async()=>{const f=fixture();const v=await f.ops.version(ro);v.resources.bindings=[];assert.throws(()=>assertVersion(v,'readonly',f.receipt));});
+test('recorded version ID rejects a different valid UUID with otherwise identical proof',async()=>{
+  const f=fixture();f.receipt.versions={readonly:ro};const v=await f.ops.version(ro);
+  assertVersion(v,'readonly',f.receipt);v.id=foreign;
+  assert.throws(()=>assertVersion(v,'readonly',f.receipt),/recorded version identity changed/);
+});
+test('only exact owned version annotation delta is allowed; all other settings stay exact',()=>{
+  const f=fixture();f.receipt.versions={readonly:ro};const current=structuredClone(f.receipt.boundary);
+  current.data.settings.annotations={...versionAnnotations('readonly',f.receipt),'workers/triggered_by':'api'};
+  assertBoundary(current,f.receipt);
+  current.data.settings.annotations.extra='unexpected';assert.throws(()=>assertBoundary(current,f.receipt));delete current.data.settings.annotations.extra;
+  current.data.settings.observability.enabled=false;assert.throws(()=>assertBoundary(current,f.receipt));
+});
+test('inactive version runtime and returned content identity must remain exact',async()=>{
+  const f=fixture();f.receipt.versionEtags={readonly:'e'.repeat(64)};
+  const v=await f.ops.version(ro);v.resources.script.etag='f'.repeat(64);assert.throws(()=>assertVersion(v,'readonly',f.receipt));
+  v.resources.script.etag='e'.repeat(64);v.resources.script_runtime={...v.resources.script_runtime,usage_model:'bundled'};assert.throws(()=>assertVersion(v,'readonly',f.receipt));
+});
+test('direct API operations only upload inactive version or deploy exact data script',async()=>{
+  const f=fixture(),calls=[];
+  const transport={api:async(...args)=>{calls.push(args);return {};}};
+  const ops=makeOperations(transport,'unused',{bundles:{readonly:{bytes:Buffer.from('code')}}});
+  await ops.upload('readonly',f.receipt);await ops.deploy(ro);
+  assert.deepEqual(calls.map(x=>[x[0],x[1],x[2].method]),[[SCRIPT+'/versions?bindings_inherit=strict','DATA_EDGE_TOKEN','POST'],[SCRIPT+'/deployments','DATA_EDGE_TOKEN','POST']]);
+  const metadata=JSON.parse(await calls[0][2].body.get('metadata').text());
+  assert.deepEqual(metadata.bindings,[{name:'CATALOG_PROMOTION_KEY',type:'inherit',version_id:old}]);assert.ok(!JSON.stringify(metadata).includes('secret-value'));
+  assert.deepEqual(metadata.placement,{});assert.equal(metadata.usage_model,'standard');assert.ok(!Object.hasOwn(metadata,'observability'));
+});

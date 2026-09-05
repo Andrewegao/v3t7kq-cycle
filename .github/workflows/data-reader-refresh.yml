@@ -1,0 +1,116 @@
+# Manual Phase 1 code-only upgrade. No routes, Pages, settings, catalog or R2 writes.
+name: WeatherX production data reader refresh
+on:
+  workflow_dispatch:
+    inputs:
+      atmosphere_sha:
+        description: Exact reviewed merged Atmos SHA containing both data reader entrypoints
+        required: true
+        type: string
+      boundary_digest:
+        description: Reviewed SHA256 of full production boundary (zeroes discover and safely refuse)
+        required: true
+        type: string
+      confirm:
+        description: Type REFRESH-DATA-READER-ONLY
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-production-data-edge
+  cancel-in-progress: false
+jobs:
+  data-reader-refresh:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: production
+    env:
+      ATMOSPHERE_SHA: ${{ inputs.atmosphere_sha }}
+      BOUNDARY_DIGEST: ${{ inputs.boundary_digest }}
+      REFRESH_RECEIPT: ${{ runner.temp }}/data-reader-refresh/receipt.json
+    steps:
+      - name: Validate owner confirmation and immutable inputs
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          test "$CONFIRM" = REFRESH-DATA-READER-ONLY
+          [[ "$ATMOSPHERE_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          [[ "$BOUNDARY_DIGEST" =~ ^[a-f0-9]{64}$ ]] || exit 1
+      - name: Checkout exact controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: cycle
+          persist-credentials: false
+      - name: Checkout exact reviewed source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: ${{ inputs.atmosphere_sha }}
+          fetch-depth: 0
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: atmos
+          persist-credentials: false
+      - name: Verify source is merged master and controller matches this run
+        env:
+          CYCLE_SHA: ${{ github.sha }}
+        run: |
+          test "$(git -C cycle rev-parse HEAD)" = "$CYCLE_SHA"
+          test "$(git -C atmos rev-parse HEAD)" = "$ATMOSPHERE_SHA"
+          git -C atmos merge-base --is-ancestor "$ATMOSPHERE_SHA" refs/remotes/origin/master
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: atmos/platform/edge/package-lock.json
+      - name: Check existing Pages read authority before build or mutation
+        timeout-minutes: 1
+        env:
+          PAGES_TOKEN: ${{ secrets.PAGES_READ_TOKEN || secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+        run: node cycle/tools/data-reader-refresh.mjs pages-access
+      - name: Install exact locked Worker dependencies
+        timeout-minutes: 5
+        working-directory: atmos/platform/edge
+        run: npm ci
+      - name: Run complete Worker and publisher protocol contracts
+        timeout-minutes: 8
+        working-directory: atmos/platform/edge
+        run: npm run check
+      - name: Run controller safety and fault-injection contracts
+        timeout-minutes: 2
+        env:
+          WEATHERX_ATMOS_SOURCE: ${{ github.workspace }}/atmos
+        run: node --test cycle/tests/data-reader-*.mjs
+      - name: Review current production boundary and immutable reader compatibility
+        timeout-minutes: 8
+        env:
+          DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
+          PLATFORM_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+          PAGES_TOKEN: ${{ secrets.PAGES_READ_TOKEN || secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+        run: node cycle/tools/data-reader-refresh.mjs preflight atmos "$ATMOSPHERE_SHA" "$REFRESH_RECEIPT" "$BOUNDARY_DIGEST"
+      - name: Qualify compatible read-only version then activate full data reader
+        id: refresh
+        timeout-minutes: 14
+        env:
+          DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
+          PLATFORM_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+          PAGES_TOKEN: ${{ secrets.PAGES_READ_TOKEN || secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+        run: node cycle/tools/data-reader-refresh.mjs execute atmos "$ATMOSPHERE_SHA" "$REFRESH_RECEIPT" "$BOUNDARY_DIGEST"
+      - name: Contain interrupted refresh with owned compatible read-only version
+        if: ${{ always() && (steps.refresh.outcome == 'failure' || steps.refresh.outcome == 'cancelled') }}
+        timeout-minutes: 6
+        env:
+          DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
+          PLATFORM_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+          PAGES_TOKEN: ${{ secrets.PAGES_READ_TOKEN || secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+        run: node cycle/tools/data-reader-refresh.mjs recover atmos "$ATMOSPHERE_SHA" "$REFRESH_RECEIPT" "$BOUNDARY_DIGEST"
+      - name: Retain non-secret deployment ownership and compatibility receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: data-reader-refresh-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/data-reader-refresh/receipt.json
+          if-no-files-found: ignore
+          retention-days: 30
