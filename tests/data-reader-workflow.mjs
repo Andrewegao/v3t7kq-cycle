@@ -32,3 +32,8 @@ test('CLI rejects shell injection and absent owner approval before checkout',()=
   for(const bad of [{CONFIRM:'yes'},{ATMOSPHERE_SHA:'main'},{BOUNDARY_DIGEST:'$(touch /tmp/forbidden)'}])assert.throws(()=>execFileSync('bash',['-e','-c',shell],{env:{...env,...bad},stdio:'pipe'}));
 });
 test('new controller contracts are registered in existing CI',()=>{const ci=read('.github/workflows/scheduler-ci.yml');assert.ok(ci.includes('.github/workflows/data-reader-refresh.yml'));assert.ok(ci.includes('node --test tests/data-reader-*.mjs'));});
+test('runner-specific receipt path is resolved in a step, never job-level env',()=>{
+  const jobEnv=workflow.split('    env:\n')[1].split('    steps:')[0];
+  assert.ok(!jobEnv.includes('runner.'),'runner context unavailable in job env');
+  assert.ok(workflow.includes('run: echo "REFRESH_RECEIPT=$RUNNER_TEMP/data-reader-refresh/receipt.json" >> "$GITHUB_ENV"'));
+});
