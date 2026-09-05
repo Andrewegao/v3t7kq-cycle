@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 import stat
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -48,6 +49,44 @@ def zip_bytes(entries):
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_real_cli_requires_pristine_checkout_before_tracked_data_hydration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo, core, regional = root / "repo", root / "core", root / "regional"
+            tracked = repo / "app/public/data-atmos/stations/metar.json"
+            tracked.parent.mkdir(parents=True)
+            tracked.write_text('{"receipt":"tracked-weather-fixture"}')
+            producer = repo / "ops/producer.py"
+            producer.parent.mkdir()
+            producer.write_text('SOURCE = "approved"\n')
+            def git(*args):
+                return subprocess.check_output(["git", "-C", str(repo), *args], stderr=subprocess.DEVNULL, text=True).strip()
+            git("init", "--quiet")
+            git("add", ".")
+            git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "fixture")
+            source, run = git("rev-parse", "HEAD"), "123456789"
+            for model, (kind, *_unused) in r.ARTIFACTS.items():
+                path = (core if kind == "core" else regional) / model / ("manifest.json" if kind == "core" else "pack-receipt.json")
+                path.parent.mkdir(parents=True)
+                path.write_text(json.dumps(dict(model=model, sourceSha=source, runId=run)))
+            command = [sys.executable, str(Path(r.__file__)), "--verify-transfers", "--run-id", r.ORIGIN_RUN,
+                       "--current-source-sha", source, "--atmos-root", str(repo), "--core-packs", str(core),
+                       "--regional-packs", str(regional)]
+            def check():
+                return subprocess.run(command, capture_output=True, text=True, env={**r.os.environ,
+                    "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_RUN_ID": run})
+            before = check()
+            self.assertEqual(before.returncode, 0, before.stderr)
+            # Hydration intentionally overwrites this tracked fixture with the verified live release.
+            tracked.write_text('{"receipt":"verified-live-weather-data"}')
+            after = check()
+            self.assertEqual(after.returncode, 1)
+            self.assertIn("dirty-current-source", after.stderr)
+            self.assertEqual(git("diff", "--name-only", "HEAD"), "app/public/data-atmos/stations/metar.json")
+            tracked.write_text('{"receipt":"tracked-weather-fixture"}')
+            producer.write_text('SOURCE = "unapproved"\n')
+            self.assertEqual(check().returncode, 1, 'actual source changes must still be rejected')
+
     def test_fixed_manual_scope_default_is_fresh(self):
         for event in ("schedule", "workflow_dispatch"):
             r.validate_request("", event)
