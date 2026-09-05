@@ -37,3 +37,11 @@ test('runner-specific receipt path is resolved in a step, never job-level env',(
   assert.ok(!jobEnv.includes('runner.'),'runner context unavailable in job env');
   assert.ok(workflow.includes('run: echo "REFRESH_RECEIPT=$RUNNER_TEMP/data-reader-refresh/receipt.json" >> "$GITHUB_ENV"'));
 });
+test('publisher contracts have Python and Pillow before the full check',()=>{
+  const setup=workflow.indexOf('uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065');
+  const install=workflow.indexOf('python -m pip install --disable-pip-version-check Pillow==');
+  assert.ok(setup>workflow.indexOf('mjs pages-access'));
+  assert.ok(install>setup);
+  assert.ok(install<workflow.indexOf('run: npm run check'));
+  assert.match(workflow,/python-version: '3\.12'/);
+});
