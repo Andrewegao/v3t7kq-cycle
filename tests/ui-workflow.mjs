@@ -25,7 +25,7 @@ test('staging workflow leaves release-mode activation to the exact-profile contr
   assert.match(build,/VITE_STAGING_MODEL_SELECTION_SHA256: ''/);assert.doesNotMatch(build,/ATMOS_STAGING_EXPERIMENT_RELEASE:\s*'1'/);
   assert.match(source,/publicBuildEnvironment\(profile,selection/);
   assert.match(source,/merge-base','--is-ancestor',requiredSourceGuard\(profile\),'HEAD'/);
-  assert.doesNotMatch(prod,/ATMOS_STAGING_EXPERIMENT_RELEASE|MODEL_SELECTION_SHA256|VITE_STAGING_MODEL_ADMISSION/);
+  assert.doesNotMatch(prod,/ATMOS_STAGING_EXPERIMENT_RELEASE|ATMOS_STAGING_RELEASE_ROSTER|MODEL_SELECTION_SHA256|VITE_STAGING_MODEL_ADMISSION|UI_STAGING_CORE_PROFILE_APPROVED/);
   const stagedController="ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && 'a58eff158b56ef2ba25189d2b859315b00893a14' || 'a58eff158b56ef2ba25189d2b859315b00893a14' }}";
   assert.equal(staging.split(stagedController).length-1,2);
   assert.match(candidate,/STAGING_CONTROL_SHA = 'a58eff158b56ef2ba25189d2b859315b00893a14'/);

@@ -4,11 +4,11 @@
 import assert from 'node:assert/strict';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {resolve} from 'node:path';
-import {cycleTime,profileFor,readSelection,STAGING_ORIGIN} from './ui-staging-models.mjs';
+import {coreReleaseProfile,cycleTime,profileFor,readSelection,selectionProfile,STAGING_ORIGIN} from './ui-staging-models.mjs';
 
 const HOUR=3_600_000;
 const PIPELINE_MARGIN=25*60_000;
-const MODELS=['ecmwf','gfs'];
+const POINT_MODELS=['ecmwf','gfs','aifs','hrrr'];
 const VARIABLES=['temperature','wind_speed','wind_direction','wind_gust','precipitation','dewpoint','visibility','solar_radiation'];
 
 export function normalizeLongitude(value){return ((value+180)%360+360)%360-180;}
@@ -23,7 +23,7 @@ export function preflightLocations(bundle){
   const seen=new Set();return locations.filter(({lat,lon})=>{const key=`${lat.toFixed(4)},${lon.toFixed(4)}`;if(seen.has(key))return false;seen.add(key);return true;});
 }
 export function pointUrl(model,{lat,lon},now=Date.now()){
-  assert.ok(MODELS.includes(model));assert.ok(Number.isFinite(lat)&&lat>=-90&&lat<=90);assert.ok(Number.isFinite(lon)&&lon>=-180&&lon<180);
+  assert.ok(POINT_MODELS.includes(model));assert.ok(Number.isFinite(lat)&&lat>=-90&&lat<=90);assert.ok(Number.isFinite(lon)&&lon>=-180&&lon<180);
   const start=new Date(Math.floor(now/HOUR)*HOUR).toISOString(),end=new Date(Date.parse(start)+14*24*HOUR).toISOString();
   const query=new URLSearchParams({lat:String(lat),lon:String(lon),variables:VARIABLES.join(','),start,end});
   return new URL(`/api/v1/point-series/${model}?${query}`,STAGING_ORIGIN);
@@ -44,20 +44,27 @@ export function validatePointPayload(payload,model,{now=Date.now(),location,star
 }
 export async function runPreflight({selection='none',root,fetchImpl=fetch,now=Date.now(),batchSize=4}={}){
   assert.ok(Number.isInteger(batchSize)&&batchSize>=1&&batchSize<=8);const profile=profileFor(selection);
-  const bundle=profile.stagingOnly?requireSelectionMargin(readSelection(root,profile,now).bundle,now):null,locations=preflightLocations(bundle),work=[];
-  for(const location of locations)for(const model of MODELS)work.push({location,model});
-  const results=[];
+  const bundle=selectionProfile(profile)?requireSelectionMargin(readSelection(root,profile,now).bundle,now):null,locations=preflightLocations(bundle),work=[];
+  for(const location of locations)for(const model of ['ecmwf','gfs'])work.push({location,model});
+  if(coreReleaseProfile(profile))work.push({location:{name:'aifs-global',lat:35,lon:104},model:'aifs'},
+    {location:{name:'hrrr-conus',lat:39.74,lon:-104.99},model:'hrrr'});
+  const results=[],failures=[];
   for(let i=0;i<work.length;i+=batchSize){
-    const rows=await Promise.all(work.slice(i,i+batchSize).map(async({location,model})=>{
+    const batch=work.slice(i,i+batchSize),settled=await Promise.allSettled(batch.map(async({location,model})=>{
       const url=pointUrl(model,location,now),start=url.searchParams.get('start'),end=url.searchParams.get('end'),response=await fetchImpl(url,{redirect:'error',signal:AbortSignal.timeout(20_000),headers:{Accept:'application/json','Cache-Control':'no-cache'}});
       assert.equal(response.url,url.href,'staging point request redirected');assert.equal(response.status,200,`staging point ${model}/${location.name} returned ${response.status}`);
       const release=response.headers.get('x-weatherx-release');assert.ok(release,'staging point response lacks a release header');
       const validated=validatePointPayload(await response.json(),model,{now,location,start,end});assert.equal(validated.releaseId,release,'staging point header/body release changed');
       return {location:location.name,headerRelease:release,...validated};
-    }));results.push(...rows);
+    }));
+    settled.forEach((row,index)=>{if(row.status==='fulfilled')results.push(row.value);else failures.push({model:batch[index].model,location:batch[index].location.name,
+      error:row.reason instanceof Error?row.reason.message:String(row.reason)});});
   }
+  if(failures.length)throw new AggregateError(failures.map(row=>new Error(`${row.model}@${row.location}: ${row.error}`)),
+    `staging point preflight failed ${failures.length} independent probe(s)`);
   assert.equal(new Set(results.map(result=>result.headerRelease)).size,1,'staging point probes span multiple releases');
-  return {schemaVersion:1,origin:STAGING_ORIGIN,selection,locations:locations.length,probes:results.length,results};
+  const locationCount=new Set(work.map(row=>`${row.location.lat},${row.location.lon}`)).size;
+  return {schemaVersion:1,origin:STAGING_ORIGIN,selection,locations:locationCount,probes:results.length,results};
 }
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){

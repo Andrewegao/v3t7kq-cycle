@@ -9,7 +9,7 @@ on:
         required: true
         type: string
       model_selection_sha256:
-        description: approved reuses the protected staging selection; none explicitly selects baseline; an exact digest must match approval
+        description: approved/hash uses a pinned selection; release-roster-core-v1 enables only reviewed core expansion plus release roster; none selects baseline
         required: false
         default: approved
         type: string
@@ -42,8 +42,9 @@ jobs:
         env:
           REQUESTED_SELECTION: ${{ inputs.model_selection_sha256 }}
           APPROVED_SELECTION: ${{ vars.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256 }}
+          APPROVED_CORE_PROFILE: ${{ vars.UI_STAGING_CORE_PROFILE_APPROVED }}
         run: |
-          selection="$(node --input-type=module -e "import {resolveSelectionRequest} from './cycle/tools/ui-staging-models.mjs'; console.log(resolveSelectionRequest(process.env.REQUESTED_SELECTION,process.env.APPROVED_SELECTION));")"
+          selection="$(node --input-type=module -e "import {resolveSelectionRequest} from './cycle/tools/ui-staging-models.mjs'; console.log(resolveSelectionRequest(process.env.REQUESTED_SELECTION,process.env.APPROVED_SELECTION,process.env.APPROVED_CORE_PROFILE));")"
           printf 'model_selection_sha256=%s\n' "$selection" >> "$GITHUB_OUTPUT"
   build:
     # No deployment environment, CF token, decryption key or promotion-signing key.
@@ -148,6 +149,7 @@ jobs:
       ATMOS_SHA: ${{ inputs.atmos_sha }}
       MODEL_SELECTION_SHA256: ${{ needs.profile.outputs.model_selection_sha256 }}
       UI_STAGING_MODEL_SELECTION_APPROVED_SHA256: ${{ vars.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256 }}
+      UI_STAGING_CORE_PROFILE_APPROVED: ${{ vars.UI_STAGING_CORE_PROFILE_APPROVED }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { path: cycle, fetch-depth: 0, persist-credentials: false }
