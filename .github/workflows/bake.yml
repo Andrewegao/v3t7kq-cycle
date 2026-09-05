@@ -41,13 +41,13 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          ref: 561a5aa5727a04040b6cce5fb16533255b353af4
+          ref: 77487534a6ff0a17bf4e5d55f9ab5c06938138d4
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 32
           persist-credentials: false
       - name: Verify approved immutable core collector before running source
         run: |
-          test "$(git rev-parse HEAD)" = "561a5aa5727a04040b6cce5fb16533255b353af4"
+          test "$(git rev-parse HEAD)" = "77487534a6ff0a17bf4e5d55f9ab5c06938138d4"
           git diff --exit-code HEAD
       - name: checkout this reviewed recovery controller
         if: ${{ inputs.recovery_run_id != '' }}
@@ -126,13 +126,13 @@ jobs:
         with:
           repository: weatherx-hq/atmos
           # Must equal the bake job's approved commit: the bake refuses a pack collected elsewhere.
-          ref: 561a5aa5727a04040b6cce5fb16533255b353af4
+          ref: 77487534a6ff0a17bf4e5d55f9ab5c06938138d4
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 32
           persist-credentials: false
       - name: Verify approved immutable regional collector before running source
         run: |
-          test "$(git rev-parse HEAD)" = "561a5aa5727a04040b6cce5fb16533255b353af4"
+          test "$(git rev-parse HEAD)" = "77487534a6ff0a17bf4e5d55f9ab5c06938138d4"
           git diff --exit-code HEAD
       - name: checkout this reviewed recovery controller
         if: ${{ inputs.recovery_run_id != '' }}
@@ -210,13 +210,13 @@ jobs:
           repository: weatherx-hq/atmos
           # Approved by full Atmos CI. The whole release produced below must pass
           # its own gates before any staging or production consumer can select it.
-          ref: 561a5aa5727a04040b6cce5fb16533255b353af4
+          ref: 77487534a6ff0a17bf4e5d55f9ab5c06938138d4
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 32 # bound checkout cost; unknown checkpoint ancestry is a cache miss
           persist-credentials: false
       - name: Verify approved immutable collector before running source
         run: |
-          test "$(git rev-parse HEAD)" = "561a5aa5727a04040b6cce5fb16533255b353af4"
+          test "$(git rev-parse HEAD)" = "77487534a6ff0a17bf4e5d55f9ab5c06938138d4"
           git diff --exit-code HEAD
       - name: plan conservative no-change fast path
         id: bake_plan
@@ -392,6 +392,7 @@ jobs:
       - name: bake → gate → publish immutable data release
         if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         env:
+          WEATHERX_BAKE_LIVE_PROGRESS: '1'
           WEATHERX_LIVE_ORIGIN: https://weatherx.org
           REGIONAL_PACKS_DIR: ${{ runner.temp }}/regional-packs
           CORE_MODEL_PACKS_DIR: ${{ runner.temp }}/core-model-packs
