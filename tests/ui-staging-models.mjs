@@ -4,8 +4,9 @@ import {mkdtempSync,mkdirSync,writeFileSync,realpathSync,readFileSync} from 'nod
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
-import {BASELINE_PROFILE,MODELS,GRIDS,variables,displayPaths,digest,canonical,cycleTime,resolveSelectionRequest,profileFor,validateProfile,requireProductionProfile,validateSelection,readSelection,validateCandidateSelection,requireStagingApproval,browserEnvironment,validateBrowserReceipt} from '../tools/ui-staging-models.mjs';
+import {BASELINE_PROFILE,CORE_RELEASE_PROFILE,CORE_RELEASE_REQUEST,MODELS,GRIDS,variables,displayPaths,digest,canonical,cycleTime,resolveSelectionRequest,profileFor,validateProfile,requireProductionProfile,validateSelection,readSelection,validateCandidateSelection,requireStagingApproval,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt} from '../tools/ui-staging-models.mjs';
 import {browserCandidateReady,discardedResponseBody,layerActivationNeeded,matrixProofPlan,pixelDifference,responseBodyOrFallback,responseCaptureNeeded,validateFetchedObject,validateIndependentPointSource} from '../tools/ui-staging-model-browser.mjs';
+import {coreCycle,protocol as coreBrowserProtocol,releaseRosterProof,validateCoreIndex,validateOutsideDomain} from '../tools/ui-staging-core-browser.mjs';
 import {createCandidate,hash,eligibleRun,REPOSITORY,CONTROL_SHA,STAGING_CONTROL_SHA,controlShaFor} from '../tools/ui-candidate.mjs';
 import {eligibleBuild} from '../tools/ui-build-transfer.mjs';
 import {publicBuildEnvironment,requiredSourceGuard,standaloneWeatherFeedVerificationRequired} from '../tools/ui-release.mjs';
@@ -34,13 +35,18 @@ function candidateFixture(profile=BASELINE_PROFILE,bundle){
 test('baseline remains exact while experimental profile binds one content digest',()=>{
   assert.deepEqual(profileFor(),BASELINE_PROFILE);assert.deepEqual(profileFor('none'),BASELINE_PROFILE);requireProductionProfile(BASELINE_PROFILE);
   const p=profileFor(DIGEST);validateProfile(p);assert.equal(p.stagingOnly,true);assert.throws(()=>requireProductionProfile(p));
+  assert.deepEqual(profileFor(CORE_RELEASE_REQUEST),CORE_RELEASE_PROFILE);validateProfile(CORE_RELEASE_PROFILE);assert.throws(()=>requireProductionProfile(CORE_RELEASE_PROFILE));
   for(const bad of ['',{},'x'.repeat(64),{...p,account:true},{...p,extra:true}])assert.throws(()=>validateProfile(typeof bad==='string'?profileFor(bad):bad));
+  for(const bad of [{...CORE_RELEASE_PROFILE,releaseRosterCore:'other'},{...CORE_RELEASE_PROFILE,modelSelectionSha256:DIGEST},{...CORE_RELEASE_PROFILE,stagingOnly:false}])assert.throws(()=>validateProfile(bad));
 });
 test('ordinary staging resolves the protected approval while baseline remains an explicit opt-out',()=>{
   assert.equal(resolveSelectionRequest(undefined,DIGEST),DIGEST);
   assert.equal(resolveSelectionRequest('approved',DIGEST),DIGEST);
   assert.equal(resolveSelectionRequest(DIGEST,DIGEST),DIGEST);
   assert.equal(resolveSelectionRequest('none',undefined),'none');
+  assert.equal(resolveSelectionRequest(CORE_RELEASE_REQUEST,undefined,CORE_RELEASE_REQUEST),CORE_RELEASE_REQUEST);
+  assert.throws(()=>resolveSelectionRequest(CORE_RELEASE_REQUEST,DIGEST,undefined),/core profile approval/);
+  assert.throws(()=>resolveSelectionRequest(CORE_RELEASE_REQUEST,DIGEST,'other'),/core profile approval/);
   for(const [requested,approved] of [['approved',undefined],['approved','x'],['',DIGEST],['0'.repeat(64),DIGEST]])
     assert.throws(()=>resolveSelectionRequest(requested,approved));
 });
@@ -69,6 +75,10 @@ test('candidate profile and exact public asset are inseparable; protected stagin
   assert.equal(requireStagingApproval(candidate,{MODEL_SELECTION_SHA256:sha,UI_STAGING_MODEL_SELECTION_APPROVED_SHA256:sha},NOW).entries.length,1);
   assert.throws(()=>requireStagingApproval(candidate,{MODEL_SELECTION_SHA256:sha,UI_STAGING_MODEL_SELECTION_APPROVED_SHA256:'0'.repeat(64)},NOW));
   const baseline=candidateFixture();assert.equal(requireStagingApproval(baseline,{MODEL_SELECTION_SHA256:'none'},NOW),null);
+  const core=candidateFixture(CORE_RELEASE_PROFILE);assert.equal(validateCandidateSelection(core,NOW),null);
+  assert.equal(requireStagingApproval(core,{MODEL_SELECTION_SHA256:CORE_RELEASE_REQUEST,UI_STAGING_CORE_PROFILE_APPROVED:CORE_RELEASE_REQUEST},NOW),null);
+  assert.throws(()=>requireStagingApproval(core,{MODEL_SELECTION_SHA256:CORE_RELEASE_REQUEST}),/core profile approval/);
+  assert.throws(()=>candidateFixture(CORE_RELEASE_PROFILE,body),/cannot carry experimental selection/);
   for(const mutate of [c=>c.files.splice(c.files.findIndex(f=>f.path==='assets/staging-model-selection.json'),1),c=>c.profile=BASELINE_PROFILE,c=>c.profile.modelSelectionSha256='0'.repeat(64)]){
     const bad=structuredClone(candidate);mutate(bad);assert.throws(()=>validateCandidateSelection(bad,NOW));
   }
@@ -78,6 +88,8 @@ test('production run eligibility rejects a qualified staging experiment before a
   const run={id:123,repository:{full_name:REPOSITORY},path:'.github/workflows/ui-staging.yml',event:'workflow_dispatch',head_branch:'main',status:'completed',conclusion:'success',run_attempt:1,head_sha:c.workflowSha};
   const artifacts=[{name:'ui-candidate-123-1',expired:false,expires_at:'2026-10-01T00:00:00Z'}];
   assert.throws(()=>eligibleRun(run,artifacts,{runId:'123',sourceSha:SHA,digest:c.artifactDigest,pipelineDigest:c.pipelineDigest,candidate:c},NOW),/cannot enter production/);
+  const core=candidateFixture(CORE_RELEASE_PROFILE);core.qualification=structuredClone(c.qualification);
+  assert.throws(()=>eligibleRun(run,artifacts,{runId:'123',sourceSha:SHA,digest:core.artifactDigest,pipelineDigest:core.pipelineDigest,candidate:core},NOW),/cannot enter production/);
 });
 test('isolated publisher binds protected input profile to the exact same-attempt build',()=>{
   const body=selection(['icon']),sha=digest(body),profile=profileFor(sha),c=candidateFixture(profile,body);
@@ -90,9 +102,11 @@ test('manual staging defaults to protected approval and only explicit none selec
   const root=new URL('../',import.meta.url),staging=readFileSync(new URL('.github/workflows/ui-staging.yml',root),'utf8'),production=readFileSync(new URL('.github/workflows/ui-release.yml',root),'utf8');
   assert.match(staging,/model_selection_sha256:[\s\S]*?default: approved/);
   assert.match(staging,/\n  profile:\n[\s\S]*?environment:\s*\n\s*name: ui-staging[\s\S]*?APPROVED_SELECTION: \$\{\{ vars\.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256 \}\}/);
+  assert.match(staging,/APPROVED_CORE_PROFILE: \$\{\{ vars\.UI_STAGING_CORE_PROFILE_APPROVED \}\}/);
   assert.equal(staging.split('needs.profile.outputs.model_selection_sha256').length-1,4);
   assert.match(staging,/name: ui-staging[\s\S]*?UI_STAGING_MODEL_SELECTION_APPROVED_SHA256: \$\{\{ vars\.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256 \}\}/);
-  assert.doesNotMatch(production,/model_selection_sha256|UI_STAGING_MODEL_SELECTION_APPROVED_SHA256|VITE_STAGING_MODEL_ADMISSION/);
+  assert.match(staging,/UI_STAGING_CORE_PROFILE_APPROVED: \$\{\{ vars\.UI_STAGING_CORE_PROFILE_APPROVED \}\}/);
+  assert.doesNotMatch(production,/model_selection_sha256|UI_STAGING_MODEL_SELECTION_APPROVED_SHA256|UI_STAGING_CORE_PROFILE_APPROVED|VITE_STAGING_MODEL_ADMISSION|release-roster-core-v1/);
 });
 test('build flags select mutually exclusive production or exact staging-experiment release guards',()=>{
   const body=selection(['icon']),sha=digest(body),profile=profileFor(sha),source={bytes:body};
@@ -106,6 +120,10 @@ test('build flags select mutually exclusive production or exact staging-experime
   assert.equal(baseline.ATMOS_PUBLIC_RELEASE,'1');assert.equal(baseline.ATMOS_STAGING_EXPERIMENT_RELEASE,'0');
   assert.equal(baseline.VITE_MODEL_EXPANSION_QUALIFICATION,'0');assert.equal(baseline.VITE_STAGING_MODEL_ADMISSION,'0');assert.equal(baseline.VITE_STAGING_MODEL_SELECTION_SHA256,'');
   assert.equal(requiredSourceGuard(profile),'164a469189da2c8303c997d4020b3ae20da84cd7');assert.equal(requiredSourceGuard(BASELINE_PROFILE),null);
+  const core=publicBuildEnvironment(CORE_RELEASE_PROFILE,null,{});
+  assert.equal(core.ATMOS_PUBLIC_RELEASE,'0');assert.equal(core.ATMOS_STAGING_EXPERIMENT_RELEASE,'1');assert.equal(core.ATMOS_STAGING_RELEASE_ROSTER,'1');
+  assert.equal(core.VITE_MODEL_EXPANSION_QUALIFICATION,'1');assert.equal(core.VITE_STAGING_MODEL_ADMISSION,'0');assert.equal(core.VITE_STAGING_MODEL_SELECTION_SHA256,'');
+  assert.equal(requiredSourceGuard(CORE_RELEASE_PROFILE),'ed8065275eefa5e6e530ce37d1133a3baf1026c5');assert.throws(()=>publicBuildEnvironment(CORE_RELEASE_PROFILE,source,{}));
   assert.throws(()=>publicBuildEnvironment(profile,null,{}));
   assert.throws(()=>publicBuildEnvironment(profile,{bytes:Buffer.from('wrong')},{}));
   assert.throws(()=>publicBuildEnvironment(BASELINE_PROFILE,source,{}));
@@ -114,6 +132,14 @@ test('browser child process uses an allowlist and pixel proof measures visible c
   const clean=browserEnvironment({PATH:'/bin',HOME:'/tmp',GITHUB_TOKEN:'secret',CLOUDFLARE_API_TOKEN:'secret',UI_CANDIDATE_KEY:'secret',RANDOM:'discard'},{BASE:'https://staging.weatherx.org'});
   assert.deepEqual(clean,{PATH:'/bin',HOME:'/tmp',BASE:'https://staging.weatherx.org'});
   const off={width:2,height:1,data:Buffer.from([0,0,0,255,0,0,0,255])},on={...off,data:Buffer.from([9,0,0,255,8,0,0,255])};assert.equal(pixelDifference(on,off),.5);
+});
+test('core browser gate is staging-only and refuses inherited credentials before launch',()=>{
+  const env={BASE:'https://staging.weatherx.org',UI_EXPECTED_SOURCE_SHA:SHA,WEATHERX_EXPECTED_RELEASE_ID:`git-${SHA.slice(0,12)}-run-123`,UI_MODEL_BROWSER_OUTPUT:'/tmp/receipt.json'};
+  assert.doesNotThrow(()=>coreBrowserProtocol(env));
+  assert.throws(()=>coreBrowserProtocol({...env,BASE:'https://weatherx.org'}),/only actual staging/);
+  assert.throws(()=>coreBrowserProtocol({...env,CLOUDFLARE_API_TOKEN:'secret'}),/must not inherit credentials/);
+  assert.equal(validateOutsideDomain({error:{code:'outside_model_domain',message:'The requested point is outside this model domain.'}}),true);
+  assert.throws(()=>validateOutsideDomain({error:'outside_model_domain'}));
 });
 test('browser admission requires one coherent exact candidate in its own page context',()=>{
   const expected={sourceSha:SHA,releaseId:`git-${SHA.slice(0,12)}-run-123`,selectionSha256:DIGEST};
@@ -183,4 +209,41 @@ test('browser receipt proves each selected model plus the exact latest-selection
   const receipt={schemaVersion:1,origin:'https://staging.weatherx.org',sourceSha:SHA,releaseId:`git-${SHA.slice(0,12)}-run-123`,selectionSha256:digest(body),qualifiedAt:new Date(NOW).toISOString(),models:[...bundle.entries.map(model),{rapidModelSequence:['icon','nam'],finalModel:'nam'}],verifiedObjectCount:12};
   const bytes=Buffer.from(JSON.stringify(receipt));validateBrowserReceipt(bytes,bundle,{sourceSha:SHA,releaseId:receipt.releaseId,selectionSha256:digest(body)},NOW);
   for(const mutate of [r=>r.models.pop(),r=>r.models.at(-1).finalModel='icon',r=>r.verifiedObjectCount=11]){const bad=structuredClone(receipt);mutate(bad);assert.throws(()=>validateBrowserReceipt(Buffer.from(JSON.stringify(bad)),bundle,{sourceSha:SHA,releaseId:receipt.releaseId,selectionSha256:digest(body)},NOW));}
+});
+test('release-roster core receipt binds two independent model proofs and never reads selection policy',()=>{
+  const releaseRoster=MODELS.map((model,index)=>({model,status:index===0?'fresh':'absent',init:index===0?INIT:null,expectedSelectable:index===0,visible:index===0,enabled:index===0}));
+  const row=(model,catalogId)=>({model,status:'ready',init:'2026-08-31T12:00:00Z',base:`/data/_catalog/${catalogId}/${model}/runs/${INIT}/`,catalogId,
+    field:model==='hrrr'?'temp':'wind',deck:model==='hrrr'?'temp-raster':'wind-field',changedRatio:.12,finitePointValue:12.5,pointRunId:INIT,
+    pointQuality:'complete',windAdmitted:model!=='hrrr',domain:{inside:true,outside:model==='hrrr'?true:null}});
+  const receipt={schemaVersion:1,kind:'weatherx-staging-core-browser-receipt',origin:'https://staging.weatherx.org',sourceSha:SHA,
+    releaseId:`git-${SHA.slice(0,12)}-run-123`,qualifiedAt:new Date(NOW).toISOString(),pointReleaseId:'cycle-123',releaseRoster,
+    models:[row('aifs','catalog-aifs'),row('hrrr','catalog-hrrr')],rapidModelSequence:['aifs','hrrr'],finalModel:'hrrr',selectionRequests:[],errors:[]};
+  const bytes=Buffer.from(JSON.stringify(receipt));assert.deepEqual(validateCoreBrowserReceipt(bytes,{sourceSha:SHA,releaseId:receipt.releaseId},NOW),receipt);
+  const hourly=structuredClone(receipt),hrrr=hourly.models.find(model=>model.model==='hrrr');
+  Object.assign(hrrr,{init:'2026-08-31T19:00:00Z',base:'/data/_catalog/catalog-hrrr/hrrr/runs/2026083119/',pointRunId:'2026083119'});
+  assert.deepEqual(validateCoreBrowserReceipt(Buffer.from(JSON.stringify(hourly)),{sourceSha:SHA,releaseId:receipt.releaseId},NOW),hourly);
+  for(const mutate of [r=>r.selectionRequests.push('/assets/staging-model-selection.json'),r=>r.models[1].field='wind',r=>r.models[1].windAdmitted=true,
+    r=>r.models[0].pointRunId='2026083118',r=>r.models[0].base='/data/aifs/runs/2026083112/',r=>r.releaseRoster[0].visible=false,
+    r=>r.models.pop(),r=>r.errors.push({model:'hrrr',error:'unavailable'}),r=>r.finalModel='aifs']){
+    const bad=structuredClone(receipt);mutate(bad);assert.throws(()=>validateCoreBrowserReceipt(Buffer.from(JSON.stringify(bad)),{sourceSha:SHA,releaseId:receipt.releaseId},NOW));
+  }
+});
+test('core browser inventory proof keeps every regional admission independent',()=>{
+  const models=Object.fromEntries(MODELS.map(model=>[model,{status:'absent'}]));
+  models.icon={status:'fresh',init:INIT,initTime:'2026-08-31T12:00:00Z',path:`runs/${INIT}/`};
+  models['nam-hi']={status:'carried',init:'2026083100',initTime:'2026-08-31T00:00:00Z',path:'runs/2026083100/'};
+  const roster={schemaVersion:1,kind:'weatherx-release-model-roster',createdAt:'2026-08-31T19:00:00Z',maxAgeHours:24,cycleHours:6,horizonHours:48,leadCount:49,fusionEligible:false,models};
+  const proof=releaseRosterProof(roster,NOW);
+  assert.deepEqual(proof.map(row=>[row.model,row.expectedSelectable]),MODELS.map(model=>[model,model==='icon'||model==='nam-hi']));
+  models.nam={status:'fresh',init:'2026082912',initTime:'2026-08-29T12:00:00Z',path:'runs/2026082912/'};
+  assert.equal(releaseRosterProof(roster,NOW).find(row=>row.model==='nam').expectedSelectable,false);
+  assert.throws(()=>releaseRosterProof({...roster,horizonHours:72},NOW));
+  assert.throws(()=>releaseRosterProof({...roster,models:{...models,icon:{...models.icon,path:'runs/other/'}}},NOW));
+  const index=validateCoreIndex({schemaVersion:1,model:'hrrr',runs:[{init_time:'2026-08-31T12:00:00Z',path:`runs/${INIT}/`}]},'hrrr','catalog-hrrr');
+  assert.equal(index.manifestPath,`/data/_catalog/catalog-hrrr/hrrr/runs/${INIT}/manifest.json`);
+  assert.equal(coreCycle('hrrr','2026-09-05T19:00:00Z'),'2026090519');
+  assert.equal(validateCoreIndex({schemaVersion:1,model:'hrrr',runs:[{init_time:'2026-09-05T19:00:00Z',path:'runs/2026090519/'}]},'hrrr','catalog-hourly').cycle,'2026090519');
+  assert.throws(()=>coreCycle('aifs','2026-09-05T19:00:00Z'));
+  for(const invalid of ['2026-09-05T24:00:00Z','2026-09-31T19:00:00Z','2026-09-05T19:30:00Z'])assert.throws(()=>coreCycle('hrrr',invalid));
+  assert.throws(()=>validateCoreIndex({schemaVersion:1,model:'hrrr',runs:[]},'hrrr','catalog-hrrr'));
 });
