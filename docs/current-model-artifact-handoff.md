@@ -1,8 +1,10 @@
 # Current-run per-model artifact handoff
 
-Status: guarded source foundation only. The eleven reusable publishers are
-structurally disabled while their Atmos SHA remains the unqualified `77487534`
-placeholder. No workflow pin, environment variable, or catalog was changed.
+Status: guarded draft, not activated. All four workflow source pins now select
+merged Atmos `3f7479573b990337c64643077720c39b361b6841`, containing the reviewed
+baseline repair and speed/source-integrity fixes. The publisher also continues
+to reject the old `77487534` source. Approval variables were not set, and no
+live workflow, catalog or publication was changed by this draft.
 
 ## Purpose
 
@@ -102,9 +104,9 @@ production-environment settings (environment-only flags cannot unlock caller job
 - `CURRENT_RUN_COMPONENT_PUBLISH_ENABLED=true`
 - `CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA=<the exact qualified common SHA>`
 
-The publisher also refuses the current placeholder SHA even if both variables are
-mis-set. Update all three reusable Atmos checkout refs and the whole-bake ref,
-including their exact source assertions, together. There are no duplicate legacy
+The publisher also refuses the old placeholder SHA even if both variables are
+mis-set. The three reusable Atmos checkout refs and the whole-bake ref,
+including their exact source assertions, have been updated together. There are no duplicate legacy
 collector matrices. Run a publication-disabled cloud canary to confirm GitHub's
 exact compound job names (`core (MODEL) / collector` and
 `regional (MODEL) / collector`) before enabling publication.

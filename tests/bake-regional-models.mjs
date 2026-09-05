@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
 
 const read=path=>readFileSync(new URL(`../${path}`,import.meta.url),'utf8');
 const bake=read('.github/workflows/bake.yml');
@@ -54,6 +55,22 @@ test('publisher is disabled by default and structurally production-data-only',()
   assert.doesNotMatch(publisher,/weatherx-data-staging|weatherx-components-staging|UI_PRODUCTION|pages deploy/i);
   assert.match(publisher,/group: weatherx-component-production-\$\{\{ inputs\.model \}\}/);
   assert.match(publisher,/cancel-in-progress: false/);
+});
+
+test('actual initial publisher guard rejects branch, event, missing approval and old source before credentials',()=>{
+  const guard=publisher.split('        run: |\n')[1].split('\n      - name:')[0];
+  const good={...process.env,GITHUB_REPOSITORY:'Andrewegao/v3t7kq-cycle',GITHUB_REF:'refs/heads/main',
+    GITHUB_EVENT_NAME:'workflow_dispatch',ENABLED:'true',APPROVED_SHA:'a'.repeat(40),ATMOS_SHA:'a'.repeat(40),
+    UNQUALIFIED_PLACEHOLDER_SHA:'b'.repeat(40),COMPONENT_KIND:'regional',MODEL:'icon'};
+  const run=env=>spawnSync('bash',['-e','-u','-c',guard],{env,encoding:'utf8'});
+  assert.equal(run(good).status,0);
+  assert.equal(run({...good,GITHUB_EVENT_NAME:'schedule'}).status,0);
+  for(const change of [{GITHUB_REPOSITORY:'other/repo'},{GITHUB_REF:'refs/heads/feature'},
+    {GITHUB_EVENT_NAME:'pull_request'},{ENABLED:''},{APPROVED_SHA:'c'.repeat(40)},
+    {UNQUALIFIED_PLACEHOLDER_SHA:'a'.repeat(40)},{MODEL:'../ecmwf'}]) {
+    const result=run({...good,...change});assert.notEqual(result.status,0,JSON.stringify(change));
+    assert.equal(result.stdout,'');
+  }
 });
 
 test('per-model authentication precedes production baseline and publication credentials',()=>{
