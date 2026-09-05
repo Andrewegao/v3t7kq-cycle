@@ -6,6 +6,14 @@ import { spawnSync } from 'node:child_process';
 
 const workflow = await readFile(new URL('../.github/workflows/bake.yml', import.meta.url), 'utf8');
 
+// The reviewed producer exposes fixed-name progress, not arbitrary command logs.
+const joinedBake = workflow.split('      - name: bake → gate → publish immutable data release\n')[1]
+  ?.split('      - name:')[0];
+assert.ok(joinedBake, 'joined publisher step remains present');
+assert.match(joinedBake, /^          WEATHERX_BAKE_LIVE_PROGRESS: '1'$/m);
+assert.match(joinedBake, /run: bash ops\/bake-weatherx\.sh/);
+assert.doesNotMatch(joinedBake, /\btee\b|tail -f|tail --follow/, 'do not expose raw bake logs for live progress');
+
 // Run the actual final diagnostic step against a long failed-cycle fixture.
 // Early checkpoint/resource evidence must survive the existing 200-line tail,
 // without uploading the full internal bake log or dumping arbitrary old lines.
