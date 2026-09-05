@@ -15,9 +15,6 @@ on:
         type: string
         required: false
         default: ''
-concurrency:
-  group: weatherx-data-maintenance
-  cancel-in-progress: false        # never abort a half-written run
 jobs:
   # Eleven isolated model collectors start together. Only the joined bake job can publish.
   # ECMWF and GFS each get a full runner instead of competing for shared memory.
@@ -44,13 +41,13 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          ref: fbd8bd7d429a94020dfdcf63b4295e7a96927a27
+          ref: 561a5aa5727a04040b6cce5fb16533255b353af4
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 32
           persist-credentials: false
       - name: Verify approved immutable core collector before running source
         run: |
-          test "$(git rev-parse HEAD)" = "fbd8bd7d429a94020dfdcf63b4295e7a96927a27"
+          test "$(git rev-parse HEAD)" = "561a5aa5727a04040b6cce5fb16533255b353af4"
           git diff --exit-code HEAD
       - name: checkout this reviewed recovery controller
         if: ${{ inputs.recovery_run_id != '' }}
@@ -129,13 +126,13 @@ jobs:
         with:
           repository: weatherx-hq/atmos
           # Must equal the bake job's approved commit: the bake refuses a pack collected elsewhere.
-          ref: fbd8bd7d429a94020dfdcf63b4295e7a96927a27
+          ref: 561a5aa5727a04040b6cce5fb16533255b353af4
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 32
           persist-credentials: false
       - name: Verify approved immutable regional collector before running source
         run: |
-          test "$(git rev-parse HEAD)" = "fbd8bd7d429a94020dfdcf63b4295e7a96927a27"
+          test "$(git rev-parse HEAD)" = "561a5aa5727a04040b6cce5fb16533255b353af4"
           git diff --exit-code HEAD
       - name: checkout this reviewed recovery controller
         if: ${{ inputs.recovery_run_id != '' }}
@@ -191,6 +188,12 @@ jobs:
           retention-days: 1
           if-no-files-found: warn
   bake:
+    # Collection is read-only and may overlap the previous cycle's processing. Keep the
+    # exact legacy workflow lock here: old workflow owners and new publisher jobs serialize.
+    # Pending jobs still use GitHub's single/latest-wins queue; running publishers never cancel.
+    concurrency:
+      group: weatherx-data-maintenance
+      cancel-in-progress: false
     environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 300
@@ -207,13 +210,13 @@ jobs:
           repository: weatherx-hq/atmos
           # Approved by full Atmos CI. The whole release produced below must pass
           # its own gates before any staging or production consumer can select it.
-          ref: fbd8bd7d429a94020dfdcf63b4295e7a96927a27
+          ref: 561a5aa5727a04040b6cce5fb16533255b353af4
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 32 # bound checkout cost; unknown checkpoint ancestry is a cache miss
           persist-credentials: false
       - name: Verify approved immutable collector before running source
         run: |
-          test "$(git rev-parse HEAD)" = "fbd8bd7d429a94020dfdcf63b4295e7a96927a27"
+          test "$(git rev-parse HEAD)" = "561a5aa5727a04040b6cce5fb16533255b353af4"
           git diff --exit-code HEAD
       - name: plan conservative no-change fast path
         id: bake_plan

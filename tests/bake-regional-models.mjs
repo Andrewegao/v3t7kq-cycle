@@ -11,6 +11,26 @@ const core=workflow.slice(workflow.indexOf('\n  core:'),workflow.indexOf('\n  re
 const regional=workflow.slice(workflow.indexOf('\n  regional:'),workflow.indexOf('\n  bake:'));
 const bake=workflow.slice(workflow.indexOf('\n  bake:'));
 
+function assertPublisherLock(source){
+  assert.doesNotMatch(source,/^concurrency:/m,'credential-free collection must not wait for the publisher lock');
+  const publisher=source.slice(source.indexOf('\n  bake:'));
+  const collectors=source.slice(source.indexOf('\n  core:'),source.indexOf('\n  bake:'));
+  assert.doesNotMatch(collectors,/^    concurrency:/m,'collectors must remain independently schedulable');
+  assert.match(publisher,/^    concurrency:\n      group: weatherx-data-maintenance\n      cancel-in-progress: false(?:\s*#[^\n]*)?$/m,
+    'one non-cancelling publisher lock must share the exact legacy workflow group');
+  assert.equal((source.match(/group: weatherx-data-maintenance/g)||[]).length,1,'no duplicate/self-blocking lock');
+}
+
+test('new collection overlaps prior processing but all publication retains the legacy lock',()=>{
+  assertPublisherLock(workflow);
+  for(const mutation of [
+    `concurrency:\n  group: weatherx-data-maintenance\n${workflow}`,
+    workflow.replace('cancel-in-progress: false','cancel-in-progress: true'),
+    workflow.replace('group: weatherx-data-maintenance','group: weatherx-data-maintenance-new'),
+    workflow.replace('\n  core:\n','\n  core:\n    concurrency: collector-lock\n')
+  ])assert.throws(()=>assertPublisherLock(mutation));
+});
+
 function assertParallelTopology(source){
   const jobs=Object.fromEntries([...source.matchAll(/^  (core|regional|bake):\n([\s\S]*?)(?=^  [a-z][\w-]*:\n|$(?![\s\S]))/gm)].map(m=>[m[1],m[2]]));
   const models=job=>job.match(/^        model: \[([^\]]+)\]$/m)?.[1].split(',').map(m=>m.trim());
