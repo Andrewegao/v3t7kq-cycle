@@ -100,6 +100,27 @@ def args(root, kind="core", model="gfs"):
 
 
 class CurrentModelArtifactTests(unittest.TestCase):
+    def test_dirty_project_dependency_cannot_execute_before_bootstrap_guard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "tools").mkdir()
+            helper = Path(subject.__file__).read_bytes()
+            (root / "tools/current-model-artifact.py").write_bytes(helper)
+            (root / "tools/recover-model-inputs.py").write_text("SAFE = True\n")
+            subprocess.run(["git", "init", "--quiet", root], check=True)
+            subprocess.run(["git", "-C", root, "add", "."], check=True)
+            subprocess.run(["git", "-C", root, "-c", "user.name=Fixture", "-c",
+                            "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "fixture"], check=True)
+            head = subprocess.check_output(["git", "-C", root, "rev-parse", "HEAD"], text=True).strip()
+            marker = root / "project-code-executed"
+            (root / "tools/recover-model-inputs.py").write_text(
+                f"from pathlib import Path\nPath({str(marker)!r}).write_text('unsafe')\n")
+            result = subprocess.run([sys.executable, "-I", str(root / "tools/current-model-artifact.py"), "--help"],
+                capture_output=True, text=True, env={**os.environ, "GITHUB_SHA": head})
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("controller-bootstrap-dirty", result.stderr)
+            self.assertFalse(marker.exists(), "dirty repository dependency executed before provenance guard")
+
     def test_all_eleven_names_and_step_contracts_are_explicit(self):
         self.assertEqual(len(subject.MODELS), 11)
         self.assertEqual(set(subject.CORE), {"ecmwf", "gfs", "hrrr", "aifs"})
@@ -256,6 +277,21 @@ class CurrentModelArtifactTests(unittest.TestCase):
                                      NOW, hydrate)
             hydrate.assert_not_called()
             self.assertFalse(Path(arguments.output).exists())
+
+    def test_artifact_disappearance_during_download_withholds_but_bad_bytes_are_fatal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run, jobs, artifacts = metadata()
+            arguments = args(root)
+            for failure, expected in ((subject.legacy.Miss("gone"), subject.Withheld),
+                                      (subject.legacy.Refusal("archive-digest-mismatch"),
+                                       subject.legacy.Refusal)):
+                client = Client([run, jobs, artifacts])
+                client.download = unittest.mock.Mock(side_effect=failure)
+                with self.subTest(failure=type(failure).__name__), patch.object(
+                        subject, "assert_clean_checkout"), self.assertRaises(expected):
+                    subject.transfer(arguments, client, NOW)
+                self.assertFalse(Path(arguments.output).exists())
 
     def test_catalog_hydration_binds_remote_component_inventory_and_model_manifest(self):
         with tempfile.TemporaryDirectory() as directory:

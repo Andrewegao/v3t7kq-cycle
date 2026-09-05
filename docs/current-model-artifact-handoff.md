@@ -96,6 +96,12 @@ of `published`, `unchanged`, `withheld`, or `failed`; never claim the entire ros
 online because some rows succeeded. The legacy whole-release publisher and all
 production controls remain unchanged until that separate integration is reviewed.
 
+Activation must pin an exact final Atmos SHA whose `hydrate-r2-component.sh`
+validates the catalog pointer/snapshot hash and identity before its missing-component
+whole-release fallback. The handoff's common-source guard makes that prerequisite
+structural: it must not be wired against the older helper ordering where absence was
+examined before catalog integrity.
+
 ## Local evidence
 
 ```text

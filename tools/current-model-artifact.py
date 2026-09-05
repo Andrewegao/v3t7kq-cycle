@@ -25,6 +25,35 @@ import urllib.parse
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LEGACY_PATH = REPO_ROOT / "tools/recover-model-inputs.py"
+
+
+def bootstrap_controller_guard():
+    """Use only stdlib and git before executing any repository-owned dependency."""
+    source_sha = os.environ.get("GITHUB_SHA", "")
+    if not re.fullmatch(r"[a-f0-9]{40}", source_sha):
+        print("current model artifact handoff refused: controller-bootstrap-identity", file=sys.stderr)
+        raise SystemExit(1)
+    try:
+        head = subprocess.check_output(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+                                       stderr=subprocess.DEVNULL, text=True).strip()
+        status = subprocess.run(["git", "-C", str(REPO_ROOT), "status", "--porcelain=v1", "-z",
+                                 "--untracked-files=all"], capture_output=True)
+        ignored = subprocess.run(["git", "-C", str(REPO_ROOT), "ls-files", "--others", "--ignored",
+                                  "--exclude-standard", "-z"], capture_output=True)
+        ignored_paths = ignored.stdout.decode("utf-8", "strict").split("\0")
+    except (OSError, subprocess.CalledProcessError, UnicodeDecodeError):
+        print("current model artifact handoff refused: controller-bootstrap-check", file=sys.stderr)
+        raise SystemExit(1) from None
+    allowed = ("data/.venv/", "node_modules/", "app/node_modules/")
+    unsafe_ignored = [path for path in ignored_paths if path and not path.startswith(allowed)]
+    if head != source_sha or status.returncode != 0 or status.stdout or ignored.returncode != 0 or unsafe_ignored:
+        print("current model artifact handoff refused: controller-bootstrap-dirty", file=sys.stderr)
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    bootstrap_controller_guard()
+
 legacy = types.ModuleType("_weatherx_recovery_transport")
 legacy.__file__ = str(LEGACY_PATH)
 # Compile the reviewed source bytes directly. An ignored __pycache__ file can never
@@ -397,7 +426,12 @@ def transfer(args, client, now, hydrate=hydrate_baseline):
     scratch = Path(tempfile.mkdtemp(prefix=".current-model-handoff-", dir=output.parent))
     try:
         archive, packs, bundle = scratch / "artifact.zip", scratch / "packs", scratch / "bundle"
-        client.download(artifact["id"], archive, artifact["size_in_bytes"], artifact["digest"][7:])
+        try:
+            client.download(artifact["id"], archive, artifact["size_in_bytes"], artifact["digest"][7:])
+        except legacy.Miss:
+            # A retained artifact can expire or be deleted after metadata was read.
+            # That is honest per-model absence; digest/auth/archive failures remain fatal.
+            raise Withheld("collector-artifact-unavailable-during-download") from None
         legacy.extract(archive, packs, kind, args.model)
         pack = inspect_pack(packs, kind, args.model, args.atmos_source_sha, args.run_id)
         baseline = None
