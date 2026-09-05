@@ -21,6 +21,7 @@ on:
       - ".github/workflows/staging-data-activate.yml"
       - ".github/workflows/verify-backfill.yml"
       - ".github/workflows/consumer-refresh.yml"
+      - ".github/workflows/data-reader-refresh.yml"
       - ".github/workflows/gdacs-feed-release.yml"
       - ".github/workflows/fusion-*.yml"
       - "scheduler/**"
@@ -66,6 +67,8 @@ jobs:
           node --test tests/scheduler-deploy-plan.mjs
       - name: Consumer refresh preflight and rollback contracts
         run: node --test tests/consumer-refresh*.mjs
+      - name: Data-only reader upgrade and compatible fallback contracts
+        run: node --test tests/data-reader-*.mjs
       - name: GDACS isolated route workflow and recovery contracts
         run: |
           node tests/gdacs-feed-workflow.mjs
