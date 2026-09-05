@@ -62,6 +62,7 @@ jobs:
         run: |
           npm ci --ignore-scripts --prefix staging-controller
           node --test tests/staging-*.mjs
+          python3 tests/staging-consumer-reuse.py
           node --test tests/model-inputs*.mjs
       - name: Consumer refresh workflow safety contract
         run: |
