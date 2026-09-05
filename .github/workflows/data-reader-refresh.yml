@@ -29,7 +29,6 @@ jobs:
     env:
       ATMOSPHERE_SHA: ${{ inputs.atmosphere_sha }}
       BOUNDARY_DIGEST: ${{ inputs.boundary_digest }}
-      REFRESH_RECEIPT: ${{ runner.temp }}/data-reader-refresh/receipt.json
     steps:
       - name: Validate owner confirmation and immutable inputs
         env:
@@ -44,6 +43,8 @@ jobs:
           ref: ${{ github.sha }}
           path: cycle
           persist-credentials: false
+      - name: Initialize runner-local receipt path
+        run: echo "REFRESH_RECEIPT=$RUNNER_TEMP/data-reader-refresh/receipt.json" >> "$GITHUB_ENV"
       - name: Checkout exact reviewed source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
