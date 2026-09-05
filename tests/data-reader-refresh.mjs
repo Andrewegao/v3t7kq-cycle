@@ -2,27 +2,99 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {generateKeyPairSync,privateDecrypt,createDecipheriv} from 'node:crypto';
 import { createTransport,safeFailureDiagnostic,encryptInheritanceDiagnostic } from '../tools/gdacs-feed-release.mjs';
-import { execute,recover,assertClosure,CLOSURE,assertVersion,makeOperations,SCRIPT,assertBoundary,versionAnnotations } from '../tools/data-reader-refresh.mjs';
+import { execute,recover,assertClosure,CLOSURE,assertVersion,makeOperations,SCRIPT,assertBoundary,versionAnnotations,normalizeHistory,assertHistory,EXCLUSIVE_WINDOW } from '../tools/data-reader-refresh.mjs';
 const old='00000000-0000-0000-0000-000000000001',ro='00000000-0000-0000-0000-000000000002',full='00000000-0000-0000-0000-000000000003',foreign='00000000-0000-0000-0000-000000000004';
 function fixture(){
-  let current=old;const writes=[],events=[],saved=[];
+  let current=old;const writes=[],events=[],saved=[],history=[{id:old,number:13}];
   const runtime={compatibility_date:'2026-08-28',compatibility_flags:['nodejs_compat'],usage_model:'standard'};
   const boundary={data:{runtime,settings:{bindings:[{name:'CATALOG_PROMOTION_KEY',type:'secret_text'}],compatibility_date:'2026-08-28',compatibility_flags:['nodejs_compat'],placement:{},usage_model:'standard',observability:{enabled:true},annotations:{'workers/message':'old'}}},routes:['unchanged'],pages:{id:'same'},platform:{version:'unchanged'}};
-  const receipt={status:'preflight-passed',createdAt:new Date().toISOString(),beforeVersion:old,sha:'a'.repeat(40),tag:'owned',boundary,pointers:{catalog:'old',whole:'old'}};
-  const detail=(id,kind)=>({id,annotations:versionAnnotations(kind,receipt),resources:{bindings:boundary.data.settings.bindings,script_runtime:runtime,script:{etag:'e'.repeat(64)}}});
+  const receipt={status:'preflight-passed',exclusiveWindow:EXCLUSIVE_WINDOW,beforeHistory:structuredClone(history),createdAt:new Date().toISOString(),beforeVersion:old,sha:'a'.repeat(40),tag:'owned',boundary,pointers:{catalog:'old',whole:'old'}};
+  const detail=(id,kind)=>({id,number:kind==='readonly'?14:15,annotations:versionAnnotations(kind,receipt),resources:{bindings:boundary.data.settings.bindings,script_runtime:runtime,script:{etag:'e'.repeat(64)}}});
   const ops={active:async()=>current,boundary:async()=>structuredClone(boundary),pointers:async()=>({...receipt.pointers}),
-    upload:async kind=>{writes.push(`upload:${kind}`);return detail(kind==='readonly'?ro:full,kind);},
+    history:async()=>structuredClone(history),
+    upload:async kind=>{writes.push(`upload:${kind}`);const value=detail(kind==='readonly'?ro:full,kind);history.unshift({id:value.id,number:value.number});return value;},
     version:async id=>detail(id,id===ro?'readonly':'full'),
     deploy:async id=>{writes.push(`deploy:${id}`);current=id;},
     verify:async kind=>{events.push(`verify:${kind}`);},pause:async()=>{},
   };
-  return {receipt,ops,writes,events,saved,persist:()=>saved.push(structuredClone(receipt)),setActive:x=>{current=x;},getActive:()=>current};
+  return {receipt,ops,writes,events,saved,history,persist:()=>saved.push(structuredClone(receipt)),setActive:x=>{current=x;},getActive:()=>current};
 }
 test('uploads both inactive, proves fallback before full, preserves all protected boundaries',async()=>{
   const f=fixture();await execute(f.receipt,f.ops,f.persist);
   assert.equal(f.receipt.status,'passed');assert.deepEqual(f.writes,[`upload:readonly`,`upload:full`,`deploy:${ro}`,`deploy:${full}`]);
   assert.deepEqual(f.events,['verify:readonly','verify:readonly','verify:readonly','verify:full','verify:full','verify:full']);
   assert.ok(f.saved.some(x=>x.intent.activate==='readonly'&&!x.completedAt));
+});
+test('exclusive window is separately required and ordinary release approval cannot substitute',async()=>{
+  for(const confirmation of [undefined,'REFRESH-DATA-READER-ONLY']){
+    const f=fixture();f.receipt.exclusiveWindow=confirmation;
+    await assert.rejects(execute(f.receipt,f.ops,f.persist),/exclusive/);assert.deepEqual(f.writes,[]);
+  }
+});
+test('initial latest must be the reviewed fully active version',async()=>{
+  const f=fixture();f.history.unshift({id:foreign,number:14});
+  await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.deepEqual(f.writes,[]);assert.equal(f.getActive(),old);
+});
+test('history validates identity, positive integer sequence, ordering and completeness',()=>{
+  for(const items of [[],[{id:old}], [{id:old,number:13.5}], [{id:old,number:13},{id:old,number:12}], [{id:old,number:13},{id:foreign,number:14}]])assert.throws(()=>normalizeHistory({items}));
+  const f=fixture();f.receipt.versions={readonly:ro};
+  assertHistory([{id:ro,number:14},{id:old,number:13}],f.receipt);
+  for(const rows of [[{id:ro,number:15},{id:old,number:13}],[{id:ro,number:14}],[{id:ro,number:14},{id:foreign,number:13}]])assert.throws(()=>assertHistory(rows,f.receipt));
+});
+test('second upload expects owned readonly latest rather than the old active predecessor',async()=>{
+  const f=fixture(),upload=f.ops.upload;
+  f.ops.upload=async kind=>{
+    assert.equal(f.history[0].id,kind==='readonly'?old:ro);
+    assert.equal(f.getActive(),old);
+    return upload(kind);
+  };
+  await execute(f.receipt,f.ops,f.persist);assert.equal(f.getActive(),full);
+});
+for(const kind of ['readonly','full'])test(`competing secret-only upload during ${kind} creation refuses before activation`,async()=>{
+  const f=fixture(),upload=f.ops.upload;
+  f.ops.upload=async selected=>{
+    if(selected===kind)f.history.unshift({id:foreign,number:kind==='readonly'?14:15});
+    return upload(selected);
+  };
+  await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.equal(f.getActive(),old);
+  assert.ok(!f.writes.some(x=>x.startsWith('deploy')));assert.equal(f.receipt.recovery,'no-active-mutation');
+});
+test('unexpected returned sequence cannot be concealed by otherwise exact binding metadata',async()=>{
+  const f=fixture(),upload=f.ops.upload;f.ops.upload=async kind=>({...await upload(kind),number:99});
+  await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.equal(f.getActive(),old);assert.ok(!f.writes.some(x=>x.startsWith('deploy')));
+});
+test('foreign latest after uploads but before activation refuses without touching the active version',async()=>{
+  const f=fixture(),history=f.ops.history;let reads=0;
+  f.ops.history=async()=>{
+    if(f.writes.includes('upload:full')&&++reads===2)f.history.unshift({id:foreign,number:16});
+    return history();
+  };
+  await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.equal(f.getActive(),old);assert.ok(!f.writes.some(x=>x.startsWith('deploy')));
+});
+test('foreign history after qualification is detected and never overwritten by recovery',async()=>{
+  const f=fixture();f.ops.verify=async()=>{f.history.unshift({id:foreign,number:16});};
+  await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.equal(f.getActive(),ro);
+  assert.equal(f.receipt.recovery,'manual-forward-repair-required');assert.deepEqual(f.writes.filter(x=>x.startsWith('deploy')),[`deploy:${ro}`]);
+});
+test('foreign activation during the last pre-activation history check is never overwritten',async()=>{
+  const f=fixture(),history=f.ops.history;let reads=0;
+  f.ops.history=async()=>{if(f.writes.includes('upload:full')&&++reads===2)f.setActive(foreign);return history();};
+  await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.equal(f.getActive(),foreign);assert.ok(!f.writes.some(x=>x.startsWith('deploy')));
+});
+test('recovery rechecks active ownership after history and refuses a racing foreign deployment',async()=>{
+  const f=fixture();await execute(f.receipt,f.ops,f.persist);f.receipt.status='failed';
+  const history=f.ops.history;let reads=0;
+  f.ops.history=async()=>{if(++reads===2)f.setActive(foreign);return history();};
+  const before=f.writes.length;await assert.rejects(recover(f.receipt,f.ops,f.persist));
+  assert.equal(f.getActive(),foreign);assert.equal(f.writes.length,before);assert.equal(f.receipt.recovery,'manual-forward-repair-required');
+});
+test('history read failure refuses upload rather than falling back to active-only checks',async()=>{
+  const f=fixture();f.ops.history=async()=>{throw Error('unreadable');};
+  await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.deepEqual(f.writes,[]);assert.equal(f.getActive(),old);
+});
+test('lost full-upload response keeps both candidates inactive and never infers ownership',async()=>{
+  const f=fixture(),upload=f.ops.upload;f.ops.upload=async kind=>{const value=await upload(kind);if(kind==='full')throw Error('lost response');return value;};
+  await assert.rejects(execute(f.receipt,f.ops,f.persist));assert.equal(f.getActive(),old);assert.equal(f.receipt.versions.full,undefined);assert.equal(f.receipt.recovery,'no-active-mutation');
 });
 test('changed pointer before activation refuses and leaves old active',async()=>{
   const f=fixture();let n=0;f.ops.pointers=async()=>++n===1?f.receipt.pointers:{catalog:'changed',whole:'old'};
@@ -93,7 +165,7 @@ test('direct API operations only upload inactive version or deploy exact data sc
   assert.deepEqual(calls.map(x=>[x[0],x[1],x[2].method]),[[SCRIPT+'/versions?bindings_inherit=strict','DATA_EDGE_TOKEN','POST'],[SCRIPT+'/deployments','DATA_EDGE_TOKEN','POST']]);
   assert.equal(typeof calls[0][2].body.get('metadata'),'string','metadata is an ordinary multipart string field, not a file');
   const metadata=JSON.parse(calls[0][2].body.get('metadata'));
-  assert.deepEqual(metadata.bindings,[{name:'CATALOG_PROMOTION_KEY',type:'inherit',version_id:old}]);assert.ok(!JSON.stringify(metadata).includes('secret-value'));
+  assert.deepEqual(metadata.bindings,[{name:'CATALOG_PROMOTION_KEY',type:'inherit',version_id:'latest'}]);assert.ok(!JSON.stringify(metadata).includes('secret-value'));
   assert.ok(!Object.hasOwn(metadata,'placement'));assert.equal(metadata.usage_model,'standard');assert.ok(!Object.hasOwn(metadata,'observability'));
   f.receipt.boundary.data.settings.placement={mode:'smart',hint:'wnam'};
   await ops.upload('readonly',f.receipt);
