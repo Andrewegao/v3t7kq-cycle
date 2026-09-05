@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
-import { normalizedSettings, canonical, saveReceipt, createTransport, ACCOUNT, ZONE } from './gdacs-feed-release.mjs';
+import { normalizedSettings, canonical, saveReceipt, createTransport, safeFailureDiagnostic, ACCOUNT, ZONE } from './gdacs-feed-release.mjs';
 import { activeVersion, normalizedBindings, assertSettings } from './consumer-refresh.mjs';
 import { proveReaders, verifySourceImports } from './data-reader-proof.mjs';
 
@@ -139,7 +139,7 @@ export async function recover(receipt,ops,persist){
 export async function execute(receipt,ops,persist){
   assert.equal(receipt.status,'preflight-passed');
   assert.ok(Date.now()-Date.parse(receipt.createdAt)<15*60_000,'preflight expired');
-  const step=async(name,fn)=>{receipt.stage=name;persist();try{return await fn();}catch{receipt.failedStage=name;persist();throw Error(`data-reader stage failed: ${name}`);}};
+  const step=async(name,fn)=>{receipt.stage=name;persist();try{return await fn();}catch(error){receipt.failedStage=name;receipt.failure=safeFailureDiagnostic(error);persist();throw Error(`data-reader stage failed: ${name}`);}};
   try{
     assertBoundary(await ops.boundary(),receipt);
     assert.equal(await ops.active(),receipt.beforeVersion,'active version changed');
@@ -174,7 +174,8 @@ export async function execute(receipt,ops,persist){
       }
     });
     receipt.status='passed';receipt.completedAt=new Date().toISOString();receipt.afterPointers=await ops.pointers();persist();
-  }catch{
+  }catch(error){
+    receipt.failure??=safeFailureDiagnostic(error);
     receipt.status='failed';persist();ops.resetRecovery?.();await recover(receipt,ops,persist);
     throw Error(`data-reader refresh failed; recovery=${receipt.recovery}`);
   }
@@ -220,8 +221,11 @@ export function makeOperations(transport,atmos,source){
       // Versioned options must survive unchanged. Observability/logpush/tails/tags
       // are non-versioned: never PATCH them (Wrangler versions upload does not).
       for(const key of ['placement','limits','cache_options','usage_model'])if(Object.hasOwn(settings,key))metadata[key]=settings[key];
+      // GET /settings reports unset placement as {}; Wrangler omits that default
+      // on upload. Preserve every nonempty placement policy verbatim.
+      if(metadata.placement&&Object.keys(metadata.placement).length===0)delete metadata.placement;
       for(const key of ['limits','usage_model'])if(Object.hasOwn(receipt.boundary.data.runtime,key))metadata[key]=receipt.boundary.data.runtime[key];
-      const body=new FormData();body.set('metadata',new Blob([JSON.stringify(metadata)],{type:'application/json'}));
+      const body=new FormData();body.set('metadata',JSON.stringify(metadata));
       body.set('dataReader.mjs',new Blob([source.bundles[kind].bytes],{type:'application/javascript+module'}),'dataReader.mjs');
       return api(`${SCRIPT}/versions?bindings_inherit=strict`,{method:'POST',body});
     },
@@ -260,6 +264,6 @@ export async function main(args=process.argv.slice(2)){
   for(const kind of ['readonly','full'])assert.equal(receipt.source.bundles[kind].sha256,source.bundles[kind].sha256);
   const persist=()=>saveReceipt(receiptPath,receipt);
   if(command==='recover')return recover(receipt,ops,persist);
-  try{await execute(receipt,ops,persist);}catch{end=Date.now()+5*60_000;throw Error(`data-reader refresh refused at ${receipt.failedStage??'precondition'}; ${receipt.recovery??'no mutation'}`);}
+  try{await execute(receipt,ops,persist);}catch{end=Date.now()+5*60_000;const diagnostic=safeFailureDiagnostic({safeDiagnostic:receipt.failure,code:receipt.failure?.kind==='local-validation'?'ERR_ASSERTION':undefined});throw Error(`data-reader refresh refused at ${receipt.failedStage??'precondition'}; ${receipt.recovery??'no mutation'}; diagnostic=${JSON.stringify(diagnostic)}`);}
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))main().catch(error=>{console.error(error.message);process.exitCode=1;});
