@@ -5,7 +5,7 @@
 // Cloudflare routes have no compare-and-swap. Recheck immediately before POST;
 // detected drift is a refusal, never permission to replace another publisher.
 import assert from 'node:assert/strict';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID, randomBytes, createCipheriv, publicEncrypt } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, existsSync, mkdirSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync, chmodSync } from 'node:fs';
 import { resolve, dirname, relative, isAbsolute } from 'node:path';
@@ -130,6 +130,39 @@ export async function buildSource(atmos,sha) {
 // before persistence. These are the existing data-reader boundary names only.
 const INHERIT_BINDINGS=new Set(['APP_ORIGIN','AUTH_HASH_KEY','AUTH_MODE','CATALOG_PROMOTION_KEY','COMPONENT_BUCKET','DATA_BUCKET','DATA_CATALOG_MODE','DATA_CATALOG_POINTER_KEY','DATA_ENTITLEMENT_KEY','DATA_POINTER_KEY','PLATFORM_DB','PLATFORM_METRICS']);
 const INHERIT_REASONS=new Set(['missing-binding','no-previous-version','unknown']);
+// One-off diagnostic recipient. The private key exists only on the owner's Mac,
+// never in source, Actions, environment variables or uploaded artifacts.
+const DIAGNOSTIC_PUBLIC_KEY=`-----BEGIN PUBLIC KEY-----
+MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0YX3Ub8kc1eLvLBM9iy0
+g+8kplyZtW6AyJFn89IdOHAkfp7zFU9l1rEJF1bb/fyFjFWFrjAVjQyP07heG9cc
+tLANJU3ffZ9b8nVDTeAAmacViuEniltH7CLCaYIcuwuRfIvlmfVlH6wan+ec3lBI
+lNDSgAUlBIr7OaUfr8+II3GctnlWBzi/GlASicL3+0FCeuzUoGWg34wBLb4G39/l
+yTP4nmgbNMIJlG9buYDF/mqVmwq/KDje15hsCfUQL0+RQLiEQBbus+R002BEHZAq
+ndzFglsvZny+oeZfLKXKVACoybL+YFBRZTJGknLSg/Twg9s2XBTgtluiW25pFC9F
+Atr6X7fkSWArkHv4wHPptugtqfk6ZsPvRx96l+vpFrDg4G9Pij2RcGtuRoXnDN/c
+J0XifLdu+BHJn0fyqBNPRQLjQaYTCDBdn3B/QPb8Cz+2dJbCVJISRCRQJoE36LDd
+msYTudGT2UyaOQY6+dDztttvmxVHK3brf7zeh3h77+MLAgMBAAE=
+-----END PUBLIC KEY-----
+`;
+const DIAGNOSTIC_ALGORITHM='RSA-OAEP-SHA256+A256GCM';
+export function encryptInheritanceDiagnostic(errors,publicKey=DIAGNOSTIC_PUBLIC_KEY){
+  const selected=errors.filter(error=>error?.code===10057&&typeof error.message==='string'&&error.message.length<=512).slice(0,8).map(({message})=>({code:10057,message}));
+  if(!selected.length)return undefined;
+  const plaintext=Buffer.from(JSON.stringify({version:1,errors:selected}));
+  const key=randomBytes(32),iv=randomBytes(12),keySha256=sha256(publicKey);
+  try{
+    const cipher=createCipheriv('aes-256-gcm',key,iv);
+    cipher.setAAD(Buffer.from(`weatherx-inherit-diagnostic/v1:${keySha256}`));
+    const ciphertext=Buffer.concat([cipher.update(plaintext),cipher.final()]);
+    return {version:1,algorithm:DIAGNOSTIC_ALGORITHM,keySha256,wrappedKey:publicEncrypt({key:publicKey,oaepHash:'sha256'},key).toString('base64'),iv:iv.toString('base64'),tag:cipher.getAuthTag().toString('base64'),ciphertext:ciphertext.toString('base64')};
+  }finally{key.fill(0);plaintext.fill(0);}
+}
+function safeEncryptedDiagnostic(value){
+  if(value?.version!==1||value.algorithm!==DIAGNOSTIC_ALGORITHM||value.keySha256!==sha256(DIAGNOSTIC_PUBLIC_KEY))return undefined;
+  const valid=(field,min,max)=>typeof value[field]==='string'&&value[field].length<=max*2&&/^[A-Za-z0-9+/]+={0,2}$/.test(value[field])&&Buffer.from(value[field],'base64').toString('base64')===value[field]&&Buffer.from(value[field],'base64').length>=min&&Buffer.from(value[field],'base64').length<=max;
+  if(!valid('wrappedKey',384,384)||!valid('iv',12,12)||!valid('tag',16,16)||!valid('ciphertext',1,32768))return undefined;
+  return Object.fromEntries(['version','algorithm','keySha256','wrappedKey','iv','tag','ciphertext'].map(key=>[key,value[key]]));
+}
 function inheritDiagnostic(errors,bindings){
   const allowed=new Set((Array.isArray(bindings)?bindings:[]).filter(name=>INHERIT_BINDINGS.has(name)));
   if(!allowed.size)return undefined;
@@ -154,14 +187,18 @@ export function safeFailureDiagnostic(error){
     if(diagnostic.kind==='cloudflare-api'&&diagnostic.httpStatus===400&&diagnostic.errorCodes.includes(10057)&&Array.isArray(value.inheritance)&&value.inheritance.length){
       diagnostic.inheritance=value.inheritance.slice(0,8).map(item=>({reason:INHERIT_REASONS.has(item?.reason)?item.reason:'unknown',...(INHERIT_BINDINGS.has(item?.binding)?{binding:item.binding}:{})}));
     }
+    if(diagnostic.kind==='cloudflare-api'&&diagnostic.httpStatus===400&&diagnostic.errorCodes.includes(10057)){
+      const encrypted=safeEncryptedDiagnostic(value.encryptedInheritance);
+      if(encrypted)diagnostic.encryptedInheritance=encrypted;
+    }
     return diagnostic;
   }
   if(value?.kind==='transport')return {kind:'transport'};
   return {kind:error?.code==='ERR_ASSERTION'?'local-validation':'unexpected'};
 }
-function apiFailure(kind,status,codes=[],inheritance){
+function apiFailure(kind,status,codes=[],inheritance,encryptedInheritance){
   const error=new Error('Cloudflare operation rejected');
-  error.safeDiagnostic=safeFailureDiagnostic({safeDiagnostic:{kind,httpStatus:status,errorCodes:codes,inheritance}});
+  error.safeDiagnostic=safeFailureDiagnostic({safeDiagnostic:{kind,httpStatus:status,errorCodes:codes,inheritance,encryptedInheritance}});
   return error;
 }
 export function createTransport({fetchImpl=globalThis.fetch,deadline=()=>Date.now()+30_000,signal=()=>undefined,tokens=process.env}={}) {
@@ -183,7 +220,12 @@ export function createTransport({fetchImpl=globalThis.fetch,deadline=()=>Date.no
     if(allowAbsent && response.status===404 && json?.success===false && Array.isArray(json.errors)&&json.errors.some(error=>error?.code===10007))return null;
     if(!(response.status>=200&&response.status<300&&json?.success===true)){
       const errors=Array.isArray(json?.errors)?json.errors:[];
-      throw apiFailure('cloudflare-api',response.status,errors.map(error=>error?.code),response.status===400?inheritDiagnostic(errors,inheritanceBindings):undefined);
+      const capture=response.status===400&&method==='POST'&&tokenName==='DATA_EDGE_TOKEN'&&path===`/accounts/${ACCOUNT}/workers/scripts/weatherx-data-edge-production/versions?bindings_inherit=strict`&&Array.isArray(inheritanceBindings)&&inheritanceBindings.length>0&&inheritanceBindings.length<=INHERIT_BINDINGS.size&&inheritanceBindings.every(name=>INHERIT_BINDINGS.has(name));
+      let encrypted;
+      // A diagnostic encryption failure must never expose plaintext, change the
+      // original refusal or trigger another request.
+      if(capture)try{encrypted=encryptInheritanceDiagnostic(errors);}catch{}
+      throw apiFailure('cloudflare-api',response.status,errors.map(error=>error?.code),response.status===400?inheritDiagnostic(errors,inheritanceBindings):undefined,encrypted);
     }
     return json.result;
   }
