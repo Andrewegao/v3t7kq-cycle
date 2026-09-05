@@ -2,7 +2,7 @@
 // deployment. Account-scoped credentials stay in a trusted hosted controller.
 import assert from 'node:assert/strict';
 import { execFileSync, execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { promisify, isDeepStrictEqual } from 'node:util';
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -186,7 +186,7 @@ export function assertRuntimePreserved(config,runtime) {
 const SAFE_ID=/^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/;
 const HOUR=3600000;
 const PROBES=['health','data-health','ecmwf-index','ecmwf-manifest','ecmwf-point','gfs-index','gfs-manifest','gfs-point'];
-const PHASES=new Set(['unknown','upload','upload-boundary','activate','verify','final-boundary','rollback-identity','rollback','rollback-boundary','control-read','contract-health','receipt-persist',...PROBES.flatMap(label=>[`read-${label}`,`contract-${label}`])]);
+const PHASES=new Set(['unknown','upload','upload-boundary','activate','verify','activation-readiness','final-boundary','rollback-identity','rollback','rollback-boundary','control-read','contract-health','receipt-persist',...PROBES.flatMap(label=>[`read-${label}`,`contract-${label}`])]);
 const failures=new WeakMap();
 function rememberFailure(error,phase,code,httpStatus){
   if(error&&typeof error==='object'&&!failures.has(error))failures.set(error,{phase,code,...(Number.isInteger(httpStatus)&&httpStatus>=100&&httpStatus<=599?{httpStatus}:{})});
@@ -209,6 +209,66 @@ function safeProbe(value){
 // MAX_AGE_HOURS/MAX_FUTURE_SKEW_HOURS and data/build_point_series.py SOURCE.fresh_h.
 // Regional UI admission has a separate, intentionally shorter policy.
 export const CORE_FRESH_HOURS=Object.freeze({ecmwf:30,gfs:18});
+const LEGACY_HEALTH={ok:true,authMode:'public',billingMode:'enabled'};
+const LEGACY_DATA_HEALTH={ok:true,authMode:'public',catalogMode:'serve'};
+export function validateReadinessBaseline(value,{beforeVersion,workflowRun,workflowAttempt}){
+  assert.deepEqual(Object.keys(value??{}).sort(),['schemaVersion','origin','beforeVersion','workflowRun','workflowAttempt','health','dataHealth'].sort(),'invalid readiness baseline');
+  assert.equal(value.schemaVersion,1);assert.equal(value.origin,ORIGIN);assert.equal(value.beforeVersion,beforeVersion);
+  assert.equal(value.workflowRun,workflowRun);assert.equal(value.workflowAttempt,workflowAttempt);
+  assert.deepEqual(value.health,LEGACY_HEALTH,'unreviewed prior health');assert.deepEqual(value.dataHealth,LEGACY_DATA_HEALTH,'unreviewed prior data health');
+}
+function readinessState(pair,baseline){
+  assert.deepEqual(Object.keys(pair??{}).sort(),['dataHealth','health']);
+  if(isDeepStrictEqual(pair.health,baseline.health)&&isDeepStrictEqual(pair.dataHealth,baseline.dataHealth))return 'pending-legacy';
+  assert.deepEqual(pair.health,{ok:true,authMode:'public',billingMode:'disabled'},'unexpected activation health');
+  const data=pair.dataHealth;
+  assert.deepEqual(Object.keys(data??{}).sort(),['ok','authMode','catalogMode','dataSource','sharedReadConfigured','pin','sharedRead'].sort(),'unexpected activation data health');
+  assert.deepEqual({...data,pin:null},{ok:true,authMode:'public',catalogMode:'serve',dataSource:'shared',sharedReadConfigured:true,pin:null,
+    sharedRead:{dataBucket:SHARED_READ_VARS.SHARED_READ_DATA_BUCKET,componentBucket:SHARED_READ_VARS.SHARED_READ_COMPONENT_BUCKET,pinKey:'shared-read/pin.json'}},'unexpected shared runtime');
+  // A configured pin is still checked by every subsequent real forecast proof.
+  if(data.pin!==null){
+    assert.deepEqual(Object.keys(data.pin??{}).sort(),['schemaVersion','releaseId','catalogId','expiresAt'].sort());assert.equal(data.pin.schemaVersion,1);
+    for(const key of ['releaseId','catalogId'])assert.ok(data.pin[key]===null||SAFE_ID.test(data.pin[key]));
+    assert.ok(data.pin.releaseId!==null||data.pin.catalogId!==null);assert.ok(Number.isFinite(Date.parse(data.pin.expiresAt)));
+  }
+  return 'ready';
+}
+function safeReadiness(value){
+  assert.equal(value.phase,'activation-readiness');assert.match(value.version??'',UUID);
+  assert.ok(Number.isInteger(value.attempt)&&value.attempt>=1&&value.attempt<=16);
+  assert.ok(Number.isFinite(value.elapsedMs)&&value.elapsedMs>=0&&value.elapsedMs<=75000);
+  assert.ok(['pending-legacy','ready'].includes(value.state));
+  return {phase:value.phase,attempt:value.attempt,elapsedMs:Math.round(value.elapsedMs),version:value.version,state:value.state,
+    billingMode:value.state==='ready'?'disabled':'enabled',catalogMode:'serve',dataSource:value.state==='ready'?'shared':null,sharedReadConfigured:value.state==='ready'?true:null};
+}
+export async function activationReadiness({baseline,beforeVersion,workflowRun,workflowAttempt,uploaded,checkOwned,readPair,observe=async()=>{},
+  now=()=>performance.now(),sleep=ms=>new Promise(r=>setTimeout(r,ms)),timeoutMs=75000,intervalMs=5000}){
+  validateReadinessBaseline(baseline,{beforeVersion,workflowRun,workflowAttempt});assert.match(uploaded,UUID);
+  const observedBaseline=structuredClone(baseline);
+  assert.ok(Number.isFinite(timeoutMs)&&timeoutMs>0&&timeoutMs<=75000);assert.ok(Number.isFinite(intervalMs)&&intervalMs>=5000);
+  const started=now(),deadline=started+timeoutMs;
+  const bounded=async fn=>{
+    const remaining=deadline-now();assert.ok(remaining>0,'activation readiness deadline');let timer;
+    try{const result=await Promise.race([Promise.resolve().then(fn),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('activation readiness deadline')),remaining);})]);
+      assert.ok(now()<deadline,'activation readiness deadline');return result;
+    }finally{clearTimeout(timer);}
+  };
+  try{for(let attempt=1;attempt<=16;attempt++){
+    assert.equal(await bounded(checkOwned),uploaded,'foreign activation during readiness');
+    const pair=await bounded(()=>readPair(attempt));
+    assert.equal(await bounded(checkOwned),uploaded,'foreign activation during readiness');
+    const state=readinessState(pair,observedBaseline);
+    await bounded(()=>observe(safeReadiness({phase:'activation-readiness',attempt,elapsedMs:now()-started,version:uploaded,state})));
+    if(state==='ready')return;
+    await bounded(()=>sleep(Math.min(intervalMs,deadline-now())));
+  }throw Error('activation readiness deadline');}catch(error){rememberFailure(error,'activation-readiness','refused');throw error;}
+}
+async function readReadinessPair(tag){
+  assert.match(tag,/^[0-9]+-[0-9]+-(?:baseline|[0-9]+)$/);
+  const health=await forecastJson(`/api/platform/health?readiness=${tag}`,fetch,8192,'health');
+  const data=await forecastJson(`/api/platform/data-health?readiness=${tag}`,fetch,8192,'data-health');
+  return {health:health.body,dataHealth:data.body};
+}
 async function forecastJson(path,fetcher,maxBytes=256*1024,label='unknown',observe=async()=>{}){
   let code='network',event={label};
   try{
@@ -292,7 +352,11 @@ export async function guardedRepair({before,desired,upload,snapshot,getVersion=a
     receipt.status='activating';await write();attempted=true;
     receipt.phase='activate';await write();await activate(receipt.uploaded);
     receipt.phase='verify';await write();
-    await verify(async event=>{receipt.probes??=[];if(receipt.probes.length<24)receipt.probes.push(safeProbe(event));await write();});
+    await verify(async event=>{
+      if(event?.phase==='activation-readiness'){receipt.readiness??=[];assert.ok(receipt.readiness.length<16);receipt.readiness.push(safeReadiness(event));}
+      else{receipt.probes??=[];if(receipt.probes.length<24)receipt.probes.push(safeProbe(event));}
+      await write();
+    });
     receipt.phase='final-boundary';await write();
     const after=await snapshot();assert.equal(after.version,receipt.uploaded);assert.deepEqual(after.state,desired);
     receipt.status='passed';receipt.after=after;await write();return receipt;
@@ -366,8 +430,13 @@ export async function main(command,atmos,receiptPath,env=process.env){
   const persist=async receipt=>{mkdirSync(dirname(receiptPath),{recursive:true,mode:0o700});writeFileSync(receiptPath,JSON.stringify(receipt,null,2)+'\n',{mode:0o600});};
   if(command==='preflight-reuse'){
     const proof=await reusablePreflight({config,origin,snapshot,history,readVersion});
+    const activationBaseline={schemaVersion:1,origin:ORIGIN,beforeVersion:proof.before.version,workflowRun:env.GITHUB_RUN_ID,workflowAttempt:env.GITHUB_RUN_ATTEMPT,
+      ...await readReadinessPair(`${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}-baseline`)};
+    validateReadinessBaseline(activationBaseline,{beforeVersion:proof.before.version,workflowRun:env.GITHUB_RUN_ID,workflowAttempt:env.GITHUB_RUN_ATTEMPT});
+    assert.deepEqual(await snapshot(),proof.before,'staging changed during baseline health capture');
+    assertUploadedHistory(origin.versionHistory,await history(),OWNED_REUSE.version);
     const receipt={...proof,sourceSha:SOURCE_SHA,worker:WORKER,at:new Date().toISOString(),
-      workflowRun:env.GITHUB_RUN_ID,workflowAttempt:env.GITHUB_RUN_ATTEMPT,reuseOrigin:{...OWNED_REUSE,receipt:origin}};
+      workflowRun:env.GITHUB_RUN_ID,workflowAttempt:env.GITHUB_RUN_ATTEMPT,activationBaseline,reuseOrigin:{...OWNED_REUSE,receipt:origin}};
     await persist(receipt);console.log(JSON.stringify({worker:WORKER,version:proof.before.version,reusing:OWNED_REUSE.version,deployed:false}));return receipt;
   }
   if(command==='preflight'){
@@ -414,6 +483,7 @@ export async function main(command,atmos,receiptPath,env=process.env){
   const age=Date.now()-Date.parse(stored.at);assert.ok(age>=0&&age<10*60_000,'staging preflight expired');
   assert.deepEqual(await snapshot(),stored.before,'staging changed since reviewed preflight');
   if(reuse){
+    validateReadinessBaseline(stored.activationBaseline,{beforeVersion:stored.before.version,workflowRun:env.GITHUB_RUN_ID,workflowAttempt:env.GITHUB_RUN_ATTEMPT});
     assertUploadedHistory(stored.versionHistory,await history(),OWNED_REUSE.version);
     assertReusableVersion(config,origin,await readVersion(OWNED_REUSE.version));
   }else{
@@ -423,7 +493,7 @@ export async function main(command,atmos,receiptPath,env=process.env){
   assertRuntimePreserved(config,stored.before.state.script_runtime);
   assertAllowedTransition(config,stored.before.state,stored.desired);
   return guardedRepair({before:stored.before,desired:stored.desired,snapshot,getVersion,
-    persist:r=>{stored.uploaded=r.uploaded;return persist({...r,versionHistory:stored.versionHistory,workflowRun:env.GITHUB_RUN_ID,workflowAttempt:env.GITHUB_RUN_ATTEMPT,...(reuse?{reuseOrigin:stored.reuseOrigin,candidateMode:'reused-owned-version'}:{})});},
+    persist:r=>{stored.uploaded=r.uploaded;return persist({...r,versionHistory:stored.versionHistory,workflowRun:env.GITHUB_RUN_ID,workflowAttempt:env.GITHUB_RUN_ATTEMPT,...(reuse?{reuseOrigin:stored.reuseOrigin,activationBaseline:stored.activationBaseline,candidateMode:'reused-owned-version'}:{})});},
     upload:async()=>{
       if(reuse){
         // Candidate acquisition only: no upload, no secret lookup or inheritance.
@@ -443,7 +513,11 @@ export async function main(command,atmos,receiptPath,env=process.env){
     },
     activate:id=>activateOwned({before:stored.before,uploaded:id,priorHistory:stored.versionHistory,history,snapshot,getVersion,
       activate:version=>run(['versions','deploy',`${version}@100%`,'--yes','--message','Qualified staging public-weather repair'])}),
-    verify:async observe=>{for(let n=0;n<3;n++){await verifySharedForecast(fetch,Date.now(),observe);if(n<2)await new Promise(r=>setTimeout(r,5000));}
+    verify:async observe=>{
+      if(reuse)await activationReadiness({baseline:stored.activationBaseline,beforeVersion:stored.before.version,workflowRun:env.GITHUB_RUN_ID,workflowAttempt:env.GITHUB_RUN_ATTEMPT,uploaded:stored.uploaded,
+        checkOwned:async()=>{await confirmOwned({uploaded:stored.uploaded,priorHistory:stored.versionHistory,history,getVersion});return stored.uploaded;},
+        readPair:attempt=>readReadinessPair(`${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}-${attempt}`),observe});
+      for(let n=0;n<3;n++){await verifySharedForecast(fetch,Date.now(),observe);if(n<2)await new Promise(r=>setTimeout(r,5000));}
       await confirmOwned({uploaded:stored.uploaded,priorHistory:stored.versionHistory,history,getVersion});},rollback:restore});
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)
