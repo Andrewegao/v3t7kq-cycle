@@ -14,6 +14,10 @@ import { SHARED_READ_SECRETS, SHARED_READ_VARS } from './staging-shared-read.mjs
 
 export const SOURCE_SHA = '0aa9fbed9e179ab2ccb6ac456727b9f33124ddb6';
 export const WORKER = 'weatherx-platform-edge-staging';
+export const OWNED_REUSE=Object.freeze({run:'33988771315',attempt:'1',version:'e3d05c37-01c6-479e-baa8-450a6d3eabac',
+  before:'371277cf-0113-4f9b-91c2-277a31a78d98',receiptSha:'4eb744b4691f0fc76265c30776e9ddde81397058c715c222bc8b3d5cce842b69',
+  artifactId:9975982597,artifactSha:'43ec3ca54e9f0033461d1c753464865cf62b32cbfb3da4199a6bca62acead339',
+  etag:'e9ce28d5818650c1170b27da97f479df2a91e7e4ba9690181e0290a528f787e8'});
 const ZONE = '9dc4df7c3c094ab9a11dd00d378adc26';
 const BASE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/workers/scripts/${WORKER}`;
 const UUID=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
@@ -32,7 +36,8 @@ export function consumerGate(env) {
   assert.equal(env.GITHUB_EVENT_NAME,'workflow_dispatch'); assert.equal(env.GITHUB_JOB,'refresh');
   assert.equal(env.GITHUB_WORKFLOW_REF,'Andrewegao/v3t7kq-cycle/.github/workflows/staging-consumer-refresh.yml@refs/heads/main');
   assert.equal(env.STAGING_CONSUMER_ENABLED,'true'); assert.equal(env.STAGING_CONSUMER_SOURCE_SHA,SOURCE_SHA);
-  assert.equal(env.CONFIRM,'REFRESH-STAGING-CONSUMER'); assert.equal(env.STAGING_R2_ACCOUNT_ID,ACCOUNT);
+  const mode=env.STAGING_CONSUMER_MODE??'upload';assert.ok(['upload','reuse-owned-33988771315'].includes(mode));
+  assert.equal(env.CONFIRM,mode==='upload'?'REFRESH-STAGING-CONSUMER':'REUSE-STAGING-33988771315'); assert.equal(env.STAGING_R2_ACCOUNT_ID,ACCOUNT);
   assert.match(env.STAGING_CONSUMER_APPROVED_VERSION ?? '',UUID);
   assert.match(env.STAGING_CONSUMER_APPROVED_SETTINGS_SHA256 ?? '',/^[a-f0-9]{64}$/);
   for(const name of ['GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT'])assert.match(env[name]??'',/^[1-9][0-9]*$/);
@@ -139,6 +144,36 @@ export async function confirmOwned({uploaded,priorHistory,history,getVersion}){
   assertUploadedHistory(priorHistory,await history(),uploaded);
   assert.equal(await getVersion(),uploaded,'foreign activation during qualification');
 }
+export function readOwnedOrigin(bytes){
+  assert.ok(bytes.length<=65536);assert.equal(hash(bytes),OWNED_REUSE.receiptSha,'unreviewed origin receipt');
+  const origin=JSON.parse(bytes);assert.equal(origin.schemaVersion,1);assert.equal(origin.sourceSha,SOURCE_SHA);
+  assert.equal(origin.worker,WORKER);assert.equal(origin.status,'failed-restored');
+  assert.equal(origin.workflowRun,OWNED_REUSE.run);assert.equal(origin.workflowAttempt,OWNED_REUSE.attempt);
+  assert.equal(origin.uploaded,OWNED_REUSE.version);assert.equal(origin.before.version,OWNED_REUSE.before);
+  assert.equal(origin.versionHistory[0],origin.before.version);return origin;
+}
+export function assertReusableVersion(config,origin,resource){
+  assert.equal(resource.id,OWNED_REUSE.version,'wrong retained version');
+  assert.deepEqual(JSON.parse(JSON.stringify(normalizedBindings(resource.resources?.bindings))),origin.desired.bindings,'retained bindings drift');
+  assert.deepEqual(resource.resources?.script_runtime,origin.before.state.script_runtime,'retained runtime drift');
+  assertRuntimePreserved(config,resource.resources.script_runtime);
+  assertSettings(config,{...resource.resources.script_runtime,bindings:resource.resources.bindings});
+  assert.equal(resource.annotations?.['workers/tag'],`staging-${SOURCE_SHA.slice(0,12)}`,'retained source tag mismatch');
+  assert.equal(resource.annotations?.['workers/triggered_by'],'version_upload');
+  assert.equal(resource.metadata?.created_on,'2026-09-05T20:00:51.429394Z','retained creation differs');
+  // Opaque Cloudflare content identity, NOT a reproducible source-code SHA.
+  assert.equal(resource.resources?.script?.etag,OWNED_REUSE.etag,'retained content identity differs');
+}
+export async function reusablePreflight({config,origin,snapshot,history,readVersion}){
+  const before=await snapshot();assert.deepEqual(before,origin.before,'staging changed since owned restoration');
+  const desired=desiredSettings(before.state,config);assert.deepEqual(desired,origin.desired,'reviewed desired settings changed');
+  assertAllowedTransition(config,before.state,desired);assertRuntimePreserved(config,before.state.script_runtime);
+  assertUploadedHistory(origin.versionHistory,await history(),OWNED_REUSE.version);
+  const resource=await readVersion(OWNED_REUSE.version);assertReusableVersion(config,origin,resource);
+  assert.deepEqual(await snapshot(),before,'staging changed during reuse preflight');
+  assertUploadedHistory(origin.versionHistory,await history(),OWNED_REUSE.version);
+  return {before,desired,versionHistory:origin.versionHistory};
+}
 export function assertRuntimePreserved(config,runtime) {
   assert.ok(runtime&&typeof runtime==='object','missing runtime');
   assert.ok(Object.keys(runtime).every(k=>['compatibility_date','compatibility_flags','usage_model','limits'].includes(k)),'unsupported runtime field');
@@ -150,28 +185,66 @@ export function assertRuntimePreserved(config,runtime) {
 }
 const SAFE_ID=/^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/;
 const HOUR=3600000;
+const PROBES=['health','data-health','ecmwf-index','ecmwf-manifest','ecmwf-point','gfs-index','gfs-manifest','gfs-point'];
+const PHASES=new Set(['unknown','upload','upload-boundary','activate','verify','final-boundary','rollback-identity','rollback','rollback-boundary','control-read','contract-health','receipt-persist',...PROBES.flatMap(label=>[`read-${label}`,`contract-${label}`])]);
+const failures=new WeakMap();
+function rememberFailure(error,phase,code,httpStatus){
+  if(error&&typeof error==='object'&&!failures.has(error))failures.set(error,{phase,code,...(Number.isInteger(httpStatus)&&httpStatus>=100&&httpStatus<=599?{httpStatus}:{})});
+}
+/** Never serialize an exception, assertion values, stderr, or a forged .diagnostic property. */
+export function safeFailure(error,phase){
+  return {...(error&&typeof error==='object'?failures.get(error):null)??{phase:PHASES.has(phase)?phase:'unknown',code:'operation-failed'}};
+}
+function safeProbe(value){
+  const result={label:PROBES.includes(value.label)?value.label:'unknown'};
+  if(Number.isInteger(value.httpStatus)&&value.httpStatus>=100&&value.httpStatus<=599)result.httpStatus=value.httpStatus;
+  for(const [key,allowed] of Object.entries({dataSource:['own','shared'],authMode:['public','enforce','observe'],billingMode:['enabled','disabled'],catalogMode:['serve','shadow','off'],quality:['complete','partial','stale']}))if(allowed.includes(value[key]))result[key]=value[key];
+  if(typeof value.sharedReadConfigured==='boolean')result.sharedReadConfigured=value.sharedReadConfigured;
+  // Snapshot IDs must have known public formats, not merely arbitrary token-shaped strings.
+  for(const key of ['catalogId','releaseId'])if(typeof value[key]==='string'&&/^(?:[0-9]+-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}|cycle-[0-9]+)$/.test(value[key])&&value[key].length<=96)result[key]=value[key];
+  if(typeof value.runId==='string'&&/^[0-9]{10}$/.test(value.runId))result.runId=value.runId;
+  return result;
+}
 // Exact core publication policy: Atmos ops/platform/validate-model-component.py
 // MAX_AGE_HOURS/MAX_FUTURE_SKEW_HOURS and data/build_point_series.py SOURCE.fresh_h.
 // Regional UI admission has a separate, intentionally shorter policy.
 export const CORE_FRESH_HOURS=Object.freeze({ecmwf:30,gfs:18});
-async function forecastJson(path,fetcher,maxBytes=256*1024){
+async function forecastJson(path,fetcher,maxBytes=256*1024,label='unknown',observe=async()=>{}){
+  let code='network',event={label};
+  try{
   const response=await fetcher(ORIGIN+path,{method:'GET',redirect:'error',cache:'no-store',headers:{'Cache-Control':'no-cache'},signal:AbortSignal.timeout(20000)});
+  event={label,httpStatus:response.status,dataSource:response.headers.get('x-weatherx-data-source'),catalogId:response.headers.get('x-weatherx-catalog'),releaseId:response.headers.get('x-weatherx-release')};
+  code='http-status';
   assert.equal(response.status,200,'staging forecast read failed');
+  code='content-type';
   assert.match(response.headers.get('content-type')??'',/^application\/json\b/i,'staging forecast must be JSON');
+  code='empty-body';
   assert.ok(response.body,'empty staging forecast');const reader=response.body.getReader(),parts=[];let size=0;
-  try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;assert.ok(size<=maxBytes,'oversized staging forecast');parts.push(Buffer.from(value));}}
+  try{while(true){code='stream';const {done,value}=await reader.read();if(done)break;size+=value.byteLength;code='oversized';assert.ok(size<=maxBytes,'oversized staging forecast');parts.push(Buffer.from(value));}}
   finally{await reader.cancel();}
-  return {body:JSON.parse(Buffer.concat(parts).toString('utf8')),headers:response.headers};
+  code='json';const body=JSON.parse(Buffer.concat(parts).toString('utf8'));
+  if(body&&typeof body==='object')event={...event,authMode:body.authMode,billingMode:body.billingMode,catalogMode:body.catalogMode,sharedReadConfigured:body.sharedReadConfigured,quality:body.quality,
+    dataSource:['own','shared'].includes(event.dataSource)?event.dataSource:body.dataSource,runId:body.runId??/^runs\/([0-9]{10})\/$/.exec(body.runs?.[0]?.path??'')?.[1]};
+  return {body,headers:response.headers};
+  }catch(error){rememberFailure(error,`read-${label}`,code,event.httpStatus);throw error;}
+  finally{await observe(safeProbe(event));}
 }
-export async function verifySharedForecast(fetcher=fetch,now=Date.now()){
-  const platform=await forecastJson('/api/platform/health',fetcher,8192);
-  const data=await forecastJson('/api/platform/data-health',fetcher,8192);
+export async function verifySharedForecast(fetcher=fetch,now=Date.now(),observe=async()=>{}){
+  let phase='contract-health',observationError;
+  // Finish the read/contract checks so a receipt-write error cannot conceal the
+  // original endpoint refusal. A lost receipt still prevents qualification.
+  const record=async event=>{try{await observe(event);}catch(error){observationError??=error;rememberFailure(error,'receipt-persist','write');}};
+  const read=async(label,path,maxBytes)=>{const value=await forecastJson(path,fetcher,maxBytes,label,record);phase=`contract-${label}`;return value;};
+  try{
+  const platform=await read('health','/api/platform/health',8192);
+  const data=await read('data-health','/api/platform/data-health',8192);
+  phase='contract-health';
   validateHealth(platform.body,data.body);
   assert.equal(data.body.dataSource,'shared','staging must read shared data');
   assert.equal(data.body.sharedReadConfigured,true,'shared credential not configured');
   const models=[];
   for(const model of ['ecmwf','gfs']){
-    const index=await forecastJson(`/data/${model}/index.json`,fetcher);
+    const index=await read(`${model}-index`,`/data/${model}/index.json`);
     assert.equal(index.headers.get('x-weatherx-data-source'),'shared');
     assert.equal(index.body.model,model);assert.ok(Array.isArray(index.body.runs)&&index.body.runs.length>0);
     const latest=index.body.runs[0],match=/^runs\/([0-9]{10})\/$/.exec(latest.path??'');assert.ok(match,'unsafe model run path');
@@ -179,7 +252,7 @@ export async function verifySharedForecast(fetcher=fetch,now=Date.now()){
     assert.ok(Number.isFinite(initialized)&&initialized<=now+HOUR&&now-initialized<=CORE_FRESH_HOURS[model]*HOUR,'stale or future map run');
     assert.equal(new Date(initialized).toISOString().replace(/[-:T]/g,'').slice(0,10),runId,'map path/init mismatch');
     const catalogId=index.headers.get('x-weatherx-catalog');assert.match(catalogId??'',SAFE_ID,'missing map catalog identity');
-    const manifest=await forecastJson(`/data/_catalog/${catalogId}/${model}/${latest.path}manifest.json`,fetcher);
+    const manifest=await read(`${model}-manifest`,`/data/_catalog/${catalogId}/${model}/${latest.path}manifest.json`);
     assert.equal(manifest.headers.get('x-weatherx-data-source'),'shared');assert.equal(manifest.headers.get('x-weatherx-catalog'),catalogId);
     assert.equal(manifest.body.init_time,latest.init_time,'manifest run mismatch');
     const frames=manifest.body.frames;assert.ok(Array.isArray(frames)&&frames.length>1);
@@ -187,7 +260,7 @@ export async function verifySharedForecast(fetcher=fetch,now=Date.now()){
     assert.ok(times[0]<=now&&times.at(-1)>=now+3*HOUR,'map does not cover current forecast');
     const start=Math.floor(now/HOUR)*HOUR,end=start+6*HOUR;
     const query=new URLSearchParams({lat:'39.9',lon:'116.4',variables:'temperature',run:runId,start:new Date(start).toISOString(),end:new Date(end).toISOString()});
-    const point=await forecastJson(`/api/v1/point-series/${model}?${query}`,fetcher),body=point.body;
+    const point=await read(`${model}-point`,`/api/v1/point-series/${model}?${query}`),body=point.body;
     assert.equal(point.headers.get('x-weatherx-data-source'),'shared');
     assert.equal(body.schemaVersion,1);assert.equal(body.model,model);assert.equal(body.runId,runId);assert.equal(Date.parse(body.initializedAt),initialized);
     // Point mounts may legitimately use a catalog ID instead of the whole-release ID.
@@ -200,37 +273,56 @@ export async function verifySharedForecast(fetcher=fetch,now=Date.now()){
     assert.ok(samples.every((s,i)=>typeof s.value==='number'&&Number.isFinite(s.value)&&Number.isFinite(Date.parse(s.validTime))&&Date.parse(s.validTime)>=start&&Date.parse(s.validTime)<=end&&(!i||Date.parse(s.validTime)>Date.parse(samples[i-1].validTime))),'invalid numeric forecast');
     models.push({model,runId,catalogId,pointSnapshotId:body.releaseId,samples:samples.length});
   }
+  if(observationError)throw observationError;
   return {checkedAt:new Date(now).toISOString(),dataSource:'shared',models};
+  }catch(error){rememberFailure(error,phase,'contract');throw error;}
 }
 export async function guardedRepair({before,desired,upload,snapshot,getVersion=async()=> (await snapshot()).version,activate,verify,rollback,persist}) {
   const receipt={schemaVersion:1,sourceSha:SOURCE_SHA,worker:WORKER,before,desired,status:'preflight-passed'};
-  await persist(receipt);
-  receipt.uploaded=await upload();assert.match(receipt.uploaded,UUID);await persist(receipt);
-  assert.deepEqual(await snapshot(),before,'inactive upload changed live boundary');
+  const write=async()=>{try{await persist(receipt);}catch(error){rememberFailure(error,'receipt-persist','write');throw error;}};
+  // Diagnostic storage must never gate ownership checks or the actual restore.
+  const recoveryWrite=async()=>{try{await write();}catch(error){receipt.persistenceFailure=safeFailure(error,'receipt-persist');}};
+  await write();
   let attempted=false;
   try {
-    receipt.status='activating';await persist(receipt);attempted=true;
-    await activate(receipt.uploaded);await verify();
+    receipt.phase='upload';await write();
+    receipt.uploaded=await upload();assert.match(receipt.uploaded,UUID);await write();
+    receipt.phase='upload-boundary';
+    assert.deepEqual(await snapshot(),before,'inactive upload changed live boundary');
+    receipt.status='activating';await write();attempted=true;
+    receipt.phase='activate';await write();await activate(receipt.uploaded);
+    receipt.phase='verify';await write();
+    await verify(async event=>{receipt.probes??=[];if(receipt.probes.length<24)receipt.probes.push(safeProbe(event));await write();});
+    receipt.phase='final-boundary';await write();
     const after=await snapshot();assert.equal(after.version,receipt.uploaded);assert.deepEqual(after.state,desired);
-    receipt.status='passed';receipt.after=after;await persist(receipt);return receipt;
+    receipt.status='passed';receipt.after=after;await write();return receipt;
   } catch(error) {
+    receipt.failure=safeFailure(error,receipt.phase);
+    receipt.status=attempted?'failed-recovery-pending':'failed-before-activation';await recoveryWrite();
     if(attempted){
+      try{
       // Bad runtime/binding metadata must not prevent identifying and restoring
       // our own version. Acceptance still requires the complete strict snapshot.
-      const liveVersion=await getVersion();
+      receipt.phase='rollback-identity';const liveVersion=await getVersion();
       assert.ok([before.version,receipt.uploaded].includes(liveVersion),'another publisher owns staging; refusing rollback');
-      if(liveVersion!==before.version)await rollback(before.version);
+      receipt.phase='rollback';if(liveVersion!==before.version)await rollback(before.version);
+      receipt.phase='rollback-boundary';
       assert.deepEqual(await snapshot(),before,'staging rollback did not restore prior boundary');
-      receipt.status='failed-restored';await persist(receipt);
+      receipt.status='failed-restored';await recoveryWrite();
+      }catch(recoveryError){receipt.recoveryFailure=safeFailure(recoveryError,receipt.phase);receipt.status='failed-recovery-incomplete';await recoveryWrite();throw recoveryError;}
     }
     throw error;
   }
 }
 async function jsonGet(url,token){
+  let code='network',status;
+  try{
   const r=await fetch(url,{headers:{Authorization:`Bearer ${token}`},redirect:'error',signal:AbortSignal.timeout(30_000)});
+  status=r.status;code='http-status';
   assert.equal(r.status,200,'Cloudflare read failed');let n=0;const parts=[];
-  for await(const chunk of r.body){n+=chunk.length;assert.ok(n<=2*1024**2,'oversized Cloudflare response');parts.push(chunk);}
-  const value=JSON.parse(Buffer.concat(parts));assert.equal(value.success,true,'Cloudflare rejected read');return value.result;
+  code='stream';for await(const chunk of r.body){n+=chunk.length;assert.ok(n<=2*1024**2,'oversized Cloudflare response');parts.push(chunk);}
+  code='json';const value=JSON.parse(Buffer.concat(parts));code='api-result';assert.equal(value.success,true,'Cloudflare rejected read');return value.result;
+  }catch(error){rememberFailure(error,'control-read',code,status);throw error;}
 }
 export async function consumerSnapshot(config,get){
   // /settings describes the latest upload, not necessarily the version serving
@@ -257,7 +349,10 @@ export async function consumerSnapshot(config,get){
   return {version,state};
 }
 export async function main(command,atmos,receiptPath,env=process.env){
-  assert.ok(['preflight','execute','recover'].includes(command));
+  assert.ok(['preflight','execute','preflight-reuse','execute-reuse','recover'].includes(command));
+  const reuse=['preflight-reuse','execute-reuse'].includes(command)||(command==='recover'&&env.STAGING_CONSUMER_MODE==='reuse-owned-33988771315');
+  if(reuse){consumerGate(env);assert.equal(env.STAGING_CONSUMER_MODE,'reuse-owned-33988771315');}
+  else if(command!=='recover')assert.equal(env.STAGING_CONSUMER_MODE??'upload','upload');
   const croot=resolve(atmos,'platform/edge');
   assert.equal(execFileSync('git',['rev-parse','HEAD'],{cwd:atmos,encoding:'utf8'}).trim(),SOURCE_SHA);
   execFileSync('git',['diff','--exit-code','HEAD'],{cwd:atmos,stdio:'pipe'});
@@ -266,7 +361,15 @@ export async function main(command,atmos,receiptPath,env=process.env){
   const getVersion=async()=>activeVersion(await jsonGet(BASE+'/deployments',token));
   const history=async()=>versionHistory(await jsonGet(BASE+'/versions?page=1&per_page=10',token));
   const snapshot=()=>consumerSnapshot(config,url=>jsonGet(url,token));
+  const readVersion=id=>jsonGet(BASE+`/versions/${id}`,token);
+  const origin=reuse?readOwnedOrigin(readFileSync(join(dirname(receiptPath),'origin.json'))):null;
   const persist=async receipt=>{mkdirSync(dirname(receiptPath),{recursive:true,mode:0o700});writeFileSync(receiptPath,JSON.stringify(receipt,null,2)+'\n',{mode:0o600});};
+  if(command==='preflight-reuse'){
+    const proof=await reusablePreflight({config,origin,snapshot,history,readVersion});
+    const receipt={...proof,sourceSha:SOURCE_SHA,worker:WORKER,at:new Date().toISOString(),
+      workflowRun:env.GITHUB_RUN_ID,workflowAttempt:env.GITHUB_RUN_ATTEMPT,reuseOrigin:{...OWNED_REUSE,receipt:origin}};
+    await persist(receipt);console.log(JSON.stringify({worker:WORKER,version:proof.before.version,reusing:OWNED_REUSE.version,deployed:false}));return receipt;
+  }
   if(command==='preflight'){
     const before=await snapshot(),desired=desiredSettings(before.state,config);
     assertRuntimePreserved(config,before.state.script_runtime);
@@ -280,6 +383,8 @@ export async function main(command,atmos,receiptPath,env=process.env){
   assert.equal(stored.before.version,env.STAGING_CONSUMER_APPROVED_VERSION);
   assert.equal(hash(JSON.stringify(stored.before.state)),env.STAGING_CONSUMER_APPROVED_SETTINGS_SHA256);
   assert.equal(stored.workflowRun,env.GITHUB_RUN_ID);assert.equal(stored.workflowAttempt,env.GITHUB_RUN_ATTEMPT);
+  if(reuse)assert.deepEqual(stored.reuseOrigin,{...OWNED_REUSE,receipt:origin},'reuse provenance changed');
+  else assert.equal(stored.reuseOrigin,undefined,'normal upload cannot reuse receipt');
   const run=async(args,options={})=>{
     let secretDir,secretPath;
     if(options.secrets){
@@ -308,13 +413,23 @@ export async function main(command,atmos,receiptPath,env=process.env){
   }
   const age=Date.now()-Date.parse(stored.at);assert.ok(age>=0&&age<10*60_000,'staging preflight expired');
   assert.deepEqual(await snapshot(),stored.before,'staging changed since reviewed preflight');
-  assert.deepEqual(await history(),stored.versionHistory,'version history changed since reviewed preflight');
-  assert.equal(stored.versionHistory[0],stored.before.version,'latest version does not own reviewed secrets');
+  if(reuse){
+    assertUploadedHistory(stored.versionHistory,await history(),OWNED_REUSE.version);
+    assertReusableVersion(config,origin,await readVersion(OWNED_REUSE.version));
+  }else{
+    assert.deepEqual(await history(),stored.versionHistory,'version history changed since reviewed preflight');
+    assert.equal(stored.versionHistory[0],stored.before.version,'latest version does not own reviewed secrets');
+  }
   assertRuntimePreserved(config,stored.before.state.script_runtime);
   assertAllowedTransition(config,stored.before.state,stored.desired);
   return guardedRepair({before:stored.before,desired:stored.desired,snapshot,getVersion,
-    persist:r=>{stored.uploaded=r.uploaded;return persist({...r,versionHistory:stored.versionHistory,workflowRun:env.GITHUB_RUN_ID,workflowAttempt:env.GITHUB_RUN_ATTEMPT});},
+    persist:r=>{stored.uploaded=r.uploaded;return persist({...r,versionHistory:stored.versionHistory,workflowRun:env.GITHUB_RUN_ID,workflowAttempt:env.GITHUB_RUN_ATTEMPT,...(reuse?{reuseOrigin:stored.reuseOrigin,candidateMode:'reused-owned-version'}:{})});},
     upload:async()=>{
+      if(reuse){
+        // Candidate acquisition only: no upload, no secret lookup or inheritance.
+        assertReusableVersion(config,origin,await readVersion(OWNED_REUSE.version));
+        assertUploadedHistory(stored.versionHistory,await history(),OWNED_REUSE.version);return OWNED_REUSE.version;
+      }
       // Deliberately omit --keep-vars: apply only the reviewed public/shared delta.
       // Existing secrets are inherited (no secrets file) from the exclusively owned
       // latest version; both binding and full runtime readbacks gate activation.
@@ -328,7 +443,7 @@ export async function main(command,atmos,receiptPath,env=process.env){
     },
     activate:id=>activateOwned({before:stored.before,uploaded:id,priorHistory:stored.versionHistory,history,snapshot,getVersion,
       activate:version=>run(['versions','deploy',`${version}@100%`,'--yes','--message','Qualified staging public-weather repair'])}),
-    verify:async()=>{for(let n=0;n<3;n++){await verifySharedForecast();if(n<2)await new Promise(r=>setTimeout(r,5000));}
+    verify:async observe=>{for(let n=0;n<3;n++){await verifySharedForecast(fetch,Date.now(),observe);if(n<2)await new Promise(r=>setTimeout(r,5000));}
       await confirmOwned({uploaded:stored.uploaded,priorHistory:stored.versionHistory,history,getVersion});},rollback:restore});
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)

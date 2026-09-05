@@ -1,0 +1,387 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "0aa9fbed9e179ab2ccb6ac456727b9f33124ddb6",
+  "worker": "weatherx-platform-edge-staging",
+  "before": {
+    "version": "371277cf-0113-4f9b-91c2-277a31a78d98",
+    "state": {
+      "bindings": [
+        {
+          "name": "APP_ORIGIN",
+          "type": "plain_text",
+          "text": "https://staging.weatherx.org"
+        },
+        {
+          "name": "AUTH_EMAIL_FROM_NAME",
+          "type": "plain_text",
+          "text": "WeatherX"
+        },
+        {
+          "name": "AUTH_EMAIL_FROM",
+          "type": "plain_text",
+          "text": "login@weatherx.org"
+        },
+        {
+          "name": "AUTH_EMAIL_QUEUE",
+          "type": "queue",
+          "queue_name": "weatherx-auth-email-staging"
+        },
+        {
+          "name": "AUTH_HASH_KEY",
+          "type": "secret_text"
+        },
+        {
+          "name": "AUTH_MODE",
+          "type": "plain_text",
+          "text": "public"
+        },
+        {
+          "name": "BILLING_MODE",
+          "type": "plain_text",
+          "text": "enabled"
+        },
+        {
+          "name": "CATALOG_PROMOTION_KEY",
+          "type": "secret_text"
+        },
+        {
+          "name": "COMPONENT_BUCKET",
+          "type": "r2_bucket",
+          "bucket_name": "weatherx-components-staging"
+        },
+        {
+          "name": "DATA_BUCKET",
+          "type": "r2_bucket",
+          "bucket_name": "weatherx-data-staging"
+        },
+        {
+          "name": "DATA_CATALOG_MODE",
+          "type": "plain_text",
+          "text": "serve"
+        },
+        {
+          "name": "DATA_CATALOG_POINTER_KEY",
+          "type": "plain_text",
+          "text": "catalogs/current.json"
+        },
+        {
+          "name": "DATA_ENTITLEMENT_KEY",
+          "type": "plain_text",
+          "text": "weather_data"
+        },
+        {
+          "name": "DATA_POINTER_KEY",
+          "type": "plain_text",
+          "text": "releases/current.json"
+        },
+        {
+          "name": "EMAIL",
+          "type": "send_email",
+          "allowed_sender_addresses": [
+            "login@weatherx.org"
+          ],
+          "allowed_destination_addresses": []
+        },
+        {
+          "name": "PLATFORM_DB",
+          "type": "d1",
+          "id": "9501827a-7e4c-4249-806b-d45d5857d9e5"
+        },
+        {
+          "name": "PLATFORM_METRICS",
+          "type": "analytics_engine",
+          "dataset": "weatherx_platform_staging"
+        },
+        {
+          "name": "SESSION_TTL_DAYS",
+          "type": "plain_text",
+          "text": "30"
+        },
+        {
+          "name": "SHARED_READ_ACCESS_KEY_ID",
+          "type": "secret_text"
+        },
+        {
+          "name": "SHARED_READ_SECRET_ACCESS_KEY",
+          "type": "secret_text"
+        },
+        {
+          "name": "STRIPE_ENVIRONMENT",
+          "type": "plain_text",
+          "text": "test"
+        },
+        {
+          "name": "STRIPE_PASS_PRICE_ID",
+          "type": "plain_text",
+          "text": "price_1U6et6PKEj1zQ5Sco1gMbGLe"
+        },
+        {
+          "name": "STRIPE_PRICE_ID",
+          "type": "plain_text",
+          "text": "price_1U6XNWPKEj1zQ5ScUsQsdCgp"
+        },
+        {
+          "name": "STRIPE_SECRET_KEY",
+          "type": "secret_text"
+        },
+        {
+          "name": "STRIPE_WEBHOOK_SECRET",
+          "type": "secret_text"
+        }
+      ],
+      "compatibility_date": "2026-08-15",
+      "compatibility_flags": [
+        "nodejs_compat"
+      ],
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+        "redact_query_string": false,
+        "logs": {
+          "enabled": true,
+          "head_sampling_rate": 1,
+          "persist": true,
+          "invocation_logs": true
+        },
+        "traces": {
+          "enabled": true,
+          "persist": true,
+          "head_sampling_rate": 0.01
+        }
+      },
+      "placement": {},
+      "tail_consumers": [],
+      "logpush": false,
+      "script_runtime": {
+        "compatibility_date": "2026-08-15",
+        "compatibility_flags": [
+          "nodejs_compat"
+        ],
+        "usage_model": "standard"
+      },
+      "routes": [
+        "staging.weatherx.org/api/eonet/*",
+        "staging.weatherx.org/api/gdacs/*",
+        "staging.weatherx.org/api/platform/*",
+        "staging.weatherx.org/api/tc/*",
+        "staging.weatherx.org/api/v1/*",
+        "staging.weatherx.org/cdn/*",
+        "staging.weatherx.org/data-atmos/*",
+        "staging.weatherx.org/data/*"
+      ],
+      "crons": [
+        "17 3 * * *"
+      ]
+    }
+  },
+  "desired": {
+    "bindings": [
+      {
+        "name": "APP_ORIGIN",
+        "type": "plain_text",
+        "text": "https://staging.weatherx.org"
+      },
+      {
+        "name": "AUTH_EMAIL_FROM_NAME",
+        "type": "plain_text",
+        "text": "WeatherX"
+      },
+      {
+        "name": "AUTH_EMAIL_FROM",
+        "type": "plain_text",
+        "text": "login@weatherx.org"
+      },
+      {
+        "name": "AUTH_EMAIL_QUEUE",
+        "type": "queue",
+        "queue_name": "weatherx-auth-email-staging"
+      },
+      {
+        "name": "AUTH_HASH_KEY",
+        "type": "secret_text"
+      },
+      {
+        "name": "AUTH_MODE",
+        "type": "plain_text",
+        "text": "public"
+      },
+      {
+        "name": "BILLING_MODE",
+        "type": "plain_text",
+        "text": "disabled"
+      },
+      {
+        "name": "CATALOG_PROMOTION_KEY",
+        "type": "secret_text"
+      },
+      {
+        "name": "COMPONENT_BUCKET",
+        "type": "r2_bucket",
+        "bucket_name": "weatherx-components-staging"
+      },
+      {
+        "name": "DATA_BUCKET",
+        "type": "r2_bucket",
+        "bucket_name": "weatherx-data-staging"
+      },
+      {
+        "name": "DATA_CATALOG_MODE",
+        "type": "plain_text",
+        "text": "serve"
+      },
+      {
+        "name": "DATA_CATALOG_POINTER_KEY",
+        "type": "plain_text",
+        "text": "catalogs/current.json"
+      },
+      {
+        "name": "DATA_ENTITLEMENT_KEY",
+        "type": "plain_text",
+        "text": "weather_data"
+      },
+      {
+        "name": "DATA_POINTER_KEY",
+        "type": "plain_text",
+        "text": "releases/current.json"
+      },
+      {
+        "name": "DATA_SOURCE_MODE",
+        "type": "plain_text",
+        "text": "shared"
+      },
+      {
+        "name": "EMAIL",
+        "type": "send_email",
+        "allowed_sender_addresses": [
+          "login@weatherx.org"
+        ],
+        "allowed_destination_addresses": []
+      },
+      {
+        "name": "PLATFORM_DB",
+        "type": "d1",
+        "id": "9501827a-7e4c-4249-806b-d45d5857d9e5"
+      },
+      {
+        "name": "PLATFORM_METRICS",
+        "type": "analytics_engine",
+        "dataset": "weatherx_platform_staging"
+      },
+      {
+        "name": "SESSION_TTL_DAYS",
+        "type": "plain_text",
+        "text": "30"
+      },
+      {
+        "name": "SHARED_READ_ACCESS_KEY_ID",
+        "type": "secret_text"
+      },
+      {
+        "name": "SHARED_READ_ACCOUNT_ID",
+        "type": "plain_text",
+        "text": "a89f9a1af485021fbc60a68b163c7c6e"
+      },
+      {
+        "name": "SHARED_READ_COMPONENT_BUCKET",
+        "type": "plain_text",
+        "text": "weatherx-components-production"
+      },
+      {
+        "name": "SHARED_READ_DATA_BUCKET",
+        "type": "plain_text",
+        "text": "weatherx-data-production"
+      },
+      {
+        "name": "SHARED_READ_PIN_KEY",
+        "type": "plain_text",
+        "text": "shared-read/pin.json"
+      },
+      {
+        "name": "SHARED_READ_SECRET_ACCESS_KEY",
+        "type": "secret_text"
+      },
+      {
+        "name": "STRIPE_ENVIRONMENT",
+        "type": "plain_text",
+        "text": "test"
+      },
+      {
+        "name": "STRIPE_PASS_PRICE_ID",
+        "type": "plain_text",
+        "text": "price_1U6et6PKEj1zQ5Sco1gMbGLe"
+      },
+      {
+        "name": "STRIPE_PRICE_ID",
+        "type": "plain_text",
+        "text": "price_1U6XNWPKEj1zQ5ScUsQsdCgp"
+      },
+      {
+        "name": "STRIPE_SECRET_KEY",
+        "type": "secret_text"
+      },
+      {
+        "name": "STRIPE_WEBHOOK_SECRET",
+        "type": "secret_text"
+      }
+    ],
+    "compatibility_date": "2026-08-15",
+    "compatibility_flags": [
+      "nodejs_compat"
+    ],
+    "observability": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "redact_query_string": false,
+      "logs": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+        "persist": true,
+        "invocation_logs": true
+      },
+      "traces": {
+        "enabled": true,
+        "persist": true,
+        "head_sampling_rate": 0.01
+      }
+    },
+    "placement": {},
+    "tail_consumers": [],
+    "logpush": false,
+    "script_runtime": {
+      "compatibility_date": "2026-08-15",
+      "compatibility_flags": [
+        "nodejs_compat"
+      ],
+      "usage_model": "standard"
+    },
+    "routes": [
+      "staging.weatherx.org/api/eonet/*",
+      "staging.weatherx.org/api/gdacs/*",
+      "staging.weatherx.org/api/platform/*",
+      "staging.weatherx.org/api/tc/*",
+      "staging.weatherx.org/api/v1/*",
+      "staging.weatherx.org/cdn/*",
+      "staging.weatherx.org/data-atmos/*",
+      "staging.weatherx.org/data/*"
+    ],
+    "crons": [
+      "17 3 * * *"
+    ]
+  },
+  "status": "failed-restored",
+  "uploaded": "e3d05c37-01c6-479e-baa8-450a6d3eabac",
+  "versionHistory": [
+    "371277cf-0113-4f9b-91c2-277a31a78d98",
+    "02a352c5-7919-4bf8-b801-3d7f247a948e",
+    "91f09566-6692-4c76-92aa-132a437fbdde",
+    "0bcebe07-691a-463a-9f95-87ec4c45d0cc",
+    "cb341bff-0d7b-44a7-9651-7b6c29ddcea2",
+    "38afc33f-719a-4764-9456-5ae8691407ce",
+    "9399dac3-33d5-4620-9aae-d3853b54105e",
+    "ddc95dca-7aab-472b-8191-6f80d843a750",
+    "175d4c41-d0f9-47c9-ba53-864a5d346328",
+    "959d3155-a22e-409e-8d8f-1febf5a6309d"
+  ],
+  "workflowRun": "33988771315",
+  "workflowAttempt": "1"
+}
