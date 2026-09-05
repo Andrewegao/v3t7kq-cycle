@@ -227,7 +227,7 @@ export function makeOperations(transport,atmos,source){
       for(const key of ['limits','usage_model'])if(Object.hasOwn(receipt.boundary.data.runtime,key))metadata[key]=receipt.boundary.data.runtime[key];
       const body=new FormData();body.set('metadata',JSON.stringify(metadata));
       body.set('dataReader.mjs',new Blob([source.bundles[kind].bytes],{type:'application/javascript+module'}),'dataReader.mjs');
-      return api(`${SCRIPT}/versions?bindings_inherit=strict`,{method:'POST',body});
+      return api(`${SCRIPT}/versions?bindings_inherit=strict`,{method:'POST',body,inheritanceBindings:settings.bindings.map(x=>x.name)});
     },
     deploy:id=>{assert.match(id,UUID);return api(`${SCRIPT}/deployments`,{method:'POST',body:{strategy:'percentage',versions:[{version_id:id,percentage:100}]}});},
     verify:async(kind,receipt)=>{

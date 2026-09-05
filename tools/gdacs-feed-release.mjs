@@ -126,19 +126,42 @@ export async function buildSource(atmos,sha) {
   return {bytes,source:{sha,inventorySha256:inventory.inventorySha256,bundleSha256:sha256(bytes),bundleBytes:bytes.length,esbuildVersion:esbuild.version,inputs:sorted(Object.keys(bundle.metafile.inputs))}};
 }
 // Never retain remote text, URLs, headers or configuration in diagnostics. Keep
-// only fixed classes and bounded numbers, and re-sanitize before persistence.
+// only fixed classes, reviewed binding names and bounded numbers; re-sanitize
+// before persistence. These are the existing data-reader boundary names only.
+const INHERIT_BINDINGS=new Set(['APP_ORIGIN','AUTH_HASH_KEY','AUTH_MODE','CATALOG_PROMOTION_KEY','COMPONENT_BUCKET','DATA_BUCKET','DATA_CATALOG_MODE','DATA_CATALOG_POINTER_KEY','DATA_ENTITLEMENT_KEY','DATA_POINTER_KEY','PLATFORM_DB','PLATFORM_METRICS']);
+const INHERIT_REASONS=new Set(['missing-binding','no-previous-version','unknown']);
+function inheritDiagnostic(errors,bindings){
+  const allowed=new Set((Array.isArray(bindings)?bindings:[]).filter(name=>INHERIT_BINDINGS.has(name)));
+  if(!allowed.size)return undefined;
+  return errors.filter(error=>error?.code===10057).slice(0,8).map(error=>{
+    const message=error.message;
+    if(typeof message!=='string'||message.length>512||/[^\x20-\x7e]/.test(message))return {reason:'unknown'};
+    // Exact known server forms, also used in Cloudflare workers-sdk fixtures.
+    if(message==='cannot inherit bindings: no previous version exists')return {reason:'no-previous-version'};
+    const match=message.match(/^inherit binding '([A-Z_]+)' is invalid(?:: (.*))?$/);
+    if(!match||!allowed.has(match[1]))return {reason:'unknown'};
+    const binding=match[1];
+    return {reason:match[2]===`previous version does not have binding named '${binding}'`?'missing-binding':'unknown',binding};
+  });
+}
 export function safeFailureDiagnostic(error){
   const value=error?.safeDiagnostic;
-  if(['cloudflare-api','cloudflare-response'].includes(value?.kind))return {
+  if(['cloudflare-api','cloudflare-response'].includes(value?.kind)){
+    const diagnostic={
     kind:value.kind,httpStatus:Number.isInteger(value.httpStatus)&&value.httpStatus>=100&&value.httpStatus<=599?value.httpStatus:null,
     errorCodes:[...new Set((Array.isArray(value.errorCodes)?value.errorCodes:[]).filter(code=>Number.isSafeInteger(code)&&code>=1000&&code<=999999999))].slice(0,8),
-  };
+    };
+    if(diagnostic.kind==='cloudflare-api'&&diagnostic.httpStatus===400&&diagnostic.errorCodes.includes(10057)&&Array.isArray(value.inheritance)&&value.inheritance.length){
+      diagnostic.inheritance=value.inheritance.slice(0,8).map(item=>({reason:INHERIT_REASONS.has(item?.reason)?item.reason:'unknown',...(INHERIT_BINDINGS.has(item?.binding)?{binding:item.binding}:{})}));
+    }
+    return diagnostic;
+  }
   if(value?.kind==='transport')return {kind:'transport'};
   return {kind:error?.code==='ERR_ASSERTION'?'local-validation':'unexpected'};
 }
-function apiFailure(kind,status,codes=[]){
+function apiFailure(kind,status,codes=[],inheritance){
   const error=new Error('Cloudflare operation rejected');
-  error.safeDiagnostic=safeFailureDiagnostic({safeDiagnostic:{kind,httpStatus:status,errorCodes:codes}});
+  error.safeDiagnostic=safeFailureDiagnostic({safeDiagnostic:{kind,httpStatus:status,errorCodes:codes,inheritance}});
   return error;
 }
 export function createTransport({fetchImpl=globalThis.fetch,deadline=()=>Date.now()+30_000,signal=()=>undefined,tokens=process.env}={}) {
@@ -149,7 +172,7 @@ export function createTransport({fetchImpl=globalThis.fetch,deadline=()=>Date.no
     for await(const chunk of response.body??[]){size+=chunk.length;assert.ok(size<=max,'response body cap exceeded');chunks.push(chunk);}
     return {status:response.status,headers:response.headers,body:Buffer.concat(chunks)};
   }
-  async function api(path,tokenName='PLATFORM_EDGE_TOKEN',{method='GET',body,allowAbsent=false}={}){
+  async function api(path,tokenName='PLATFORM_EDGE_TOKEN',{method='GET',body,allowAbsent=false,inheritanceBindings}={}){
     assert.ok(tokens[tokenName],`missing ${tokenName}`);
     const headers={Authorization:`Bearer ${tokens[tokenName]}`};
     if(body && !(body instanceof FormData)){headers['Content-Type']='application/json';body=JSON.stringify(body);}
@@ -158,7 +181,10 @@ export function createTransport({fetchImpl=globalThis.fetch,deadline=()=>Date.no
     let json;
     try{json=JSON.parse(response.body);}catch{throw apiFailure('cloudflare-response',response.status);}
     if(allowAbsent && response.status===404 && json?.success===false && Array.isArray(json.errors)&&json.errors.some(error=>error?.code===10007))return null;
-    if(!(response.status>=200&&response.status<300&&json?.success===true))throw apiFailure('cloudflare-api',response.status,Array.isArray(json?.errors)?json.errors.map(error=>error?.code):[]);
+    if(!(response.status>=200&&response.status<300&&json?.success===true)){
+      const errors=Array.isArray(json?.errors)?json.errors:[];
+      throw apiFailure('cloudflare-api',response.status,errors.map(error=>error?.code),response.status===400?inheritDiagnostic(errors,inheritanceBindings):undefined);
+    }
     return json.result;
   }
   async function object(key,max=16*1024*1024){

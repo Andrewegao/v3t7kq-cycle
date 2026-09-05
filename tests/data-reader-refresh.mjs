@@ -120,3 +120,35 @@ test('diagnostic persistence rejects remote strings and bounds numeric fields',(
   assert.deepEqual(diagnostic,{kind:'cloudflare-api',httpStatus:null,errorCodes:Array.from({length:8},(_,i)=>1000+i)});
   assert.deepEqual(safeFailureDiagnostic({safeDiagnostic:{kind:'never-print'}}),{kind:'unexpected'});
 });
+async function inheritFailure(errors,{status=400,bindings=['CATALOG_PROMOTION_KEY']}={}){
+  const transport=createTransport({tokens:{DATA_EDGE_TOKEN:'never-print-token'},fetchImpl:async()=>Response.json({success:false,errors},{status})});
+  try{await transport.api(SCRIPT+'/versions?bindings_inherit=strict','DATA_EDGE_TOKEN',{method:'POST',inheritanceBindings:bindings});assert.fail('expected refusal');}catch(error){return safeFailureDiagnostic(error);}
+}
+test('inherit refusal retains only known reason and reviewed binding through controller receipt',async()=>{
+  const f=fixture();
+  const transport=createTransport({tokens:{DATA_EDGE_TOKEN:'never-print-token'},fetchImpl:async()=>Response.json({success:false,errors:[{code:10057,message:"inherit binding 'CATALOG_PROMOTION_KEY' is invalid: previous version does not have binding named 'CATALOG_PROMOTION_KEY'"}]},{status:400})});
+  f.ops.upload=makeOperations(transport,'unused',{bundles:{readonly:{bytes:Buffer.from('code')}}}).upload;
+  await assert.rejects(execute(f.receipt,f.ops,f.persist));
+  assert.deepEqual(f.receipt.failure,{kind:'cloudflare-api',httpStatus:400,errorCodes:[10057],inheritance:[{reason:'missing-binding',binding:'CATALOG_PROMOTION_KEY'}]});
+  assert.equal(f.receipt.recovery,'no-active-mutation');assert.equal(f.getActive(),old);
+});
+test('inherit no previous version has a fixed classification without reflected text',async()=>{
+  assert.deepEqual((await inheritFailure([{code:10057,message:'cannot inherit bindings: no previous version exists'}])).inheritance,[{reason:'no-previous-version'}]);
+});
+test('inherit unknown reasons, names, controls, oversized messages and embedded secrets are redacted',async()=>{
+  for(const message of ["inherit binding 'never-print-secret' is invalid: previous version does not have binding named 'never-print-secret'",'https://never-print.example/token',"inherit binding 'CATALOG_PROMOTION_KEY' is invalid: https://never-print.example/token", "inherit binding 'CATALOG_PROMOTION_KEY' is invalid\nnever-print",'never-print'.repeat(100)]){
+    const diagnostic=await inheritFailure([{code:10057,message}]);
+    assert.equal(diagnostic.inheritance[0].reason,'unknown');assert.ok(!JSON.stringify(diagnostic).includes('never-print'));
+  }
+  assert.deepEqual((await inheritFailure([{code:10057,message:"inherit binding 'PLATFORM_DB' is invalid: previous version does not have binding named 'PLATFORM_DB'"}])).inheritance,[{reason:'unknown'}]);
+});
+test('inherit classification requires numeric 10057, HTTP 400 and explicit boundary opt-in',async()=>{
+  const message='cannot inherit bindings: no previous version exists';
+  for(const [errors,options] of [[[{code:'10057',message}],{}],[[{code:10057,message}],{status:403}],[[{code:10057,message}],{bindings:[]}],[[{code:10021,message}],{}]])assert.ok(!Object.hasOwn(await inheritFailure(errors,options),'inheritance'));
+});
+test('inherit diagnostics are capped and re-sanitized before persistence',async()=>{
+  const diagnostic=await inheritFailure(Array.from({length:20},()=>({code:10057,message:'cannot inherit bindings: no previous version exists'})));
+  assert.equal(diagnostic.inheritance.length,8);
+  const input={kind:'cloudflare-api',httpStatus:400,errorCodes:[10057],inheritance:[{reason:'never-print',binding:'never-print',message:'never-print'},{reason:'missing-binding',binding:'CATALOG_PROMOTION_KEY',token:'never-print'}]};
+  assert.deepEqual(safeFailureDiagnostic({safeDiagnostic:input}).inheritance,[{reason:'unknown'},{reason:'missing-binding',binding:'CATALOG_PROMOTION_KEY'}]);
+});
