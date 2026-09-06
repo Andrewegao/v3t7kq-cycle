@@ -50,14 +50,14 @@ jobs:
         with:
           repository: weatherx-hq/atmos
           # Qualified fast-lane source, independent of experimental app master.
-          ref: 3f7479573b990337c64643077720c39b361b6841
+          ref: d8cd45d123f60c30c413c14d46f68113e37468b7
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: atmos
           persist-credentials: false
       - name: Verify approved immutable component collector
         working-directory: atmos
         run: |
-          test "$(git rev-parse HEAD)" = "3f7479573b990337c64643077720c39b361b6841"
+          test "$(git rev-parse HEAD)" = "d8cd45d123f60c30c413c14d46f68113e37468b7"
           git diff --exit-code HEAD
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22 }
