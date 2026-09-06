@@ -33,6 +33,7 @@ test('both data bakes and legacy backfill have no UI credential or dispatch capa
   for (const name of ['collect-core-model.yml', 'collect-regional-model.yml'])
     assertDataOnly(workflows[name], ['ATMOS_DEPLOY_KEY']);
   assertDataOnly(workflows['publish-current-model-production.yml'], maintenanceKeys);
+  assertDataOnly(workflows['resume-model-publication.yml'], maintenanceKeys);
   assert.match(workflows['bake.yml'], /DATA_PUBLISH_MODE: r2-release/);
   assert.match(workflows['catalog-bake.yml'], /bash ops\/bake-model-component\.sh/);
 });

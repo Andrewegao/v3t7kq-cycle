@@ -61,7 +61,7 @@ test('actual initial publisher guard rejects branch, event, missing approval and
   const guard=publisher.split('        run: |\n')[1].split('\n      - name:')[0];
   const good={...process.env,GITHUB_REPOSITORY:'Andrewegao/v3t7kq-cycle',GITHUB_REF:'refs/heads/main',
     GITHUB_EVENT_NAME:'workflow_dispatch',ENABLED:'true',APPROVED_SHA:'a'.repeat(40),ATMOS_SHA:'a'.repeat(40),
-    UNQUALIFIED_PLACEHOLDER_SHA:'b'.repeat(40),COMPONENT_KIND:'regional',MODEL:'icon'};
+    UNQUALIFIED_PLACEHOLDER_SHA:'b'.repeat(40),COMPONENT_KIND:'regional',MODEL:'icon',RETAINED_RUN_ID:''};
   const run=env=>spawnSync('bash',['-e','-u','-c',guard],{env,encoding:'utf8'});
   assert.equal(run(good).status,0);
   assert.equal(run({...good,GITHUB_EVENT_NAME:'schedule'}).status,0);
