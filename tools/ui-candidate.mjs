@@ -13,6 +13,22 @@ export const REPOSITORY = 'Andrewegao/v3t7kq-cycle';
 export const FREEZE_UNTIL = '2026-08-31T11:00:00Z';
 export const MAX_BYTES = 96 * 1024 * 1024;
 export const MAX_FILES = 5000;
+// The staging-only compression manifest authenticates at most 512 sidecars.
+// They do not consume the ordinary shell budget; the combined byte cap remains.
+const MAX_COMPRESSION_SIDECARS = 512;
+function fileBudget(profile) {
+  const compressed = staticCompressionProfile(profile);
+  let ordinary = 0, sidecars = 0, manifests = 0;
+  return path => {
+    if (compressed && /^__wx_encoded\/[a-f0-9]{64}\.br$/.test(path)) {
+      assert.ok(++sidecars <= MAX_COMPRESSION_SIDECARS, 'artifact exceeds compression sidecar file limit (512)');
+    } else if (compressed && path === 'static-compression-manifest.json') {
+      assert.ok(++manifests <= 1, 'artifact exceeds compression manifest file limit (1)');
+    } else {
+      assert.ok(++ordinary <= MAX_FILES, `artifact exceeds ordinary file limit (${MAX_FILES}): ${path}`);
+    }
+  };
+}
 export const hash = value => createHash('sha256').update(value).digest('hex');
 export const PROFILE = BASELINE_PROFILE;
 export function controlShaFor(profile = PROFILE) {
@@ -43,9 +59,9 @@ export function safePath(path) {
   return path;
 }
 
-export function readTree(root) {
+export function readTree(root, profile = PROFILE) {
   assert.ok(lstatSync(root).isDirectory() && !lstatSync(root).isSymbolicLink(), 'artifact root must be a real directory');
-  const files = []; let total = 0;
+  const files = [], countFile = fileBudget(profile); let total = 0;
   function walk(dir, prefix = '') {
     for (const name of readdirSync(dir).sort()) {
       const path = safePath(prefix + name), full = resolve(dir, name), stat = lstatSync(full);
@@ -54,7 +70,8 @@ export function readTree(root) {
       else {
         assert.ok(stat.isFile(), 'special file prohibited');
         total += stat.size;
-        assert.ok(total <= MAX_BYTES && files.length < MAX_FILES, 'artifact exceeds size/file limit');
+        assert.ok(total <= MAX_BYTES, `artifact exceeds byte limit (${MAX_BYTES}): ${path}`);
+        countFile(path);
         const bytes = readFileSync(full);
         files.push({ path, bytes: bytes.length, sha256: hash(bytes), base64: bytes.toString('base64') });
       }
@@ -64,11 +81,13 @@ export function readTree(root) {
   return files.sort((a,b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
 }
 
-export function validateFiles(files) {
-  assert.ok(Array.isArray(files) && files.length > 0 && files.length <= MAX_FILES, 'invalid file inventory');
+export function validateFiles(files, profile = PROFILE) {
+  const compressed = staticCompressionProfile(profile), countFile = fileBudget(profile);
+  assert.ok(Array.isArray(files) && files.length > 0 && files.length <= MAX_FILES + (compressed ? MAX_COMPRESSION_SIDECARS + 1 : 0), 'invalid file inventory');
   const seen = new Set(); let total = 0;
   for (const file of files) {
     safePath(file.path);
+    countFile(file.path);
     assert.ok(!seen.has(file.path), 'duplicate path'); seen.add(file.path);
     assert.ok(Number.isSafeInteger(file.bytes) && file.bytes >= 0, 'invalid file size');
     total += file.bytes; assert.ok(total <= MAX_BYTES, 'artifact exceeds byte limit');
@@ -86,8 +105,8 @@ export function validateFiles(files) {
 }
 
 export function createCandidate(root, context) {
-  const files = readTree(root), { digest } = validateFiles(files);
   const profile = context.profile ?? PROFILE;
+  const files = readTree(root, profile), { digest } = validateFiles(files, profile);
   const candidate = { schemaVersion: 1, controlSha: controlShaFor(profile), profile,
     sourceSha: context.sourceSha, runId: context.runId, attempt: context.attempt,
     workflowSha: context.workflowSha, pipelineDigest: context.pipelineDigest, artifactDigest: digest, files };
@@ -102,7 +121,7 @@ export function validateCandidate(candidate) {
   assert.match(candidate.sourceSha, SHA); assert.match(candidate.workflowSha, SHA);
   assert.match(candidate.runId, ID); assert.match(candidate.attempt, ID);
   assert.match(candidate.pipelineDigest, DIGEST);
-  assert.equal(validateFiles(candidate.files).digest, candidate.artifactDigest, 'inventory mismatch');
+  assert.equal(validateFiles(candidate.files, candidate.profile).digest, candidate.artifactDigest, 'inventory mismatch');
   validateCandidateSelection(candidate);
   validateCompressionFiles(candidate.files,staticCompressionProfile(candidate.profile));
   const receipt = JSON.parse(Buffer.from(candidate.files.find(f => f.path === 'health/release.json').base64, 'base64'));
@@ -154,7 +173,7 @@ export function restore(candidate, root) {
     mkdirSync(dirname(full), { recursive: true, mode: 0o700 });
     writeFileSync(full, Buffer.from(file.base64,'base64'), { flag: 'wx', mode: 0o600 });
   }
-  assert.equal(validateFiles(readTree(root)).digest, candidate.artifactDigest);
+  assert.equal(validateFiles(readTree(root, candidate.profile), candidate.profile).digest, candidate.artifactDigest);
 }
 
 export function eligibleRun(run, artifacts, { runId, sourceSha, digest, pipelineDigest, candidate }, now = Date.now()) {

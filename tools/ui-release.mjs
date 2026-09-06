@@ -311,14 +311,14 @@ async function deploy(stage) {
   const c = candidate();
   if (stage === 'production') { await auditRun(c); await exactStaging(c); }
   const dist = stage === 'staging' ? resolve(process.env.RUNNER_TEMP,'ui-stage-dist') : resolve(process.env.RUNNER_TEMP,'ui-promote-dist');
-  assert.equal(validateFiles(readTree(dist)).digest,c.artifactDigest, 'deploy bytes differ from candidate');
+  assert.equal(validateFiles(readTree(dist,c.profile),c.profile).digest,c.artifactDigest, 'deploy bytes differ from candidate');
   const env = environment(c);
   // Work outside the Atmos app: no wrangler config discovery, no Functions discovery/rebuild.
   const uploadCwd=resolve(process.env.RUNNER_TEMP,'ui-upload-cwd'); mkdirSync(uploadCwd,{recursive:true,mode:0o700});
   run('bash',[resolve(CONTROL,'ops/release/guard-pages-deploy.sh'),'--project',PROJECTS[stage],
     '--branch','main','--dir',dist,'--receipt',resolve(dist,'health/release.json'),'--',
     'bash',resolve(ROOT,'tools/ui-verify.sh'),stage], {cwd:uploadCwd,env});
-  assert.equal(validateFiles(readTree(dist)).digest,c.artifactDigest, 'deployment modified artifact');
+  assert.equal(validateFiles(readTree(dist,c.profile),c.profile).digest,c.artifactDigest, 'deployment modified artifact');
   if (stage === 'staging') {
     const p = await projectSnapshot(stage); await exactStaging(c);
     const selection=requireStagingApproval(c,process.env),modelProof=c.profile.stagingOnly?readFileSync(resolve(process.env.RUNNER_TEMP,'ui-model-browser.json')):null;
