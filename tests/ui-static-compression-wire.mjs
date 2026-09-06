@@ -22,6 +22,23 @@ test('wire gate proves actual Brotli bytes, identity fallback and conditional re
 test('wire gate permits Cloudflare to strip its private CDN cache control header',async()=>{
   await verifyStaticCompression(origin,manifest,async(...args)=>{const r=await request(...args);r.headers.delete('cloudflare-cdn-cache-control');return r;});
 });
+test('missing Vary reports the exact probe and only allowlisted response metadata',async()=>{
+  const secret='must-not-appear-in-wire-diagnostics';
+  await assert.rejects(verifyStaticCompression(origin,manifest,async(...args)=>{
+    const r=await request(...args);r.headers.delete('vary');r.headers.set('cf-cache-status','HIT');r.headers.set('age','209748');
+    r.headers.set('set-cookie',`session=${secret}`);r.headers.set('authorization',`Bearer ${secret}`);r.headers.set('x-private-debug',secret);
+    return r;
+  }),error=>{
+    const message=String(error);
+    assert.match(message,/\/assets\/App-12345678\.js/);assert.match(message,/freshness/);assert.match(message,/encoding=br/);
+    assert.match(message,/"status":200/);assert.match(message,/"vary":null/);assert.match(message,/"content-encoding":"br"/);
+    assert.match(message,/\\"sealed\\"/);assert.match(message,/"cf-cache-status":"HIT"/);assert.match(message,/"age":"209748"/);
+    const metadata=JSON.parse(message.slice(message.indexOf('response=')+'response='.length));
+    assert.deepEqual(Object.keys(metadata).sort(),['age','cf-cache-status','content-encoding','etag','status','vary']);
+    assert.doesNotMatch(message,new RegExp(secret));assert.doesNotMatch(message,/set-cookie|authorization|x-private-debug|export const x/);
+    return true;
+  });
+});
 test('ordinary variant sequence and cross-encoding validator cannot be hidden by no-cache probes',async()=>{
   const calls=[];
   await verifyStaticCompression(origin,manifest,async(url,options)=>{calls.push(options);return request(url,options);});

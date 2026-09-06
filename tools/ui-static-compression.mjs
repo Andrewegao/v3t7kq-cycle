@@ -4,9 +4,10 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {brotliDecompressSync} from 'node:zlib';
 import {readFileSync,readdirSync,lstatSync,existsSync,mkdirSync,writeFileSync,renameSync,unlinkSync} from 'node:fs';
-import {resolve,dirname,posix} from 'node:path';
+import {resolve,dirname} from 'node:path';
 const MANIFEST='static-compression-manifest.json';
-const ASSET=/^\/assets\/[A-Za-z0-9_-]+-[A-Za-z0-9_-]{8,}\.(js|css)$/;
+const PREFIX='/assets/wxbr11v1-',PREFIX_ROUTE=PREFIX+'*';
+const ASSET=/^\/assets\/wxbr11v1-[A-Za-z0-9_][A-Za-z0-9_.-]*-[A-Za-z0-9_-]{8,}\.(js|css)$/;
 const HASH=/^[a-f0-9]{64}$/;
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const MAX_FILE=32*1024*1024,MAX_TOTAL=96*1024*1024;
@@ -16,6 +17,24 @@ function checkPath(path){assert.match(path,ASSET);assert.ok(path.length<=100);re
 function assetRoute(rule){
   assert.equal(typeof rule,'string');
   return rule==='/assets'||rule.startsWith('/assets/')||(rule.endsWith('*')&&'/assets/'.startsWith(rule.slice(0,-1)));
+}
+function browserAssets(paths){
+  const selected=[];
+  for(const path of paths){
+    assert.equal(typeof path,'string');
+    if(path.startsWith(PREFIX)||path.startsWith('/assets/')&&/\.(?:js|css)$/i.test(path))selected.push(checkPath(path));
+  }
+  assert.ok(selected.length>0&&selected.length<=512,'browser asset inventory must contain 1–512 files');
+  assert.equal(new Set(selected).size,selected.length,'duplicate browser asset inventory');
+  return selected.sort();
+}
+function validateRoutes(routes){
+  assert.equal(routes.version,1);assert.ok(Array.isArray(routes.include)&&Array.isArray(routes.exclude));
+  const all=[...routes.include,...routes.exclude];assert.ok(all.length<=100);
+  for(const rule of all)assert.ok(typeof rule==='string'&&rule.length<=100&&/^\/[A-Za-z0-9_./:-]*\*?$/.test(rule)
+    &&!rule.includes('//')&&!rule.split('/').some(part=>part==='.'||part==='..'),'unsafe compression route');
+  assert.equal(new Set(all).size,all.length,'duplicate compression route');
+  return routes;
 }
 function inventory(root){
   const rows=[];let total=0;
@@ -30,12 +49,14 @@ function inventory(root){
   }walk(root);return rows;
 }
 export function validateCompressionFiles(files,enabled){
+  assert.equal(new Set(files.map(f=>f.path)).size,files.length,'duplicate inventory paths');
   const matches=files.filter(f=>f.path===MANIFEST),sidecars=files.filter(f=>f.path.startsWith('__wx_encoded/'));
   if(!enabled){
     assert.equal(matches.length+sidecars.length,0,'compression requires an explicit staging-only profile');
     const routes=JSON.parse(bytes(files.find(f=>f.path==='_routes.json')));
     assert.ok(Array.isArray(routes.include));
     assert.ok(!routes.include.some(assetRoute),'asset Worker routes require the compression profile');
+    assert.ok(!files.some(f=>('/'+f.path).startsWith(PREFIX)),'prefixed artifacts require the compression profile');
     return null;
   }
   assert.equal(matches.length,1,'one sealed compression manifest required');assert.ok(matches[0].bytes<=1024*1024);
@@ -45,9 +66,11 @@ export function validateCompressionFiles(files,enabled){
   assert.equal(manifest.promotable,false);assert.equal(manifest.standaloneShell,false);assert.equal(manifest.artifactType,'pre-seal-packaging-overlay');
   assert.equal(manifest.origin,'https://staging.weatherx.org');assert.equal(manifest.compression.format,'br');assert.equal(manifest.compression.quality,11);
   assert.deepEqual(Object.keys(manifest.securityHeaders).sort(),security.slice().sort());assert.equal(manifest.securityHeaders['x-content-type-options'],'nosniff');
-  assert.ok(Array.isArray(manifest.selectedPaths)&&manifest.selectedPaths.length>0&&manifest.selectedPaths.length<=81);
+  assert.ok(Array.isArray(manifest.selectedPaths)&&manifest.selectedPaths.length>0&&manifest.selectedPaths.length<=512);
   assert.equal(new Set(manifest.selectedPaths).size,manifest.selectedPaths.length);
   assert.deepEqual(Object.keys(manifest.entries),manifest.selectedPaths);
+  assert.deepEqual(manifest.selectedPaths.slice().sort(),browserAssets(files.map(f=>'/'+f.path)),
+    'sealed asset inventory must exhaustively match every emitted browser JS/CSS');
   const expectedSidecars=new Set();let total=0;
   for(const path of manifest.selectedPaths){
     checkPath(path);const entry=manifest.entries[path];assert.match(entry.brSha256,HASH);assert.match(entry.rawSha256,HASH);
@@ -67,11 +90,9 @@ export function validateCompressionFiles(files,enabled){
     const expected=manifest.outputs[name],body=bytes(files.find(f=>f.path===path));assert.equal(expected.path,path);assert.equal(body.length,expected.bytes);assert.equal(hash(body),expected.sha256);
   }
   assert.equal(hash(bytes(files.find(f=>f.path==='_headers'))),manifest.sources.headers.sha256,'header policy changed');
-  const routes=JSON.parse(bytes(files.find(f=>f.path==='_routes.json')));
-  assert.equal(routes.version,1);assert.ok(Array.isArray(routes.include)&&Array.isArray(routes.exclude));
-  assert.ok(routes.include.length+routes.exclude.length<=100);
-  assert.deepEqual(routes.include.filter(assetRoute).sort(),manifest.selectedPaths.slice().sort(),'asset Worker routes differ from sealed selection');
-  for(const path of manifest.selectedPaths)assert.equal(routes.include.filter(x=>x===path).length,1);
+  const routes=validateRoutes(JSON.parse(bytes(files.find(f=>f.path==='_routes.json'))));
+  assert.deepEqual(routes.include.filter(assetRoute),[PREFIX_ROUTE],'asset Worker routes must contain only the fixed compression prefix');
+  assert.ok(!routes.exclude.some(assetRoute),'asset exclusion route can bypass compression');
   assert.ok(![...routes.include,...routes.exclude].some(x=>x.startsWith('/__wx_encoded/')),'sidecars must not add Worker routes');
   return manifest;
 }
@@ -88,8 +109,9 @@ export function installCompressionOverlay({dist,overlay,originalWorkerPath,origi
   assert.equal(hash(readFileSync(originalWorkerPath)),manifest.sources.originalWorker.sha256,'original Worker changed');
   const originalRoutes=readFileSync(originalRoutesPath);
   assert.equal(hash(originalRoutes),manifest.sources.originalRoutes.sha256,'original routes changed');
-  const original=JSON.parse(originalRoutes),merged=JSON.parse(bytes(over.find(f=>f.path==='_routes.json')));
-  assert.deepEqual(merged,{...original,include:[...original.include,...manifest.selectedPaths]},'routing policy changed beyond selected assets');
+  const original=validateRoutes(JSON.parse(originalRoutes)),merged=JSON.parse(bytes(over.find(f=>f.path==='_routes.json')));
+  assert.ok(![...original.include,...original.exclude].some(assetRoute),'original asset routes overlap compression');
+  assert.deepEqual(merged,{...original,include:[...original.include,PREFIX_ROUTE]},'routing policy changed beyond compression prefix');
   // Every check precedes writes. A partial local failure has no candidate or release receipt.
   for(const f of over.filter(f=>f.path!=='_routes.json'&&f.path!==MANIFEST)){
     const target=resolve(dist,f.path);mkdirSync(dirname(target),{recursive:true,mode:0o700});writeFileSync(target,bytes(f),{flag:'wx',mode:0o600});
@@ -102,25 +124,11 @@ export function installCompressionOverlay({dist,overlay,originalWorkerPath,origi
   return manifest;
 }
 
-export function selectCompressionAssets(dist,parseModule){
-  const html=readFileSync(resolve(dist,'index.html'),'utf8'),names=readdirSync(resolve(dist,'assets'));
-  const entry=[...html.matchAll(/<script\b[^>]*>/g)].filter(([tag])=>/\btype="module"/.test(tag))
-    .map(([tag])=>/\bsrc="([^"]+)"/.exec(tag)?.[1]);
-  assert.equal(entry.length,1,'one exact module entry required');
-  const roots=[entry[0],...['App-','MapView-'].map(prefix=>{
-    const choices=names.filter(x=>x.startsWith(prefix)&&x.endsWith('.js'));assert.equal(choices.length,1,`unique ${prefix} startup chunk required`);return '/assets/'+choices[0];
-  })];
-  const selected=new Set();
-  function visit(path){
-    checkPath(path);if(selected.has(path))return;selected.add(path);
-    const full=resolve(dist,path.slice(1)),stat=lstatSync(full);assert.ok(stat.isFile()&&!stat.isSymbolicLink());
-    const [imports]=parseModule(readFileSync(full,'utf8'));
-    for(const item of imports.filter(x=>x.d===-1)){
-      assert.equal(typeof item.n,'string');assert.ok(item.n.startsWith('./')||item.n.startsWith('/assets/'),'unexpected static startup import');
-      const child=item.n.startsWith('/')?item.n:posix.join(posix.dirname(path),item.n);visit(child);
-    }
-  }
-  roots.forEach(visit);
-  for(const [tag]of html.matchAll(/<link\b[^>]*>/g))if(/\brel="stylesheet"/.test(tag))selected.add(checkPath(/\bhref="([^"]+)"/.exec(tag)?.[1]));
-  assert.ok(selected.size<=81,'startup selection exceeds exact-route budget');return [...selected].sort();
+export function selectCompressionAssets(dist,_parseModule){
+  // Membership is permanent for this namespace, not inferred from today's startup graph.
+  // Including lazy and worker code prevents a previously cached Pages representation from
+  // bypassing the Worker when the same immutable asset later becomes mandatory.
+  void _parseModule;
+  const root=lstatSync(dist);assert.ok(root.isDirectory()&&!root.isSymbolicLink(),'real asset root required');
+  return browserAssets(inventory(resolve(dist,'assets')).map(f=>'/assets/'+f.path));
 }
