@@ -18,7 +18,20 @@ first. UI releases remain manual; a bake does not publish UI.
 
 The built-site gate checks AIFS Wind and HRRR Temperature, map/point run identity,
 finite values, changed weather pixels, HRRR domain boundaries, rapid switching,
-browser errors, and each regional menu entry against its own release status.
+browser errors, and each regional menu entry against the same independent-catalog-or-
+release-roster admission policy as the app. A valid, fresh same-origin component catalog
+may supersede an older release-roster row; malformed authoritative catalog metadata
+refuses that model rather than falling back to the roster.
+
+Core raster readiness is a paint receipt, not a scheduled Deck layer. After each model
+selection the gate fixes the test camera, activates the field afresh, and requires an
+accepted completed Deck generation bound to the exact model, run, immutable base,
+cursor, current intent and camera. The OFF capture likewise requires a newer completed
+generation with authored zero opacity or removal. The visible pixel-change threshold is
+unchanged. A screenshot is retained only when the same completed identity is valid
+immediately before and after that capture; a raced capture is discarded and retried
+within a fixed bound. Failed runs retain the secret-free browser receipt beside rollback evidence,
+so independent per-model errors are not reduced to the wrapper assertion.
 Regional absence must not hide healthy peers. Its menu checks are not a claim
 that every regional layer and expanded forecast has been qualified: the full
 eleven-model live acceptance matrix remains separately required by the owner goal.
@@ -27,3 +40,18 @@ Evidence: all existing UI controller tests pass with the new profile, including
 production rejection, independent probe failure reporting, hourly HRRR cycles,
 domain-error schema, source ancestry and receipt validation. Workflow lint passes.
 No cloud settings, active bake, production data, or production UI were changed.
+
+2026-09-06 repair verification: the old checker also failed on restored staging
+`git-e0d4af2b831d-run-34011687277`, not only on the attempted rollout. Its roster-only
+expectation wrongly excluded AROME despite a fresh catalog component, and its HRRR
+props-only wait could capture the preceding model before regional camera movement.
+The original failed run 34022427736 did not retain row details, so these are reproduced
+control defects, not an assertion that its lost receipt contained no other errors.
+The repaired gate passed a credential-free local run against that real restored site:
+AIFS Wind and HRRR Temperature with exact completed draws, pixel ratios 1.0 and
+0.9993748, finite same-run point values, HRRR outside-domain refusal, all seven regional
+menu entries, and rapid AIFS-to-HRRR switching. The resulting receipt also passes the
+independent publisher validator. Catalog was `127-a0a24801-2d48-4359-9fba-badcfcee21fa`.
+All 88 UI controller tests pass. Same-generation redraws and newer completed generations
+are covered separately; a scheduled but undrawn newer generation remains rejected.
+This validates the test repair; it does not itself deploy the new UI candidate.

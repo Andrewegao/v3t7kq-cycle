@@ -6,7 +6,7 @@ import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {BASELINE_PROFILE,CORE_RELEASE_PROFILE,CORE_RELEASE_REQUEST,MODELS,GRIDS,variables,displayPaths,digest,canonical,cycleTime,resolveSelectionRequest,profileFor,validateProfile,requireProductionProfile,validateSelection,readSelection,validateCandidateSelection,requireStagingApproval,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt} from '../tools/ui-staging-models.mjs';
 import {browserCandidateReady,discardedResponseBody,layerActivationNeeded,matrixProofPlan,pixelDifference,responseBodyOrFallback,responseCaptureNeeded,validateFetchedObject,validateIndependentPointSource} from '../tools/ui-staging-model-browser.mjs';
-import {coreCycle,protocol as coreBrowserProtocol,releaseRosterProof,validateCoreIndex,validateOutsideDomain} from '../tools/ui-staging-core-browser.mjs';
+import {catalogAdmissionProof,coreCycle,deckSurfaceProof,hiddenDeckSurfaceProof,protocol as coreBrowserProtocol,releaseRosterProof,validateCoreIndex,validateOutsideDomain} from '../tools/ui-staging-core-browser.mjs';
 import {createCandidate,hash,eligibleRun,REPOSITORY,CONTROL_SHA,STAGING_CONTROL_SHA,controlShaFor} from '../tools/ui-candidate.mjs';
 import {eligibleBuild} from '../tools/ui-build-transfer.mjs';
 import {publicBuildEnvironment,requiredSourceGuard,standaloneWeatherFeedVerificationRequired} from '../tools/ui-release.mjs';
@@ -106,6 +106,7 @@ test('manual staging defaults to protected approval and only explicit none selec
   assert.equal(staging.split('needs.profile.outputs.model_selection_sha256').length-1,4);
   assert.match(staging,/name: ui-staging[\s\S]*?UI_STAGING_MODEL_SELECTION_APPROVED_SHA256: \$\{\{ vars\.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256 \}\}/);
   assert.match(staging,/UI_STAGING_CORE_PROFILE_APPROVED: \$\{\{ vars\.UI_STAGING_CORE_PROFILE_APPROVED \}\}/);
+  assert.match(staging,/name: retain failed core browser receipt\s*\n\s*if: \$\{\{ failure\(\) \}\}[\s\S]*?\$\{\{ runner\.temp \}\}\/ui-model-browser\.json/);
   assert.doesNotMatch(production,/model_selection_sha256|UI_STAGING_MODEL_SELECTION_APPROVED_SHA256|UI_STAGING_CORE_PROFILE_APPROVED|VITE_STAGING_MODEL_ADMISSION|release-roster-core-v1/);
 });
 test('build flags select mutually exclusive production or exact staging-experiment release guards',()=>{
@@ -211,20 +212,26 @@ test('browser receipt proves each selected model plus the exact latest-selection
   for(const mutate of [r=>r.models.pop(),r=>r.models.at(-1).finalModel='icon',r=>r.verifiedObjectCount=11]){const bad=structuredClone(receipt);mutate(bad);assert.throws(()=>validateBrowserReceipt(Buffer.from(JSON.stringify(bad)),bundle,{sourceSha:SHA,releaseId:receipt.releaseId,selectionSha256:digest(body)},NOW));}
 });
 test('release-roster core receipt binds two independent model proofs and never reads selection policy',()=>{
-  const releaseRoster=MODELS.map((model,index)=>({model,status:index===0?'fresh':'absent',init:index===0?INIT:null,expectedSelectable:index===0,visible:index===0,enabled:index===0}));
+  const releaseRoster=MODELS.map((model,index)=>({model,status:index===0?'fresh':'absent',init:index===0?INIT:null,rosterSelectable:index===0,
+    catalogStatus:'absent',catalogId:null,catalogInit:null,expectedSelectable:index===0,visible:index===0,enabled:index===0}));
   const row=(model,catalogId)=>({model,status:'ready',init:'2026-08-31T12:00:00Z',base:`/data/_catalog/${catalogId}/${model}/runs/${INIT}/`,catalogId,
-    field:model==='hrrr'?'temp':'wind',deck:model==='hrrr'?'temp-raster':'wind-field',changedRatio:.12,finitePointValue:12.5,pointRunId:INIT,
+    field:model==='hrrr'?'temp':'wind',deck:model==='hrrr'?'temp-raster':'wind-field',paint:{receiptSequence:20,receiptGeneration:7,drawSequence:21,renderedGeneration:7,camera:'[-120,-80,50,20,4,0,0,1440,900]'},
+    hidden:{drawSequence:25,renderedGeneration:8,camera:'[-120,-80,50,20,4,0,0,1440,900]'},changedRatio:.12,finitePointValue:12.5,pointRunId:INIT,
     pointQuality:'complete',windAdmitted:model!=='hrrr',domain:{inside:true,outside:model==='hrrr'?true:null}});
   const receipt={schemaVersion:1,kind:'weatherx-staging-core-browser-receipt',origin:'https://staging.weatherx.org',sourceSha:SHA,
     releaseId:`git-${SHA.slice(0,12)}-run-123`,qualifiedAt:new Date(NOW).toISOString(),pointReleaseId:'cycle-123',releaseRoster,
     models:[row('aifs','catalog-aifs'),row('hrrr','catalog-hrrr')],rapidModelSequence:['aifs','hrrr'],finalModel:'hrrr',selectionRequests:[],errors:[]};
   const bytes=Buffer.from(JSON.stringify(receipt));assert.deepEqual(validateCoreBrowserReceipt(bytes,{sourceSha:SHA,releaseId:receipt.releaseId},NOW),receipt);
+  const sameGenerationEarlier=structuredClone(receipt);sameGenerationEarlier.models[0].paint.drawSequence=18;
+  assert.deepEqual(validateCoreBrowserReceipt(Buffer.from(JSON.stringify(sameGenerationEarlier)),{sourceSha:SHA,releaseId:receipt.releaseId},NOW),sameGenerationEarlier);
+  const newerGenerationBeforeReceipt=structuredClone(receipt);Object.assign(newerGenerationBeforeReceipt.models[0].paint,{drawSequence:18,renderedGeneration:8});
+  assert.throws(()=>validateCoreBrowserReceipt(Buffer.from(JSON.stringify(newerGenerationBeforeReceipt)),{sourceSha:SHA,releaseId:receipt.releaseId},NOW));
   const hourly=structuredClone(receipt),hrrr=hourly.models.find(model=>model.model==='hrrr');
   Object.assign(hrrr,{init:'2026-08-31T19:00:00Z',base:'/data/_catalog/catalog-hrrr/hrrr/runs/2026083119/',pointRunId:'2026083119'});
   assert.deepEqual(validateCoreBrowserReceipt(Buffer.from(JSON.stringify(hourly)),{sourceSha:SHA,releaseId:receipt.releaseId},NOW),hourly);
   for(const mutate of [r=>r.selectionRequests.push('/assets/staging-model-selection.json'),r=>r.models[1].field='wind',r=>r.models[1].windAdmitted=true,
-    r=>r.models[0].pointRunId='2026083118',r=>r.models[0].base='/data/aifs/runs/2026083112/',r=>r.releaseRoster[0].visible=false,
-    r=>r.models.pop(),r=>r.errors.push({model:'hrrr',error:'unavailable'}),r=>r.finalModel='aifs']){
+    r=>r.models[0].pointRunId='2026083118',r=>r.models[0].base='/data/aifs/runs/2026083112/',r=>r.releaseRoster[0].visible=false,r=>r.releaseRoster[0].rosterSelectable=false,
+    r=>r.models[0].hidden.camera='[-121,-80,50,20,4,0,0,1440,900]',r=>r.models.pop(),r=>r.errors.push({model:'hrrr',error:'unavailable'}),r=>r.finalModel='aifs']){
     const bad=structuredClone(receipt);mutate(bad);assert.throws(()=>validateCoreBrowserReceipt(Buffer.from(JSON.stringify(bad)),{sourceSha:SHA,releaseId:receipt.releaseId},NOW));
   }
 });
@@ -246,4 +253,79 @@ test('core browser inventory proof keeps every regional admission independent',(
   assert.throws(()=>coreCycle('aifs','2026-09-05T19:00:00Z'));
   for(const invalid of ['2026-09-05T24:00:00Z','2026-09-31T19:00:00Z','2026-09-05T19:30:00Z'])assert.throws(()=>coreCycle('hrrr',invalid));
   assert.throws(()=>validateCoreIndex({schemaVersion:1,model:'hrrr',runs:[]},'hrrr','catalog-hrrr'));
+});
+test('release-roster core admission accepts a newer exact catalog without trusting malformed metadata',async()=>{
+  const init='2026083112',iso='2026-08-31T12:00:00Z',catalogId='catalog-current';
+  const manifest=model=>({schemaVersion:1,model,init_time:iso,grid:GRIDS[model],variables:variables(model),windReference:'earth-relative',
+    frames:Array.from({length:49},(_,i)=>({i,valid_time:new Date(Date.parse(iso)+i*3600000).toISOString().replace('.000','')})),attribution:'Public model source'});
+  const requestFor=(model,indexStatus=200,body=manifest(model),headers={})=>async url=>{
+    if(url===`https://staging.weatherx.org/data/${model}/index.json`)return new Response(indexStatus===200?JSON.stringify({schemaVersion:1,model,runs:[{init_time:iso,path:`runs/${init}/`}]}):'',{
+      status:indexStatus,headers:indexStatus===200?{'X-WeatherX-Catalog':catalogId,...headers}:headers});
+    if(url===`https://staging.weatherx.org/data/_catalog/${catalogId}/${model}/runs/${init}/manifest.json`)return new Response(JSON.stringify(body),{status:200,headers:{'X-WeatherX-Catalog':catalogId,...headers}});
+    throw Error(`unexpected ${url}`);
+  };
+  assert.deepEqual(await catalogAdmissionProof('arome-antilles',false,NOW,requestFor('arome-antilles')),{
+    catalogStatus:'valid',catalogId,catalogInit:iso,expectedSelectable:true,
+  });
+  assert.deepEqual(await catalogAdmissionProof('icon',true,NOW,requestFor('icon',404)),{
+    catalogStatus:'absent',catalogId:null,catalogInit:null,expectedSelectable:true,
+  });
+  assert.deepEqual(await catalogAdmissionProof('icon',true,NOW,requestFor('icon',503)),{
+    catalogStatus:'transport',catalogId:null,catalogInit:null,expectedSelectable:true,
+  });
+  const malformed=manifest('icon');malformed.grid={...malformed.grid,width:1};
+  assert.deepEqual(await catalogAdmissionProof('icon',true,NOW,requestFor('icon',200,malformed)),{
+    catalogStatus:'refused',catalogId:null,catalogInit:null,expectedSelectable:false,
+  });
+  assert.deepEqual(await catalogAdmissionProof('icon',true,NOW,requestFor('icon',200,manifest('icon'),{'X-WeatherX-Release':'wrong'})),{
+    catalogStatus:'refused',catalogId:null,catalogInit:null,expectedSelectable:false,
+  });
+  for(const error of [Error('body stream rejected'),new DOMException('body aborted','AbortError')]){
+    const request=async()=>new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode('{"schemaVersion":1,'));controller.error(error);}}),
+      {status:200,headers:{'X-WeatherX-Catalog':catalogId}});
+    assert.deepEqual(await catalogAdmissionProof('icon',true,NOW,request),{
+      catalogStatus:'refused',catalogId:null,catalogInit:null,expectedSelectable:false,
+    });
+  }
+});
+test('core surface proof rejects stale model props and binds a completed current draw to a stable camera',()=>{
+  const base='/data/_catalog/catalog-hrrr/hrrr/runs/2026083112/',init='2026-08-31T12:00:00Z',cursorMs=Date.parse(init),image={},image2={};
+  const context={intentKey:'temp',intentGeneration:7,model:'hrrr',run:init,base,cursor:cursorMs,swap:'idle',overlayGeneration:11};
+  const events=[
+    {sequence:21,stage:'deck-after',data:{...context,renderedGeneration:11}},
+    {sequence:22,stage:'receipt-flush',data:{...context,renderedGeneration:11,accepted:true}},
+    {sequence:23,stage:'layer-receipt',data:{...context,path:'deck',painted:'temp',receiptToken:3}},
+  ];
+  const layer={id:'temp-raster',isLoaded:true,props:{visible:true,opacity:.95,image,image2},state:{props:{image,image2},imageTexture:{},imageTexture2:{}},getSubLayers:()=>[{state:{model:{}}}]};
+  const bounds={getWest:()=>-120,getEast:()=>-80,getNorth:()=>50,getSouth:()=>20};
+  const state={manifest:{model:'hrrr',init_time:init,base,grid:{width:2,height:2}},cursorMs,layers:{temp:{visible:true}}};
+  globalThis.document={body:{dataset:{} }};
+  globalThis.window={__atmos:{store:{getState:()=>state},map:{isMoving:()=>false,getBounds:()=>bounds,getZoom:()=>4,getBearing:()=>0,getPitch:()=>0,getContainer:()=>({clientWidth:1440,clientHeight:900}),__deck:{layerManager:{getLayers:()=>[layer]}}},
+    deckSnapshot:()=>[{id:'temp-raster',opacity:layer.props.opacity}],temperatureHandoffDiagnostics:()=>({selectedPrimary:'temp',previewMounted:false}),
+    renderCausalDiagnostics:()=>({enabled:true,errors:0,events})}};
+  const expected={afterSequence:20,manifest:{model:'hrrr',init,base},cursorMs,field:'temp',deck:'temp-raster',camera:'[-120,-80,50,20,4,0,0,1440,900]'};
+  assert.ok(deckSurfaceProof(expected));
+  const mutate=(fn)=>{const copy=structuredClone(events);fn(copy);window.__atmos.renderCausalDiagnostics=()=>({enabled:true,errors:0,events:copy});assert.equal(deckSurfaceProof(expected),false);};
+  mutate(copy=>{for(const event of copy)event.data.model='ecmwf';});
+  mutate(copy=>{copy.splice(1,1);});
+  mutate(copy=>{copy[0].data.renderedGeneration=10;});
+  mutate(copy=>{copy.push({sequence:24,stage:'sync-request',data:{...context,overlayGeneration:12}});});
+  window.__atmos.renderCausalDiagnostics=()=>({enabled:true,errors:0,events});
+  assert.equal(deckSurfaceProof({...expected,camera:'[-121,-80,50,20,4,0,0,1440,900]'}),false);
+  layer.state.props.image={};assert.equal(deckSurfaceProof(expected),false);
+  layer.state.props.image=image;events.push({sequence:24,stage:'deck-after',data:{...context,overlayGeneration:12,renderedGeneration:12}});
+  assert.ok(deckSurfaceProof(expected),'a newer completed generation with the same identity remains valid');
+  events.push({sequence:25,stage:'sync-request',data:{...context,overlayGeneration:13}});
+  assert.equal(deckSurfaceProof(expected),false,'a newly scheduled generation without its completed draw is not valid');events.pop();
+  state.layers.temp.opacity=0;events.push({sequence:25,stage:'deck-after',data:{...context,overlayGeneration:13,renderedGeneration:13}});layer.props.opacity=0;
+  assert.ok(hiddenDeckSurfaceProof({...expected,afterSequence:24}));
+  events.at(-1).data.model='ecmwf';assert.equal(hiddenDeckSurfaceProof({...expected,afterSequence:23}),false);
+  delete globalThis.window;delete globalThis.document;
+});
+test('core browser uses causal generations and a fixed camera instead of timing scheduled layer props',()=>{
+  const source=readFileSync(new URL('../tools/ui-staging-core-browser.mjs',import.meta.url),'utf8');
+  assert.match(source,/devprobes=1&rendercausal=1/);assert.match(source,/const \{expected\}=await exactDeckPaint/);
+  assert.match(source,/page\.waitForFunction\(deckSurfaceProof/);
+  assert.match(source,/stableScreenshot\(page,deckSurfaceProof,expected,clip,'ON'\)/);assert.match(source,/stableScreenshot\(page,hiddenDeckSurfaceProof,hiddenExpected,clip,'OFF'\)/);
+  assert.match(source,/map\.on\('movestart',hold\);map\.on\('move',hold\)/);assert.doesNotMatch(source,/waitForTimeout\(250\)/);
 });
