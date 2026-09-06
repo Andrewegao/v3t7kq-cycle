@@ -60,3 +60,27 @@ test('wire gate refuses silent compression bypass, wrong bytes, headers, and pro
   }
   let calls=0;await assert.rejects(verifyStaticCompression('https://weatherx.org',manifest,()=>{calls++;}),/staging-only/);assert.equal(calls,0);
 });
+test('first wire failure cancels peers and never schedules remaining assets',async()=>{
+  const paths=Array.from({length:12},(_,i)=>`/assets/wxbr11v1-test${i}-12345678.js`);
+  const many={...manifest,selectedPaths:paths,entries:Object.fromEntries(paths.map(p=>[p,entry]))};
+  const started=[],aborted=[];
+  const result=verifyStaticCompression(origin,many,async(url,options)=>{
+    started.push(url.pathname);
+    if(url.pathname===paths[0]){
+      await new Promise(resolve=>setImmediate(resolve));
+      const r=await request(new URL(origin+path),options);r.headers.delete('vary');return r;
+    }
+    return new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>{cleanup();request(new URL(origin+path),options).then(resolve,reject);},40);
+      const abort=()=>{clearTimeout(timer);cleanup();aborted.push(url.pathname);reject(options.signal.reason);};
+      const cleanup=()=>options.signal?.removeEventListener('abort',abort);
+      options.signal?.addEventListener('abort',abort,{once:true});
+    });
+  });
+  await assert.rejects(result,error=>{
+    assert.match(error.message,/test0-12345678/);assert.match(error.message,/Vary Accept-Encoding missing/);return true;
+  });
+  await new Promise(resolve=>setTimeout(resolve,60));
+  assert.deepEqual(started,paths.slice(0,4),'failure must not leave peers walking the inventory');
+  assert.deepEqual(aborted.sort(),paths.slice(1,4).sort(),'all active peers must receive cancellation');
+});

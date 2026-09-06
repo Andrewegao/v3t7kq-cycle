@@ -369,6 +369,7 @@ async function verify(stage) {
 }
 function retain() {
   const c=candidate(), out=resolve(process.env.RUNNER_TEMP,'ui-sealed');
+  let compressionProof;
   const selection=requireStagingApproval(c,process.env);
   if(selectionProfile(c.profile)){assert.equal(c.qualification?.modelSelectionSha256,c.profile.modelSelectionSha256);assert.equal(c.qualification?.modelBrowserModels,selection.entries.length);assert.match(c.qualification?.modelBrowserReceiptSha256??'',/^[a-f0-9]{64}$/);}
   if(coreReleaseProfile(c.profile)){assert.equal(c.qualification?.coreProfile,c.profile.releaseRosterCore);assert.equal(c.qualification?.coreBrowserModels,2);assert.match(c.qualification?.coreBrowserReceiptSha256??'',/^[a-f0-9]{64}$/);}
@@ -377,9 +378,14 @@ function retain() {
     assert.equal(c.qualification?.staticCompressionSealSha256,manifest.sealSha256);
     assert.equal(c.qualification?.staticCompressionAssets,manifest.selectedPaths.length);
     assert.match(c.qualification?.staticCompressionWireSha256??'',/^[a-f0-9]{64}$/);
+    compressionProof=readFileSync(resolve(process.env.RUNNER_TEMP,'ui-compression-wire.json'));
+    assert.equal(hash(compressionProof),c.qualification.staticCompressionWireSha256,'wire receipt changed after qualification');
   }
   mkdirSync(out,{mode:0o700});
   writeFileSync(resolve(out,'candidate.wxui'),seal(c,process.env.UI_CANDIDATE_KEY),{mode:0o600});
+  // Controller-produced public paths/hashes/cache observations only; no bodies, server code,
+  // request headers or credentials. Preserve the exact proof bound into the encrypted candidate.
+  if(compressionProof)writeFileSync(resolve(out,'compression-wire.json'),compressionProof,{mode:0o600});
   const summary={sourceSha:c.sourceSha,stagingRunId:c.runId,attempt:c.attempt,artifactDigest:c.artifactDigest,
     deploymentId:c.qualification.deploymentId,qualifiedAt:c.qualification.qualifiedAt};
   save(resolve(out,'summary.json'),summary);

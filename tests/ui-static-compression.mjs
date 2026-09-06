@@ -108,6 +108,13 @@ test('packaging completes before release receipt and candidate creation',()=>{
   assert.match(verify,/stage==='staging'&&staticCompressionProfile\(c.profile\)/);
   assert.match(source,/staticCompressionWireSha256:hash\(proof\)/);
 });
+test('retention keeps the exact hash-bound public wire receipt alongside the encrypted candidate',()=>{
+  const source=readFileSync(new URL('../tools/ui-release.mjs',import.meta.url),'utf8');
+  const retain=source.slice(source.indexOf('function retain()'),source.indexOf('async function runRecords()'));
+  assert.match(retain,/hash\(compressionProof\),c\.qualification\.staticCompressionWireSha256/);
+  assert.match(retain,/writeFileSync\(resolve\(out,'compression-wire\.json'\),compressionProof/);
+  assert.ok(retain.indexOf('hash(compressionProof)')<retain.indexOf("writeFileSync(resolve(out,'compression-wire.json')"));
+});
 test('compressed candidate binds raw bytes, sidecars, worker, routes and headers',()=>{
   const f=fixture();validateCompressionFiles(f.files,true);
   for(const path of ['assets/wxbr11v1-App-12345678.js','_worker.js','_routes.json','_headers']){

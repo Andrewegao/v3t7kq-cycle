@@ -21,9 +21,10 @@ function failureDetail(error){
 function contextualFailure(error,{path,probe,encoding,response}){
   return new Error(`${path}: probe=${probe} encoding=${encoding} failed: ${failureDetail(error)}; response=${JSON.stringify(responseDiagnostic(response))}`);
 }
-function rawRequest(url,{method='GET',headers={},limit=32*1024*1024}={}){
+function rawRequest(url,{method='GET',headers={},limit=32*1024*1024,signal}={}){
   return new Promise((resolve,reject)=>{
-    const request=httpsRequest(url,{method,headers},response=>{
+    // Node's request signal destroys both the request and active response/socket on abort.
+    const request=httpsRequest(url,{method,headers,signal},response=>{
       const chunks=[];let size=0;
       response.on('data',chunk=>{size+=chunk.length;if(size>limit)response.destroy(new Error('compression probe exceeds byte limit'));else chunks.push(chunk);});
       response.on('error',reject);
@@ -36,15 +37,28 @@ function rawRequest(url,{method='GET',headers={},limit=32*1024*1024}={}){
 export async function verifyStaticCompression(origin,manifest,request=rawRequest){
   assert.equal(origin,'https://staging.weatherx.org','compression qualification is staging-only');
   assert.equal(manifest.origin,origin);
-  const rows=[];let next=0;
+  const rows=[];let next=0,firstFailure;
+  const cancellation=new AbortController();
   async function worker(){
-    while(next<manifest.selectedPaths.length){
+    while(!cancellation.signal.aborted&&next<manifest.selectedPaths.length){
       const path=manifest.selectedPaths[next++],entry=manifest.entries[path];
       const url=new URL(path,origin);
       async function probe(name,encoding,options,verify){
         let response;
-        try{response=await request(url,options);return verify(response);}
-        catch(error){throw contextualFailure(error,{path,probe:name,encoding,response});}
+        try{
+          cancellation.signal.throwIfAborted();
+          response=await request(url,{...options,signal:cancellation.signal});
+          cancellation.signal.throwIfAborted();
+          return verify(response);
+        }catch(error){
+          // Preserve the first failed assertion, not a peer's cancellation. Abort before
+          // any peer can claim another probe/path and drain them before rollback starts.
+          if(!firstFailure){
+            firstFailure=contextualFailure(error,{path,probe:name,encoding,response});
+            cancellation.abort(firstFailure);
+          }
+          throw firstFailure;
+        }
       }
       function verifyBody(response,encoding){
         const {headers,body}=response;
@@ -90,6 +104,11 @@ export async function verifyStaticCompression(origin,manifest,request=rawRequest
       rows.push({path,rawBytes:entry.rawBytes,brBytes:entry.bytes,brSha256:entry.brSha256,variants,conditional:304});
     }
   }
-  await Promise.all(Array.from({length:Math.min(4,manifest.selectedPaths.length)},worker));
+  await Promise.allSettled(Array.from({length:Math.min(4,manifest.selectedPaths.length)},()=>worker().catch(error=>{
+    // Also fail closed for malformed input/programming errors outside a named probe.
+    if(!firstFailure){firstFailure=new Error(`compression worker failed: ${failureDetail(error)}`);cancellation.abort(firstFailure);}
+    throw firstFailure;
+  })));
+  if(firstFailure)throw firstFailure;
   return {schemaVersion:1,origin,sealSha256:manifest.sealSha256,rows:rows.sort((a,b)=>a.path.localeCompare(b.path))};
 }
