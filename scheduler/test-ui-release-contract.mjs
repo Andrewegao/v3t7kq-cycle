@@ -13,7 +13,8 @@ const workflowNames = (await readdir(workflowDirectory)).filter((name) => name.e
 const localDataWorkflows = new Set(['collect-core-model.yml', 'collect-regional-model.yml', 'publish-current-model-production.yml']);
 function validateUse(line, workflowName) {
   const local = line.match(/^    uses: \.\/\.github\/workflows\/([a-z-]+\.yml)$/);
-  if (local && workflowName === 'bake.yml' && localDataWorkflows.has(local[1])) {
+  if (local && ((workflowName === 'bake.yml' && localDataWorkflows.has(local[1])) ||
+      (workflowName === 'resume-model-publication.yml' && local[1] === 'publish-current-model-production.yml'))) {
     // Relative reusable workflows resolve at the caller's exact commit. Their
     // own external actions are scanned by this same loop, not exempted.
     assert.ok(workflowNames.includes(local[1]), 'local data workflow must exist');
@@ -28,12 +29,24 @@ for (const bad of ['    uses: ./.github/workflows/unknown.yml', '    uses: ./.gi
   assert.throws(() => validateUse(bad, 'bake.yml'));
 }
 assert.throws(() => validateUse('    uses: ./.github/workflows/collect-core-model.yml', 'ui-release.yml'));
+assert.throws(() => validateUse('    uses: ./.github/workflows/collect-core-model.yml', 'resume-model-publication.yml'));
+assert.throws(() => validateUse('    uses: ./.github/workflows/publish-current-model-production.yml@main', 'resume-model-publication.yml'));
 for (const workflowName of workflowNames) {
   const workflow = await readWorkflow(workflowName);
   for (const line of workflow.split('\n').filter((candidate) => /\buses:/.test(candidate))) {
     validateUse(line, workflowName);
   }
   if (/secrets\./.test(workflow)) {
+    if (workflowName === 'resume-model-publication.yml') {
+      // A reusable caller cannot declare environment itself. Its ONLY job
+      // delegates to the verified production-environment publisher below.
+      assert.deepEqual(workflow.split('jobs:\n')[1].match(/^  [a-z-]+:/gm), ['  resume:']);
+      assert.doesNotMatch(workflow, /^\s+(?:steps|run):/m);
+      assert.equal((workflow.match(/^    uses:/gm)||[]).length, 1);
+      assert.match(workflow, /^    uses: \.\/\.github\/workflows\/publish-current-model-production.yml$/m);
+      assert.match(await readWorkflow('publish-current-model-production.yml'), /\n    environment: production\n/);
+      continue;
+    }
     assert.match(workflow, /\n\s{4}environment:\s*(?:production|staging|\n)/,
       `${workflowName} must place secret-bearing jobs behind a protected environment`);
   }

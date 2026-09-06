@@ -498,6 +498,73 @@ class CurrentModelArtifactTests(unittest.TestCase):
             with self.assertRaisesRegex(subject.Refusal, "github-output-invalid"):
                 subject.write_outputs(output, {"status": "ready\ninjected=x"})
 
+    def test_exact_ready_output_record_accepts_digest_name_and_is_all_or_nothing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "github-output"
+            values = {"status": "ready", "reason": "authenticated-current-model-artifact",
+                      "bundle": directory + "/handoff", "handoff_sha256": "c" * 64}
+            subject.write_outputs(output, values)
+            expected = "".join(f"{key}={value}\n" for key, value in values.items())
+            self.assertEqual(output.read_text(), expected)
+            for bad in ({"status": "ready", "bad-key": "x"},
+                        {"status": "ready", "reason": "x\rinjected=y"},
+                        {"status": "ready", "reason": "x\0y"}):
+                with self.assertRaisesRegex(subject.Refusal, "github-output-invalid"):
+                    subject.write_outputs(output, bad)
+                self.assertEqual(output.read_text(), expected)
+
+    def test_main_emits_the_complete_ready_record_after_real_transfer(self):
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return NOW
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            invocation = args(root)
+            archive = core_archive()
+            rows = metadata()
+            artifact = rows[2]["artifacts"][0]
+            artifact.update(size_in_bytes=len(archive), digest="sha256:" + hashlib.sha256(archive).hexdigest())
+            client = Client(rows, archive)
+            argv = ["current-model-artifact.py"]
+            for key, value in vars(invocation).items():
+                argv.extend(["--" + key.replace("_", "-"), str(value)])
+            env = {"GITHUB_RUN_ID": RUN_ID, "GITHUB_RUN_ATTEMPT": str(ATTEMPT), "GITHUB_SHA": CONTROLLER}
+            with patch.object(sys, "argv", argv), patch.dict(os.environ, env), patch.object(subject, "datetime", FrozenDateTime), \
+                 patch.object(subject, "assert_clean_checkout"), patch.object(subject, "verify_workflow_closure"), \
+                 patch.object(subject.legacy, "GitHub", return_value=client):
+                self.assertEqual(subject.main(), 0)
+            record = dict(line.split("=", 1) for line in Path(invocation.github_output).read_text().splitlines())
+            self.assertEqual(record["status"], "ready")
+            self.assertEqual(record["handoff_sha256"], hashlib.sha256((Path(invocation.output) / "handoff.json").read_bytes()).hexdigest())
+            self.assertEqual(json.loads((Path(invocation.output) / "handoff.json").read_text())["origin"]["runId"], RUN_ID)
+
+    def test_retained_recovery_authenticates_caller_and_preserves_fixed_origin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            invocation = args(Path(directory))
+            invocation.retained_run_id = subject.RETAINED_RUN
+            invocation.atmos_source_sha = subject.RETAINED_SOURCE
+            caller = metadata()[0]
+            caller.update(path=subject.RESUME_WORKFLOW, event="workflow_dispatch")
+            env = {"GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF": "refs/heads/main",
+                   "GITHUB_WORKFLOW_REF": f"{subject.REPO}/{subject.RESUME_WORKFLOW}@refs/heads/main"}
+            with patch.dict(os.environ, env):
+                origin = subject.producer_args(invocation, Client([caller]))
+                self.assertEqual((origin.run_id, origin.run_attempt, origin.controller_sha, origin.atmos_source_sha),
+                                 (subject.RETAINED_RUN, 1, subject.RETAINED_CONTROLLER, subject.RETAINED_SOURCE))
+                self.assertEqual(invocation.run_id, RUN_ID)
+                for changes in ({"retained_run_id": "34000676898"}, {"atmos_source_sha": "c" * 40}):
+                    invalid = SimpleNamespace(**{**vars(invocation), **changes})
+                    with self.assertRaisesRegex(subject.Refusal, "retained-run-not-reviewed"):
+                        subject.producer_args(invalid, Client([]))
+                for changes in ({"GITHUB_EVENT_NAME": "schedule"}, {"GITHUB_REF": "refs/heads/other"},
+                                {"GITHUB_WORKFLOW_REF": f"{subject.REPO}/{subject.WORKFLOW}@refs/heads/main"}):
+                    with patch.dict(os.environ, changes), self.assertRaisesRegex(subject.Refusal, "retained-caller-workflow"):
+                        subject.producer_args(invocation, Client([]))
+                for changes in ({"path": subject.WORKFLOW}, {"head_sha": "d" * 40}, {"event": "schedule"}):
+                    with self.assertRaises(subject.Refusal):
+                        subject.producer_args(invocation, Client([{**caller, **changes}]))
+
 
 if __name__ == "__main__":
     unittest.main()

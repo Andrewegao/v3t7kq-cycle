@@ -64,6 +64,12 @@ exec(compile(LEGACY_PATH.read_bytes(), str(LEGACY_PATH), "exec"), legacy.__dict_
 REPO = legacy.REPO
 REPO_ID = legacy.REPO_ID
 WORKFLOW = ".github/workflows/bake.yml"
+RESUME_WORKFLOW = ".github/workflows/resume-model-publication.yml"
+# One reviewed run hit an output-record bug after authenticating its artifacts.
+# This is not a generic cross-run/source recovery escape hatch.
+RETAINED_RUN = "34000676897"
+RETAINED_CONTROLLER = "3ba5567c5c4307be27910129ddc37571b1b0b9f8"
+RETAINED_SOURCE = "3f7479573b990337c64643077720c39b361b6841"
 WORKFLOW_CLOSURE = (
     WORKFLOW,
     ".github/workflows/collect-core-model.yml",
@@ -222,13 +228,13 @@ def one_step(job, name):
     return rows[0]
 
 
-def exact_run(client, run_id, attempt, controller_sha):
+def exact_run(client, run_id, attempt, controller_sha, workflow=WORKFLOW):
     try:
         run = client.json(f"/actions/runs/{run_id}")
     except legacy.Miss:
         raise Withheld("collector-run-unavailable") from None
     require(run.get("id") == int(run_id) and run.get("run_attempt") == attempt
-            and run.get("head_sha") == controller_sha and run.get("path") == WORKFLOW
+            and run.get("head_sha") == controller_sha and run.get("path") == workflow
             and run.get("event") in ("schedule", "workflow_dispatch")
             and run.get("status") in ("in_progress", "completed")
             and run.get("repository", {}).get("id") == REPO_ID
@@ -237,6 +243,24 @@ def exact_run(client, run_id, attempt, controller_sha):
             and run.get("head_repository", {}).get("full_name") == REPO,
             "collector-run-provenance")
     return run
+
+
+def producer_args(args, client):
+    retained = getattr(args, "retained_run_id", "")
+    if not retained:
+        return args
+    require(retained == RETAINED_RUN and args.atmos_source_sha == RETAINED_SOURCE,
+            "retained-run-not-reviewed")
+    require(os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+            and os.environ.get("GITHUB_REF") == "refs/heads/main"
+            and os.environ.get("GITHUB_WORKFLOW_REF") == f"{REPO}/{RESUME_WORKFLOW}@refs/heads/main",
+            "retained-caller-workflow")
+    # Authenticate the new caller independently, then retain the original
+    # producer's immutable run/controller/source in every artifact check.
+    caller = exact_run(client, args.run_id, args.run_attempt, args.controller_sha, RESUME_WORKFLOW)
+    require(caller.get("event") == "workflow_dispatch", "retained-caller-event")
+    return types.SimpleNamespace(**{**vars(args), "run_id": RETAINED_RUN,
+        "run_attempt": 1, "controller_sha": RETAINED_CONTROLLER})
 
 
 def exact_job(client, run_id, attempt, controller_sha, kind, model):
@@ -511,11 +535,16 @@ def transfer(args, client, now):
 
 def write_outputs(path, values):
     path = str(path)
-    require(path and "\n" not in path and "\0" not in path, "github-output-invalid")
+    require(path and not any(char in path for char in "\r\n\0"), "github-output-invalid")
+    # Validate the complete record before appending: ready must never be written
+    # before a later invalid field fails. Digest output names include digits.
+    lines = []
+    for key, value in values.items():
+        require(isinstance(key, str) and re.fullmatch(r"[a-z_][a-z0-9_]*", key)
+                and not any(char in str(value) for char in "\r\n\0"), "github-output-invalid")
+        lines.append(f"{key}={value}\n")
     with open(path, "a", encoding="utf-8") as output:
-        for key, value in values.items():
-            require(re.fullmatch(r"[a-z_]+", key) and "\n" not in str(value), "github-output-invalid")
-            output.write(f"{key}={value}\n")
+        output.write("".join(lines))
 
 
 def main():
@@ -529,6 +558,7 @@ def main():
     parser.add_argument("--model", choices=MODELS, required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--github-output", required=True)
+    parser.add_argument("--retained-run-id", default="")
     args = parser.parse_args()
     try:
         require(RUN.fullmatch(args.run_id) and args.run_attempt > 0
@@ -541,8 +571,9 @@ def main():
         assert_clean_checkout(REPO_ROOT, args.controller_sha, "controller")
         assert_clean_checkout(args.atmos_root, args.atmos_source_sha, "atmos")
         verify_workflow_closure(args.atmos_source_sha)
-        handoff = transfer(args, legacy.GitHub(os.environ.get("GH_TOKEN", "")),
-                           datetime.now(timezone.utc))
+        client = legacy.GitHub(os.environ.get("GH_TOKEN", ""))
+        origin = producer_args(args, client)
+        handoff = transfer(origin, client, datetime.now(timezone.utc))
         write_outputs(args.github_output, {"status": "ready", "reason": "authenticated-current-model-artifact",
             "bundle": args.output, "handoff_sha256": hash_file(Path(args.output) / "handoff.json", MAX_JSON)["sha256"]})
         print(f"{args.model}: authenticated current-run artifact ready; publication not authorized")

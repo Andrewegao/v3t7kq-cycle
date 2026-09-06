@@ -163,6 +163,13 @@ Additional retry tests cover same-run reuse with original attempt/receipt
 identity, refusal behind a newer failed or malformed collector, and a bounded
 history lookup. These require a new final CI pass before activation.
 
+September 6 follow-up: PR163 was activated on main3ba5567 after CI passed.
+Run34000676897 authenticated artifacts but exposed an output-name regex defect
+on `handoff_sha256`. See [the fixed-run recovery](resume-model-publication.md):
+the correction has a full CLI-output regression, and one explicit manual-only
+cross-run exception reuses that run's retained original inputs. All other
+cross-run/source recovery remains excluded. Running collectors are not restarted.
+
 Same-commit reusable-workflow semantics are documented by
 [GitHub](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows).
 The immutable-action guard recognizes only these three exact local data calls

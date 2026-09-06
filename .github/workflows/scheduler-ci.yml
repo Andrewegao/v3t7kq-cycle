@@ -9,6 +9,7 @@ on:
       - ".github/workflows/collect-core-model.yml"
       - ".github/workflows/collect-regional-model.yml"
       - ".github/workflows/publish-current-model-production.yml"
+      - ".github/workflows/resume-model-publication.yml"
       - ".github/workflows/catalog-bake.yml"
       - ".github/workflows/scheduler-ci.yml"
       - ".github/workflows/scheduler-deploy.yml"

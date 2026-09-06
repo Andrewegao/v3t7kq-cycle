@@ -1,0 +1,32 @@
+name: Resume reviewed retained model publication
+permissions:
+  contents: read
+  actions: read
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Publish only retained qualified inputs from reviewed bake 34000676897; never recollect
+        type: choice
+        required: true
+        default: all
+        options: [all, ecmwf, gfs, hrrr, aifs, icon, hrdps, arome-antilles, hrrr-ak, nam, nam-hi, nam-ak]
+jobs:
+  resume:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 11
+      matrix:
+        model: ${{ fromJSON(inputs.model == 'all' && '["ecmwf","gfs","hrrr","aifs","icon","hrdps","arome-antilles","hrrr-ak","nam","nam-hi","nam-ak"]' || format('["{0}"]', inputs.model)) }}
+    uses: ./.github/workflows/publish-current-model-production.yml
+    with:
+      model: ${{ matrix.model }}
+      kind: ${{ contains(fromJSON('["ecmwf","gfs","hrrr","aifs"]'), matrix.model) && 'core' || 'regional' }}
+      retained_run_id: '34000676897'
+    secrets:
+      ATMOS_DEPLOY_KEY: ${{ secrets.ATMOS_DEPLOY_KEY }}
+      R2_PRODUCTION_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+      R2_PRODUCTION_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+      CATALOG_ENDPOINT_PRODUCTION: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
+      CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}

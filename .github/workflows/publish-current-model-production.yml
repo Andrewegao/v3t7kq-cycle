@@ -11,6 +11,10 @@ on:
       kind:
         required: true
         type: string
+      retained_run_id:
+        required: false
+        type: string
+        default: ''
     outputs:
       status:
         value: ${{ jobs.publisher.outputs.status }}
@@ -41,6 +45,7 @@ jobs:
       UNQUALIFIED_PLACEHOLDER_SHA: 77487534a6ff0a17bf4e5d55f9ab5c06938138d4
       MODEL: ${{ inputs.model }}
       COMPONENT_KIND: ${{ inputs.kind }}
+      RETAINED_RUN_ID: ${{ inputs.retained_run_id }}
     steps:
       - name: refuse inactive or unqualified production component source before credentials
         env:
@@ -53,6 +58,11 @@ jobs:
           test "$ENABLED" = true
           test "$APPROVED_SHA" = "$ATMOS_SHA"
           test "$ATMOS_SHA" != "$UNQUALIFIED_PLACEHOLDER_SHA"
+          if [ -n "$RETAINED_RUN_ID" ]; then
+            test "$RETAINED_RUN_ID" = 34000676897
+            test "$GITHUB_EVENT_NAME" = workflow_dispatch
+            test "$GITHUB_WORKFLOW_REF" = Andrewegao/v3t7kq-cycle/.github/workflows/resume-model-publication.yml@refs/heads/main
+          fi
           case "$COMPONENT_KIND:$MODEL" in
             core:ecmwf|core:gfs|core:hrrr|core:aifs|regional:icon|regional:hrdps|regional:arome-antilles|regional:hrrr-ak|regional:nam|regional:nam-hi|regional:nam-ak) ;;
             *) exit 2 ;;
@@ -103,7 +113,7 @@ jobs:
             --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --controller-sha "$GITHUB_SHA" --atmos-source-sha "$ATMOS_SHA" --atmos-root "$GITHUB_WORKSPACE/atmos" \
             --kind "$COMPONENT_KIND" --model "$MODEL" --output "$RUNNER_TEMP/model-handoff" \
-            --github-output "$GITHUB_OUTPUT"
+            --github-output "$GITHUB_OUTPUT" --retained-run-id "$RETAINED_RUN_ID"
       - name: hydrate authenticated current production component baseline
         if: ${{ steps.handoff.outputs.status == 'ready' }}
         env:
@@ -152,13 +162,14 @@ jobs:
           pack_receipt="$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["pack"]["receiptSha256"])' "$handoff")"
           point_receipt="$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["pack"].get("pointReceiptSha256",""))' "$handoff")"
           forecast_run="$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["pack"]["forecastRun"])' "$handoff")"
+          producer_run="$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["origin"]["runId"])' "$handoff")"
           if [ "$COMPONENT_KIND" = core ]; then
             export CORE_MODEL_PACKS_DIR="$RUNNER_TEMP/model-handoff/packs" CORE_INPUT_SOURCE_SHA="$ATMOS_SHA"
-            export CORE_INPUT_RUN_ID="$GITHUB_RUN_ID" CORE_INPUT_MANIFEST_SHA256="$pack_receipt"
+            export CORE_INPUT_RUN_ID="$producer_run" CORE_INPUT_MANIFEST_SHA256="$pack_receipt"
           else
             test -n "$point_receipt"
             export REGIONAL_MODEL_PACKS_DIR="$RUNNER_TEMP/model-handoff/packs" REGIONAL_INPUT_SOURCE_SHA="$ATMOS_SHA"
-            export REGIONAL_INPUT_RUN_ID="$GITHUB_RUN_ID" REGIONAL_INPUT_RECEIPT_SHA256="$pack_receipt"
+            export REGIONAL_INPUT_RUN_ID="$producer_run" REGIONAL_INPUT_RECEIPT_SHA256="$pack_receipt"
             export REGIONAL_POINT_RECEIPT_SHA256="$point_receipt" REGIONAL_BASELINE_MANIFEST="$RUNNER_TEMP/baseline-manifest.json"
           fi
           log="$RUNNER_TEMP/component-publish.log"
