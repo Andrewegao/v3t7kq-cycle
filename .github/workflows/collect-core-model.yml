@@ -1,0 +1,96 @@
+name: collect one core model
+permissions:
+  contents: read
+  actions: read
+on:
+  workflow_call:
+    inputs:
+      model:
+        required: true
+        type: string
+      recovery_run_id:
+        required: false
+        type: string
+        default: ''
+    secrets:
+      ATMOS_DEPLOY_KEY:
+        required: true
+jobs:
+  collector:
+    name: collector
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    env:
+      CORE_MODEL: ${{ inputs.model }}
+      RECOVERY_RUN_ID: ${{ inputs.recovery_run_id }}
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - name: reject unsupported recovery before any collector work
+        run: |
+          case "$CORE_MODEL" in ecmwf|gfs|hrrr|aifs) ;; *) exit 2 ;; esac
+          test -z "$RECOVERY_RUN_ID" || {
+            test "$GITHUB_EVENT_NAME" = workflow_dispatch && test "$GITHUB_REF" = refs/heads/main && test "$RECOVERY_RUN_ID" = 33925520386
+          }
+      - name: checkout atmos core collector (same approved commit, read-only deploy key)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: weatherx-hq/atmos
+          ref: 3f7479573b990337c64643077720c39b361b6841
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          fetch-depth: 32
+          persist-credentials: false
+      - name: Verify approved immutable core collector before running source
+        run: |
+          test "$(git rev-parse HEAD)" = "3f7479573b990337c64643077720c39b361b6841"
+          git diff --exit-code HEAD
+      - name: checkout this reviewed recovery controller
+        if: ${{ inputs.recovery_run_id != '' }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Andrewegao/v3t7kq-cycle
+          ref: ${{ github.sha }}
+          path: cycle-controller
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with: { python-version: '3.12' }
+      - name: system eccodes
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeccodes-dev
+      - name: venv + python deps
+        run: |
+          python -m venv data/.venv
+          data/.venv/bin/pip install -r data/requirements.txt
+      - name: recover only compatible completed core inputs
+        id: recovery
+        if: ${{ inputs.recovery_run_id != '' }}
+        timeout-minutes: 15
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(git -C cycle-controller rev-parse HEAD)" = "$GITHUB_SHA"
+          test ! -e "$RUNNER_TEMP/recovery-controller"
+          mv cycle-controller "$RUNNER_TEMP/recovery-controller"
+          data/.venv/bin/python "$RUNNER_TEMP/recovery-controller/tools/recover-model-inputs.py" \
+            --run-id "$RECOVERY_RUN_ID" --kind core --model "$CORE_MODEL" \
+            --current-source-sha "$(git rev-parse HEAD)" --atmos-root "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/core-model-packs" --github-output "$GITHUB_OUTPUT"
+      - name: collect one core model and seal its map, point and float inputs
+        if: ${{ steps.recovery.outputs.reused != 'true' }}
+        timeout-minutes: 60
+        run: |
+          data/.venv/bin/python data/bake_model_inputs.py --model "$CORE_MODEL"
+          data/.venv/bin/python ops/core_model_artifact.py seal \
+            --model "$CORE_MODEL" --source-sha "$(git rev-parse HEAD)" \
+            --root "$GITHUB_WORKSPACE" --run-id "$GITHUB_RUN_ID" \
+            --output "$RUNNER_TEMP/core-model-packs"
+      - name: retain only sealed core model inputs for the joined bake
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: core-model-packs-${{ inputs.model }}
+          path: ${{ runner.temp }}/core-model-packs
+          compression-level: 1
+          include-hidden-files: true
+          retention-days: 1
+          if-no-files-found: error

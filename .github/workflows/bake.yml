@@ -16,177 +16,208 @@ on:
         required: false
         default: ''
 jobs:
-  # Eleven isolated model collectors start together. Only the joined bake job can publish.
-  # ECMWF and GFS each get a full runner instead of competing for shared memory.
-  core:
-    environment: production
+  core-ecmwf:
+    name: core (ecmwf)
+    uses: ./.github/workflows/collect-core-model.yml
+    with: { model: ecmwf, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
+    secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
+  core-gfs:
+    name: core (gfs)
+    uses: ./.github/workflows/collect-core-model.yml
+    with: { model: gfs, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
+    secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
+  core-hrrr:
+    name: core (hrrr)
+    uses: ./.github/workflows/collect-core-model.yml
+    with: { model: hrrr, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
+    secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
+  core-aifs:
+    name: core (aifs)
+    uses: ./.github/workflows/collect-core-model.yml
+    with: { model: aifs, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
+    secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
+  regional-icon:
+    name: regional (icon)
+    uses: ./.github/workflows/collect-regional-model.yml
+    with: { model: icon, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
+    secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
+  regional-hrdps:
+    name: regional (hrdps)
+    uses: ./.github/workflows/collect-regional-model.yml
+    with: { model: hrdps, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
+    secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
+  regional-arome-antilles:
+    name: regional (arome-antilles)
+    uses: ./.github/workflows/collect-regional-model.yml
+    with: { model: arome-antilles, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
+    secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
+  regional-hrrr-ak:
+    name: regional (hrrr-ak)
+    uses: ./.github/workflows/collect-regional-model.yml
+    with: { model: hrrr-ak, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
+    secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
+  regional-nam:
+    name: regional (nam)
+    uses: ./.github/workflows/collect-regional-model.yml
+    with: { model: nam, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
+    secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
+  regional-nam-hi:
+    name: regional (nam-hi)
+    uses: ./.github/workflows/collect-regional-model.yml
+    with: { model: nam-hi, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
+    secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
+  regional-nam-ak:
+    name: regional (nam-ak)
+    uses: ./.github/workflows/collect-regional-model.yml
+    with: { model: nam-ak, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
+    secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
+  publish-ecmwf:
+    needs: core-ecmwf
+    if: ${{ needs.core-ecmwf.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true' }}
+    uses: ./.github/workflows/publish-current-model-production.yml
+    with: { model: ecmwf, kind: core }
+    secrets:
+      ATMOS_DEPLOY_KEY: ${{ secrets.ATMOS_DEPLOY_KEY }}
+      R2_PRODUCTION_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+      R2_PRODUCTION_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+      CATALOG_ENDPOINT_PRODUCTION: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
+      CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+  publish-gfs:
+    needs: core-gfs
+    if: ${{ needs.core-gfs.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true' }}
+    uses: ./.github/workflows/publish-current-model-production.yml
+    with: { model: gfs, kind: core }
+    secrets:
+      ATMOS_DEPLOY_KEY: ${{ secrets.ATMOS_DEPLOY_KEY }}
+      R2_PRODUCTION_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+      R2_PRODUCTION_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+      CATALOG_ENDPOINT_PRODUCTION: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
+      CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+  publish-hrrr:
+    needs: core-hrrr
+    if: ${{ needs.core-hrrr.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true' }}
+    uses: ./.github/workflows/publish-current-model-production.yml
+    with: { model: hrrr, kind: core }
+    secrets:
+      ATMOS_DEPLOY_KEY: ${{ secrets.ATMOS_DEPLOY_KEY }}
+      R2_PRODUCTION_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+      R2_PRODUCTION_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+      CATALOG_ENDPOINT_PRODUCTION: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
+      CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+  publish-aifs:
+    needs: core-aifs
+    if: ${{ needs.core-aifs.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true' }}
+    uses: ./.github/workflows/publish-current-model-production.yml
+    with: { model: aifs, kind: core }
+    secrets:
+      ATMOS_DEPLOY_KEY: ${{ secrets.ATMOS_DEPLOY_KEY }}
+      R2_PRODUCTION_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+      R2_PRODUCTION_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+      CATALOG_ENDPOINT_PRODUCTION: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
+      CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+  publish-icon:
+    needs: regional-icon
+    if: ${{ needs.regional-icon.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true' }}
+    uses: ./.github/workflows/publish-current-model-production.yml
+    with: { model: icon, kind: regional }
+    secrets:
+      ATMOS_DEPLOY_KEY: ${{ secrets.ATMOS_DEPLOY_KEY }}
+      R2_PRODUCTION_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+      R2_PRODUCTION_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+      CATALOG_ENDPOINT_PRODUCTION: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
+      CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+  publish-hrdps:
+    needs: regional-hrdps
+    if: ${{ needs.regional-hrdps.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true' }}
+    uses: ./.github/workflows/publish-current-model-production.yml
+    with: { model: hrdps, kind: regional }
+    secrets:
+      ATMOS_DEPLOY_KEY: ${{ secrets.ATMOS_DEPLOY_KEY }}
+      R2_PRODUCTION_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+      R2_PRODUCTION_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+      CATALOG_ENDPOINT_PRODUCTION: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
+      CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+  publish-arome-antilles:
+    needs: regional-arome-antilles
+    if: ${{ needs.regional-arome-antilles.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true' }}
+    uses: ./.github/workflows/publish-current-model-production.yml
+    with: { model: arome-antilles, kind: regional }
+    secrets:
+      ATMOS_DEPLOY_KEY: ${{ secrets.ATMOS_DEPLOY_KEY }}
+      R2_PRODUCTION_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+      R2_PRODUCTION_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+      CATALOG_ENDPOINT_PRODUCTION: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
+      CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+  publish-hrrr-ak:
+    needs: regional-hrrr-ak
+    if: ${{ needs.regional-hrrr-ak.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true' }}
+    uses: ./.github/workflows/publish-current-model-production.yml
+    with: { model: hrrr-ak, kind: regional }
+    secrets:
+      ATMOS_DEPLOY_KEY: ${{ secrets.ATMOS_DEPLOY_KEY }}
+      R2_PRODUCTION_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+      R2_PRODUCTION_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+      CATALOG_ENDPOINT_PRODUCTION: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
+      CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+  publish-nam:
+    needs: regional-nam
+    if: ${{ needs.regional-nam.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true' }}
+    uses: ./.github/workflows/publish-current-model-production.yml
+    with: { model: nam, kind: regional }
+    secrets:
+      ATMOS_DEPLOY_KEY: ${{ secrets.ATMOS_DEPLOY_KEY }}
+      R2_PRODUCTION_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+      R2_PRODUCTION_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+      CATALOG_ENDPOINT_PRODUCTION: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
+      CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+  publish-nam-hi:
+    needs: regional-nam-hi
+    if: ${{ needs.regional-nam-hi.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true' }}
+    uses: ./.github/workflows/publish-current-model-production.yml
+    with: { model: nam-hi, kind: regional }
+    secrets:
+      ATMOS_DEPLOY_KEY: ${{ secrets.ATMOS_DEPLOY_KEY }}
+      R2_PRODUCTION_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+      R2_PRODUCTION_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+      CATALOG_ENDPOINT_PRODUCTION: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
+      CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+  publish-nam-ak:
+    needs: regional-nam-ak
+    if: ${{ needs.regional-nam-ak.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true' }}
+    uses: ./.github/workflows/publish-current-model-production.yml
+    with: { model: nam-ak, kind: regional }
+    secrets:
+      ATMOS_DEPLOY_KEY: ${{ secrets.ATMOS_DEPLOY_KEY }}
+      R2_PRODUCTION_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+      R2_PRODUCTION_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+      CATALOG_ENDPOINT_PRODUCTION: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
+      CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+  component-publish-status:
+    needs: [publish-ecmwf, publish-gfs, publish-hrrr, publish-aifs, publish-icon, publish-hrdps, publish-arome-antilles, publish-hrrr-ak, publish-nam, publish-nam-hi, publish-nam-ak]
+    if: ${{ always() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 70
-    strategy:
-      fail-fast: false
-      max-parallel: 4
-      matrix:
-        model: [ecmwf, gfs, hrrr, aifs]
+    timeout-minutes: 3
     env:
-      CORE_MODEL: ${{ matrix.model }}
-      PYTHONUNBUFFERED: '1'
-      RECOVERY_RUN_ID: ${{ inputs.recovery_run_id || '' }}
+      ECMWF: ${{ needs.publish-ecmwf.result == 'skipped' && 'withheld' || (needs.publish-ecmwf.outputs.status || 'failed') }}
+      GFS: ${{ needs.publish-gfs.result == 'skipped' && 'withheld' || (needs.publish-gfs.outputs.status || 'failed') }}
+      HRRR: ${{ needs.publish-hrrr.result == 'skipped' && 'withheld' || (needs.publish-hrrr.outputs.status || 'failed') }}
+      AIFS: ${{ needs.publish-aifs.result == 'skipped' && 'withheld' || (needs.publish-aifs.outputs.status || 'failed') }}
+      ICON: ${{ needs.publish-icon.result == 'skipped' && 'withheld' || (needs.publish-icon.outputs.status || 'failed') }}
+      HRDPS: ${{ needs.publish-hrdps.result == 'skipped' && 'withheld' || (needs.publish-hrdps.outputs.status || 'failed') }}
+      AROME_ANTILLES: ${{ needs.publish-arome-antilles.result == 'skipped' && 'withheld' || (needs.publish-arome-antilles.outputs.status || 'failed') }}
+      HRRR_AK: ${{ needs.publish-hrrr-ak.result == 'skipped' && 'withheld' || (needs.publish-hrrr-ak.outputs.status || 'failed') }}
+      NAM: ${{ needs.publish-nam.result == 'skipped' && 'withheld' || (needs.publish-nam.outputs.status || 'failed') }}
+      NAM_HI: ${{ needs.publish-nam-hi.result == 'skipped' && 'withheld' || (needs.publish-nam-hi.outputs.status || 'failed') }}
+      NAM_AK: ${{ needs.publish-nam-ak.result == 'skipped' && 'withheld' || (needs.publish-nam-ak.outputs.status || 'failed') }}
     steps:
-      - name: reject unsupported recovery before any collector work
+      - name: report independent component publication outcomes
         run: |
-          test -z "$RECOVERY_RUN_ID" || {
-            test "$GITHUB_EVENT_NAME" = workflow_dispatch && test "$GITHUB_REF" = refs/heads/main && test "$RECOVERY_RUN_ID" = 33925520386
-          }
-      - name: checkout atmos core collector (same approved commit, read-only deploy key)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: weatherx-hq/atmos
-          ref: 77487534a6ff0a17bf4e5d55f9ab5c06938138d4
-          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
-          fetch-depth: 32
-          persist-credentials: false
-      - name: Verify approved immutable core collector before running source
-        run: |
-          test "$(git rev-parse HEAD)" = "77487534a6ff0a17bf4e5d55f9ab5c06938138d4"
-          git diff --exit-code HEAD
-      - name: checkout this reviewed recovery controller
-        if: ${{ inputs.recovery_run_id != '' }}
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: Andrewegao/v3t7kq-cycle
-          ref: ${{ github.sha }}
-          path: cycle-controller
-          persist-credentials: false
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with: { python-version: '3.12' }
-      - name: system eccodes
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libeccodes-dev
-      - name: venv + python deps
-        run: |
-          python -m venv data/.venv
-          data/.venv/bin/pip install -r data/requirements.txt
-      - name: recover only compatible completed core inputs
-        id: recovery
-        if: ${{ inputs.recovery_run_id != '' }}
-        timeout-minutes: 15
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          test "$(git -C cycle-controller rev-parse HEAD)" = "$GITHUB_SHA"
-          # Regional producer snapshots reject any untracked checkout inside Atmos.
-          # Keep controller code outside the model producer root before admission or collection.
-          test ! -e "$RUNNER_TEMP/recovery-controller"
-          mv cycle-controller "$RUNNER_TEMP/recovery-controller"
-          data/.venv/bin/python "$RUNNER_TEMP/recovery-controller/tools/recover-model-inputs.py" \
-            --run-id "$RECOVERY_RUN_ID" --kind core --model "$CORE_MODEL" \
-            --current-source-sha "$(git rev-parse HEAD)" --atmos-root "$GITHUB_WORKSPACE" \
-            --output "$RUNNER_TEMP/core-model-packs" --github-output "$GITHUB_OUTPUT"
-      - name: collect one core model and seal its map, point and float inputs
-        if: ${{ steps.recovery.outputs.reused != 'true' }}
-        timeout-minutes: 60
-        run: |
-          data/.venv/bin/python data/bake_model_inputs.py --model "$CORE_MODEL"
-          data/.venv/bin/python ops/core_model_artifact.py seal \
-            --model "$CORE_MODEL" --source-sha "$(git rev-parse HEAD)" \
-            --root "$GITHUB_WORKSPACE" --run-id "$GITHUB_RUN_ID" \
-            --output "$RUNNER_TEMP/core-model-packs"
-      - name: retain only sealed core model inputs for the joined bake
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: core-model-packs-${{ matrix.model }}
-          path: ${{ runner.temp }}/core-model-packs
-          compression-level: 1
-          include-hidden-files: true # allowlisted float/point directories, never a workspace upload
-          retention-days: 1
-          if-no-files-found: error
-  # Every regional model has an isolated runner; provider misses still yield explicit abstention.
-  regional:
-    environment: production
-    runs-on: ubuntu-latest
-    timeout-minutes: 55
-    strategy:
-      fail-fast: false
-      max-parallel: 7
-      matrix:
-        model: [icon, hrdps, arome-antilles, hrrr-ak, nam, nam-hi, nam-ak]
-    env:
-      REGIONAL_MODEL: ${{ matrix.model }}
-      PYTHONUNBUFFERED: '1'
-      RECOVERY_RUN_ID: ${{ inputs.recovery_run_id || '' }}
-    steps:
-      - name: reject unsupported recovery before any collector work
-        run: |
-          test -z "$RECOVERY_RUN_ID" || {
-            test "$GITHUB_EVENT_NAME" = workflow_dispatch && test "$GITHUB_REF" = refs/heads/main && test "$RECOVERY_RUN_ID" = 33925520386
-          }
-      - name: checkout atmos regional collector (same approved commit, read-only deploy key)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: weatherx-hq/atmos
-          # Must equal the bake job's approved commit: the bake refuses a pack collected elsewhere.
-          ref: 77487534a6ff0a17bf4e5d55f9ab5c06938138d4
-          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
-          fetch-depth: 32
-          persist-credentials: false
-      - name: Verify approved immutable regional collector before running source
-        run: |
-          test "$(git rev-parse HEAD)" = "77487534a6ff0a17bf4e5d55f9ab5c06938138d4"
-          git diff --exit-code HEAD
-      - name: checkout this reviewed recovery controller
-        if: ${{ inputs.recovery_run_id != '' }}
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: Andrewegao/v3t7kq-cycle
-          ref: ${{ github.sha }}
-          path: cycle-controller
-          persist-credentials: false
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with: { python-version: '3.12' }
-      - name: system eccodes
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libeccodes-dev
-      - name: venv + python deps
-        run: |
-          python -m venv data/.venv
-          data/.venv/bin/pip install -r data/requirements.txt
-      - name: recover only compatible completed regional inputs
-        id: recovery
-        if: ${{ inputs.recovery_run_id != '' }}
-        timeout-minutes: 15
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          test "$(git -C cycle-controller rev-parse HEAD)" = "$GITHUB_SHA"
-          # Regional producer snapshots reject any untracked checkout inside Atmos.
-          # Keep controller code outside the model producer root before admission or collection.
-          test ! -e "$RUNNER_TEMP/recovery-controller"
-          mv cycle-controller "$RUNNER_TEMP/recovery-controller"
-          data/.venv/bin/python "$RUNNER_TEMP/recovery-controller/tools/recover-model-inputs.py" \
-            --run-id "$RECOVERY_RUN_ID" --kind regional --model "$REGIONAL_MODEL" \
-            --current-source-sha "$(git rev-parse HEAD)" --atmos-root "$GITHUB_WORKSPACE" \
-            --output "$RUNNER_TEMP/regional-packs" --github-output "$GITHUB_OUTPUT"
-      - name: collect one regional model for the newest complete cycle (one older-cycle fallback)
-        if: ${{ steps.recovery.outputs.reused != 'true' }}
-        timeout-minutes: 45
-        run: |
-          df -h "$RUNNER_TEMP"
-          case "$REGIONAL_MODEL" in
-            icon|hrdps|arome-antilles|hrrr-ak|nam|nam-hi|nam-ak) ;;
-            *) echo "unknown regional model: $REGIONAL_MODEL" >&2; exit 2 ;;
-          esac
-          data/.venv/bin/python data/bake_regional_models.py collect --model "$REGIONAL_MODEL" \
-            --source-sha "$(git rev-parse HEAD)" --workers 2 --output "$RUNNER_TEMP/regional-packs"
-      - name: hand the display packs (or abstention receipts) to the bake job
-        if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: regional-packs-${{ matrix.model }}
-          path: ${{ runner.temp }}/regional-packs
-          retention-days: 1
-          if-no-files-found: warn
+          for row in "ecmwf:$ECMWF" "gfs:$GFS" "hrrr:$HRRR" "aifs:$AIFS" "icon:$ICON" "hrdps:$HRDPS" \
+            "arome-antilles:$AROME_ANTILLES" "hrrr-ak:$HRRR_AK" "nam:$NAM" "nam-hi:$NAM_HI" "nam-ak:$NAM_AK"; do
+            case "${row#*:}" in published|unchanged|withheld|failed) ;; *) exit 1 ;; esac
+            echo "$row"
+          done
+
   bake:
     # Collection is read-only and may overlap the previous cycle's processing. Keep the
     # exact legacy workflow lock here: old workflow owners and new publisher jobs serialize.
@@ -199,10 +230,10 @@ jobs:
     timeout-minutes: 300
     # Join bounded collectors before assembling one release. Missing regional inputs abstain
     # in the roster; missing core inputs withhold this candidate. Only this job can publish.
-    needs: [core, regional]
+    needs: [core-ecmwf, core-gfs, core-hrrr, core-aifs, regional-icon, regional-hrdps, regional-arome-antilles, regional-hrrr-ak, regional-nam, regional-nam-hi, regional-nam-ak]
     # Recovery provenance failures are not optional provider abstentions. A refused
     # regional recovery must withhold the entire candidate, never publish a subset.
-    if: ${{ always() && !cancelled() && needs.core.result == 'success' && (inputs.recovery_run_id == '' || needs.regional.result == 'success') }}
+    if: ${{ always() && !cancelled() && needs.core-ecmwf.result == 'success' && needs.core-gfs.result == 'success' && needs.core-hrrr.result == 'success' && needs.core-aifs.result == 'success' && (inputs.recovery_run_id == '' || (needs.regional-icon.result == 'success' && needs.regional-hrdps.result == 'success' && needs.regional-arome-antilles.result == 'success' && needs.regional-hrrr-ak.result == 'success' && needs.regional-nam.result == 'success' && needs.regional-nam-hi.result == 'success' && needs.regional-nam-ak.result == 'success')) }}
     steps:
       - name: checkout atmos (private, read-only deploy key)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -210,13 +241,13 @@ jobs:
           repository: weatherx-hq/atmos
           # Approved by full Atmos CI. The whole release produced below must pass
           # its own gates before any staging or production consumer can select it.
-          ref: 77487534a6ff0a17bf4e5d55f9ab5c06938138d4
+          ref: 3f7479573b990337c64643077720c39b361b6841
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 32 # bound checkout cost; unknown checkpoint ancestry is a cache miss
           persist-credentials: false
       - name: Verify approved immutable collector before running source
         run: |
-          test "$(git rev-parse HEAD)" = "77487534a6ff0a17bf4e5d55f9ab5c06938138d4"
+          test "$(git rev-parse HEAD)" = "3f7479573b990337c64643077720c39b361b6841"
           git diff --exit-code HEAD
       - name: plan conservative no-change fast path
         id: bake_plan
@@ -496,7 +527,7 @@ jobs:
           fi
   # Reporting cannot publish, change admission, or turn an abstention into data.
   model-status:
-    needs: [core, regional, bake]
+    needs: [core-ecmwf, core-gfs, core-hrrr, core-aifs, regional-icon, regional-hrdps, regional-arome-antilles, regional-hrrr-ak, regional-nam, regional-nam-hi, regional-nam-ak, bake]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 8

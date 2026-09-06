@@ -6,6 +6,9 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/bake.yml"
+      - ".github/workflows/collect-core-model.yml"
+      - ".github/workflows/collect-regional-model.yml"
+      - ".github/workflows/publish-current-model-production.yml"
       - ".github/workflows/catalog-bake.yml"
       - ".github/workflows/scheduler-ci.yml"
       - ".github/workflows/scheduler-deploy.yml"
@@ -54,6 +57,7 @@ jobs:
           node --test tests/bake-model-status.mjs
           node --test tests/model-recovery-workflow.mjs
           python3 tests/test_recover_model_inputs.py
+          python3 -m unittest tests.test_current_model_artifact
           node --test tests/nam-hi-diagnostic.mjs
       - name: Staged UI artifact, manual promotion and privacy contracts
         run: node --test tests/ui-*.mjs

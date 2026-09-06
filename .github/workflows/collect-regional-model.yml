@@ -1,0 +1,93 @@
+name: collect one regional model
+permissions:
+  contents: read
+  actions: read
+on:
+  workflow_call:
+    inputs:
+      model:
+        required: true
+        type: string
+      recovery_run_id:
+        required: false
+        type: string
+        default: ''
+    secrets:
+      ATMOS_DEPLOY_KEY:
+        required: true
+jobs:
+  collector:
+    name: collector
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      REGIONAL_MODEL: ${{ inputs.model }}
+      RECOVERY_RUN_ID: ${{ inputs.recovery_run_id }}
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - name: reject unsupported recovery before any collector work
+        run: |
+          case "$REGIONAL_MODEL" in icon|hrdps|arome-antilles|hrrr-ak|nam|nam-hi|nam-ak) ;; *) exit 2 ;; esac
+          test -z "$RECOVERY_RUN_ID" || {
+            test "$GITHUB_EVENT_NAME" = workflow_dispatch && test "$GITHUB_REF" = refs/heads/main && test "$RECOVERY_RUN_ID" = 33925520386
+          }
+      - name: checkout atmos regional collector (same approved commit, read-only deploy key)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: weatherx-hq/atmos
+          ref: 3f7479573b990337c64643077720c39b361b6841
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          fetch-depth: 32
+          persist-credentials: false
+      - name: Verify approved immutable regional collector before running source
+        run: |
+          test "$(git rev-parse HEAD)" = "3f7479573b990337c64643077720c39b361b6841"
+          git diff --exit-code HEAD
+      - name: checkout this reviewed recovery controller
+        if: ${{ inputs.recovery_run_id != '' }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Andrewegao/v3t7kq-cycle
+          ref: ${{ github.sha }}
+          path: cycle-controller
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with: { python-version: '3.12' }
+      - name: system eccodes
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeccodes-dev
+      - name: venv + python deps
+        run: |
+          python -m venv data/.venv
+          data/.venv/bin/pip install -r data/requirements.txt
+      - name: recover only compatible completed regional inputs
+        id: recovery
+        if: ${{ inputs.recovery_run_id != '' }}
+        timeout-minutes: 15
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(git -C cycle-controller rev-parse HEAD)" = "$GITHUB_SHA"
+          test ! -e "$RUNNER_TEMP/recovery-controller"
+          mv cycle-controller "$RUNNER_TEMP/recovery-controller"
+          data/.venv/bin/python "$RUNNER_TEMP/recovery-controller/tools/recover-model-inputs.py" \
+            --run-id "$RECOVERY_RUN_ID" --kind regional --model "$REGIONAL_MODEL" \
+            --current-source-sha "$(git rev-parse HEAD)" --atmos-root "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/regional-packs" --github-output "$GITHUB_OUTPUT"
+      - name: collect one regional model for the newest complete cycle (one older-cycle fallback)
+        if: ${{ steps.recovery.outputs.reused != 'true' }}
+        timeout-minutes: 45
+        run: |
+          df -h "$RUNNER_TEMP"
+          data/.venv/bin/python data/bake_regional_models.py collect --model "$REGIONAL_MODEL" \
+            --source-sha "$(git rev-parse HEAD)" --workers 2 --output "$RUNNER_TEMP/regional-packs"
+      - name: hand the display packs (or abstention receipts) to the bake job
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: regional-packs-${{ inputs.model }}
+          path: ${{ runner.temp }}/regional-packs
+          retention-days: 1
+          if-no-files-found: warn

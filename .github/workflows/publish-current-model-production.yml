@@ -1,0 +1,182 @@
+name: publish one current model to shared production data
+permissions:
+  contents: read
+  actions: read
+on:
+  workflow_call:
+    inputs:
+      model:
+        required: true
+        type: string
+      kind:
+        required: true
+        type: string
+    outputs:
+      status:
+        value: ${{ jobs.publisher.outputs.status }}
+    secrets:
+      ATMOS_DEPLOY_KEY:
+        required: true
+      R2_PRODUCTION_ACCESS_KEY_ID:
+        required: true
+      R2_PRODUCTION_SECRET_ACCESS_KEY:
+        required: true
+      CATALOG_ENDPOINT_PRODUCTION:
+        required: true
+      CATALOG_PROMOTION_KEY_PRODUCTION:
+        required: true
+jobs:
+  publisher:
+    name: publisher
+    environment: production
+    concurrency:
+      group: weatherx-component-production-${{ inputs.model }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      status: ${{ steps.result.outputs.status }}
+    env:
+      ATMOS_SHA: 3f7479573b990337c64643077720c39b361b6841
+      UNQUALIFIED_PLACEHOLDER_SHA: 77487534a6ff0a17bf4e5d55f9ab5c06938138d4
+      MODEL: ${{ inputs.model }}
+      COMPONENT_KIND: ${{ inputs.kind }}
+    steps:
+      - name: refuse inactive or unqualified production component source before credentials
+        env:
+          ENABLED: ${{ vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED }}
+          APPROVED_SHA: ${{ vars.CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA }}
+        run: |
+          test "$GITHUB_REPOSITORY" = Andrewegao/v3t7kq-cycle
+          test "$GITHUB_REF" = refs/heads/main
+          case "$GITHUB_EVENT_NAME" in schedule|workflow_dispatch) ;; *) exit 2 ;; esac
+          test "$ENABLED" = true
+          test "$APPROVED_SHA" = "$ATMOS_SHA"
+          test "$ATMOS_SHA" != "$UNQUALIFIED_PLACEHOLDER_SHA"
+          case "$COMPONENT_KIND:$MODEL" in
+            core:ecmwf|core:gfs|core:hrrr|core:aifs|regional:icon|regional:hrdps|regional:arome-antilles|regional:hrrr-ak|regional:nam|regional:nam-hi|regional:nam-ak) ;;
+            *) exit 2 ;;
+          esac
+      - name: checkout authenticated current-run controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Andrewegao/v3t7kq-cycle
+          ref: ${{ github.sha }}
+          path: cycle-controller
+          persist-credentials: false
+      - name: checkout exact qualified Atmos component publisher
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: weatherx-hq/atmos
+          ref: 3f7479573b990337c64643077720c39b361b6841
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: atmos
+          fetch-depth: 32
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with: { python-version: '3.12' }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: { node-version: 22, cache: npm, cache-dependency-path: atmos/app/package-lock.json }
+      - name: provision exact component runtime
+        run: |
+          test "$(git -C cycle-controller rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C atmos rev-parse HEAD)" = "$ATMOS_SHA"
+          git -C cycle-controller diff --exit-code HEAD
+          git -C atmos diff --exit-code HEAD
+          sudo apt-get update
+          sudo apt-get install -y libeccodes-dev
+          archive="$RUNNER_TEMP/rclone-v1.75.0-linux-amd64.zip"
+          curl --fail --silent --show-error --location \
+            https://github.com/rclone/rclone/releases/download/v1.75.0/rclone-v1.75.0-linux-amd64.zip --output "$archive"
+          printf '%s  %s\n' aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa "$archive" | sha256sum --check --status
+          unzip -q "$archive" -d "$RUNNER_TEMP"
+          sudo install -m 0755 "$RUNNER_TEMP/rclone-v1.75.0-linux-amd64/rclone" /usr/local/bin/rclone
+          python -m venv atmos/data/.venv
+          atmos/data/.venv/bin/pip install -r atmos/data/requirements.txt
+          npm ci --prefix atmos/app
+      - name: authenticate and copy only this completed collector artifact
+        id: handoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -I cycle-controller/tools/current-model-artifact.py \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --controller-sha "$GITHUB_SHA" --atmos-source-sha "$ATMOS_SHA" --atmos-root "$GITHUB_WORKSPACE/atmos" \
+            --kind "$COMPONENT_KIND" --model "$MODEL" --output "$RUNNER_TEMP/model-handoff" \
+            --github-output "$GITHUB_OUTPUT"
+      - name: hydrate authenticated current production component baseline
+        if: ${{ steps.handoff.outputs.status == 'ready' }}
+        env:
+          COMPONENT_ID: ${{ inputs.model }}
+          CATALOG_R2_REMOTE: weatherx:weatherx-data-production
+          COMPONENT_R2_REMOTE: weatherx:weatherx-components-production
+          ALLOW_EMPTY_CATALOG: '0'
+          ALLOW_MISSING_COMPONENT: '1'
+          HYDRATE_MISSING_FROM_RELEASE: '1'
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+        working-directory: atmos
+        run: |
+          test "$CATALOG_R2_REMOTE" = weatherx:weatherx-data-production
+          test "$COMPONENT_R2_REMOTE" = weatherx:weatherx-components-production
+          GITHUB_ENV="$RUNNER_TEMP/baseline.env" bash ops/platform/hydrate-r2-component.sh
+          run_path="$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["runs"][0]["path"])' "app/public/data/$MODEL/index.json")"
+          manifest="app/public/data/$MODEL/$run_path/manifest.json"
+          test -f "$manifest" && test ! -L "$manifest"
+          cp "$manifest" "$RUNNER_TEMP/baseline-manifest.json"
+          sha256sum "$RUNNER_TEMP/baseline-manifest.json" | awk '{print "REGIONAL_BASELINE_SHA256=" $1}' >> "$GITHUB_ENV"
+      - name: validate and publish only the selected production data component
+        id: publish
+        if: ${{ steps.handoff.outputs.status == 'ready' }}
+        env:
+          CATALOG_R2_REMOTE: weatherx:weatherx-data-production
+          COMPONENT_R2_REMOTE: weatherx:weatherx-components-production
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+          PUBLISH: '1'
+          LIVE: https://weatherx.org
+          DATA_PUBLISH_MODE: component-catalog
+          CATALOG_ENDPOINT: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
+          CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+        working-directory: atmos
+        run: |
+          handoff="$RUNNER_TEMP/model-handoff/handoff.json"
+          pack_receipt="$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["pack"]["receiptSha256"])' "$handoff")"
+          point_receipt="$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["pack"].get("pointReceiptSha256",""))' "$handoff")"
+          forecast_run="$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["pack"]["forecastRun"])' "$handoff")"
+          if [ "$COMPONENT_KIND" = core ]; then
+            export CORE_MODEL_PACKS_DIR="$RUNNER_TEMP/model-handoff/packs" CORE_INPUT_SOURCE_SHA="$ATMOS_SHA"
+            export CORE_INPUT_RUN_ID="$GITHUB_RUN_ID" CORE_INPUT_MANIFEST_SHA256="$pack_receipt"
+          else
+            test -n "$point_receipt"
+            export REGIONAL_MODEL_PACKS_DIR="$RUNNER_TEMP/model-handoff/packs" REGIONAL_INPUT_SOURCE_SHA="$ATMOS_SHA"
+            export REGIONAL_INPUT_RUN_ID="$GITHUB_RUN_ID" REGIONAL_INPUT_RECEIPT_SHA256="$pack_receipt"
+            export REGIONAL_POINT_RECEIPT_SHA256="$point_receipt" REGIONAL_BASELINE_MANIFEST="$RUNNER_TEMP/baseline-manifest.json"
+          fi
+          log="$RUNNER_TEMP/component-publish.log"
+          bash ops/bake-model-component.sh >"$log" 2>&1
+          if grep -Fq "unchanged ($forecast_run)" "$log"; then status=unchanged
+          elif grep -Eq "^(atomically promoted|promoted standalone point-)" "$log" && grep -Fq "$forecast_run" "$log"; then status=published
+          else echo 'component publisher returned no recognized fixed result' >&2; exit 1; fi
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "$MODEL: $status"
+      - name: record truthful per-model outcome
+        id: result
+        if: ${{ always() }}
+        env:
+          HANDOFF_STATUS: ${{ steps.handoff.outputs.status }}
+          PUBLISH_STATUS: ${{ steps.publish.outputs.status }}
+        run: |
+          if [ "$HANDOFF_STATUS" = withheld ]; then status=withheld
+          elif [ "$PUBLISH_STATUS" = published ] || [ "$PUBLISH_STATUS" = unchanged ]; then status="$PUBLISH_STATUS"
+          else status=failed; fi
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          test "$status" != failed

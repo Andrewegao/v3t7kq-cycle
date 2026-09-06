@@ -10,11 +10,28 @@ const [bake, ui, staging, backfill] = await Promise.all([
 ]);
 const workflowDirectory = new URL('../.github/workflows/', import.meta.url);
 const workflowNames = (await readdir(workflowDirectory)).filter((name) => name.endsWith('.yml'));
+const localDataWorkflows = new Set(['collect-core-model.yml', 'collect-regional-model.yml', 'publish-current-model-production.yml']);
+function validateUse(line, workflowName) {
+  const local = line.match(/^    uses: \.\/\.github\/workflows\/([a-z-]+\.yml)$/);
+  if (local && workflowName === 'bake.yml' && localDataWorkflows.has(local[1])) {
+    // Relative reusable workflows resolve at the caller's exact commit. Their
+    // own external actions are scanned by this same loop, not exempted.
+    assert.ok(workflowNames.includes(local[1]), 'local data workflow must exist');
+    return;
+  }
+  assert.match(line, /@[a-f0-9]{40}(?:\s+#.*)?$/,
+    `${workflowName} must pin every external action to a full commit SHA: ${line.trim()}`);
+  assert.doesNotMatch(line, /uses:\s+\.\//, 'local reusable calls must be exact reviewed data lanes');
+}
+for (const bad of ['    uses: ./.github/workflows/unknown.yml', '    uses: ./.github/workflows/collect-core-model.yml@main',
+  '    uses: ./.github/workflows/collect-core-model.yml@' + 'a'.repeat(40), '    uses: actions/checkout@main']) {
+  assert.throws(() => validateUse(bad, 'bake.yml'));
+}
+assert.throws(() => validateUse('    uses: ./.github/workflows/collect-core-model.yml', 'ui-release.yml'));
 for (const workflowName of workflowNames) {
   const workflow = await readWorkflow(workflowName);
   for (const line of workflow.split('\n').filter((candidate) => /\buses:/.test(candidate))) {
-    assert.match(line, /@[a-f0-9]{40}(?:\s+#.*)?$/,
-      `${workflowName} must pin every external action to a full commit SHA: ${line.trim()}`);
+    validateUse(line, workflowName);
   }
   if (/secrets\./.test(workflow)) {
     assert.match(workflow, /\n\s{4}environment:\s*(?:production|staging|\n)/,
