@@ -38,9 +38,37 @@ This is an opt-in experiment, not a completed latency qualification.
 
 ## Current repair evidence on 2026-09-06
 
+### Full candidate file budget follow-up
+
+After the reviewed retry closed fuse #175, run 34047704810 passed the application
+tests, Weather Lab gate, Vite build and Functions compilation, then refused before
+deployment with `artifact exceeds size/file limit`. The shell receipt counted
+3,734 files but excludes 1,365 retained ground tiles and the receipt itself: the
+complete candidate has 5,100 files. It exceeded the 5,000-file inventory limit,
+not the 96 MiB byte limit. Overlay-only local validation had missed this boundary.
+
+The compressed staging profile now admits at most 5,000 ordinary files, 512
+hash-named Brotli sidecars, and one sealed manifest. Full candidate admission
+still verifies the manifest/sidecar bijection and decoded equality. The combined
+96 MiB byte limit, encrypted transport bounds, baseline/production 5,000-file
+limit, and production rejection of compressed candidates are unchanged. The
+profile is carried through disk reads, candidate validation, restore and both
+pre/post-deployment exact-byte checks; an allowance at build time alone is not enough.
+
+Regression evidence: the new full-envelope test failed on the old limit and
+passes through candidate creation, RSA build transport, AES candidate retention,
+restore, and inventory verification. Tests retain ordinary-file and byte overflow
+refusals, enforce the 512-sidecar cap, and reject relabeling for production.
+All 113 UI-controller tests pass locally. A public-only copy of the actual frozen
+build passed with 5,100 files / 29,387,074 bytes / 39,911,438 encrypted bytes and
+exact restored inventory. Evidence: `/private/tmp/weatherx-candidate-budget-47N0CE/`.
+This is local packaging evidence, not a cloud deployment or latency qualification.
+
+### Earlier namespace repair
+
 Run 34038808522 failed wire qualification and restored the prior staging
-deployment. Fuse #175 remains open until the diagnosis and fresh validation are
-reviewed; do not blindly retry. Raw GET evidence found old automatic-compression
+deployment. Fuse #175 was subsequently closed after diagnosis and fresh validation
+were reviewed; do not blindly retry. Raw GET evidence found old automatic-compression
 cache responses on unchanged asset URLs. This is the leading diagnosis, not
 certainty about the original unlogged failed path. The repair's failure messages
 now record a bounded path/phase/status/header summary without bodies or secrets.

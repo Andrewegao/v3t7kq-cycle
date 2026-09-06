@@ -86,7 +86,7 @@ test('only successful staging retains encrypted output; production has no build 
   assert.doesNotMatch(prod,/ui-release.mjs build|npm run build|deploy-code-only.sh/);
   assert.match(prod,/ui-release.mjs download[\s\S]+ui-release.mjs deploy production/);
   assert.match(source,/if \(stage === 'production'\) \{ await auditRun\(c\); await exactStaging\(c\); \}/);
-  assert.match(source,/assert.equal\(validateFiles\(readTree\(dist\)\).digest,c.artifactDigest/);
+  assert.match(source,/assert.equal\(validateFiles\(readTree\(dist,c.profile\),c.profile\).digest,c.artifactDigest/);
 });
 test('secret exposure is step-local and no implicit production key fallback exists',()=>{
   assert.doesNotMatch(staging,/secrets\.UI_PRODUCTION_PAGES_TOKEN/);

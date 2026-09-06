@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,symlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {createHash} from 'node:crypto';
+import {createHash,generateKeyPairSync} from 'node:crypto';
 import {brotliCompressSync} from 'node:zlib';
 import {validateCompressionFiles,installCompressionOverlay,selectCompressionAssets} from '../tools/ui-static-compression.mjs';
-import {validateCandidate,validateFiles,STAGING_CONTROL_SHA} from '../tools/ui-candidate.mjs';
+import {validateCandidate,validateFiles,STAGING_CONTROL_SHA,createCandidate,restore,readTree,seal,unseal,MAX_FILES,MAX_BYTES} from '../tools/ui-candidate.mjs';
 import {STATIC_COMPRESSION_PROFILE,CORE_RELEASE_PROFILE,requireProductionProfile} from '../tools/ui-staging-models.mjs';
 import {requiredSourceGuard,POLICY_FILES} from '../tools/ui-release.mjs';
+import {packBuild,unpackBuild} from '../tools/ui-build-transfer.mjs';
 function reseal(f){
  delete f.manifest.sealSha256;f.manifest.sealSha256=hash(JSON.stringify(f.manifest));
  f.files=f.files.map(row=>row.path==='static-compression-manifest.json'?file(row.path,Buffer.from(JSON.stringify(f.manifest))):row);return f;
@@ -96,6 +97,48 @@ test('candidate admission requires compression inventory and refuses relabeling 
   assert.throws(()=>requireProductionProfile(c.profile),/cannot enter production/);
   assert.equal(requiredSourceGuard(c.profile),'a22db10b3f76ff84c422352e566c879868b45706');
   assert.ok(POLICY_FILES.includes('tools/ui-static-compression.mjs'));
+});
+test('full compressed candidate keeps the 5000 ordinary-file budget through encryption and restore',()=>{
+ const root=mkdtempSync(join(tmpdir(),'wx-compression-budget-'));
+ try{
+  const f=fixture(),sourceSha='a'.repeat(40),runId='123',dist=join(root,'dist');mkdirSync(dist);
+  // 4999 ordinary files + the release receipt, one sidecar and one manifest.
+  while(f.files.filter(x=>!x.path.startsWith('__wx_encoded/')&&x.path!=='static-compression-manifest.json').length<MAX_FILES-1)
+   f.files.push(file(`basemap-ground/tiles/${f.files.length}.jpg`,Buffer.from('tile')));
+  for(const row of f.files){const target=join(dist,row.path);mkdirSync(join(target,'..'),{recursive:true});writeFileSync(target,Buffer.from(row.base64,'base64'));}
+  const shell=f.files.filter(x=>!x.path.startsWith('basemap-ground/')).sort((a,b)=>a.path<b.path?-1:1),digest=createHash('sha256');
+  for(const row of shell)digest.update(row.path).update('\0').update(String(row.bytes)).update('\0').update(Buffer.from(row.base64,'base64')).update('\0');
+  const receipt={gitSha:sourceSha,workflowRunId:runId,releaseId:`git-${sourceSha.slice(0,12)}-run-${runId}`,shellSha256:digest.digest('hex'),shellFileCount:shell.length,shellBytes:shell.reduce((n,x)=>n+x.bytes,0),indexSha256:shell.find(x=>x.path==='index.html').sha256};
+  mkdirSync(join(dist,'health'));writeFileSync(join(dist,'health/release.json'),JSON.stringify(receipt));
+  const context={sourceSha,runId,attempt:'1',workflowSha:'b'.repeat(40),pipelineDigest:'c'.repeat(64),profile:STATIC_COMPRESSION_PROFILE};
+  const c=createCandidate(dist,context);assert.equal(c.files.length,MAX_FILES+2);
+  const keys=generateKeyPairSync('rsa',{modulusLength:3072,publicKeyEncoding:{type:'spki',format:'pem'},privateKeyEncoding:{type:'pkcs8',format:'pem'}});
+  assert.equal(unpackBuild(packBuild(c,keys.publicKey),keys.privateKey).artifactDigest,c.artifactDigest);
+  c.qualification={fixture:true};const decoded=unseal(seal(c,'ab'.repeat(32)),'ab'.repeat(32));
+  const restored=join(root,'restored');restore(decoded,restored);
+  assert.equal(validateFiles(readTree(restored,c.profile),c.profile).digest,c.artifactDigest);
+  assert.throws(()=>readTree(dist),/file.*limit/i,'baseline budget must not expand');
+  assert.throws(()=>validateFiles(c.files,CORE_RELEASE_PROFILE),/file.*limit|inventory/i);
+  writeFileSync(join(dist,'extra.txt'),'extra');assert.throws(()=>createCandidate(dist,context),/ordinary.*file.*limit/i);
+  const oversized=structuredClone(c.files);oversized[0].bytes=MAX_BYTES+1;
+  assert.throws(()=>validateFiles(oversized,c.profile),/byte limit/i);
+  assert.throws(()=>requireProductionProfile(c.profile),/cannot enter production/);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
+test('compression allowance is capped at 512 hashed sidecars and cannot hide ordinary files',()=>{
+ const root=mkdtempSync(join(tmpdir(),'wx-compression-sidecar-cap-'));
+ try{
+  mkdirSync(join(root,'__wx_encoded'));
+  for(let i=0;i<512;i++)writeFileSync(join(root,'__wx_encoded',`${i.toString(16).padStart(64,'0')}.br`),'x');
+  assert.equal(readTree(root,STATIC_COMPRESSION_PROFILE).length,512);
+  writeFileSync(join(root,'__wx_encoded',`${'f'.repeat(64)}.br`),'x');
+  assert.throws(()=>readTree(root,STATIC_COMPRESSION_PROFILE),/sidecar file limit/);
+  const f=fixture().files;
+  while(f.length<MAX_FILES)f.push(file(`ground/${f.length}.jpg`,Buffer.from('x')));
+  // Two valid compression files are excluded, so these three extras overflow ordinary files.
+  for(let i=0;i<3;i++)f.push(file(`__wx_encoded/not-a-hash-${i}.br`,Buffer.from('x')));
+  assert.throws(()=>validateFiles(f,STATIC_COMPRESSION_PROFILE),/ordinary file limit/);
+ }finally{rmSync(root,{recursive:true,force:true});}
 });
 test('packaging completes before release receipt and candidate creation',()=>{
   const source=readFileSync(new URL('../tools/ui-release.mjs',import.meta.url),'utf8');
