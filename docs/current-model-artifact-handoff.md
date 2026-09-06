@@ -5,6 +5,10 @@ merged Atmos `3f7479573b990337c64643077720c39b361b6841`, containing the reviewed
 baseline repair and speed/source-integrity fixes. The publisher also continues
 to reject the old `77487534` source. Approval variables were not set, and no
 live workflow, catalog or publication was changed by this draft.
+The existing four-core notifier lane also pins that same repaired source, so its
+future ECMWF same-cycle refreshes receive the enrichment fix. Its schedules,
+target selection and per-model concurrency are unchanged; running jobs keep
+their originally checked-out source.
 
 ## Purpose
 
