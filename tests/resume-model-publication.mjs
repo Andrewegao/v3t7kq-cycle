@@ -1,10 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {readFileSync,mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 const read=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
 const lane=read('.github/workflows/resume-model-publication.yml');
 const publisher=read('.github/workflows/publish-current-model-production.yml');
+test('actual baseline capture never arms regional mode for core artifacts',()=>{
+  const capture=publisher.split('GITHUB_ENV="$RUNNER_TEMP/baseline.env" bash ops/platform/hydrate-r2-component.sh\n')[1].split('\n      - name:')[0];
+  for(const [model,kind] of [['hrrr','core'],['nam','regional']]){
+    const root=mkdtempSync(join(tmpdir(),'wx-baseline-mode-'));
+    try{
+      const folder=join(root,'app/public/data',model),run='runs/2026090518/';
+      mkdirSync(join(folder,run),{recursive:true});
+      writeFileSync(join(folder,'index.json'),JSON.stringify({runs:[{path:run}]}));
+      writeFileSync(join(folder,run,'manifest.json'),'{}');
+      const envFile=join(root,'environment');writeFileSync(envFile,'');
+      const result=spawnSync('bash',['-e','-u','-c',capture],{cwd:root,encoding:'utf8',
+        env:{...process.env,MODEL:model,COMPONENT_KIND:kind,RUNNER_TEMP:root,GITHUB_ENV:envFile}});
+      assert.equal(result.status,0,result.stderr);
+      const changes=readFileSync(envFile,'utf8');
+      if(kind==='core')assert.equal(changes,'','a regional hash activates the incompatible regional-artifact branch');
+      else assert.match(changes,/^REGIONAL_BASELINE_SHA256=[a-f0-9]{64}\n$/);
+    }finally{rmSync(root,{recursive:true,force:true});}
+  }
+});
 test('resume is manual main, one fixed retained run, and no duplicate acquisition',()=>{
   assert.match(lane,/workflow_dispatch:/);assert.doesNotMatch(lane,/schedule:|workflow_run:|push:/);
   assert.match(lane,/github\.ref == 'refs\/heads\/main'/);

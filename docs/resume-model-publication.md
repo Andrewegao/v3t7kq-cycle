@@ -45,3 +45,23 @@ Local checks: Python helper suite (including full CLI output and recovery caller
 negative cases), workflow contract suite, UI credential boundary tests, and
 actionlint. Dispatch only after the corrected controller's CI passes and its
 current source/approval settings are verified. Production UI is out of scope.
+
+## Core environment and private publisher diagnostics
+
+Recovery 34001865145 published regional components, but core publishers refused
+before processing: the caller unconditionally exported `REGIONAL_BASELINE_SHA256`.
+That flag correctly activates the regional artifact mode, which is incompatible
+with core artifact inputs. Baseline manifest capture now exports it only when
+`COMPONENT_KIND=regional`. The ambiguity guard and all installer checks remain
+unchanged. A regression executes the actual workflow shell against both core and
+regional fixture baselines; no weather collection is run locally.
+
+The previously discarded publisher log now has an always-run diagnostic step.
+It reads at most the final 16 KiB, encrypts it for the existing owner-private
+diagnostic recipient, and retains only ciphertext and fixed provenance metadata
+for three days. Missing logs produce no artifact. Invalid inputs fail with a fixed
+message, never raw output. No credentials or private key are added to the repo.
+The reused encryption format retains AAD
+`weatherx-nam-hi-diagnostic/v1:<keySha256>`; only the outer receipt kind changes to
+`weatherx-component-private-diagnostic`. Diagnostic receipts cannot authorize
+publication. Tests decrypt synthetic output in memory and reject symlink inputs.
