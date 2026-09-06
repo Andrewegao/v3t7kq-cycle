@@ -119,12 +119,15 @@ production-environment settings (environment-only flags cannot unlock caller job
 The publisher also refuses the old placeholder SHA even if both variables are
 mis-set. The three reusable Atmos checkout refs and the whole-bake ref,
 including their exact source assertions, have been updated together. There are no duplicate legacy
-collector matrices. Run a publication-disabled cloud canary to confirm GitHub's
-exact compound job names (`core (MODEL) / collector` and
-`regional (MODEL) / collector`) before enabling publication.
-The canary still needs the read-only source checkout key; it must not execute
-the production component-publishing jobs. Ordinary whole-data publication remains
-an explicitly authorized separate job, not a credential-free simulation.
+collector matrices. The first guarded run is the cloud qualification: each
+publisher must authenticate GitHub's exact compound job names (`core (MODEL) /
+collector` and `regional (MODEL) / collector`), original upload, archive digest
+and source receipts before reaching any storage-credential step. A mismatch
+withholds that model before publication. This avoids collecting everything twice
+just to check job names; it does not skip the provenance check or scientific gate.
+The owner-authorized whole-data publisher remains a separate job. Do not describe
+the first run as a credential-free simulation or declare activation successful
+until live paired reads and failure isolation are checked.
 
 Activation must pin an exact final Atmos SHA whose `hydrate-r2-component.sh`
 validates the catalog pointer/snapshot hash and identity before its missing-component
