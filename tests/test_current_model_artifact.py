@@ -160,13 +160,13 @@ class CurrentModelArtifactTests(unittest.TestCase):
             subject.atmos_refs(workflow.replace("ref: " + SOURCE, "ref: main", 1))
 
     def test_versioned_reusable_workflow_closure_is_exact(self):
-        pinned = "3f7479573b990337c64643077720c39b361b6841"
+        pinned = "d8cd45d123f60c30c413c14d46f68113e37468b7"
         subject.verify_workflow_closure(pinned)
         with self.assertRaisesRegex(subject.Refusal, "source-mismatch"):
             subject.verify_workflow_closure("0" * 40)
 
     def test_each_reusable_source_ref_is_required_once_and_cannot_drift(self):
-        pinned = "3f7479573b990337c64643077720c39b361b6841"
+        pinned = "d8cd45d123f60c30c413c14d46f68113e37468b7"
         documents = {name: (subject.REPO_ROOT / name).read_text() for name in subject.WORKFLOW_CLOSURE}
         for name in subject.WORKFLOW_CLOSURE:
             for defect in ("drift", "missing", "duplicate"):
