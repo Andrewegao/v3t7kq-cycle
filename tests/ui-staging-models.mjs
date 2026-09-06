@@ -177,6 +177,17 @@ test('browser child process uses an allowlist and pixel proof measures visible c
   assert.deepEqual(clean,{PATH:'/bin',HOME:'/tmp',BASE:'https://staging.weatherx.org'});
   const off={width:2,height:1,data:Buffer.from([0,0,0,255,0,0,0,255])},on={...off,data:Buffer.from([9,0,0,255,8,0,0,255])};assert.equal(pixelDifference(on,off),.5);
 });
+test('only compressed profile enables the build namespace and all other profiles clear inherited activation',()=>{
+  const body=selection(['icon']),profile=profileFor(digest(body));
+  for(const inherited of [undefined,'static-br11-v1','malicious']){
+    const env={ATMOS_STATIC_COMPRESSION_PROFILE:inherited,KEEP:'yes'};
+    assert.equal(publicBuildEnvironment(STATIC_COMPRESSION_PROFILE,null,env).ATMOS_STATIC_COMPRESSION_PROFILE,'static-br11-v1');
+    for(const [choice,source] of [[BASELINE_PROFILE,null],[CORE_RELEASE_PROFILE,null],[profile,{bytes:body}]]){
+      const actual=publicBuildEnvironment(choice,source,env);
+      assert.equal(actual.ATMOS_STATIC_COMPRESSION_PROFILE,'');assert.equal(actual.KEEP,'yes');
+    }
+  }
+});
 test('core browser gate is staging-only and refuses inherited credentials before launch',()=>{
   const env={BASE:'https://staging.weatherx.org',UI_EXPECTED_SOURCE_SHA:SHA,WEATHERX_EXPECTED_RELEASE_ID:`git-${SHA.slice(0,12)}-run-123`,UI_MODEL_BROWSER_OUTPUT:'/tmp/receipt.json'};
   assert.doesNotThrow(()=>coreBrowserProtocol(env));

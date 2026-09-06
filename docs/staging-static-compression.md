@@ -9,11 +9,18 @@ This is an opt-in experiment, not a completed latency qualification.
 - Explicit request `release-roster-core-br11-v1`; existing defaults unchanged.
 - Requires both protected staging approvals: core `release-roster-core-v1`
   and `UI_STAGING_STATIC_COMPRESSION_APPROVED=static-br11-v1`.
-- Requires source ancestry of Atmos `b06c012f171cade42c98ca67fa655f456d720cd8`
+- Requires source ancestry of Atmos `a22db10b3f76ff84c422352e566c879868b45706`
   and the existing exact-current-master check. No bypass of that check.
-- The credential-free build compiles the existing Functions once, selects the
-  entry/App/MapView static-import closure and entry CSS, then composes the
-  precompressed overlay **before** generating the release receipt.
+- The credential-free build compiles the existing Functions once and exhaustively
+  selects emitted browser JS/CSS, including lazy modules and separately built workers.
+  The bundler names these `/assets/wxbr11v1-*` before hashing and rewriting references;
+  the precompressed overlay is composed **before** generating the release receipt.
+  Non-code assets and flag-off Lab/Road output retain their original naming.
+- The manifest must be a bijection with all emitted JS/CSS (1–512 files). Unsalted
+  JS/CSS, malformed reserved names, symlinks, omissions and overlapping original
+  asset routes are refused. One fixed namespace route is appended; the runtime
+  still serves only sealed exact paths at the staging origin. A future change to
+  the representation/header/routing contract requires a new namespace version.
 - Candidate admission verifies raw/decompressed byte equality, sidecar inventory,
   final Worker/routes/headers hashes and manifest seal without executing source.
 - An ordinary profile cannot carry compression metadata/sidecars. Production
@@ -22,10 +29,39 @@ This is an opt-in experiment, not a completed latency qualification.
   fallback, security headers, browser caching, ETags, HEAD and 304 for every
   selected file, with at most four concurrent probe chains. This runs inside
   the rollback transaction. Retention requires its artifact-bound proof.
+- First failure stops scheduling and aborts all in-flight HTTPS peers before returning
+  control to rollback. The original contextual failure is retained, not replaced by an
+  abort error. The exact hash-bound public wire receipt is retained alongside the
+  encrypted candidate; it contains no response bodies, server code or credentials.
 - Cloudflare's private CDN cache header may be stripped on the wire; runtime
   contracts check emission. See the official [header documentation](https://developers.cloudflare.com/cache/concepts/cdn-cache-control/).
 
-## Evidence on 2026-09-06
+## Current repair evidence on 2026-09-06
+
+Run 34038808522 failed wire qualification and restored the prior staging
+deployment. Fuse #175 remains open until the diagnosis and fresh validation are
+reviewed; do not blindly retry. Raw GET evidence found old automatic-compression
+cache responses on unchanged asset URLs. This is the leading diagnosis, not
+certainty about the original unlogged failed path. The repair's failure messages
+now record a bounded path/phase/status/header summary without bodies or secrets.
+
+Frozen repair artifacts under `/private/tmp/weatherx-severe-baseline.i5Ldvc/`:
+
+- 163 JS/CSS assets, including five workers; 5,567,746 raw / 1,503,081 Brotli bytes.
+- 20 routes: all 19 originals plus `/assets/wxbr11v1-*`; 37 non-code assets unchanged.
+- 589 resolved imports; seal `5d9c07b93ae0227c475a9329f8fb90fbc8dd4068c74fb48a5bf96f1f910512e0`.
+- Actual compiled Functions with local Pages ASSETS passed 1,304 wire probes over
+  all 163 assets plus five non-asset OPTIONS parity checks. A loopback-origin adapter
+  and symmetric local rebundling were used; these are not cloud CDN receipts.
+- Three paired runs per network profile for point and layer journeys plus three
+  extra counterbalanced normal-only pairs each: 48 journeys passed. Severe weather
+  median about 24.8 -> 23.6 s against captured local Pages automatic Brotli,
+  not a gzip baseline. Normal results are small and mixed; no proven normal gain.
+- Candidate with live staging catalog 141 passed ten explicit model-point rows,
+  causal map/zoom pixels and rapid switching. AROME Antilles failed freshness
+  (`2026090518`, expired 12:00Z). No all-eleven success or data repair is claimed.
+
+## Historical pre-namespace evidence (superseded contract)
 
 Real frozen-build composition passed in
 `/private/tmp/weatherx-controller-compression-QdvQ8O/`:
@@ -49,15 +85,18 @@ installed with the same staging-controller npm-ci step used in CI.
 ## Remaining before acceptance
 
 1. Review source and controller changes, including existing recovery contracts.
-2. Merge/pin the reviewed source and controller through their usual lanes; the
-   compression source is not current master at this checkpoint.
-3. Explicitly approve and deploy this profile to staging only. No approval
-   variables or Cloudflare state have been changed by this integration work.
+2. Merge/pin the reviewed source and controller through their usual lanes. PR #172
+   and Cycle #174 merged the initial experiment; repair PRs Atmos #173 and Cycle
+   #176 are not yet merged at this checkpoint.
+3. Review the fuse diagnosis and fresh repair evidence before a guarded staging-only
+   deployment using the existing protected approval. Keep automatic rollback and all
+   wire assertions intact. No approval variable or Cloudflare configuration change
+   is required by this namespace repair.
 4. Verify live HTTP delivery, repeat counterbalanced normal/moderate/severe
    startup and first-use/layer/zoom/point measurements, all 11 model paths and
    recovery. Reject the experiment if the extra Worker routing offsets savings.
-5. Continue reducing mandatory startup bytes. The prior local compression
-   experiment improved ~25.8s to ~23.5s; it does not meet the <10s target.
+5. Continue reducing mandatory startup bytes. The fairer automatic-Brotli comparison
+   improved ~24.8s to ~23.6s; it does not meet the <10s target.
 
 No production deployment, configuration or weather data changed.
 

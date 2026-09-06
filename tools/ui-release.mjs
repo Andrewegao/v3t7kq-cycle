@@ -4,7 +4,6 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, chmodSync, existsSync, unlinkSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createRequire } from 'node:module';
 import {installCompressionOverlay,selectCompressionAssets,validateCompressionFiles} from './ui-static-compression.mjs';
 import {verifyStaticCompression} from './ui-static-compression-wire.mjs';
 import {staticCompressionProfile} from './ui-staging-models.mjs';
@@ -175,7 +174,7 @@ async function preflight(stage) {
 }
 export function requiredSourceGuard(profile) {
   validateProfile(profile);
-  if (staticCompressionProfile(profile)) return 'b06c012f171cade42c98ca67fa655f456d720cd8';
+  if (staticCompressionProfile(profile)) return 'a22db10b3f76ff84c422352e566c879868b45706';
   if (coreReleaseProfile(profile)) return 'ed8065275eefa5e6e530ce37d1133a3baf1026c5';
   return profile.stagingOnly ? STAGING_RELEASE_GUARD_SHA : null;
 }
@@ -194,6 +193,7 @@ export function publicBuildEnvironment(profile,selection,env=process.env) {
     assert.equal(hash(selection.bytes),profile.modelSelectionSha256,'staging experiment selection differs from profile');
   } else assert.equal(selection,null,'non-selection build cannot carry a staging selection');
   return {...env,ATMOS_CODE_ONLY_BUILD:'1',ATMOS_PUBLIC_RELEASE:profile.stagingOnly?'0':'1',
+    ATMOS_STATIC_COMPRESSION_PROFILE:staticCompressionProfile(profile)?'static-br11-v1':'',
     ATMOS_STAGING_EXPERIMENT_RELEASE:profile.stagingOnly?'1':'0',VITE_PRODUCT:'lab',VITE_APP:'lab',VITE_PLATFORM_ACCOUNT:'0',
     ATMOS_STAGING_RELEASE_ROSTER:core?'1':'0',VITE_MODEL_EXPANSION_QUALIFICATION:profile.stagingOnly?'1':'0',VITE_MODEL_LOCAL_BASE:'',
     VITE_STAGING_MODEL_ADMISSION:selected?'1':'0',VITE_STAGING_MODEL_SELECTION_SHA256:profile.modelSelectionSha256??''};
@@ -219,11 +219,9 @@ export async function packagePagesWorker(profile,{app,dist,workerOut,overlay}) {
   // runner independently validates the resulting opaque bytes through ui-candidate.
   assert.deepEqual(readdirSync(workerOut),['index.js'],'Pages Functions build emitted unexpected modules');
   const {packageStaticCompression}=await import(pathToFileURL(resolve(app,'scripts/package-static-compression.mjs')).href);
-  const require=createRequire(resolve(app,'package.json'));
-  const {init,parse}=require('es-module-lexer'); await init;
   const originalWorkerPath=resolve(workerOut,'index.js'),originalRoutesPath=resolve(dist,'_routes.json');
   await packageStaticCompression({originalWorkerPath,originalRoutesPath,assetRoot:dist,
-    selectedPaths:selectCompressionAssets(dist,parse),outputDir:overlay,
+    selectedPaths:selectCompressionAssets(dist),outputDir:overlay,
     origin:ORIGINS.staging,qualificationScope:'staging-only-nonpromotable'});
   installCompressionOverlay({dist,overlay,originalWorkerPath,originalRoutesPath});
 }
@@ -371,6 +369,7 @@ async function verify(stage) {
 }
 function retain() {
   const c=candidate(), out=resolve(process.env.RUNNER_TEMP,'ui-sealed');
+  let compressionProof;
   const selection=requireStagingApproval(c,process.env);
   if(selectionProfile(c.profile)){assert.equal(c.qualification?.modelSelectionSha256,c.profile.modelSelectionSha256);assert.equal(c.qualification?.modelBrowserModels,selection.entries.length);assert.match(c.qualification?.modelBrowserReceiptSha256??'',/^[a-f0-9]{64}$/);}
   if(coreReleaseProfile(c.profile)){assert.equal(c.qualification?.coreProfile,c.profile.releaseRosterCore);assert.equal(c.qualification?.coreBrowserModels,2);assert.match(c.qualification?.coreBrowserReceiptSha256??'',/^[a-f0-9]{64}$/);}
@@ -379,9 +378,14 @@ function retain() {
     assert.equal(c.qualification?.staticCompressionSealSha256,manifest.sealSha256);
     assert.equal(c.qualification?.staticCompressionAssets,manifest.selectedPaths.length);
     assert.match(c.qualification?.staticCompressionWireSha256??'',/^[a-f0-9]{64}$/);
+    compressionProof=readFileSync(resolve(process.env.RUNNER_TEMP,'ui-compression-wire.json'));
+    assert.equal(hash(compressionProof),c.qualification.staticCompressionWireSha256,'wire receipt changed after qualification');
   }
   mkdirSync(out,{mode:0o700});
   writeFileSync(resolve(out,'candidate.wxui'),seal(c,process.env.UI_CANDIDATE_KEY),{mode:0o600});
+  // Controller-produced public paths/hashes/cache observations only; no bodies, server code,
+  // request headers or credentials. Preserve the exact proof bound into the encrypted candidate.
+  if(compressionProof)writeFileSync(resolve(out,'compression-wire.json'),compressionProof,{mode:0o600});
   const summary={sourceSha:c.sourceSha,stagingRunId:c.runId,attempt:c.attempt,artifactDigest:c.artifactDigest,
     deploymentId:c.qualification.deploymentId,qualifiedAt:c.qualification.qualifiedAt};
   save(resolve(out,'summary.json'),summary);
