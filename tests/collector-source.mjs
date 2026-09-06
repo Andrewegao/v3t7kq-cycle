@@ -20,6 +20,13 @@ export function validateCollectorSource(text){
 test('production maintenance uses an immutable approved source before any source script',()=>{
   assert.match(validateCollectorSource(workflow),/^[a-f0-9]{40}$/);
 });
+test('distributed maintenance never restores unused checkpoint files into its guarded checkout',()=>{
+  const bake=workflow.split('\n  bake:\n')[1].split('\n  model-status:\n')[0];
+  assert.match(bake,/CORE_MODEL_PACKS_DIR: \$\{\{ runner.temp \}\}\/core-model-packs/);
+  assert.doesNotMatch(bake,/ops\/\.maintenance-checkpoint|maintenance_checkpoint.py|MAINTENANCE_CHECKPOINT_ENABLED/);
+  assert.match(bake,/name: save rolling verification cache/,'independent rolling observations cache remains');
+  assert.match(bake,/name: hydrate and verify current production R2 release/);
+});
 test('missing, floating, mismatched and dirty-source guards are rejected',()=>{
   // Mutate the production bake job's own checkout, not the regional family checkout that precedes it.
   const at=workflow.indexOf('      - name: checkout atmos (private, read-only deploy key)');assert.ok(at>0);
