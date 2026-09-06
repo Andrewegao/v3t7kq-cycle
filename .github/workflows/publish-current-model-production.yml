@@ -134,11 +134,13 @@ jobs:
           test "$CATALOG_R2_REMOTE" = weatherx:weatherx-data-production
           test "$COMPONENT_R2_REMOTE" = weatherx:weatherx-components-production
           GITHUB_ENV="$RUNNER_TEMP/baseline.env" bash ops/platform/hydrate-r2-component.sh
-          run_path="$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["runs"][0]["path"])' "app/public/data/$MODEL/index.json")"
-          manifest="app/public/data/$MODEL/$run_path/manifest.json"
-          test -f "$manifest" && test ! -L "$manifest"
-          cp "$manifest" "$RUNNER_TEMP/baseline-manifest.json"
-          sha256sum "$RUNNER_TEMP/baseline-manifest.json" | awk '{print "REGIONAL_BASELINE_SHA256=" $1}' >> "$GITHUB_ENV"
+          if [ "$COMPONENT_KIND" = regional ]; then
+            run_path="$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["runs"][0]["path"])' "app/public/data/$MODEL/index.json")"
+            manifest="app/public/data/$MODEL/$run_path/manifest.json"
+            test -f "$manifest" && test ! -L "$manifest"
+            cp "$manifest" "$RUNNER_TEMP/baseline-manifest.json"
+            sha256sum "$RUNNER_TEMP/baseline-manifest.json" | awk '{print "REGIONAL_BASELINE_SHA256=" $1}' >> "$GITHUB_ENV"
+          fi
       - name: validate and publish only the selected production data component
         id: publish
         if: ${{ steps.handoff.outputs.status == 'ready' }}
@@ -179,6 +181,17 @@ jobs:
           else echo 'component publisher returned no recognized fixed result' >&2; exit 1; fi
           echo "status=$status" >> "$GITHUB_OUTPUT"
           echo "$MODEL: $status"
+      - name: encrypt bounded component diagnostics without exposing raw logs
+        if: ${{ always() }}
+        run: node cycle-controller/tools/component-publish-diagnostic.mjs
+      - name: retain only encrypted component diagnostic receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: component-diagnostic-${{ inputs.model }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/component-diagnostic/receipt.json
+          if-no-files-found: ignore
+          retention-days: 3
       - name: record truthful per-model outcome
         id: result
         if: ${{ always() }}
