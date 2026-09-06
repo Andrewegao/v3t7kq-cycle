@@ -60,3 +60,21 @@ installed with the same staging-controller npm-ci step used in CI.
    experiment improved ~25.8s to ~23.5s; it does not meet the <10s target.
 
 No production deployment, configuration or weather data changed.
+
+## Independent review follow-up
+
+Two findings were reproduced with failing tests, then repaired before activation:
+
+- Removing compression metadata and sidecars must not leave its asset Worker
+  routes in a noncompression candidate. Baseline/core now reject asset invocation
+  rules; compressed candidates require exactly the sealed asset route selection.
+  Existing synthetic candidate fixtures now use real API-only route schemas
+  instead of empty JSON placeholders.
+- A no-cache-only probe can conceal representation contamination. The live gate
+  now separates a freshness probe from ordinary br/identity/gzip/br requests,
+  verifies decoded bytes and Vary/security/browser-cache policy for every variant,
+  and requires raw 200 when the Brotli ETag is presented for identity. CF cache
+  status and Age are recorded, not assumed to identify the outer cache layer.
+
+The updated UI suite passes 103 tests. This does not replace live qualification;
+no cloud settings or deployment have been changed.

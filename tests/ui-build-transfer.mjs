@@ -7,7 +7,7 @@ const keys=generateKeyPairSync('rsa',{modulusLength:3072,
   publicKeyEncoding:{type:'spki',format:'pem'},privateKeyEncoding:{type:'pkcs8',format:'pem'}});
 const context={sourceSha:'a'.repeat(40),workflowSha:'b'.repeat(40),runId:'123',attempt:'1',pipelineDigest:'c'.repeat(64)};
 function candidate() {
-  const contents={'index.html':'WeatherX','_worker.js':'private compiled functions','_routes.json':'{}'};
+  const contents={'index.html':'WeatherX','_worker.js':'private compiled functions','_routes.json':'{"version":1,"include":["/api/*"],"exclude":[]}'};
   const digest=createHash('sha256');
   const files=Object.entries(contents).sort(([a],[b])=>a<b?-1:1).map(([path,text])=>{
     const bytes=Buffer.from(text);digest.update(path).update('\0').update(String(bytes.length)).update('\0').update(bytes).update('\0');

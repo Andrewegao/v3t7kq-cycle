@@ -68,7 +68,7 @@ function entry(model,n){
 }
 export function selection(models=MODELS){return Buffer.from(JSON.stringify({schemaVersion:1,kind:'weatherx-staging-model-selection',targetOrigin:'https://staging.weatherx.org',entries:models.map((m,i)=>entry(m,i))})+'\n');}
 function candidateFixture(profile=BASELINE_PROFILE,bundle){
-  const root=mkdtempSync(resolve(tmpdir(),'wx-stage-profile-')),content={'index.html':'x','_worker.js':'x','_routes.json':'{}',...(bundle?{'assets/staging-model-selection.json':bundle}:{})};
+  const root=mkdtempSync(resolve(tmpdir(),'wx-stage-profile-')),content={'index.html':'x','_worker.js':'x','_routes.json':'{"version":1,"include":["/api/*"],"exclude":[]}',...(bundle?{'assets/staging-model-selection.json':bundle}:{})};
   const crypto=[];for(const path of Object.keys(content).sort()){const bytes=Buffer.from(content[path]);crypto.push([path,bytes]);mkdirSync(resolve(root,path,'..'),{recursive:true});writeFileSync(resolve(root,path),bytes);}
   const d=(h=>{for(const [path,bytes] of crypto)h.update(path).update('\0').update(String(bytes.length)).update('\0').update(bytes).update('\0');return h.digest('hex');})(createHash('sha256'));
   const receipt={schemaVersion:1,gitSha:SHA,workflowRunId:'123',releaseId:`git-${SHA.slice(0,12)}-run-123`,shellSha256:d,indexSha256:hash('x'),shellFileCount:crypto.length,shellBytes:crypto.reduce((n,[,b])=>n+b.length,0)};

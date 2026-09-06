@@ -13,6 +13,10 @@ const MAX_FILE=32*1024*1024,MAX_TOTAL=96*1024*1024;
 const security=['strict-transport-security','x-content-type-options','referrer-policy','permissions-policy','x-frame-options','content-security-policy'];
 function bytes(file){assert.ok(file);const body=Buffer.from(file.base64,'base64');assert.equal(body.length,file.bytes);assert.equal(hash(body),file.sha256);return body;}
 function checkPath(path){assert.match(path,ASSET);assert.ok(path.length<=100);return path;}
+function assetRoute(rule){
+  assert.equal(typeof rule,'string');
+  return rule==='/assets'||rule.startsWith('/assets/')||(rule.endsWith('*')&&'/assets/'.startsWith(rule.slice(0,-1)));
+}
 function inventory(root){
   const rows=[];let total=0;
   function walk(dir,prefix=''){
@@ -27,7 +31,13 @@ function inventory(root){
 }
 export function validateCompressionFiles(files,enabled){
   const matches=files.filter(f=>f.path===MANIFEST),sidecars=files.filter(f=>f.path.startsWith('__wx_encoded/'));
-  if(!enabled){assert.equal(matches.length+sidecars.length,0,'compression requires an explicit staging-only profile');return null;}
+  if(!enabled){
+    assert.equal(matches.length+sidecars.length,0,'compression requires an explicit staging-only profile');
+    const routes=JSON.parse(bytes(files.find(f=>f.path==='_routes.json')));
+    assert.ok(Array.isArray(routes.include));
+    assert.ok(!routes.include.some(assetRoute),'asset Worker routes require the compression profile');
+    return null;
+  }
   assert.equal(matches.length,1,'one sealed compression manifest required');assert.ok(matches[0].bytes<=1024*1024);
   const manifest=JSON.parse(bytes(matches[0])),{sealSha256,...payload}=manifest;
   assert.match(sealSha256,HASH);assert.equal(hash(JSON.stringify(payload)),sealSha256,'compression manifest seal mismatch');
@@ -60,6 +70,7 @@ export function validateCompressionFiles(files,enabled){
   const routes=JSON.parse(bytes(files.find(f=>f.path==='_routes.json')));
   assert.equal(routes.version,1);assert.ok(Array.isArray(routes.include)&&Array.isArray(routes.exclude));
   assert.ok(routes.include.length+routes.exclude.length<=100);
+  assert.deepEqual(routes.include.filter(assetRoute).sort(),manifest.selectedPaths.slice().sort(),'asset Worker routes differ from sealed selection');
   for(const path of manifest.selectedPaths)assert.equal(routes.include.filter(x=>x===path).length,1);
   assert.ok(![...routes.include,...routes.exclude].some(x=>x.startsWith('/__wx_encoded/')),'sidecars must not add Worker routes');
   return manifest;

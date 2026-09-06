@@ -23,7 +23,19 @@ function fixture(){
 }
 test('compressed metadata and sidecars are refused under baseline profiles',()=>{
   const f=fixture();assert.throws(()=>validateCompressionFiles(f.files,false),/profile/);
-  assert.doesNotThrow(()=>validateCompressionFiles(f.files.filter(x=>!x.path.startsWith('__wx_encoded/')&&x.path!=='static-compression-manifest.json'),false));
+  const stripped=f.files.filter(x=>!x.path.startsWith('__wx_encoded/')&&x.path!=='static-compression-manifest.json');
+  assert.throws(()=>validateCompressionFiles(stripped,false),/asset.*route/i);
+  assert.doesNotThrow(()=>validateCompressionFiles(stripped.map(x=>x.path==='_routes.json'?file(x.path,f.originalRoutes):x),false));
+});
+test('only sealed exact asset routes are allowed for compressed candidates',()=>{
+  for(const rule of ['/assets/extra-12345678.js','/assets/*','/*']){
+    const f=fixture(),routes=JSON.parse(Buffer.from(f.files.find(x=>x.path==='_routes.json').base64,'base64'));
+    routes.include.push(rule);const body=Buffer.from(JSON.stringify(routes));
+    f.manifest.outputs.routes={path:'_routes.json',bytes:body.length,sha256:hash(body)};
+    delete f.manifest.sealSha256;f.manifest.sealSha256=hash(JSON.stringify(f.manifest));
+    const rows=f.files.map(x=>x.path==='_routes.json'?file(x.path,body):x.path==='static-compression-manifest.json'?file(x.path,Buffer.from(JSON.stringify(f.manifest))):x);
+    assert.throws(()=>validateCompressionFiles(rows,true),/asset.*route/i);
+  }
 });
 test('candidate admission requires compression inventory and refuses relabeling to ordinary core',()=>{
   const f=fixture(),sourceSha='a'.repeat(40),runId='123';
