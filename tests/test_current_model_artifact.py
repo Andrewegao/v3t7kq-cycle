@@ -186,6 +186,55 @@ class CurrentModelArtifactTests(unittest.TestCase):
         self.assertEqual((job["id"], artifact["id"]), (1234, 5678))
         self.assertIn(f"/attempts/{ATTEMPT}/jobs", client.suffixes[1])
 
+    def test_publisher_retry_reuses_the_prior_successful_collector_without_recollection(self):
+        _, jobs, artifacts = metadata()
+        jobs['jobs'][0]['run_attempt'] = 1
+        client = Client([{'total_count': 0, 'jobs': []}, jobs, artifacts])
+        job, upload = subject.completed_collector(client, RUN_ID, 2, CONTROLLER, 'core', 'gfs')
+        self.assertEqual(job['run_attempt'], 1)
+        artifact = subject.exact_artifact(client, RUN_ID, 1, CONTROLLER, 'core', 'gfs', upload, NOW)
+        self.assertEqual(artifact['id'], 5678)
+        self.assertIn('/attempts/2/jobs', client.suffixes[0])
+        self.assertIn('/attempts/1/jobs', client.suffixes[1])
+
+    def test_retry_never_cherry_picks_behind_a_failed_or_invalid_newer_collector(self):
+        for defect in ('failure', 'cancelled', 'skipped', 'wrong-source', 'wrong-attempt'):
+            with self.subTest(defect=defect):
+                _, jobs, _ = metadata()
+                job = jobs['jobs'][0]
+                if defect == 'wrong-source': job['head_sha'] = 'e' * 40
+                elif defect == 'wrong-attempt': job['run_attempt'] = 1
+                else: job['conclusion'] = defect
+                client = Client([jobs])
+                with self.assertRaises((subject.Withheld, subject.Refusal)):
+                    subject.completed_collector(client, RUN_ID, 2, CONTROLLER, 'core', 'gfs')
+                self.assertEqual(len(client.suffixes), 1)
+
+    def test_retry_history_lookup_is_bounded_and_never_changes_run(self):
+        client = Client([{'total_count': 0, 'jobs': []}] * 10)
+        with self.assertRaisesRegex(subject.Withheld, 'not-complete'):
+            subject.completed_collector(client, RUN_ID, 99, CONTROLLER, 'core', 'gfs')
+        self.assertEqual(len(client.suffixes), 10)
+        self.assertTrue(all('/runs/' + RUN_ID + '/attempts/' in url for url in client.suffixes))
+
+    def test_retry_transfer_preserves_original_attempt_and_sealed_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run, jobs, artifacts = metadata()
+            jobs['jobs'][0]['run_attempt'] = 1
+            client = Client([run, {'total_count': 0, 'jobs': []}, jobs, artifacts], core_archive())
+            arguments = args(root)
+            with patch.object(subject, 'assert_clean_checkout'):
+                handoff = subject.transfer(arguments, client, NOW)
+            self.assertEqual(handoff['origin']['runAttempt'], 2)
+            self.assertEqual(handoff['origin']['collectorAttempt'], 1)
+            self.assertEqual(handoff['origin']['runId'], RUN_ID)
+            self.assertEqual(handoff['origin']['jobId'], 1234)
+            self.assertFalse(handoff['publicationAuthorized'])
+            manifest = json.loads((Path(arguments.output) / 'packs/gfs/manifest.json').read_text())
+            self.assertEqual(manifest['runId'], RUN_ID)
+            self.assertEqual(manifest['sourceSha'], SOURCE)
+
     def test_job_absence_failure_and_expiry_are_truthful_withholds(self):
         run, jobs, artifacts = metadata()
         client = Client([run, {"total_count": 0, "jobs": []}])

@@ -34,9 +34,12 @@ artifact. It requires:
 - exactly one Atmos checkout in each of `bake.yml` and the three reusable
   workflows, all using the same exact producer / consumer SHA;
 - an authenticated GitHub run from repository `1301196656`, the exact workflow
-  path, and the exact attempt-specific successful model job;
+  path, and the exact attempt-specific successful model job. Publisher retries
+  may use the newest untouched successful collector from an earlier attempt of
+  that same run and controller/source. The lookup stops at a newer failed,
+  skipped, incomplete or malformed collector and is bounded to ten attempts;
 - successful source-verification, collection, and artifact-upload steps in order;
-- exactly one artifact created during that attempt's upload step, with GitHub's
+- exactly one artifact created during the original collector's upload step, with GitHub's
   immutable ID, SHA-256 digest, bounded size, repository provenance, and a live
   retention deadline;
 - the existing strict ZIP download and extraction policy (no credential forwarding
@@ -86,6 +89,11 @@ current-model-handoff/
   handoff.json
   packs/...
 ```
+
+The envelope records the current publisher `runAttempt` and original
+`collectorAttempt` separately. No receipt is relabeled. Prior-run recovery is
+still excluded from this lane; freshness and downstream scientific admission
+are rerun even when the retained collector artifact is reused.
 
 `handoff.json` is a non-authorizing envelope (`publicationAuthorized: false`). It
 binds the original GitHub run/attempt/controller/job/artifact and Atmos source,
@@ -140,7 +148,7 @@ python -m unittest tests.test_current_model_artifact
 The suite is hermetic: it uses synthetic GitHub metadata/ZIPs and mocked hydration,
 performs no provider downloads, cloud writes, dispatches, or deploys.
 
-Latest local evidence: 18 Python handoff tests pass, including twelve per-file
+Latest local evidence: the initial 18 Python handoff tests pass, including twelve per-file
 missing/duplicate/drifted checkout mutations. Scheduler types, 23 unit tests,
 workflow contracts and Worker deployment dry-run pass. The matching CI Node
 contract selection passes 471 tests, with four pre-existing opt-in skips. An
@@ -148,6 +156,9 @@ initial broader ad-hoc run lacked the staging-controller SDK dependencies and
 used the system rclone 1.74.3 for an opt-in 1.75.0 throughput experiment; that is
 not a passing throughput measurement. No cloud latency improvement is claimed
 from these local tests.
+Additional retry tests cover same-run reuse with original attempt/receipt
+identity, refusal behind a newer failed or malformed collector, and a bounded
+history lookup. These require a new final CI pass before activation.
 
 Same-commit reusable-workflow semantics are documented by
 [GitHub](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows).

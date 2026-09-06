@@ -265,6 +265,23 @@ def exact_job(client, run_id, attempt, controller_sha, kind, model):
     return job, upload
 
 
+def completed_collector(client, run_id, attempt, controller_sha, kind, model):
+    """A retry may reuse an untouched collector from this same immutable run.
+
+    Only a complete attempt-specific jobs response with no matching job permits
+    looking back. A newer failed/skipped collector or invalid evidence is never
+    bypassed. Exact source, job steps, upload window, artifact digest and expiry
+    remain required; the caller's current attempt is not written over the origin.
+    """
+    for origin_attempt in range(attempt, max(0, attempt - 10), -1):
+        try:
+            return exact_job(client, run_id, origin_attempt, controller_sha, kind, model)
+        except Withheld as error:
+            if str(error) != 'collector-job-not-complete':
+                raise
+    raise Withheld('collector-job-not-complete-in-bounded-history')
+
+
 def exact_artifact(client, run_id, attempt, controller_sha, kind, model, upload, now):
     name = artifact_name(kind, model)
     suffix = (f"/actions/runs/{run_id}/artifacts?per_page=100&name="
@@ -448,8 +465,8 @@ def transfer(args, client, now):
     kind = "core" if args.model in CORE else "regional"
     require(args.kind == kind, "model-kind-mismatch")
     exact_run(client, args.run_id, args.run_attempt, args.controller_sha)
-    job, upload = exact_job(client, args.run_id, args.run_attempt, args.controller_sha, kind, args.model)
-    artifact = exact_artifact(client, args.run_id, args.run_attempt, args.controller_sha,
+    job, upload = completed_collector(client, args.run_id, args.run_attempt, args.controller_sha, kind, args.model)
+    artifact = exact_artifact(client, args.run_id, job['run_attempt'], args.controller_sha,
                               kind, args.model, upload, now)
     requested_output = Path(args.output)
     require(requested_output.is_absolute(), "handoff-output-must-be-absolute")
@@ -478,6 +495,7 @@ def transfer(args, client, now):
             "status": "ready", "publicationAuthorized": False, "model": args.model,
             "componentKind": kind, "origin": {"repository": REPO, "repositoryId": REPO_ID,
                 "workflow": WORKFLOW, "runId": args.run_id, "runAttempt": args.run_attempt,
+                "collectorAttempt": job['run_attempt'],
                 "controllerSha": args.controller_sha, "atmosSourceSha": args.atmos_source_sha,
                 "jobId": job["id"], "jobName": job["name"], "artifactId": artifact["id"],
                 "artifactName": artifact["name"], "artifactSha256": artifact["digest"][7:],
