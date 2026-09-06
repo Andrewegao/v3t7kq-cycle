@@ -4,6 +4,10 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, chmodSync, existsSync, unlinkSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
+import {installCompressionOverlay,selectCompressionAssets,validateCompressionFiles} from './ui-static-compression.mjs';
+import {verifyStaticCompression} from './ui-static-compression-wire.mjs';
+import {staticCompressionProfile} from './ui-staging-models.mjs';
 import { controlShaFor, REPOSITORY, MAX_BYTES, gate, hash, createCandidate, validateCandidate,
   readTree, validateFiles, seal, unseal, restore, eligibleRun } from './ui-candidate.mjs';
 import { packBuild, unpackBuild, eligibleBuild } from './ui-build-transfer.mjs';
@@ -18,7 +22,8 @@ const ORIGINS = { staging: 'https://staging.weatherx.org', production: 'https://
 const PROJECTS = { staging: 'weatherx-platform-staging', production: 'atmos-platform' };
 export const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workflows/ui-release.yml',
   'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh',
-  'tools/ui-staging-models.mjs','tools/ui-staging-model-browser.mjs','tools/ui-staging-core-browser.mjs','tools/ui-staging-preflight.mjs'];
+  'tools/ui-staging-models.mjs','tools/ui-staging-model-browser.mjs','tools/ui-staging-core-browser.mjs','tools/ui-staging-preflight.mjs',
+  'tools/ui-static-compression.mjs','tools/ui-static-compression-wire.mjs'];
 const run = (command, args, options = {}) => execFileSync(command, args, { stdio: 'inherit', ...options });
 const git = (args, cwd = ROOT) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore','pipe','pipe'] }).trim();
 export const pipelineDigest = (profile=profileFor(),root=ROOT) => hash(POLICY_FILES.map(p => `${p}\0${hash(readFileSync(resolve(root,p)))}`)
@@ -170,6 +175,7 @@ async function preflight(stage) {
 }
 export function requiredSourceGuard(profile) {
   validateProfile(profile);
+  if (staticCompressionProfile(profile)) return 'b06c012f171cade42c98ca67fa655f456d720cd8';
   if (coreReleaseProfile(profile)) return 'ed8065275eefa5e6e530ce37d1133a3baf1026c5';
   return profile.stagingOnly ? STAGING_RELEASE_GUARD_SHA : null;
 }
@@ -206,7 +212,22 @@ export function installPagesWorker(workerOut,dist) {
   try { run(process.execPath,['--check',syntaxProbe]); } finally { unlinkSync(syntaxProbe); }
   writeFileSync(target,source,{flag:'wx',mode:0o600});
 }
-function build() {
+export async function packagePagesWorker(profile,{app,dist,workerOut,overlay}) {
+  validateProfile(profile);
+  if (!staticCompressionProfile(profile)) { installPagesWorker(workerOut,dist); return; }
+  // Candidate modules run ONLY on the credential-free build runner. The publishing
+  // runner independently validates the resulting opaque bytes through ui-candidate.
+  assert.deepEqual(readdirSync(workerOut),['index.js'],'Pages Functions build emitted unexpected modules');
+  const {packageStaticCompression}=await import(pathToFileURL(resolve(app,'scripts/package-static-compression.mjs')).href);
+  const require=createRequire(resolve(app,'package.json'));
+  const {init,parse}=require('es-module-lexer'); await init;
+  const originalWorkerPath=resolve(workerOut,'index.js'),originalRoutesPath=resolve(dist,'_routes.json');
+  await packageStaticCompression({originalWorkerPath,originalRoutesPath,assetRoot:dist,
+    selectedPaths:selectCompressionAssets(dist,parse),outputDir:overlay,
+    origin:ORIGINS.staging,qualificationScope:'staging-only-nonpromotable'});
+  installCompressionOverlay({dist,overlay,originalWorkerPath,originalRoutesPath});
+}
+async function build() {
   buildGate(); controller();
   const profile=profileFor(process.env.MODEL_SELECTION_SHA256),selection=readSelection(ROOT,profile);
   sourceIdentity(profile);
@@ -225,7 +246,7 @@ function build() {
   run(resolve(CONTROL,'platform/edge/node_modules/.bin/wrangler'), ['pages','functions','build',resolve(app,'functions'),
     '--project-directory',app,'--outdir',workerOut,'--output-routes-path',resolve(dist,'_routes.json'),
     '--compatibility-date','2026-06-23','--minify','--sourcemap=false'], {cwd:app});
-  installPagesWorker(workerOut,dist);
+  await packagePagesWorker(profile,{app,dist,workerOut,overlay:resolve(process.env.RUNNER_TEMP,'ui-static-compression-overlay')});
   run('node',[resolve(CONTROL,'ops/release/build-release-receipt.mjs'),dist,resolve(dist,'health/release.json')]);
   const c = createCandidate(dist,{sourceSha:process.env.ATMOS_SHA,runId:process.env.GITHUB_RUN_ID,
     attempt:process.env.GITHUB_RUN_ATTEMPT,workflowSha:process.env.GITHUB_SHA,pipelineDigest:pipelineDigest(profile),profile});
@@ -309,6 +330,13 @@ async function deploy(stage) {
       artifactDigest:c.artifactDigest,qualifiedAt:new Date().toISOString(),fullTests:true,weatherLab:true,builtRuntime:true,probes:3};
     if(modelProof&&selectionProfile(c.profile))Object.assign(c.qualification,{modelSelectionSha256:c.profile.modelSelectionSha256,modelBrowserReceiptSha256:hash(modelProof),modelBrowserModels:selection.entries.length});
     if(modelProof&&coreReleaseProfile(c.profile))Object.assign(c.qualification,{coreProfile:c.profile.releaseRosterCore,coreBrowserReceiptSha256:hash(modelProof),coreBrowserModels:2});
+    if(staticCompressionProfile(c.profile)){
+      const proof=readFileSync(resolve(process.env.RUNNER_TEMP,'ui-compression-wire.json'));
+      const manifest=validateCompressionFiles(c.files,true),wire=JSON.parse(proof);
+      assert.equal(wire.origin,ORIGINS.staging);assert.equal(wire.sealSha256,manifest.sealSha256);
+      assert.deepEqual(wire.rows.map(r=>r.path).sort(),manifest.selectedPaths.slice().sort());
+      Object.assign(c.qualification,{staticCompressionSealSha256:manifest.sealSha256,staticCompressionWireSha256:hash(proof),staticCompressionAssets:wire.rows.length});
+    }
     save(stateFile(),c);
   }
 }
@@ -322,6 +350,10 @@ async function verify(stage) {
   run('bash',[resolve(CONTROL,'ops/release/verify-platform-production.sh'),ORIGINS[stage]]);
   if (phase !== 'rollback') {
     // Real built-site checks inside the rollback transaction, not after declaring success.
+    if(stage==='staging'&&staticCompressionProfile(c.profile)) {
+      const proof=await verifyStaticCompression(ORIGINS.staging,validateCompressionFiles(c.files,true));
+      save(resolve(process.env.RUNNER_TEMP,'ui-compression-wire.json'),proof);
+    }
     run('node',[resolve(CONTROL,'app/e2e/weather-lab-only-runtime.mjs')], {cwd:resolve(CONTROL,'app'),env:{...process.env,BASE:ORIGINS[stage]}});
     run('node',[resolve(CONTROL,'app/e2e/layer-switch-tint.mjs')], {cwd:resolve(CONTROL,'app'),env:{...process.env,BASE:ORIGINS[stage]}});
     if(stage==='staging'&&selectionProfile(c.profile)){
@@ -342,6 +374,12 @@ function retain() {
   const selection=requireStagingApproval(c,process.env);
   if(selectionProfile(c.profile)){assert.equal(c.qualification?.modelSelectionSha256,c.profile.modelSelectionSha256);assert.equal(c.qualification?.modelBrowserModels,selection.entries.length);assert.match(c.qualification?.modelBrowserReceiptSha256??'',/^[a-f0-9]{64}$/);}
   if(coreReleaseProfile(c.profile)){assert.equal(c.qualification?.coreProfile,c.profile.releaseRosterCore);assert.equal(c.qualification?.coreBrowserModels,2);assert.match(c.qualification?.coreBrowserReceiptSha256??'',/^[a-f0-9]{64}$/);}
+  if(staticCompressionProfile(c.profile)){
+    const manifest=validateCompressionFiles(c.files,true);
+    assert.equal(c.qualification?.staticCompressionSealSha256,manifest.sealSha256);
+    assert.equal(c.qualification?.staticCompressionAssets,manifest.selectedPaths.length);
+    assert.match(c.qualification?.staticCompressionWireSha256??'',/^[a-f0-9]{64}$/);
+  }
   mkdirSync(out,{mode:0o700});
   writeFileSync(resolve(out,'candidate.wxui'),seal(c,process.env.UI_CANDIDATE_KEY),{mode:0o600});
   const summary={sourceSha:c.sourceSha,stagingRunId:c.runId,attempt:c.attempt,artifactDigest:c.artifactDigest,
@@ -389,7 +427,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     else if(command==='pack-build') pack();
     else if(command==='receive-build') await receiveBuild();
     else if(command==='preflight') await preflight(stage);
-    else if(command==='build') build();
+    else if(command==='build') await build();
     else if(command==='deploy') await deploy(stage);
     else if(command==='verify') await verify(stage);
     else if(command==='retain') retain();

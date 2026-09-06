@@ -8,18 +8,26 @@ import {resolve} from 'node:path';
 export const STAGING_ORIGIN='https://staging.weatherx.org';
 export const SELECTION_ASSET='assets/staging-model-selection.json';
 export const CORE_RELEASE_REQUEST='release-roster-core-v1';
+export const STATIC_COMPRESSION_REQUEST='release-roster-core-br11-v1';
 export const MAX_SELECTION_BYTES=1024*1024;
 export const MODELS=['icon','hrrr-ak','hrdps','nam','nam-hi','nam-ak','arome-antilles'];
 const HASH=/^[a-f0-9]{64}$/,COMMIT=/^[a-f0-9]{40}$/,RUN=/^[1-9]\d{0,19}$/,ATTEMPT=/^[1-9]\d{0,3}$/;
 export const digest=body=>createHash('sha256').update(body).digest('hex');
 export const BASELINE_PROFILE=Object.freeze({product:'lab',account:false,expandedModels:false,data:false});
 export const CORE_RELEASE_PROFILE=Object.freeze({...BASELINE_PROFILE,expandedModels:true,stagingOnly:true,releaseRosterCore:CORE_RELEASE_REQUEST});
+export const STATIC_COMPRESSION_PROFILE=Object.freeze({...CORE_RELEASE_PROFILE,staticCompression:'static-br11-v1'});
 const rawSelectionProfile=profile=>typeof profile?.modelSelectionSha256==='string';
 export function selectionProfile(profile){validateProfile(profile);return rawSelectionProfile(profile);}
 export function coreReleaseProfile(profile){validateProfile(profile);return profile.releaseRosterCore===CORE_RELEASE_REQUEST;}
-export function resolveSelectionRequest(requested='approved',approved,approvedCore){
-  assert.ok(requested==='approved'||requested==='none'||requested===CORE_RELEASE_REQUEST||HASH.test(requested??''),'invalid staging selection request');
+export function staticCompressionProfile(profile){validateProfile(profile);return profile.staticCompression==='static-br11-v1';}
+export function resolveSelectionRequest(requested='approved',approved,approvedCore,approvedStaticCompression){
+  assert.ok(requested==='approved'||requested==='none'||requested===CORE_RELEASE_REQUEST||requested===STATIC_COMPRESSION_REQUEST||HASH.test(requested??''),'invalid staging selection request');
   if(requested==='none')return 'none';
+  if(requested===STATIC_COMPRESSION_REQUEST){
+    assert.equal(approvedCore,CORE_RELEASE_REQUEST,'protected staging core profile approval required');
+    assert.equal(approvedStaticCompression,'static-br11-v1','protected staging static compression approval required');
+    return STATIC_COMPRESSION_REQUEST;
+  }
   if(requested===CORE_RELEASE_REQUEST){assert.equal(approvedCore,CORE_RELEASE_REQUEST,'protected staging core profile approval required');return CORE_RELEASE_REQUEST;}
   assert.match(approved??'',HASH,'protected staging selection approval required');
   if(requested!=='approved')assert.equal(requested,approved,'requested staging selection differs from protected approval');
@@ -34,9 +42,11 @@ function keys(object,expected){assert.ok(object&&typeof object==='object'&&!Arra
 export function profileFor(selection='none'){
   if(selection===undefined||selection==='none')return BASELINE_PROFILE;
   if(selection===CORE_RELEASE_REQUEST)return CORE_RELEASE_PROFILE;
+  if(selection===STATIC_COMPRESSION_REQUEST)return STATIC_COMPRESSION_PROFILE;
   assert.match(selection,HASH);return {...BASELINE_PROFILE,expandedModels:true,stagingOnly:true,modelSelectionSha256:selection};
 }
 export function validateProfile(profile){
+  if(profile?.staticCompression!==undefined){assert.deepEqual(profile,STATIC_COMPRESSION_PROFILE);return profile;}
   if(profile?.expandedModels===false){assert.deepEqual(profile,BASELINE_PROFILE);return profile;}
   if(profile?.releaseRosterCore!==undefined){assert.deepEqual(profile,CORE_RELEASE_PROFILE);return profile;}
   assert.deepEqual(profile,profileFor(profile?.modelSelectionSha256));return profile;
@@ -101,6 +111,7 @@ export function requireStagingApproval(candidate,env,now=Date.now()){
   const bundle=validateCandidateSelection(candidate,now);
   if(rawSelectionProfile(expected))assert.equal(env.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256,expected.modelSelectionSha256,'protected staging selection approval required');
   if(expected.releaseRosterCore===CORE_RELEASE_REQUEST)assert.equal(env.UI_STAGING_CORE_PROFILE_APPROVED,CORE_RELEASE_REQUEST,'protected staging core profile approval required');
+  if(staticCompressionProfile(expected))assert.equal(env.UI_STAGING_STATIC_COMPRESSION_APPROVED,'static-br11-v1','protected staging static compression approval required');
   return bundle;
 }
 export function browserEnvironment(env,extra={}){
