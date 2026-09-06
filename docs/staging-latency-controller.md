@@ -43,6 +43,27 @@ All 85 Cycle UI architecture, approval-boundary, job-isolation, candidate,
 transport, preflight and workflow tests pass. `actionlint` and diff whitespace
 checks pass; production workflow has no diff.
 
-Cycle issue #167 remains open until the reviewed source and controller activation
-checks pass. Closing the diagnosed fuse authorizes only a fresh guarded staging
+Cycle issue #167 was closed after the reviewed source and controller activation
+checks passed. Closing the diagnosed fuse authorizes only a fresh guarded staging
 attempt, not a production promotion or a bypass of final live qualification.
+
+## Temperature paint-readiness follow-up
+
+Run 34005832567 then stopped before deployment because its source gate sampled
+Temperature after 180 ms, before the real render had completed. A controlled
+800 ms scheduling delay reproduced that false failure, followed by correct paint
+with unchanged source and forecast cursor.
+
+The new staging-only controller is `b64f31a1388e8104c18a65a445d156070de5087b`.
+Its four harness/contract files exactly match Atmos PR #166 source
+`cdf6e2b7a203aaa6cb50e8772a97f4e621a20f07`. It waits at most 30 seconds for a
+new exact Temperature post-draw receipt, retaining source, time, intent and swap
+checks. Native proof survives a legitimate preview retirement; Deck proof needs
+a completed draw and accepted matching flush, not merely scheduled opacity.
+
+All 89 direct cases and independent review pass, including stale/wrong receipts,
+missing draws and retired previews. Live CPU4 software-rendering, controlled
+delay and actual native-Temperature controls pass without final pixel drift or
+page/WebGL errors. Controller ready receipt `d325db52ed53` passes all nine suites.
+Production controller and workflow, Worker code, credentials and data are unchanged.
+The full source release gate and final live staging transaction remain required.

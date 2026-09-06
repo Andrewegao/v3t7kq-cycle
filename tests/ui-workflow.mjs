@@ -26,9 +26,9 @@ test('staging workflow leaves release-mode activation to the exact-profile contr
   assert.match(source,/publicBuildEnvironment\(profile,selection/);
   assert.match(source,/merge-base','--is-ancestor',requiredSourceGuard\(profile\),'HEAD'/);
   assert.doesNotMatch(prod,/ATMOS_STAGING_EXPERIMENT_RELEASE|ATMOS_STAGING_RELEASE_ROSTER|MODEL_SELECTION_SHA256|VITE_STAGING_MODEL_ADMISSION|UI_STAGING_CORE_PROFILE_APPROVED/);
-  const stagedController="ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && 'a58eff158b56ef2ba25189d2b859315b00893a14' || 'f96a94370fd536f700f5a756bdc4075d14716d78' }}";
+  const stagedController="ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && 'a58eff158b56ef2ba25189d2b859315b00893a14' || 'b64f31a1388e8104c18a65a445d156070de5087b' }}";
   assert.equal(staging.split(stagedController).length-1,2);
-  assert.match(candidate,/STAGING_CONTROL_SHA = 'f96a94370fd536f700f5a756bdc4075d14716d78'/);
+  assert.match(candidate,/STAGING_CONTROL_SHA = 'b64f31a1388e8104c18a65a445d156070de5087b'/);
   assert.match(prod,/ref: a58eff158b56ef2ba25189d2b859315b00893a14/);
   assert.doesNotMatch(prod,/STAGING_CONTROL_SHA|stagingOnly/);
 });
