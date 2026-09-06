@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { createHash, createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
-import {BASELINE_PROFILE,validateProfile,validateCandidateSelection,requireProductionProfile} from './ui-staging-models.mjs';
+import {BASELINE_PROFILE,validateProfile,validateCandidateSelection,requireProductionProfile,staticCompressionProfile} from './ui-staging-models.mjs';
+import {validateCompressionFiles} from './ui-static-compression.mjs';
 
 export const CONTROL_SHA = 'a58eff158b56ef2ba25189d2b859315b00893a14';
 export const STAGING_CONTROL_SHA = 'b64f31a1388e8104c18a65a445d156070de5087b';
@@ -103,6 +104,7 @@ export function validateCandidate(candidate) {
   assert.match(candidate.pipelineDigest, DIGEST);
   assert.equal(validateFiles(candidate.files).digest, candidate.artifactDigest, 'inventory mismatch');
   validateCandidateSelection(candidate);
+  validateCompressionFiles(candidate.files,staticCompressionProfile(candidate.profile));
   const receipt = JSON.parse(Buffer.from(candidate.files.find(f => f.path === 'health/release.json').base64, 'base64'));
   assert.equal(receipt.gitSha, candidate.sourceSha);
   assert.equal(receipt.workflowRunId, candidate.runId);

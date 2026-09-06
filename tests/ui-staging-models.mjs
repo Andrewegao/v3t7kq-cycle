@@ -11,8 +11,51 @@ import {createCandidate,hash,eligibleRun,REPOSITORY,CONTROL_SHA,STAGING_CONTROL_
 import {eligibleBuild} from '../tools/ui-build-transfer.mjs';
 import {publicBuildEnvironment,requiredSourceGuard,standaloneWeatherFeedVerificationRequired} from '../tools/ui-release.mjs';
 import {requireSelectionMargin} from '../tools/ui-staging-preflight.mjs';
+import {STATIC_COMPRESSION_REQUEST,STATIC_COMPRESSION_PROFILE,staticCompressionProfile,coreReleaseProfile} from '../tools/ui-staging-models.mjs';
 
 const NOW=Date.parse('2026-08-31T20:00:00Z'),INIT='2026083112',SHA='a'.repeat(40),DIGEST='b'.repeat(64);
+test('compressed core profile is exact, staging-only, and remains core rather than a selection',()=>{
+  assert.equal(STATIC_COMPRESSION_REQUEST,'release-roster-core-br11-v1');
+  assert.deepEqual(STATIC_COMPRESSION_PROFILE,{...CORE_RELEASE_PROFILE,staticCompression:'static-br11-v1'});
+  assert.equal(profileFor(STATIC_COMPRESSION_REQUEST),STATIC_COMPRESSION_PROFILE);
+  assert.equal(staticCompressionProfile(STATIC_COMPRESSION_PROFILE),true);
+  assert.equal(coreReleaseProfile(STATIC_COMPRESSION_PROFILE),true);
+  assert.equal(validateCandidateSelection({profile:STATIC_COMPRESSION_PROFILE,files:[]},NOW),null);
+  for(const profile of [BASELINE_PROFILE,CORE_RELEASE_PROFILE,profileFor(DIGEST)])assert.equal(staticCompressionProfile(profile),false);
+  assert.throws(()=>requireProductionProfile(STATIC_COMPRESSION_PROFILE),/cannot enter production/);
+  for(const profile of [
+    {...STATIC_COMPRESSION_PROFILE,extra:true}, {...STATIC_COMPRESSION_PROFILE,staticCompression:'br11'},
+    {...STATIC_COMPRESSION_PROFILE,releaseRosterCore:STATIC_COMPRESSION_REQUEST},
+    {...STATIC_COMPRESSION_PROFILE,modelSelectionSha256:DIGEST}, {...STATIC_COMPRESSION_PROFILE,stagingOnly:false},
+    {...STATIC_COMPRESSION_PROFILE,expandedModels:false}, {...STATIC_COMPRESSION_PROFILE,account:true},
+    {...BASELINE_PROFILE,staticCompression:'static-br11-v1'}, {...profileFor(DIGEST),staticCompression:'static-br11-v1'},
+  ]){
+    assert.throws(()=>validateProfile(profile)); assert.throws(()=>staticCompressionProfile(profile));
+    assert.throws(()=>requireProductionProfile(profile));
+  }
+});
+test('compressed request needs independent protected core AND static compression approvals',()=>{
+  assert.equal(resolveSelectionRequest(STATIC_COMPRESSION_REQUEST,undefined,CORE_RELEASE_REQUEST,'static-br11-v1'),STATIC_COMPRESSION_REQUEST);
+  for(const core of [undefined,'',STATIC_COMPRESSION_REQUEST,'other'])
+    assert.throws(()=>resolveSelectionRequest(STATIC_COMPRESSION_REQUEST,DIGEST,core,'static-br11-v1'),/core profile approval/);
+  for(const compression of [undefined,'',CORE_RELEASE_REQUEST,'other'])
+    assert.throws(()=>resolveSelectionRequest(STATIC_COMPRESSION_REQUEST,DIGEST,CORE_RELEASE_REQUEST,compression),/static compression approval/);
+  // New approval must not silently upgrade any existing request or default.
+  assert.equal(resolveSelectionRequest('none',undefined,undefined,'static-br11-v1'),'none');
+  assert.equal(resolveSelectionRequest(CORE_RELEASE_REQUEST,undefined,CORE_RELEASE_REQUEST,'static-br11-v1'),CORE_RELEASE_REQUEST);
+  assert.equal(resolveSelectionRequest(undefined,DIGEST,CORE_RELEASE_REQUEST,'static-br11-v1'),DIGEST);
+});
+test('compressed candidate admission rejects missing approval, relabeling and selection payloads',()=>{
+  const candidate={profile:STATIC_COMPRESSION_PROFILE,files:[]};
+  const env={MODEL_SELECTION_SHA256:STATIC_COMPRESSION_REQUEST,UI_STAGING_CORE_PROFILE_APPROVED:CORE_RELEASE_REQUEST,UI_STAGING_STATIC_COMPRESSION_APPROVED:'static-br11-v1'};
+  assert.equal(requireStagingApproval(candidate,env,NOW),null);
+  for(const name of ['UI_STAGING_CORE_PROFILE_APPROVED','UI_STAGING_STATIC_COMPRESSION_APPROVED'])
+    for(const value of [undefined,'','other'])assert.throws(()=>requireStagingApproval(candidate,{...env,[name]:value},NOW),/approval/);
+  for(const requested of ['none',CORE_RELEASE_REQUEST,DIGEST])
+    assert.throws(()=>requireStagingApproval(candidate,{...env,MODEL_SELECTION_SHA256:requested},NOW),/differs from requested/);
+  assert.throws(()=>requireStagingApproval({...candidate,profile:CORE_RELEASE_PROFILE},env,NOW),/differs from requested/);
+  assert.throws(()=>requireStagingApproval({...candidate,files:[{path:'assets/staging-model-selection.json'}]},env,NOW),/cannot carry experimental selection/);
+});
 function entry(model,n){
   const files=displayPaths(INIT).map((path,i)=>({path,bytes:i+1,sha256:digest(model+'/'+path)}));
   const run=String(100+n),attempt='1',artifactId=`stage-${INIT}-${run}-${attempt}`,catalogId=`stage-${model}-${run}-${attempt}`;
@@ -25,7 +68,7 @@ function entry(model,n){
 }
 export function selection(models=MODELS){return Buffer.from(JSON.stringify({schemaVersion:1,kind:'weatherx-staging-model-selection',targetOrigin:'https://staging.weatherx.org',entries:models.map((m,i)=>entry(m,i))})+'\n');}
 function candidateFixture(profile=BASELINE_PROFILE,bundle){
-  const root=mkdtempSync(resolve(tmpdir(),'wx-stage-profile-')),content={'index.html':'x','_worker.js':'x','_routes.json':'{}',...(bundle?{'assets/staging-model-selection.json':bundle}:{})};
+  const root=mkdtempSync(resolve(tmpdir(),'wx-stage-profile-')),content={'index.html':'x','_worker.js':'x','_routes.json':'{"version":1,"include":["/api/*"],"exclude":[]}',...(bundle?{'assets/staging-model-selection.json':bundle}:{})};
   const crypto=[];for(const path of Object.keys(content).sort()){const bytes=Buffer.from(content[path]);crypto.push([path,bytes]);mkdirSync(resolve(root,path,'..'),{recursive:true});writeFileSync(resolve(root,path),bytes);}
   const d=(h=>{for(const [path,bytes] of crypto)h.update(path).update('\0').update(String(bytes.length)).update('\0').update(bytes).update('\0');return h.digest('hex');})(createHash('sha256'));
   const receipt={schemaVersion:1,gitSha:SHA,workflowRunId:'123',releaseId:`git-${SHA.slice(0,12)}-run-123`,shellSha256:d,indexSha256:hash('x'),shellFileCount:crypto.length,shellBytes:crypto.reduce((n,[,b])=>n+b.length,0)};
