@@ -236,7 +236,10 @@ def exact_run(client, run_id, attempt, controller_sha, workflow=WORKFLOW):
     require(run.get("id") == int(run_id) and run.get("run_attempt") == attempt
             and run.get("head_sha") == controller_sha and run.get("path") == workflow
             and run.get("event") in ("schedule", "workflow_dispatch")
-            and run.get("status") in ("in_progress", "completed")
+            # GitHub reports the whole run as pending while other per-model
+            # concurrency groups wait, even after this collector completed.
+            # Authority still requires this exact producer job and upload below.
+            and run.get("status") in ("pending", "in_progress", "completed")
             and run.get("repository", {}).get("id") == REPO_ID
             and run.get("repository", {}).get("full_name") == REPO
             and run.get("head_repository", {}).get("id") == REPO_ID
