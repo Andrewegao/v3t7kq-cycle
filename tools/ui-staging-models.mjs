@@ -133,20 +133,33 @@ export function validateCoreBrowserReceipt(bytes,context,now=Date.now()){
   assert.equal(r.sourceSha,context.sourceSha);assert.equal(r.releaseId,context.releaseId);assert.match(r.pointReleaseId??'',/^[A-Za-z0-9._:@+-]{1,160}$/);
   const at=Date.parse(r.qualifiedAt);assert.ok(Number.isFinite(at)&&at<=now&&now-at<=10*60000);assert.deepEqual(r.errors,[]);assert.deepEqual(r.selectionRequests,[]);
   assert.ok(Array.isArray(r.releaseRoster)&&r.releaseRoster.length===MODELS.length);assert.deepEqual(r.releaseRoster.map(row=>row?.model),MODELS);
-  for(const row of r.releaseRoster){keys(row,'model status init expectedSelectable visible enabled');assert.ok(['fresh','carried','absent'].includes(row.status));
-    if(row.status==='absent')assert.equal(row.init,null);else assert.match(row.init??'',/^\d{8}(?:00|06|12|18)$/);
-    assert.equal(typeof row.expectedSelectable,'boolean');assert.equal(row.visible,row.expectedSelectable);assert.equal(row.enabled,row.expectedSelectable);}
+  for(const row of r.releaseRoster){keys(row,'model status init rosterSelectable catalogStatus catalogId catalogInit expectedSelectable visible enabled');assert.ok(['fresh','carried','absent'].includes(row.status));
+    if(row.status==='absent'){assert.equal(row.init,null);assert.equal(row.rosterSelectable,false);}else{assert.match(row.init??'',/^\d{8}(?:00|06|12|18)$/);
+      const init=Date.parse(`${row.init.slice(0,4)}-${row.init.slice(4,6)}-${row.init.slice(6,8)}T${row.init.slice(8)}:00:00Z`);
+      assert.equal(row.rosterSelectable,Number.isFinite(init)&&init<=now&&now-init<=24*3600000);}
+    assert.equal(typeof row.rosterSelectable,'boolean');assert.ok(['valid','absent','transport','refused'].includes(row.catalogStatus));
+    if(row.catalogStatus==='valid'){assert.match(row.catalogId??'',/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/);assert.match(row.catalogInit??'',/^\d{4}-\d{2}-\d{2}T(?:00|06|12|18):00:00Z$/);
+      const init=Date.parse(row.catalogInit);assert.ok(Number.isFinite(init)&&init<=now&&now-init<=24*3600000);assert.equal(row.expectedSelectable,true);}
+    else{assert.equal(row.catalogId,null);assert.equal(row.catalogInit,null);assert.equal(row.expectedSelectable,row.catalogStatus==='refused'?false:row.rosterSelectable);}
+    assert.equal(row.visible,row.expectedSelectable);assert.equal(row.enabled,row.expectedSelectable);}
   assert.deepEqual(r.rapidModelSequence,['aifs','hrrr']);assert.equal(r.finalModel,'hrrr');assert.ok(Array.isArray(r.models)&&r.models.length===2);
   const expected={aifs:{field:'wind',deck:'wind-field',windAdmitted:true},hrrr:{field:'temp',deck:'temp-raster',windAdmitted:false}};
   assert.deepEqual(r.models.map(row=>row?.model).sort(),Object.keys(expected));
   for(const row of r.models){
-    keys(row,'model status init base catalogId field deck changedRatio finitePointValue pointRunId pointQuality windAdmitted domain');
+    keys(row,'model status init base catalogId field deck paint hidden changedRatio finitePointValue pointRunId pointQuality windAdmitted domain');
     const rule=expected[row.model];assert.ok(rule);assert.match(row.init??'',/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):00:00Z$/);
     const initTime=Date.parse(row.init);assert.ok(Number.isFinite(initTime));assert.equal(new Date(initTime).toISOString().replace('.000',''),row.init);
     if(row.model==='aifs')assert.equal(new Date(initTime).getUTCHours()%6,0);
     assert.equal(row.status,'ready');assert.match(row.catalogId??'',/^[A-Za-z0-9._:@+-]{1,160}$/);
     assert.equal(row.base,`/data/_catalog/${row.catalogId}/${row.model}/runs/${row.init.replace(/[-:T]/g,'').slice(0,10)}/`);
     assert.equal(row.field,rule.field);assert.equal(row.deck,rule.deck);assert.equal(row.windAdmitted,rule.windAdmitted);
+    keys(row.paint,'receiptSequence receiptGeneration drawSequence renderedGeneration camera');keys(row.hidden,'drawSequence renderedGeneration camera');
+    for(const value of [row.paint.receiptSequence,row.paint.receiptGeneration,row.paint.drawSequence,row.paint.renderedGeneration,row.hidden.drawSequence,row.hidden.renderedGeneration])assert.ok(Number.isSafeInteger(value)&&value>=1);
+    assert.ok(row.paint.renderedGeneration>=row.paint.receiptGeneration);
+    if(row.paint.renderedGeneration>row.paint.receiptGeneration)assert.ok(row.paint.drawSequence>row.paint.receiptSequence);
+    assert.ok(row.hidden.drawSequence>row.paint.receiptSequence&&row.hidden.drawSequence>row.paint.drawSequence);
+    assert.ok(row.hidden.renderedGeneration>=row.paint.renderedGeneration);assert.equal(row.hidden.camera,row.paint.camera);
+    const camera=JSON.parse(row.paint.camera);assert.ok(Array.isArray(camera)&&camera.length===9&&camera.every(Number.isFinite));
     assert.ok(Number.isFinite(row.changedRatio)&&row.changedRatio>.01&&row.changedRatio<=1);assert.ok(Number.isFinite(row.finitePointValue));
     assert.equal(row.pointRunId,row.init.replace(/[-:T]/g,'').slice(0,10));assert.ok(['complete','partial'].includes(row.pointQuality));
     keys(row.domain,'inside outside');assert.equal(row.domain.inside,true);assert.equal(row.domain.outside,row.model==='hrrr'?true:null);

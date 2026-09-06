@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {writeFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {STAGING_ORIGIN,MODELS as REGIONAL_MODELS} from './ui-staging-models.mjs';
+import {canonical,GRIDS,STAGING_ORIGIN,MODELS as REGIONAL_MODELS,variables} from './ui-staging-models.mjs';
 import {pointUrl,validatePointPayload} from './ui-staging-preflight.mjs';
 import {pixelDifference} from './ui-staging-model-browser.mjs';
 
@@ -16,10 +16,14 @@ const CORE=Object.freeze({
   hrrr:{label:'HRRR',field:'temp',deck:'temp-raster',location:{name:'hrrr-conus',lat:39.74,lon:-104.99},windAdmitted:false},
 });
 const SAFE_ID=/^[A-Za-z0-9._:@+-]{1,160}$/;
+const RELEASE_ID=/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
 const ISO=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/,SHA1=/^[a-f0-9]{40}$/,SHA256=/^[a-f0-9]{64}$/;
 const ROSTER_KEYS=['schemaVersion','kind','createdAt','maxAgeHours','cycleHours','horizonHours','leadCount','fusionEligible','models'];
 const ROSTER_ENTRY_KEYS=new Set(['status','init','initTime','path','collectedAt','reason','sourceSha','sourceReceiptSha256',
   'stagedQualificationSha256','inventorySha256','totalBytes','attempts']);
+const MANIFEST_KEYS=new Set(['schemaVersion','model','init_time','grid','variables','windReference','frames','attribution','license','base','individualModel']);
+const MAX_CATALOG_BYTES=256*1024;
+class CatalogTransportError extends Error {}
 
 export function protocol(env){
   assert.equal(env.BASE,STAGING_ORIGIN,'only actual staging custom domain can qualify');
@@ -59,11 +63,122 @@ export function validateCoreIndex(value,model,catalogId){
   const run=object(index.runs[0],`${model} latest run required`),cycle=coreCycle(model,run.init_time);assert.equal(run.path,`runs/${cycle}/`);
   return {model,init:run.init_time,cycle,catalogId,manifestPath:`/data/_catalog/${catalogId}/${model}/${run.path}manifest.json`};
 }
+function regionalCycle(model,value){
+  assert.ok(REGIONAL_MODELS.includes(model));assert.match(value??'',ISO);const time=Date.parse(value);assert.ok(Number.isFinite(time));
+  assert.equal(new Date(time).toISOString().replace('.000',''),value);assert.equal(time%(6*HOUR),0,`${model} requires a six-hour source cycle`);
+  return value.replace(/[-:T]/g,'').slice(0,10);
+}
+export function validateRegionalCatalogIndex(value,model,catalogId){
+  assert.ok(REGIONAL_MODELS.includes(model));assert.match(catalogId??'',RELEASE_ID);const index=object(value,`${model} catalog index required`);
+  assert.equal(index.schemaVersion,1);assert.equal(index.model,model);assert.ok(Array.isArray(index.runs)&&index.runs.length>=1&&index.runs.length<=32,`${model} catalog runs`);
+  const run=object(index.runs[0],`${model} latest catalog run required`),cycle=regionalCycle(model,run.init_time);assert.equal(run.path,`runs/${cycle}/`);
+  return {model,init:run.init_time,cycle,catalogId,manifestPath:`/data/_catalog/${catalogId}/${model}/${run.path}manifest.json`};
+}
+export function validateRegionalCatalogManifest(value,index,now=Date.now()){
+  const manifest=object(value,`${index.model} catalog manifest required`);assert.ok(Object.keys(manifest).every(key=>MANIFEST_KEYS.has(key)),'unsanitized catalog manifest fields');
+  assert.equal(manifest.schemaVersion,1);assert.equal(manifest.model,index.model);assert.equal(manifest.init_time,index.init);assert.equal(manifest.windReference,'earth-relative');
+  assert.ok(manifest.individualModel===undefined||manifest.individualModel===true);assert.equal(canonical(manifest.grid),canonical(GRIDS[index.model]),'unreviewed catalog grid');
+  assert.equal(canonical(manifest.variables),canonical(variables(index.model)),'unreviewed catalog encoding');
+  const init=Date.parse(manifest.init_time);assert.ok(Number.isFinite(init)&&init<=now&&now-init<=24*HOUR,'stale or future catalog cycle');
+  assert.ok(Array.isArray(manifest.frames)&&manifest.frames.length===49,'49 catalog frames required');
+  for(const [i,value] of manifest.frames.entries()){const frame=object(value,'catalog manifest frame');assert.deepEqual(Object.keys(frame).sort(),['i','valid_time']);
+    assert.equal(frame.i,i);assert.equal(frame.valid_time,new Date(init+i*HOUR).toISOString().replace('.000',''));}
+  assert.ok(typeof manifest.attribution==='string'&&manifest.attribution.length>0&&manifest.attribution.length<=1024,'catalog attribution required');
+  if(manifest.license!==undefined)assert.ok(typeof manifest.license==='string'&&manifest.license.length>0&&manifest.license.length<=1024,'invalid catalog license');
+  const base=`/data/_catalog/${index.catalogId}/${index.model}/runs/${index.cycle}/`;
+  return {...manifest,base,individualModel:true};
+}
+async function catalogJson(response){
+  const declared=response.headers.get('content-length');if(declared!==null)assert.ok(/^\d+$/.test(declared)&&Number(declared)<=MAX_CATALOG_BYTES,'catalog metadata too large');
+  assert.ok(response.body,'catalog metadata missing');const chunks=[];let size=0;
+  try{for await(const chunk of response.body){size+=chunk.length;assert.ok(size<=MAX_CATALOG_BYTES,'catalog metadata too large');chunks.push(chunk);}}
+  finally{await response.body?.cancel().catch(()=>{});}return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks)));
+}
+async function catalogMetadata(url,request){
+  try{return await request(new URL(url,STAGING_ORIGIN).href,{redirect:'error',signal:AbortSignal.timeout(5_000),headers:{Accept:'application/json','Cache-Control':'no-cache'}});}
+  catch{throw new CatalogTransportError('catalog request failed');}
+}
+export async function catalogAdmissionProof(model,rosterSelectable,now=Date.now(),request=fetch){
+  let indexResponse,response;
+  try{
+    indexResponse=await catalogMetadata(`/data/${model}/index.json`,request);
+    if(!indexResponse.ok){if(indexResponse.status===404)return {catalogStatus:'absent',catalogId:null,catalogInit:null,expectedSelectable:rosterSelectable};
+      if(indexResponse.status>=500)throw new CatalogTransportError('catalog index unavailable');assert.fail('catalog index refused');}
+    const catalogId=indexResponse.headers.get('x-weatherx-catalog');
+    if(catalogId===null)return {catalogStatus:'absent',catalogId:null,catalogInit:null,expectedSelectable:rosterSelectable};
+    assert.match(catalogId,RELEASE_ID);assert.equal(indexResponse.headers.has('x-weatherx-release'),false,'catalog index carries release identity');
+    const index=validateRegionalCatalogIndex(await catalogJson(indexResponse),model,catalogId);
+    response=await catalogMetadata(index.manifestPath,request);
+    if(!response.ok){if(response.status>=500)throw new CatalogTransportError('catalog manifest unavailable');assert.fail('catalog manifest refused');}
+    assert.equal(response.headers.get('x-weatherx-catalog'),catalogId,'catalog manifest identity');assert.equal(response.headers.has('x-weatherx-release'),false,'catalog manifest carries release identity');
+    validateRegionalCatalogManifest(await catalogJson(response),index,now);
+    return {catalogStatus:'valid',catalogId,catalogInit:index.init,expectedSelectable:true};
+  }catch(error){
+    if(error instanceof CatalogTransportError)return {catalogStatus:'transport',catalogId:null,catalogInit:null,expectedSelectable:rosterSelectable};
+    return {catalogStatus:'refused',catalogId:null,catalogInit:null,expectedSelectable:false};
+  }finally{await indexResponse?.body?.cancel().catch(()=>{});await response?.body?.cancel().catch(()=>{});}
+}
 export function coreCycle(model,value){
   assert.ok(model==='aifs'||model==='hrrr');assert.match(value??'',/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):00:00Z$/);
   const time=Date.parse(value);assert.ok(Number.isFinite(time));assert.equal(new Date(time).toISOString().replace('.000',''),value,'core run is not an exact UTC hour');
   if(model==='aifs')assert.equal(new Date(time).getUTCHours()%6,0,'AIFS requires a six-hour source cycle');
   return value.replace(/[-:T]/g,'').slice(0,10);
+}
+
+// Serialized into Playwright. Scheduled Deck props are not a paint receipt: require the exact
+// current intent's post-selection application receipt and its accepted completed render generation.
+export function deckSurfaceProof(expected){
+  const api=window.__atmos,state=api?.store.getState(),manifest=state?.manifest;
+  if(!api||!manifest||!expected||!Number.isInteger(expected.afterSequence)||!state.layers[expected.field]?.visible||document.body.dataset.wlSwap
+    ||manifest.model!==expected.manifest.model||manifest.init_time!==expected.manifest.init||manifest.base!==expected.manifest.base
+    ||state.cursorMs!==expected.cursorMs||api.map.isMoving())return false;
+  const round=value=>Math.round(value*1e6)/1e6,bounds=api.map.getBounds(),host=api.map.getContainer();
+  const camera=JSON.stringify([round(bounds.getWest()),round(bounds.getEast()),round(bounds.getNorth()),round(bounds.getSouth()),
+    round(api.map.getZoom()),round(api.map.getBearing()),round(api.map.getPitch()),host.clientWidth,host.clientHeight]);
+  if(camera!==expected.camera)return false;
+  const handoff=api.temperatureHandoffDiagnostics?.(),ledger=api.renderCausalDiagnostics?.(),current=ledger?.events.at(-1)?.data;
+  if(!ledger?.enabled||ledger.errors||handoff?.selectedPrimary!==expected.field||current?.intentKey!==expected.field||!Number.isInteger(current.intentGeneration))return false;
+  if(current.model!==manifest.model||current.run!==manifest.init_time||current.base!==manifest.base||current.cursor!==state.cursorMs||current.swap!=='idle')return false;
+  const matches=event=>event.sequence>expected.afterSequence&&event.data.intentKey===expected.field&&event.data.intentGeneration===current.intentGeneration
+    &&event.data.swap==='idle'&&event.data.model===manifest.model&&event.data.run===manifest.init_time&&event.data.base===manifest.base&&event.data.cursor===state.cursorMs;
+  const receipt=ledger.events.findLast(event=>event.stage==='layer-receipt'&&event.data.path==='deck'&&event.data.painted?.split('|').includes(expected.field)&&matches(event));
+  if(!receipt||!Number.isInteger(receipt.data.receiptToken)||!Number.isInteger(receipt.data.overlayGeneration)||!Number.isInteger(current.overlayGeneration))return false;
+  const flush=ledger.events.findLast(event=>event.stage==='receipt-flush'&&event.sequence<receipt.sequence&&matches(event));
+  const draw=ledger.events.findLast(event=>event.stage==='deck-after'&&event.sequence<(flush?.sequence??0)&&matches(event));
+  if(flush?.data.accepted!==true||!draw||flush.data.renderedGeneration!==receipt.data.overlayGeneration||draw.data.renderedGeneration!==receipt.data.overlayGeneration)return false;
+  const currentDraw=ledger.events.findLast(event=>event.stage==='deck-after'&&matches(event)&&event.data.renderedGeneration===event.data.overlayGeneration
+    &&event.data.renderedGeneration===current.overlayGeneration);
+  if(!currentDraw)return false;
+  const snapshot=api.deckSnapshot(),summary=snapshot.filter(layer=>layer.id===expected.deck);
+  const layers=api.map.__deck?.layerManager?.getLayers?.(),matchesLayer=layers?.filter(layer=>layer.id===expected.deck),layer=matchesLayer?.[0];
+  if(summary.length!==1||summary[0].opacity<.8||matchesLayer?.length!==1||!layer?.isLoaded||layer.props?.visible===false||layer.props?.opacity<.8
+    ||!layer.props.image||!layer.props.image2||layer.state?.props?.image!==layer.props.image||layer.state?.props?.image2!==layer.props.image2
+    ||!layer.state?.imageTexture||!layer.state?.imageTexture2||!layer.getSubLayers?.().some(child=>child.state?.model))return false;
+  return {receiptSequence:receipt.sequence,receiptGeneration:receipt.data.overlayGeneration,drawSequence:currentDraw.sequence,
+    renderedGeneration:currentDraw.data.renderedGeneration,camera};
+}
+
+// Serialized into Playwright. The OFF image is eligible only after Deck has completed a newer
+// exact-identity generation with the selected raster gone or authored at zero opacity.
+export function hiddenDeckSurfaceProof(expected){
+  const api=window.__atmos,state=api?.store.getState(),manifest=state?.manifest;
+  if(!api||!manifest||!expected||!Number.isInteger(expected.afterSequence)||document.body.dataset.wlSwap||api.map.isMoving()
+    ||manifest.model!==expected.manifest.model||manifest.init_time!==expected.manifest.init||manifest.base!==expected.manifest.base||state.cursorMs!==expected.cursorMs)return false;
+  const round=value=>Math.round(value*1e6)/1e6,bounds=api.map.getBounds(),host=api.map.getContainer();
+  const camera=JSON.stringify([round(bounds.getWest()),round(bounds.getEast()),round(bounds.getNorth()),round(bounds.getSouth()),
+    round(api.map.getZoom()),round(api.map.getBearing()),round(api.map.getPitch()),host.clientWidth,host.clientHeight]);
+  if(camera!==expected.camera)return false;
+  const ledger=api.renderCausalDiagnostics?.(),current=ledger?.events.at(-1)?.data;if(!ledger?.enabled||ledger.errors)return false;
+  const draw=ledger.events.findLast(event=>event.stage==='deck-after'&&event.sequence>expected.afterSequence&&event.data.swap==='idle'
+    &&event.data.model===manifest.model&&event.data.run===manifest.init_time&&event.data.base===manifest.base&&event.data.cursor===state.cursorMs
+    &&Number.isInteger(event.data.renderedGeneration)&&event.data.renderedGeneration===event.data.overlayGeneration);
+  if(!draw||current?.overlayGeneration!==draw.data.renderedGeneration||current.model!==manifest.model||current.run!==manifest.init_time
+    ||current.base!==manifest.base||current.cursor!==state.cursorMs||current.swap!=='idle')return false;
+  const summary=api.deckSnapshot().filter(layer=>layer.id===expected.deck),layers=api.map.__deck?.layerManager?.getLayers?.()??[];
+  const actual=layers.filter(layer=>layer.id===expected.deck);if(summary.some(layer=>layer.opacity>0)||actual.some(layer=>layer.props?.visible!==false&&layer.props?.opacity>0))return false;
+  if(expected.field==='wind'&&state.layers.wind?.visible!==false)return false;
+  if(expected.field==='temp'&&state.layers.temp?.opacity!==0)return false;
+  return {drawSequence:draw.sequence,renderedGeneration:draw.data.renderedGeneration,camera};
 }
 
 async function boundedJson(url,{status=200,max=2*1024*1024}={}){
@@ -96,7 +211,11 @@ export async function runCoreMatrix(env,now=Date.now()){
   protocol(env);const errors=[],rows=[],selectionRequests=[],pointReleases=[];let observedRoster=null;
   const release=(await boundedJson('/health/release.json')).body;
   assert.equal(release.gitSha,env.UI_EXPECTED_SOURCE_SHA);assert.equal(release.releaseId,env.WEATHERX_EXPECTED_RELEASE_ID);
-  const rosterRows=releaseRosterProof((await boundedJson('/data/model-roster.json')).body,now);
+  const releaseRosterRows=releaseRosterProof((await boundedJson('/data/model-roster.json')).body,now);
+  const rosterRows=await Promise.all(releaseRosterRows.map(async row=>{
+    const catalog=await catalogAdmissionProof(row.model,row.expectedSelectable,now);
+    return {...row,rosterSelectable:row.expectedSelectable,...catalog};
+  }));
   const indexes={};
   const indexModels=Object.keys(CORE),indexResults=await Promise.allSettled(indexModels.map(async model=>{
     const result=await boundedJson(`/data/${model}/index.json`),catalogId=result.headers.get('x-weatherx-catalog');
@@ -114,7 +233,7 @@ export async function runCoreMatrix(env,now=Date.now()){
     page.on('pageerror',error=>pageErrors.push(String(error)));
     page.on('console',message=>{if(/GL_INVALID|INVALID_(?:OPERATION|VALUE|ENUM)|WebGL.*(?:error|warning)/i.test(message.text()))pageErrors.push(message.text());});
     await page.route(/^https:\/\/(?:[^/]+\.)?weatherx\.org\//,route=>new URL(route.request().url()).origin===STAGING_ORIGIN?route.continue():route.abort());
-    await page.goto(`${STAGING_ORIGIN}/?devprobes=1#c=${location.lon},${location.lat},5.2&l=wind`,{waitUntil:'domcontentloaded',timeout:60_000});
+    await page.goto(`${STAGING_ORIGIN}/?devprobes=1&rendercausal=1#c=${location.lon},${location.lat},5.2&l=wind`,{waitUntil:'domcontentloaded',timeout:60_000});
     await page.waitForFunction(()=>window.__atmos?.deckSnapshot&&document.body.classList.contains('wl-lit')&&!document.body.classList.contains('wl-boot'),null,{timeout:30_000});
     return {context,page,pageErrors};
   }
@@ -131,13 +250,52 @@ export async function runCoreMatrix(env,now=Date.now()){
   async function pick(page,model){await openDialog(page);const pick=await option(page,CORE[model].label);assert.ok(await pick.count(),`${model} option absent`);assert.equal(await pick.isDisabled(),false,`${model} option disabled`);await pick.click();}
   async function rosterMenuProof(page){
     await openDialog(page);const labels={icon:'ICON','hrrr-ak':'HRRR AK',hrdps:'HRDPS',nam:'NAM','nam-hi':'NAM HI','nam-ak':'NAM AK','arome-antilles':'AROME ANT'};
-    const expected=rosterRows.filter(row=>row.expectedSelectable).map(row=>labels[row.model]);
-    await page.waitForFunction(expected=>{const names=[...document.querySelectorAll('#forecast-model-dialog button.wy-model .wy-model-name')].map(node=>node.textContent?.trim());
-      return expected.every(name=>names.includes(name));},expected,{timeout:15_000});
+    const expected=rosterRows.map(row=>({name:labels[row.model],selectable:row.expectedSelectable}));
+    await page.waitForFunction(expected=>{const buttons=[...document.querySelectorAll('#forecast-model-dialog button.wy-model')];
+      return expected.every(item=>{const matches=buttons.filter(button=>button.querySelector('.wy-model-name')?.textContent?.trim()===item.name);
+        return matches.length===(item.selectable?1:0)&&(!item.selectable||matches[0].disabled===false);});},expected,{timeout:15_000});
     const listed=await page.locator('#forecast-model-dialog button.wy-model').evaluateAll(buttons=>buttons.map(button=>({name:button.querySelector('.wy-model-name')?.textContent?.trim(),disabled:button.disabled})));
     await page.keyboard.press('Escape');
     return rosterRows.map(row=>{const match=listed.filter(entry=>entry.name===labels[row.model]);assert.ok(match.length<=1,`${row.model} option duplicated`);
       return {...row,visible:match.length===1,enabled:match.length===1&&!match[0].disabled};});
+  }
+  async function fixedCamera(page,location){
+    await page.evaluate(location=>{const map=window.__atmos.map;window.__wxCoreCameraUnlock?.();let applying=false;
+      const exact=()=>{const center=map.getCenter();return !map.isMoving()&&Math.abs(center.lng-location.lon)<1e-6&&Math.abs(center.lat-location.lat)<1e-6
+        &&Math.abs(map.getZoom()-5.2)<1e-6&&Math.abs(map.getBearing())<1e-6&&Math.abs(map.getPitch())<1e-6;};
+      const hold=()=>{if(applying||exact())return;applying=true;try{map.stop();map.jumpTo({center:[location.lon,location.lat],zoom:5.2,bearing:0,pitch:0});}finally{applying=false;}};
+      map.on('movestart',hold);map.on('move',hold);window.__wxCoreCameraUnlock=()=>{map.off('movestart',hold);map.off('move',hold);delete window.__wxCoreCameraUnlock;};hold();},location);
+    await page.waitForFunction(location=>{const map=window.__atmos.map,center=map.getCenter();return !map.isMoving()&&Math.abs(center.lng-location.lon)<1e-6
+      &&Math.abs(center.lat-location.lat)<1e-6&&Math.abs(map.getZoom()-5.2)<1e-6&&Math.abs(map.getBearing())<1e-6&&Math.abs(map.getPitch())<1e-6;},location,{timeout:10_000});
+    return page.evaluate(()=>{const map=window.__atmos.map,bounds=map.getBounds(),host=map.getContainer(),round=value=>Math.round(value*1e6)/1e6;
+      return JSON.stringify([round(bounds.getWest()),round(bounds.getEast()),round(bounds.getNorth()),round(bounds.getSouth()),round(map.getZoom()),
+        round(map.getBearing()),round(map.getPitch()),host.clientWidth,host.clientHeight]);});
+  }
+  async function exactDeckPaint(page,rule,index){
+    await page.waitForFunction(({model,init,base})=>{const manifest=window.__atmos.store.getState().manifest;
+      return manifest?.model===model&&manifest.init_time===init&&manifest.base===base;},
+    {model:index.model,init:index.init,base:`/data/_catalog/${index.catalogId}/${index.model}/runs/${index.cycle}/`},{timeout:45_000});
+    const camera=await fixedCamera(page,rule.location);
+    if(await page.evaluate(field=>window.__atmos.store.getState().layers[field]?.visible===true,rule.field)){
+      await page.evaluate(field=>window.__atmos.activateLayer(field),rule.field);
+      await page.waitForFunction(field=>window.__atmos.store.getState().layers[field]?.visible===false,rule.field,{timeout:15_000});
+    }
+    const afterSequence=await page.evaluate(()=>window.__atmos.renderCausalDiagnostics().events.at(-1)?.sequence??0);
+    await page.evaluate(field=>window.__atmos.activateLayer(field),rule.field);
+    await page.waitForFunction(field=>window.__atmos.store.getState().layers[field]?.visible===true,rule.field,{timeout:15_000});
+    const cursorMs=await page.evaluate(()=>window.__atmos.store.getState().cursorMs);
+    const expected={afterSequence,manifest:{model:index.model,init:index.init,base:`/data/_catalog/${index.catalogId}/${index.model}/runs/${index.cycle}/`},
+      cursorMs,field:rule.field,deck:rule.deck,camera};
+    const handle=await page.waitForFunction(deckSurfaceProof,expected,{timeout:45_000});await handle.dispose();return {expected};
+  }
+  async function stableScreenshot(page,predicate,expected,clip,label){
+    for(let attempt=0;attempt<3;attempt++){
+      const beforeHandle=await page.waitForFunction(predicate,expected,{timeout:30_000}),before=await beforeHandle.jsonValue();await beforeHandle.dispose();
+      const bytes=await page.screenshot({clip}),after=await page.evaluate(predicate,expected);
+      const identity=proof=>JSON.stringify([proof?.receiptSequence??null,proof?.receiptGeneration??null,proof?.renderedGeneration??null,proof?.camera??null]);
+      if(after&&identity(before)===identity(after))return {image:PNG.sync.read(bytes),proof:after};
+    }
+    throw new Error(`${label} paint identity did not remain stable across capture`);
   }
   async function modelProof(model){
     const rule=CORE[model],record={model,status:'error'};let session;
@@ -145,15 +303,15 @@ export async function runCoreMatrix(env,now=Date.now()){
       session=await pageFor(rule.location);const {page,pageErrors}=session;const menuRoster=await rosterMenuProof(page);
       if(observedRoster===null)observedRoster=menuRoster;else assert.deepEqual(menuRoster,observedRoster,'release roster menu changed between model checks');
       await ensureLayer(page,rule.field);await pick(page,model);
-      const index=indexes[model];if(index?.error)throw index.error;await page.waitForFunction(({model,deck})=>{
-        const a=window.__atmos,s=a?.store.getState();return s?.manifest?.model===model&&!a.map.isMoving()&&a.deckSnapshot().some(layer=>layer.id===deck&&layer.opacity>.1);
-      },{model,deck:rule.deck},{timeout:45_000});
-      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-      const clip={x:300,y:160,width:650,height:470},on=PNG.sync.read(await page.screenshot({clip}));
+      const index=indexes[model];if(index?.error)throw index.error;const {expected}=await exactDeckPaint(page,rule,index);
+      const clip={x:300,y:160,width:650,height:470},{image:on,proof:paint}=await stableScreenshot(page,deckSurfaceProof,expected,clip,'ON');
+      const hideAfterSequence=await page.evaluate(()=>window.__atmos.renderCausalDiagnostics().events.at(-1)?.sequence??0);
       if(rule.field==='wind')await page.evaluate(()=>window.__atmos.store.getState().setLayerVisible('wind',false));
       else await page.evaluate(field=>window.__atmos.store.getState().setLayerOpacity(field,0),rule.field);
-      await page.waitForTimeout(250);await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-      const off=PNG.sync.read(await page.screenshot({clip})),changedRatio=pixelDifference(on,off);assert.ok(changedRatio>.01,`${model} weather pixels did not change`);
+      const hiddenExpected={...expected,afterSequence:hideAfterSequence};
+      const {image:off,proof:hidden}=await stableScreenshot(page,hiddenDeckSurfaceProof,hiddenExpected,clip,'OFF');
+      await page.evaluate(()=>window.__wxCoreCameraUnlock?.());
+      const changedRatio=pixelDifference(on,off);assert.ok(changedRatio>.01,`${model} weather pixels did not change`);
       const state=await page.evaluate(({model,location})=>{const a=window.__atmos,s=a.store.getState(),m=s.manifest;return {model:m.model,init:m.init_time,base:m.base,variables:Object.keys(m.variables),sample:model==='aifs'?a.sampleWind(location.lon,location.lat):null};},{model,location:rule.location});
       assert.equal(state.model,model);assert.equal(state.init,index.init);assert.ok(baseMatches(model,index.cycle,index.catalogId,state.base),'model base/catalog identity changed');
       assert.ok(state.variables.includes(rule.field));if(model==='hrrr')assert.equal(state.variables.includes('wind'),false,'unverified HRRR wind became admitted');
@@ -161,7 +319,7 @@ export async function runCoreMatrix(env,now=Date.now()){
       if(model==='aifs')assert.ok(Number.isFinite(state.sample),'AIFS wind sampler is not finite');
       const outside=model==='hrrr'?await hrrrOutsideDomain(now):null;
       assert.deepEqual(pageErrors,[],'browser emitted core model errors');
-      Object.assign(record,{status:'ready',init:index.init,base:state.base,catalogId:index.catalogId,field:rule.field,deck:rule.deck,changedRatio,
+      Object.assign(record,{status:'ready',init:index.init,base:state.base,catalogId:index.catalogId,field:rule.field,deck:rule.deck,paint,hidden,changedRatio,
         finitePointValue:point.value,pointRunId:point.runId,pointQuality:point.quality,windAdmitted:rule.windAdmitted,domain:{inside:true,outside}});
     }catch(error){record.error=error instanceof Error?error.message:String(error);errors.push({model,error:record.error});}
     finally{await session?.context.close();}
