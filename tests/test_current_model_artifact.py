@@ -100,6 +100,16 @@ def args(root, kind="core", model="gfs"):
 
 
 class CurrentModelArtifactTests(unittest.TestCase):
+    def test_aggregate_pending_does_not_invalidate_a_completed_model_job(self):
+        # Real recovery run34001644009 had completed running jobs while GitHub
+        # reported its aggregate status as pending behind other model locks.
+        run, jobs, _ = metadata()
+        run["status"] = "pending"
+        client = Client([run,jobs])
+        subject.exact_run(client,RUN_ID,ATTEMPT,CONTROLLER)
+        job, _ = subject.exact_job(client,RUN_ID,ATTEMPT,CONTROLLER,"core","gfs")
+        self.assertEqual(job["conclusion"],"success")
+
     def test_dirty_project_dependency_cannot_execute_before_bootstrap_guard(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

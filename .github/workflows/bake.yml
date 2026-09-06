@@ -10,6 +10,12 @@ on:
     - cron: '30 2,8,14,20 * * *'   # ~20 min after each ECMWF publication lands
   workflow_dispatch:               # manual data refresh; UI releases use ui-release.yml
     inputs:
+      model:
+        description: Refresh one model only, or all models plus whole maintenance; schedules always use all
+        type: choice
+        required: false
+        default: all
+        options: [all, ecmwf, gfs, hrrr, aifs, icon, hrdps, arome-antilles, hrrr-ak, nam, nam-hi, nam-ak]
       recovery_run_id:
         description: Optional reviewed failed run whose unchanged model inputs may be recovered
         type: string
@@ -19,56 +25,67 @@ jobs:
   core-ecmwf:
     name: core (ecmwf)
     uses: ./.github/workflows/collect-core-model.yml
+    if: ${{ inputs.model == '' || inputs.model == 'all' || inputs.model == 'ecmwf' }}
     with: { model: ecmwf, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
     secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
   core-gfs:
     name: core (gfs)
     uses: ./.github/workflows/collect-core-model.yml
+    if: ${{ inputs.model == '' || inputs.model == 'all' || inputs.model == 'gfs' }}
     with: { model: gfs, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
     secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
   core-hrrr:
     name: core (hrrr)
     uses: ./.github/workflows/collect-core-model.yml
+    if: ${{ inputs.model == '' || inputs.model == 'all' || inputs.model == 'hrrr' }}
     with: { model: hrrr, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
     secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
   core-aifs:
     name: core (aifs)
     uses: ./.github/workflows/collect-core-model.yml
+    if: ${{ inputs.model == '' || inputs.model == 'all' || inputs.model == 'aifs' }}
     with: { model: aifs, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
     secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
   regional-icon:
     name: regional (icon)
     uses: ./.github/workflows/collect-regional-model.yml
+    if: ${{ inputs.model == '' || inputs.model == 'all' || inputs.model == 'icon' }}
     with: { model: icon, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
     secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
   regional-hrdps:
     name: regional (hrdps)
     uses: ./.github/workflows/collect-regional-model.yml
+    if: ${{ inputs.model == '' || inputs.model == 'all' || inputs.model == 'hrdps' }}
     with: { model: hrdps, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
     secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
   regional-arome-antilles:
     name: regional (arome-antilles)
     uses: ./.github/workflows/collect-regional-model.yml
+    if: ${{ inputs.model == '' || inputs.model == 'all' || inputs.model == 'arome-antilles' }}
     with: { model: arome-antilles, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
     secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
   regional-hrrr-ak:
     name: regional (hrrr-ak)
     uses: ./.github/workflows/collect-regional-model.yml
+    if: ${{ inputs.model == '' || inputs.model == 'all' || inputs.model == 'hrrr-ak' }}
     with: { model: hrrr-ak, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
     secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
   regional-nam:
     name: regional (nam)
     uses: ./.github/workflows/collect-regional-model.yml
+    if: ${{ inputs.model == '' || inputs.model == 'all' || inputs.model == 'nam' }}
     with: { model: nam, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
     secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
   regional-nam-hi:
     name: regional (nam-hi)
     uses: ./.github/workflows/collect-regional-model.yml
+    if: ${{ inputs.model == '' || inputs.model == 'all' || inputs.model == 'nam-hi' }}
     with: { model: nam-hi, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
     secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
   regional-nam-ak:
     name: regional (nam-ak)
     uses: ./.github/workflows/collect-regional-model.yml
+    if: ${{ inputs.model == '' || inputs.model == 'all' || inputs.model == 'nam-ak' }}
     with: { model: nam-ak, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
     secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
   publish-ecmwf:

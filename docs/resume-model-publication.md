@@ -30,6 +30,12 @@ does not call collectors, build/deploy UI, alter Workers, or interrupt the origi
 bake. It cannot recover other runs or sources, and cannot admit expired artifacts.
 The original whole-maintenance job may continue using the same collected inputs.
 
+GitHub may report the aggregate run as `pending` while individual jobs are
+already executing or completed behind independent locks. That observed aggregate
+state is accepted alongside `in_progress` and `completed`; the selected collector
+must still be completed/successful with successful ordered source, collect and
+upload steps. This does not admit a pending, failed or incomplete collector.
+
 NAM-HI's first artifact is a genuine abstention, not a successful input pack.
 Its diagnostic found an upstream HTTP302 during lead11 acquisition. Recovery
 must not turn that receipt into published data; the current last-good model

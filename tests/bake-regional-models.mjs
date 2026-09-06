@@ -12,6 +12,26 @@ const coreModels=['ecmwf','gfs','hrrr','aifs'];
 const regionalModels=['icon','hrdps','arome-antilles','hrrr-ak','nam','nam-hi','nam-ak'];
 const all=[...coreModels,...regionalModels];
 
+test('manual single-model requests collect only that model; schedules still collect all eleven',()=>{
+  assert.match(bake,/default: all\n\s+options: \[all, ecmwf, gfs, hrrr, aifs, icon, hrdps, arome-antilles, hrrr-ak, nam, nam-hi, nam-ak\]/);
+  const enabled=[];
+  for(const model of all){
+    const kind=coreModels.includes(model)?'core':'regional';
+    const job=bake.split(`\n  ${kind}-${model}:`)[1].split(/\n  [a-z]/)[0];
+    const expression=job.match(/    if: \$\{\{ (.+) \}\}/)?.[1];
+    assert.equal(expression,`inputs.model == '' || inputs.model == 'all' || inputs.model == '${model}'`);
+    enabled.push([model,selection=>Function('inputs',`return ${expression}`)({model:selection})]);
+  }
+  for(const selection of ['', 'all',...all,'unknown']){
+    const actual=enabled.filter(([,accept])=>accept(selection)).map(([model])=>model);
+    assert.deepEqual(actual,selection===''||selection==='all'?all:all.includes(selection)?[selection]:[]);
+  }
+  assert.match(bake,/cron: '30 2,8,14,20 \* \* \*'/);
+  // Whole maintenance still requires all FOUR successful core collectors.
+  const maintenance=bake.split('\n  bake:')[1];
+  for(const model of coreModels)assert.match(maintenance,new RegExp(`needs.core-${model}.result == 'success'`));
+});
+
 test('eleven reusable collectors each unlock only their matching publisher',()=>{
   for(const model of coreModels){
     assert.match(bake,new RegExp(`^  core-${model}:\\n    name: core \\(${model}\\)\\n    uses: \\./\\.github/workflows/collect-core-model\\.yml`,'m'));
