@@ -565,6 +565,45 @@ class CurrentModelArtifactTests(unittest.TestCase):
                     with self.assertRaises(subject.Refusal):
                         subject.producer_args(invocation, Client([{**caller, **changes}]))
 
+    def test_retained_cli_keeps_original_receipt_and_origin_through_output(self):
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return NOW
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            invocation = args(root)
+            invocation.retained_run_id = subject.RETAINED_RUN
+            invocation.atmos_source_sha = subject.RETAINED_SOURCE
+            caller = metadata()[0]
+            caller.update(path=subject.RESUME_WORKFLOW, event="workflow_dispatch")
+            producer, jobs, artifacts = metadata()
+            producer.update(id=int(subject.RETAINED_RUN), run_attempt=1, head_sha=subject.RETAINED_CONTROLLER)
+            jobs["jobs"][0].update(run_id=int(subject.RETAINED_RUN), run_attempt=1, head_sha=subject.RETAINED_CONTROLLER)
+            original = json.dumps({"schemaVersion":1, "status":"unqualified-core-inputs", "model":"gfs",
+                "sourceSha":subject.RETAINED_SOURCE, "runId":subject.RETAINED_RUN, "forecastRun":"2026090518", "files":[]}).encode()
+            archive = zip_bytes([("gfs/manifest.json",original), ("gfs/payload/data/gfs/index.json","{}")])
+            artifact = artifacts["artifacts"][0]
+            artifact.update(size_in_bytes=len(archive), digest="sha256:"+hashlib.sha256(archive).hexdigest())
+            artifact["workflow_run"].update(id=int(subject.RETAINED_RUN), head_sha=subject.RETAINED_CONTROLLER)
+            argv = ["current-model-artifact.py"]
+            for key, value in vars(invocation).items():
+                argv.extend(["--"+key.replace("_","-"),str(value)])
+            env = {"GITHUB_RUN_ID":RUN_ID,"GITHUB_RUN_ATTEMPT":str(ATTEMPT),"GITHUB_SHA":CONTROLLER,
+                "GITHUB_REF":"refs/heads/main","GITHUB_EVENT_NAME":"workflow_dispatch",
+                "GITHUB_WORKFLOW_REF":f"{subject.REPO}/{subject.RESUME_WORKFLOW}@refs/heads/main"}
+            with patch.object(sys,"argv",argv), patch.dict(os.environ,env), patch.object(subject,"datetime",FrozenDateTime), \
+                 patch.object(subject,"assert_clean_checkout"), patch.object(subject,"verify_workflow_closure"), \
+                 patch.object(subject.legacy,"GitHub",return_value=Client([caller,producer,jobs,artifacts],archive)):
+                self.assertEqual(subject.main(),0)
+            bundle = Path(invocation.output)
+            self.assertEqual((bundle/"packs/gfs/manifest.json").read_bytes(),original)
+            handoff = json.loads((bundle/"handoff.json").read_text())
+            self.assertEqual(handoff["origin"]["runId"],subject.RETAINED_RUN)
+            self.assertEqual(handoff["origin"]["controllerSha"],subject.RETAINED_CONTROLLER)
+            self.assertEqual(handoff["origin"]["collectorAttempt"],1)
+            self.assertEqual(handoff["pack"]["receiptSha256"],hashlib.sha256(original).hexdigest())
+
 
 if __name__ == "__main__":
     unittest.main()
