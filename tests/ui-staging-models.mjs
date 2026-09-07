@@ -180,12 +180,16 @@ test('browser child process uses an allowlist and pixel proof measures visible c
 test('only compressed profile enables the build namespace and all other profiles clear inherited activation',()=>{
   const body=selection(['icon']),profile=profileFor(digest(body));
   for(const inherited of [undefined,'static-br11-v1','malicious']){
-    const env={ATMOS_STATIC_COMPRESSION_PROFILE:inherited,KEEP:'yes'};
+   for(const sprite of [undefined,'','0','1','malicious']){
+    const env={ATMOS_STATIC_COMPRESSION_PROFILE:inherited,VITE_SPRITE_WEBP_QUALIFICATION:sprite,KEEP:'yes'};
     assert.equal(publicBuildEnvironment(STATIC_COMPRESSION_PROFILE,null,env).ATMOS_STATIC_COMPRESSION_PROFILE,'static-br11-v1');
+    assert.equal(publicBuildEnvironment(STATIC_COMPRESSION_PROFILE,null,env).VITE_SPRITE_WEBP_QUALIFICATION,'1');
     for(const [choice,source] of [[BASELINE_PROFILE,null],[CORE_RELEASE_PROFILE,null],[profile,{bytes:body}]]){
       const actual=publicBuildEnvironment(choice,source,env);
       assert.equal(actual.ATMOS_STATIC_COMPRESSION_PROFILE,'');assert.equal(actual.KEEP,'yes');
+      assert.equal(actual.VITE_SPRITE_WEBP_QUALIFICATION,'0');
     }
+   }
   }
 });
 test('core browser gate is staging-only and refuses inherited credentials before launch',()=>{

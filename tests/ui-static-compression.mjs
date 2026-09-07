@@ -95,7 +95,7 @@ test('candidate admission requires compression inventory and refuses relabeling 
   const without=files.filter(x=>x.path!=='static-compression-manifest.json');
   assert.throws(()=>validateCandidate({...c,files:without,artifactDigest:validateFiles(without).digest}),/manifest required/);
   assert.throws(()=>requireProductionProfile(c.profile),/cannot enter production/);
-  assert.equal(requiredSourceGuard(c.profile),'a22db10b3f76ff84c422352e566c879868b45706');
+  assert.equal(requiredSourceGuard(c.profile),'0eeec07e06e5e48b53d41bf3590218a856432b32');
   assert.ok(POLICY_FILES.includes('tools/ui-static-compression.mjs'));
 });
 test('full compressed candidate keeps the 5000 ordinary-file budget through encryption and restore',()=>{

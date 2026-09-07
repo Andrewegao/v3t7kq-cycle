@@ -9,8 +9,16 @@ This is an opt-in experiment, not a completed latency qualification.
 - Explicit request `release-roster-core-br11-v1`; existing defaults unchanged.
 - Requires both protected staging approvals: core `release-roster-core-v1`
   and `UI_STAGING_STATIC_COMPRESSION_APPROVED=static-br11-v1`.
-- Requires source ancestry of Atmos `a22db10b3f76ff84c422352e566c879868b45706`
+- Requires source ancestry of bug-bashed Atmos `0eeec07e06e5e48b53d41bf3590218a856432b32`
   and the existing exact-current-master check. No bypass of that check.
+- Following owner approval of the combined opening/PR175 staging candidate, the compressed
+  staging profile explicitly sets `VITE_SPRITE_WEBP_QUALIFICATION=1`. Every other profile
+  explicitly sets `0`, overriding inherited environment values. This admits the reviewed lossless
+  sprite transport (including its timeout/PNG recovery fixes), not a weather-quality change.
+  The pipeline digest binds these controller bytes as well as profile and exact candidate source;
+  existing production profile rejection, staging origin restriction and artifact byte checks remain.
+  Verify the live hashed WebP assets and actual browser requests after deployment; JS/CSS
+  compression receipts alone do not prove sprite activation.
 - The credential-free build compiles the existing Functions once and exhaustively
   selects emitted browser JS/CSS, including lazy modules and separately built workers.
   The bundler names these `/assets/wxbr11v1-*` before hashing and rewriting references;
