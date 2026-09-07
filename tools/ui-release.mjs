@@ -175,7 +175,7 @@ async function preflight(stage) {
 export function requiredSourceGuard(profile) {
   validateProfile(profile);
   if (staticCompressionProfile(profile)) return '0eeec07e06e5e48b53d41bf3590218a856432b32';
-  if (coreReleaseProfile(profile)) return 'ed8065275eefa5e6e530ce37d1133a3baf1026c5';
+  if (coreReleaseProfile(profile)) return '0eeec07e06e5e48b53d41bf3590218a856432b32';
   return profile.stagingOnly ? STAGING_RELEASE_GUARD_SHA : null;
 }
 function sourceIdentity(profile) {
@@ -194,7 +194,7 @@ export function publicBuildEnvironment(profile,selection,env=process.env) {
   } else assert.equal(selection,null,'non-selection build cannot carry a staging selection');
   return {...env,ATMOS_CODE_ONLY_BUILD:'1',ATMOS_PUBLIC_RELEASE:profile.stagingOnly?'0':'1',
     ATMOS_STATIC_COMPRESSION_PROFILE:staticCompressionProfile(profile)?'static-br11-v1':'',
-    VITE_SPRITE_WEBP_QUALIFICATION:staticCompressionProfile(profile)?'1':'0',
+    VITE_SPRITE_WEBP_QUALIFICATION:core?'1':'0',
     ATMOS_STAGING_EXPERIMENT_RELEASE:profile.stagingOnly?'1':'0',VITE_PRODUCT:'lab',VITE_APP:'lab',VITE_PLATFORM_ACCOUNT:'0',
     ATMOS_STAGING_RELEASE_ROSTER:core?'1':'0',VITE_MODEL_EXPANSION_QUALIFICATION:profile.stagingOnly?'1':'0',VITE_MODEL_LOCAL_BASE:'',
     VITE_STAGING_MODEL_ADMISSION:selected?'1':'0',VITE_STAGING_MODEL_SELECTION_SHA256:profile.modelSelectionSha256??''};
