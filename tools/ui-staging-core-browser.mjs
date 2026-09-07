@@ -25,6 +25,12 @@ const MANIFEST_KEYS=new Set(['schemaVersion','model','init_time','grid','variabl
 const MAX_CATALOG_BYTES=256*1024;
 class CatalogTransportError extends Error {}
 
+// The message alone cannot locate an intermittent browser exception after rollback. Preserve
+// Playwright's originating script/line and call stack; every recorded error still fails the gate.
+export function browserErrorDetail(error){
+  return typeof error?.stack==='string'&&error.stack.trim()?error.stack:String(error);
+}
+
 export function protocol(env){
   assert.equal(env.BASE,STAGING_ORIGIN,'only actual staging custom domain can qualify');
   assert.match(env.UI_EXPECTED_SOURCE_SHA??'',/^[a-f0-9]{40}$/);
@@ -230,7 +236,7 @@ export async function runCoreMatrix(env,now=Date.now()){
     await context.addInitScript(()=>{sessionStorage.setItem('atmos-boot-shown','1');localStorage.setItem('atmos-ai-code','central');localStorage.setItem('atmos-ai-scope','central');localStorage.setItem('atmos-coach-done','1');localStorage.setItem('atmos-locale','en');localStorage.setItem('atmos-debug','1');});
     const page=await context.newPage(),pageErrors=[];
     page.on('request',request=>{const url=new URL(request.url());if(url.pathname==='/assets/staging-model-selection.json')selectionRequests.push(url.href);});
-    page.on('pageerror',error=>pageErrors.push(String(error)));
+    page.on('pageerror',error=>pageErrors.push(browserErrorDetail(error)));
     page.on('console',message=>{if(/GL_INVALID|INVALID_(?:OPERATION|VALUE|ENUM)|WebGL.*(?:error|warning)/i.test(message.text()))pageErrors.push(message.text());});
     await page.route(/^https:\/\/(?:[^/]+\.)?weatherx\.org\//,route=>new URL(route.request().url()).origin===STAGING_ORIGIN?route.continue():route.abort());
     await page.goto(`${STAGING_ORIGIN}/?devprobes=1&rendercausal=1#c=${location.lon},${location.lat},5.2&l=wind`,{waitUntil:'domcontentloaded',timeout:60_000});
