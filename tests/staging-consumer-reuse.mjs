@@ -12,11 +12,12 @@ const config={...origin.before.state.script_runtime,vars:Object.fromEntries(bind
   queues:{producers:bindings.filter(b=>b.type==='queue').map(b=>({binding:b.name,queue:b.queue_name}))},
   analytics_engine_datasets:bindings.filter(b=>b.type==='analytics_engine').map(b=>({binding:b.name,dataset:b.dataset})),
   send_email:bindings.filter(b=>b.type==='send_email').map(({type,...b})=>b)};
-const resource={id:NEW,metadata:{created_on:'2026-09-05T20:00:51.429394Z'},annotations:{'workers/tag':`staging-${SOURCE_SHA.slice(0,12)}`,'workers/triggered_by':'version_upload'},
+const resource={id:NEW,metadata:{created_on:'2026-09-05T20:00:51.429394Z'},annotations:{'workers/tag':`staging-${OWNED_REUSE.sourceSha.slice(0,12)}`,'workers/triggered_by':'version_upload'},
   resources:{script:{etag:OWNED_REUSE.etag},script_runtime:origin.before.state.script_runtime,bindings}};
 const history=[NEW,...origin.versionHistory].slice(0,10);
 test('only exact archived receipt bytes are admitted, including original source/version/lineage',()=>{
   assert.equal(origin.uploaded,NEW);assert.equal(origin.workflowRun,OWNED_REUSE.run);
+  assert.equal(origin.sourceSha,OWNED_REUSE.sourceSha);assert.notEqual(origin.sourceSha,SOURCE_SHA);
   for(const mutate of [r=>r.sourceSha='a'.repeat(40),r=>r.uploaded=OTHER,r=>r.workflowRun='1',r=>r.versionHistory.reverse(),r=>r.desired.bindings.pop()]){
     const r=structuredClone(origin);mutate(r);assert.throws(()=>readOwnedOrigin(Buffer.from(JSON.stringify(r))));
   }
@@ -24,6 +25,7 @@ test('only exact archived receipt bytes are admitted, including original source/
 });
 test('retained version requires exact ID/content/source metadata/runtime and complete bindings',()=>{
   assertReusableVersion(config,origin,resource);
+  assert.throws(()=>assertReusableVersion(config,origin,{...resource,annotations:{...resource.annotations,'workers/tag':`staging-${SOURCE_SHA.slice(0,12)}`}}),/source tag/);
   for(const mutate of [r=>r.id=OTHER,r=>r.resources.script.etag='b'.repeat(64),r=>r.annotations['workers/tag']='staging-other',
     r=>r.annotations['workers/triggered_by']='upload',r=>r.metadata.created_on='2026-09-05T20:00:52Z',
     r=>r.resources.script_runtime.usage_model='bundled',r=>r.resources.bindings.pop(),r=>r.resources.bindings.find(b=>b.name==='AUTH_MODE').text='enforce']){
@@ -52,7 +54,7 @@ test('existing ownership functions activate exact reused ID, confirm, and restor
   await assert.rejects(activateOwned({...common,snapshot:async()=>origin.before,activate:async()=>assert.fail('foreign overwritten')}));
 });
 test('reuse requires separate exact confirmation; workflow never supplies shared secrets to reuse',()=>{
-  const env={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_REPOSITORY:'Andrewegao/v3t7kq-cycle',GITHUB_REF:'refs/heads/main',GITHUB_EVENT_NAME:'workflow_dispatch',GITHUB_JOB:'refresh',GITHUB_WORKFLOW_REF:'Andrewegao/v3t7kq-cycle/.github/workflows/staging-consumer-refresh.yml@refs/heads/main',STAGING_CONSUMER_ENABLED:'true',STAGING_CONSUMER_SOURCE_SHA:SOURCE_SHA,CONFIRM:'REUSE-STAGING-33988771315',STAGING_CONSUMER_MODE:'reuse-owned-33988771315',STAGING_R2_ACCOUNT_ID:'a89f9a1af485021fbc60a68b163c7c6e',STAGING_CONSUMER_APPROVED_VERSION:OLD,STAGING_CONSUMER_APPROVED_SETTINGS_SHA256:'a'.repeat(64),GITHUB_RUN_ID:'2',GITHUB_RUN_ATTEMPT:'1'};
+  const env={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_REPOSITORY:'Andrewegao/v3t7kq-cycle',GITHUB_REF:'refs/heads/main',GITHUB_EVENT_NAME:'workflow_dispatch',GITHUB_JOB:'refresh',GITHUB_WORKFLOW_REF:'Andrewegao/v3t7kq-cycle/.github/workflows/staging-consumer-refresh.yml@refs/heads/main',STAGING_CONSUMER_ENABLED:'true',STAGING_CONSUMER_SOURCE_SHA:OWNED_REUSE.sourceSha,CONFIRM:'REUSE-STAGING-33988771315',STAGING_CONSUMER_MODE:'reuse-owned-33988771315',STAGING_R2_ACCOUNT_ID:'a89f9a1af485021fbc60a68b163c7c6e',STAGING_CONSUMER_APPROVED_VERSION:OLD,STAGING_CONSUMER_APPROVED_SETTINGS_SHA256:'a'.repeat(64),GITHUB_RUN_ID:'2',GITHUB_RUN_ATTEMPT:'1'};
   consumerGate(env);assert.throws(()=>consumerGate({...env,CONFIRM:'REFRESH-STAGING-CONSUMER'}));
   assert.throws(()=>consumerGate({...env,STAGING_CONSUMER_MODE:'reuse-any'}));
   const workflow=readFileSync(new URL('../.github/workflows/staging-consumer-refresh.yml',import.meta.url),'utf8');
