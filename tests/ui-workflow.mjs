@@ -33,10 +33,13 @@ test('staging workflow leaves release-mode activation to the exact-profile contr
   assert.match(source,/publicBuildEnvironment\(profile,selection/);
   assert.match(source,/merge-base','--is-ancestor',requiredSourceGuard\(profile\),'HEAD'/);
   assert.doesNotMatch(prod,/ATMOS_STAGING_EXPERIMENT_RELEASE|ATMOS_STAGING_RELEASE_ROSTER|MODEL_SELECTION_SHA256|VITE_STAGING_MODEL_ADMISSION|UI_STAGING_CORE_PROFILE_APPROVED/);
-  const stagedController="ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && 'a58eff158b56ef2ba25189d2b859315b00893a14' || 'b64f31a1388e8104c18a65a445d156070de5087b' }}";
+  const stagedController="ref: b64f31a1388e8104c18a65a445d156070de5087b";
   assert.equal(staging.split(stagedController).length-1,2);
   assert.match(candidate,/STAGING_CONTROL_SHA = 'b64f31a1388e8104c18a65a445d156070de5087b'/);
-  assert.match(prod,/ref: a58eff158b56ef2ba25189d2b859315b00893a14/);
+  assert.match(candidate,/export const CONTROL_SHA = 'b64f31a1388e8104c18a65a445d156070de5087b'/);
+  assert.match(prod,/ref: b64f31a1388e8104c18a65a445d156070de5087b/);
+  assert.match(prod,/repository: weatherx-hq\/atmos/);
+  assert.doesNotMatch(prod,/ref: a58eff158b56ef2ba25189d2b859315b00893a14/);
   assert.doesNotMatch(prod,/STAGING_CONTROL_SHA|stagingOnly/);
 });
 test('guard upload adapter preserves args and disables rebundling without invoking a real CLI',()=>{
