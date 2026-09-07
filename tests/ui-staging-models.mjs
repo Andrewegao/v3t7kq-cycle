@@ -167,7 +167,7 @@ test('build flags select mutually exclusive production or exact staging-experime
   const core=publicBuildEnvironment(CORE_RELEASE_PROFILE,null,{});
   assert.equal(core.ATMOS_PUBLIC_RELEASE,'0');assert.equal(core.ATMOS_STAGING_EXPERIMENT_RELEASE,'1');assert.equal(core.ATMOS_STAGING_RELEASE_ROSTER,'1');
   assert.equal(core.VITE_MODEL_EXPANSION_QUALIFICATION,'1');assert.equal(core.VITE_STAGING_MODEL_ADMISSION,'0');assert.equal(core.VITE_STAGING_MODEL_SELECTION_SHA256,'');
-  assert.equal(requiredSourceGuard(CORE_RELEASE_PROFILE),'ed8065275eefa5e6e530ce37d1133a3baf1026c5');assert.throws(()=>publicBuildEnvironment(CORE_RELEASE_PROFILE,source,{}));
+  assert.equal(requiredSourceGuard(CORE_RELEASE_PROFILE),'0eeec07e06e5e48b53d41bf3590218a856432b32');assert.throws(()=>publicBuildEnvironment(CORE_RELEASE_PROFILE,source,{}));
   assert.throws(()=>publicBuildEnvironment(profile,null,{}));
   assert.throws(()=>publicBuildEnvironment(profile,{bytes:Buffer.from('wrong')},{}));
   assert.throws(()=>publicBuildEnvironment(BASELINE_PROFILE,source,{}));
@@ -177,17 +177,20 @@ test('browser child process uses an allowlist and pixel proof measures visible c
   assert.deepEqual(clean,{PATH:'/bin',HOME:'/tmp',BASE:'https://staging.weatherx.org'});
   const off={width:2,height:1,data:Buffer.from([0,0,0,255,0,0,0,255])},on={...off,data:Buffer.from([9,0,0,255,8,0,0,255])};assert.equal(pixelDifference(on,off),.5);
 });
-test('only compressed profile enables the build namespace and all other profiles clear inherited activation',()=>{
+test('staging core retains lossless sprites without custom compression; production clears both flags',()=>{
   const body=selection(['icon']),profile=profileFor(digest(body));
   for(const inherited of [undefined,'static-br11-v1','malicious']){
    for(const sprite of [undefined,'','0','1','malicious']){
     const env={ATMOS_STATIC_COMPRESSION_PROFILE:inherited,VITE_SPRITE_WEBP_QUALIFICATION:sprite,KEEP:'yes'};
     assert.equal(publicBuildEnvironment(STATIC_COMPRESSION_PROFILE,null,env).ATMOS_STATIC_COMPRESSION_PROFILE,'static-br11-v1');
     assert.equal(publicBuildEnvironment(STATIC_COMPRESSION_PROFILE,null,env).VITE_SPRITE_WEBP_QUALIFICATION,'1');
+    const core=publicBuildEnvironment(CORE_RELEASE_PROFILE,null,env);
+    assert.equal(core.ATMOS_STATIC_COMPRESSION_PROFILE,'');
+    assert.equal(core.VITE_SPRITE_WEBP_QUALIFICATION,'1');
     for(const [choice,source] of [[BASELINE_PROFILE,null],[CORE_RELEASE_PROFILE,null],[profile,{bytes:body}]]){
       const actual=publicBuildEnvironment(choice,source,env);
       assert.equal(actual.ATMOS_STATIC_COMPRESSION_PROFILE,'');assert.equal(actual.KEEP,'yes');
-      assert.equal(actual.VITE_SPRITE_WEBP_QUALIFICATION,'0');
+      assert.equal(actual.VITE_SPRITE_WEBP_QUALIFICATION,coreReleaseProfile(choice)?'1':'0');
     }
    }
   }
