@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {installCompressionOverlay,selectCompressionAssets,validateCompressionFiles} from './ui-static-compression.mjs';
 import {verifyStaticCompression} from './ui-static-compression-wire.mjs';
 import {staticCompressionProfile} from './ui-staging-models.mjs';
+import {verifyProductionGround} from './ui-production-ground.mjs';
 import { controlShaFor, REPOSITORY, MAX_BYTES, gate, hash, createCandidate, validateCandidate,
   readTree, validateFiles, seal, unseal, restore, eligibleRun } from './ui-candidate.mjs';
 import { packBuild, unpackBuild, eligibleBuild } from './ui-build-transfer.mjs';
@@ -22,7 +23,8 @@ const PROJECTS = { staging: 'weatherx-platform-staging', production: 'atmos-plat
 export const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workflows/ui-release.yml',
   'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh',
   'tools/ui-staging-models.mjs','tools/ui-staging-model-browser.mjs','tools/ui-staging-core-browser.mjs','tools/ui-staging-preflight.mjs',
-  'tools/ui-static-compression.mjs','tools/ui-static-compression-wire.mjs'];
+  'tools/ui-static-compression.mjs','tools/ui-static-compression-wire.mjs',
+  'tools/ui-production-ground.mjs','docs/production-ground-review-20260907.md'];
 const run = (command, args, options = {}) => execFileSync(command, args, { stdio: 'inherit', ...options });
 const git = (args, cwd = ROOT) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore','pipe','pipe'] }).trim();
 export const pipelineDigest = (profile=profileFor(),root=ROOT) => hash(POLICY_FILES.map(p => `${p}\0${hash(readFileSync(resolve(root,p)))}`)
@@ -166,7 +168,7 @@ export async function publicModes(origin) {
 async function preflight(stage) {
   // Artifact authority is checked before even a read-only production CF API call.
   const c=candidate();
-  if(stage==='production') requireProductionProfile(c.profile);
+  if(stage==='production') { requireProductionProfile(c.profile); verifyProductionGround(c.files); }
   else requireStagingApproval(c,process.env);
   gate(process.env); controller();
   await projectSnapshot(stage); await publicModes(ORIGINS[stage]);
