@@ -6,7 +6,7 @@ import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {BASELINE_PROFILE,CORE_RELEASE_PROFILE,CORE_RELEASE_REQUEST,MODELS,GRIDS,variables,displayPaths,digest,canonical,cycleTime,resolveSelectionRequest,profileFor,validateProfile,requireProductionProfile,validateSelection,readSelection,validateCandidateSelection,requireStagingApproval,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt} from '../tools/ui-staging-models.mjs';
 import {browserCandidateReady,discardedResponseBody,layerActivationNeeded,matrixProofPlan,pixelDifference,responseBodyOrFallback,responseCaptureNeeded,validateFetchedObject,validateIndependentPointSource} from '../tools/ui-staging-model-browser.mjs';
-import {catalogAdmissionProof,coreCycle,deckSurfaceProof,hiddenDeckSurfaceProof,protocol as coreBrowserProtocol,releaseRosterProof,validateCoreIndex,validateOutsideDomain} from '../tools/ui-staging-core-browser.mjs';
+import {browserErrorDetail,catalogAdmissionProof,coreCycle,deckSurfaceProof,hiddenDeckSurfaceProof,protocol as coreBrowserProtocol,releaseRosterProof,validateCoreIndex,validateOutsideDomain} from '../tools/ui-staging-core-browser.mjs';
 import {createCandidate,hash,eligibleRun,REPOSITORY,CONTROL_SHA,STAGING_CONTROL_SHA,controlShaFor} from '../tools/ui-candidate.mjs';
 import {eligibleBuild} from '../tools/ui-build-transfer.mjs';
 import {publicBuildEnvironment,requiredSourceGuard,standaloneWeatherFeedVerificationRequired} from '../tools/ui-release.mjs';
@@ -389,4 +389,13 @@ test('core browser uses causal generations and a fixed camera instead of timing 
   assert.match(source,/page\.waitForFunction\(deckSurfaceProof/);
   assert.match(source,/stableScreenshot\(page,deckSurfaceProof,expected,clip,'ON'\)/);assert.match(source,/stableScreenshot\(page,hiddenDeckSurfaceProof,hiddenExpected,clip,'OFF'\)/);
   assert.match(source,/map\.on\('movestart',hold\);map\.on\('move',hold\)/);assert.doesNotMatch(source,/waitForTimeout\(250\)/);
+});
+test('core browser retains the failing script and stack without relaxing the zero-error gate',()=>{
+  const error=new TypeError("Cannot read properties of undefined (reading 'then')");
+  error.stack="TypeError: Cannot read properties of undefined (reading 'then')\n    at switchModel (https://staging.weatherx.org/assets/map-abc.js:3:417)";
+  assert.equal(browserErrorDetail(error),error.stack);
+  assert.equal(browserErrorDetail('plain failure'),'plain failure');
+  const source=readFileSync(new URL('../tools/ui-staging-core-browser.mjs',import.meta.url),'utf8');
+  assert.match(source,/pageErrors\.push\(browserErrorDetail\(error\)\)/);
+  assert.match(source,/assert\.deepEqual\(pageErrors,\[\],'browser emitted rapid-switch errors'\)/);
 });
