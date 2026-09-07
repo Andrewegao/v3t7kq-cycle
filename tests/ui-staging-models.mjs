@@ -146,7 +146,9 @@ test('manual staging defaults to protected approval and only explicit none selec
   assert.match(staging,/model_selection_sha256:[\s\S]*?default: approved/);
   assert.match(staging,/\n  profile:\n[\s\S]*?environment:\s*\n\s*name: ui-staging[\s\S]*?APPROVED_SELECTION: \$\{\{ vars\.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256 \}\}/);
   assert.match(staging,/APPROVED_CORE_PROFILE: \$\{\{ vars\.UI_STAGING_CORE_PROFILE_APPROVED \}\}/);
-  assert.equal(staging.split('needs.profile.outputs.model_selection_sha256').length-1,4);
+  // The selected profile still reaches both build and qualify; controller source
+  // is now the same reviewed immutable revision for baseline and experiments.
+  assert.equal(staging.split('needs.profile.outputs.model_selection_sha256').length-1,2);
   assert.match(staging,/name: ui-staging[\s\S]*?UI_STAGING_MODEL_SELECTION_APPROVED_SHA256: \$\{\{ vars\.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256 \}\}/);
   assert.match(staging,/UI_STAGING_CORE_PROFILE_APPROVED: \$\{\{ vars\.UI_STAGING_CORE_PROFILE_APPROVED \}\}/);
   assert.match(staging,/name: retain failed core browser receipt\s*\n\s*if: \$\{\{ failure\(\) \}\}[\s\S]*?\$\{\{ runner\.temp \}\}\/ui-model-browser\.json/);

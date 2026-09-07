@@ -42,8 +42,8 @@ jobs:
       - name: checkout reviewed release controller (not candidate source)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: Andrewegao/atmos
-          ref: a58eff158b56ef2ba25189d2b859315b00893a14
+          repository: weatherx-hq/atmos
+          ref: b64f31a1388e8104c18a65a445d156070de5087b
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
           path: control
