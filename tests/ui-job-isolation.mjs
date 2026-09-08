@@ -3,7 +3,20 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { target } from '../tools/ui-release.mjs';
 const read=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
-test('candidate execution is on a separate hosted runner with no deployment environment or keys',()=>{
+function assertSourceIsolation(build) {
+  assert.match(build,/^    environment:\n      name: atmos-source-read-ui$/m);
+  assert.match(build,/^    if: \$\{\{ github\.event_name == 'workflow_dispatch' && github\.ref == 'refs\/heads\/main' \}\}$/m);
+  assert.match(build,/^    permissions:\n      contents: read\n    runs-on:/m);
+  assert.doesNotMatch(build,/CLOUDFLARE|UI_CANDIDATE_KEY|PRIVATE_KEY|ATMOS_DEPLOY_KEY|secrets\[|secrets:\s*inherit|toJSON\(secrets\)/);
+  assert.deepEqual([...new Set([...build.matchAll(/secrets\.([A-Za-z0-9_]+)/g)].map(m=>m[1]))],['ATMOS_READONLY_KEY']);
+  assert.equal((build.match(/ssh-key: \$\{\{ secrets\.ATMOS_READONLY_KEY \}\}/g)||[]).length,2);
+  assert.equal((build.match(/persist-credentials: false/g)||[]).length,3);
+  assert.match(build,/SOURCE_KEY_PROVISIONED: \$\{\{ secrets\.ATMOS_READONLY_KEY != '' \}\}/);
+  const check = build.indexOf('test "$SOURCE_KEY_PROVISIONED" = true');
+  assert.ok(check >= 0 && check < build.indexOf('uses: actions/checkout@'),'missing-key refusal precedes every checkout');
+}
+
+test('candidate execution uses only the isolated source environment, never publisher keys',()=>{
   const wf=read('.github/workflows/ui-staging.yml');
   const profile=wf.slice(wf.indexOf('\n  profile:\n'),wf.indexOf('\n  build:\n'));
   assert.match(profile,/environment:\s*\n\s*name: ui-staging/);
@@ -14,7 +27,8 @@ test('candidate execution is on a separate hosted runner with no deployment envi
   assert.ok(wf.includes('\n  build:\n'),'separate candidate build job required');
   const build=wf.slice(wf.indexOf('\n  build:\n'),wf.indexOf('\n  qualify:\n'));
   assert.match(build,/runs-on: ubuntu-latest/);
-  assert.doesNotMatch(build,/environment:|CLOUDFLARE|UI_CANDIDATE_KEY|PRIVATE_KEY|ui-release\.mjs (?:preflight|deploy|retain)/);
+  assertSourceIsolation(build);
+  assert.doesNotMatch(build,/ui-release\.mjs (?:preflight|deploy|retain)/);
   assert.match(build,/UI_BUILD_PUBLIC_KEY/);
   assert.doesNotMatch(build,/UI_STAGING_STATIC_COMPRESSION_APPROVED|APPROVED_STATIC_COMPRESSION/);
   assert.match(build,/ui-release\.mjs build/);
@@ -30,6 +44,24 @@ test('candidate execution is on a separate hosted runner with no deployment envi
   assert.match(qualify,/ui-release\.mjs deploy staging/);
   assert.ok(qualify.indexOf('receive-build')<qualify.indexOf('deploy staging'));
   assert.doesNotMatch(qualify,/actions\/cache|ui-public-shell|npm run build/);
+});
+test('source isolation contract rejects credential and privilege regressions',()=>{
+  const wf=read('.github/workflows/ui-staging.yml');
+  const build=wf.slice(wf.indexOf('\n  build:\n'),wf.indexOf('\n  qualify:\n'));
+  assertSourceIsolation(build);
+  const defects = [
+    build.replace('name: atmos-source-read-ui','name: ui-staging'),
+    build.replace('name: atmos-source-read-ui','name: ui-production'),
+    build.replaceAll('secrets.ATMOS_READONLY_KEY','secrets.ATMOS_DEPLOY_KEY'),
+    build.replace('contents: read','contents: write'),
+    build.replaceAll('persist-credentials: false','persist-credentials: true'),
+    build.replace("github.ref == 'refs/heads/main'","github.ref == 'refs/heads/feature'"),
+    build.replace('test "$SOURCE_KEY_PROVISIONED" = true','true'),
+    build.replace("secrets.ATMOS_READONLY_KEY != ''",'secrets.ATMOS_READONLY_KEY'),
+    build+'\n        env:\n          TOKEN: ${{ secrets.UI_STAGING_PAGES_TOKEN }}\n',
+    build+'\n        env:\n          TOKEN: ${{ secrets[inputs.key] }}\n',
+  ];
+  for (const defect of defects) assert.throws(()=>assertSourceIsolation(defect));
 });
 test('publisher hardcodes staging target and rejects cross-job, account and local invocations',()=>{
   const env={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_JOB:'qualify',

@@ -48,8 +48,11 @@ jobs:
           selection="$(node --input-type=module -e "import {resolveSelectionRequest} from './cycle/tools/ui-staging-models.mjs'; console.log(resolveSelectionRequest(process.env.REQUESTED_SELECTION,process.env.APPROVED_SELECTION,process.env.APPROVED_CORE_PROFILE,process.env.APPROVED_STATIC_COMPRESSION));")"
           printf 'model_selection_sha256=%s\n' "$selection" >> "$GITHUB_OUTPUT"
   build:
-    # No deployment environment, CF token, decryption key or promotion-signing key.
+    # Source-read key only. No publisher token, decryption or promotion-signing key.
     needs: profile
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    environment:
+      name: atmos-source-read-ui
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -69,6 +72,11 @@ jobs:
       # Production workflows never receive this scope.
       WX_GROUND_QUALIFICATION_SCOPE: staging-qualification-only
     steps:
+      - name: require isolated source key without legacy fallback
+        env:
+          SOURCE_KEY_PROVISIONED: ${{ secrets.ATMOS_READONLY_KEY != '' }}
+        run: |
+          test "$SOURCE_KEY_PROVISIONED" = true || { echo 'isolated UI source key is not provisioned'; exit 1; }
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { path: cycle, fetch-depth: 0, persist-credentials: false }
       - name: checkout reviewed release controller
@@ -76,7 +84,7 @@ jobs:
         with:
           repository: weatherx-hq/atmos
           ref: 25c402db5149daa018e349a34a4beeba1f2dca45
-          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          ssh-key: ${{ secrets.ATMOS_READONLY_KEY }}
           persist-credentials: false
           path: control
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -95,7 +103,7 @@ jobs:
           repository: weatherx-hq/atmos
           ref: ${{ inputs.atmos_sha }}
           fetch-depth: 0
-          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          ssh-key: ${{ secrets.ATMOS_READONLY_KEY }}
           persist-credentials: false
           path: atmos
       - name: verify current-master immutable source
