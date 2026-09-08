@@ -252,6 +252,20 @@ jobs:
     # regional recovery must withhold the entire candidate, never publish a subset.
     if: ${{ always() && !cancelled() && needs.core-ecmwf.result == 'success' && needs.core-gfs.result == 'success' && needs.core-hrrr.result == 'success' && needs.core-aifs.result == 'success' && (inputs.recovery_run_id == '' || (needs.regional-icon.result == 'success' && needs.regional-hrdps.result == 'success' && needs.regional-arome-antilles.result == 'success' && needs.regional-hrrr-ak.result == 'success' && needs.regional-nam.result == 'success' && needs.regional-nam-hi.result == 'success' && needs.regional-nam-ak.result == 'success')) }}
     steps:
+      - name: checkout exact public bake diagnostic controller
+        continue-on-error: true
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Andrewegao/v3t7kq-cycle
+          ref: ${{ github.sha }}
+          path: public-diagnostic-controller
+          persist-credentials: false
+      - name: relocate verified public diagnostic outside the private source
+        continue-on-error: true
+        run: |
+          test "$(git -C public-diagnostic-controller rev-parse HEAD)" = "$GITHUB_SHA"
+          test ! -e "$RUNNER_TEMP/public-diagnostic-controller"
+          mv public-diagnostic-controller "$RUNNER_TEMP/public-diagnostic-controller"
       - name: checkout atmos (private, read-only deploy key)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -495,31 +509,25 @@ jobs:
         if: always()
         run: |
           # A bake can cross UTC midnight. Keep bounded checkpoint/resource
-          # receipts from the newest log even when browser output fills its tail.
+          # receipts from the newest log even when browser output fills its end.
           # Do not upload the full internal log or print unrelated earlier lines.
-          log_file=
-          for candidate in ops/logs/bake-*.log; do
-            if [ -f "$candidate" ] && [ ! -L "$candidate" ] &&
-               { [ -z "$log_file" ] || [ "$candidate" -nt "$log_file" ]; }; then
-              log_file="$candidate"
-            fi
-          done
-          if [ -n "$log_file" ] && [ -f "$log_file" ]; then
-            awk '
-              /^\[[0-9T:.+Z-]+\] bake-stage name=[a-zA-Z0-9-]+ event=start$/ { print; next }
-              /^\[[0-9T:.+Z-]+\] bake-stage name=[a-zA-Z0-9-]+ event=end status=[0-9]+ elapsed_seconds=[0-9]+$/ { print; next }
-              /^point-series worker model=(ecmwf|gfs|hrrr|aifs|icon|hrrr-ak|hrdps|nam|nam-hi|nam-ak|arome-antilles) status=(-?[0-9]+|start-failed) seconds=[0-9.]+$/ { print; next }
-              /^\{"status": "installed-unqualified-inputs", "models": \["ecmwf", "gfs", "hrrr", "aifs"\], "runId": "[0-9]+", "sourceSha": "[a-f0-9]+", "requiresEnrichment": true\}$/ { print; next }
-              /^promoted cycle-[0-9]+$/ { print; next }
-              /^\[[0-9T:.+Z-]+\] === cycle complete ===$/ { print; next }
-              /^checkpoint: / { print substr($0, 1, 512); next }
-              /^model-input resource (ecmwf|gfs|hrrr|aifs|icon) peak-rss-kib=[0-9]+ elapsed-seconds=[0-9.]+$/ { print; next }
-              /^\[[0-9T:.+Z-]+\] model-input start (ecmwf|gfs|hrrr|aifs|icon)$/ { print; next }
-              /^\[[0-9T:.+Z-]+\] model-input end (ecmwf|gfs|hrrr|aifs|icon) exit=-?[0-9]+$/ { print; next }
-              /^\[[0-9T:.+Z-]+\] regional-model install (icon|hrrr-ak|hrdps|nam|nam-hi|nam-ak|arome-antilles) status=(fresh|carried|absent)/ { print substr($0, 1, 512) }
-            ' "$log_file" || true
-            tail -n 200 "$log_file" || true
-          fi
+          node "$RUNNER_TEMP/public-diagnostic-controller/tools/bake-public-diagnostic.mjs" scan-latest ||
+            echo "bake diagnostic projection unavailable"
+      - name: retain encrypted bake diagnostic receipt
+        if: ${{ always() }}
+        continue-on-error: true
+        env:
+          ATMOS_SHA: d8cd45d123f60c30c413c14d46f68113e37468b7
+        run: node "$RUNNER_TEMP/public-diagnostic-controller/tools/bake-public-diagnostic.mjs" retain
+      - name: upload encrypted bake diagnostic receipt
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bake-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/weatherx-bake-diagnostic/receipt.json
+          if-no-files-found: ignore
+          retention-days: 3
   # Reporting cannot publish, change admission, or turn an abstention into data.
   model-status:
     needs: [core-ecmwf, core-gfs, core-hrrr, core-aifs, regional-icon, regional-hrdps, regional-arome-antilles, regional-hrrr-ak, regional-nam, regional-nam-hi, regional-nam-ak, bake]

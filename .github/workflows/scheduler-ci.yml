@@ -53,6 +53,7 @@ jobs:
       - name: Late-failure bake diagnostic retention contract
         run: |
           node tests/bake-diagnostics.mjs
+          node --test tests/bake-public-diagnostic.mjs
           node --test tests/collector-source.mjs
           node --test tests/bake-regional-models.mjs
           node --test tests/bake-model-status.mjs

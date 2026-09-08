@@ -3,13 +3,21 @@ import test from 'node:test';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, readFileSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { createHash } from 'node:crypto';
+import { createCipheriv, createHash } from 'node:crypto';
 import { gate, FREEZE_UNTIL, REPOSITORY, hash, createCandidate, validateCandidate, readTree,
   validateFiles, safePath, seal, unseal, restore, eligibleRun } from '../tools/ui-candidate.mjs';
 import { configurationDigest, pipelineDigest, POLICY_FILES } from '../tools/ui-release.mjs';
 import { CORE_RELEASE_PROFILE } from '../tools/ui-staging-models.mjs';
 
 const key='ab'.repeat(32), sha='c'.repeat(40), workflow='d'.repeat(40), now=Date.parse('2026-09-01T12:00Z');
+const uncheckedSeal=candidate=>{
+  const magic=Buffer.from('WXUI1\0'),iv=Buffer.alloc(12,7),cipher=createCipheriv('aes-256-gcm',Buffer.from(key,'hex'),iv);
+  cipher.setAAD(magic);const body=Buffer.concat([cipher.update(JSON.stringify(candidate)),cipher.final()]);
+  return Buffer.concat([magic,iv,cipher.getAuthTag(),body]);
+};
+const fileRecord=(path,value)=>{
+  const raw=Buffer.from(value);return {path,bytes:raw.length,sha256:hash(raw),base64:raw.toString('base64')};
+};
 function fixture({ ground = false } = {}) {
   const root=mkdtempSync(resolve(tmpdir(),'wx-ui-artifact-test-'));
   const content={'index.html':'<title>WeatherX</title><div id="root"></div>',
@@ -78,9 +86,35 @@ test('encryption is randomized and authenticates contents, header, IV and key',(
 });
 test('path policy excludes traversal, source, data, secrets and source maps',()=>{
   for(const path of ['/etc/passwd','../x','a/../x','a//x','a\\x','a\0x','.env','a/.env.production',
-    'data/a.png','data-atmos/a.json','point-series/x','node_modules/x','functions/x.js','src/a.ts','key.pem','assets/a.js.map'])
+    'data/a.png','data-atmos/a.json','point-series/x','node_modules/x','functions/x.js','src/a.ts','key.pem','assets/a.js.map',
+    'assets/.git/config','assets/.GIT/config','assets/functions/handler.js','assets/FUNCTIONS/handler.js',
+    'assets/debug.MAP','assets/view.TS','assets/key.PEM','assets/key.KEY','assets/debug.map.br','assets/source.TS.gz',
+    'assets/source.jsx','assets/source.mts','assets/source.cts','assets/source.mjs','assets/source.cjs','assets/source.vue',
+    'assets/source.svelte','assets/tool.py','assets/tool.pyc','assets/tool.rb','assets/tool.php','assets/tool.go',
+    'assets/tool.rs','assets/tool.java','assets/tool.kt','assets/tool.swift','assets/tool.sh','assets/tool.bash',
+    'assets/tool.zsh','assets/query.sql','assets/key.p12','assets/key.pfx','assets/key.crt','assets/debug.log',
+    'assets/copy.bak','assets/copy.orig','assets/copy.swp','assets/source.tar','assets/source.tgz','assets/source.zip',
+    'assets/.npmrc','assets/.netrc','assets/.pypirc','assets/.gitconfig','.well-known/assetlinks.json',
+    'src/generated/app.js','docs/private-architecture.json','ops/release.json','platform/worker.js','tools/helper.js',
+    'tests/fixture.json','.github/workflows/release.yml','README.md','package.json','package-lock.json','wrangler.toml',
+    'config.yaml','Dockerfile','Makefile','requirements.txt','assets/source.cpp','assets/source.ts.gz.br',
+    'assets/config.ENV.production','package.json.gz.br','Dockerfile.gz'])
     assert.throws(()=>safePath(path),path);
-  for(const path of ['_worker.js','_routes.json','assets/app-1.js','health/release.json'])assert.equal(safePath(path),path);
+  for(const path of ['_worker.js','_routes.json','assets/app-1.js','assets/compiled_worker.js','health/release.json',
+    'assets/compiled_worker.js.br','assets/app.css.gz',`__wx_encoded/${'a'.repeat(64)}.br`])assert.equal(safePath(path),path);
+});
+test('disk collection and encrypted-candidate verification reject source-map references and credential signatures',()=>{
+  const rejected=[
+    ['assets/injected.js','console.log("built");\n//# sourceMappingURL=injected.js.map',/reference source maps/],
+    ['assets/app.css','body{}\n/*# sourceMappingURL=app.css.map */',/reference source maps/],
+    ['assets/config.json',`{"token":"sk_live_${'a'.repeat(24)}"}`,/stripe-live-secret signature/],
+  ];
+  for(const [path,value,message] of rejected){
+    const disk=fixture();mkdirSync(resolve(disk.root,path,'..'),{recursive:true});writeFileSync(resolve(disk.root,path),value);
+    assert.throws(()=>readTree(disk.root),message,`readTree accepted ${path}`);
+    const packed=fixture().c;packed.files.push(fileRecord(path,value));
+    assert.throws(()=>unseal(uncheckedSeal(packed),key),message,`unseal accepted ${path}`);
+  }
 });
 test('disk inventory rejects symlinks and untracked data',()=>{
   const {root}=fixture();symlinkSync(resolve(root,'index.html'),resolve(root,'alias.html'));assert.throws(()=>readTree(root));

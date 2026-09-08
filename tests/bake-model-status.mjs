@@ -125,10 +125,11 @@ test('end-to-end read-only run/attempt report retains no raw diagnostic and prod
 });
 test('report job is read-only, always reports all dependencies and does not change release guards',()=>{
   const workflow=readFileSync(new URL('../.github/workflows/bake.yml',import.meta.url),'utf8');
+  const diagnostic=readFileSync(new URL('../tools/bake-public-diagnostic.mjs',import.meta.url),'utf8');
   const report=workflow.split('\n  model-status:\n')[1];assert.ok(report);
   assert.match(report,/needs: \[core-ecmwf, core-gfs, core-hrrr, core-aifs,/);assert.match(report,/if: \$\{\{ always\(\) \}\}/);
   assert.match(report,/actions: read/);assert.match(report,/contents: read/);
   assert.doesNotMatch(report,/secrets\.|environment:|R2_|CLOUDFLARE|CATALOG_|PAGES|workflow_dispatch/);
   assert.match(workflow,/needs\.core-ecmwf\.result == 'success'/);assert.match(workflow,/cron: '30 2,8,14,20 \* \* \*'/);
-  assert.match(workflow,/installed-unqualified-inputs/);assert.match(workflow,/promoted cycle-/);
+  assert.match(diagnostic,/installed-unqualified-inputs/);assert.match(diagnostic,/promoted cycle-/);
 });
