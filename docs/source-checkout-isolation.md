@@ -22,9 +22,12 @@ candidate encryption, application/release gates, publisher isolation, and the
 production workflow are unchanged. Missing access stops a new release before
 qualification; it cannot change an already served site.
 
-Do not merge/activate this candidate until the separately approved denied-ref
-environment integration check is recorded. The successful source-only probe and
-local mutation tests are not substitutes for that negative policy check. Never
+The owner-approved denied-ref environment test is now recorded in run
+34280392117. GitHub explicitly rejected the temporary non-main branch due to
+environment protection rules; runner ID was zero, steps were empty, and artifact
+count was zero. The temporary remote branch was removed afterward. This proves
+that tested branch was blocked, not that every possible policy configuration
+has been tested. Final PR review remains required before activation. Never
 dispatch the staging release just to test credentials.
 
 This workflow is part of the candidate pipeline digest: after migration a new
