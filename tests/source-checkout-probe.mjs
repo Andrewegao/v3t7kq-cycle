@@ -38,7 +38,7 @@ test('probe has no deployment path, runs no private code, and never falls back t
   assert.doesNotMatch(workflow,/\b(?:schedule|push|pull_request|workflow_call):/);
   assert.doesNotMatch(admit,/environment:|secrets\./);
   assert.match(source,/needs: admit/);
-  assert.match(source,/environment: atmos-source-read-ui/);
+  assert.match(source,/^    environment:\n      name: atmos-source-read-ui$/m);
   assert.equal((workflow.match(/github\.event_name == 'workflow_dispatch' && github\.ref == 'refs\/heads\/main'/g)??[]).length,2);
   assert.deepEqual([...new Set([...workflow.matchAll(/secrets\.([A-Z_]+)/g)].map(m=>m[1]))],['ATMOS_READONLY_KEY']);
   assert.doesNotMatch(workflow,/ATMOS_DEPLOY_KEY|CLOUDFLARE|R2_|upload-artifact|wrangler|npm ci|npm run|bash ops|issues: write|actions: write|id-token: write/);

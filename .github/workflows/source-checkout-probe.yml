@@ -43,7 +43,8 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
     # Must be pre-created: exact-main policy, distinct read-only source key only.
     # Never reuse ui-staging/ui-production: their publisher keys do not belong here.
-    environment: atmos-source-read-ui
+    environment:
+      name: atmos-source-read-ui
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
