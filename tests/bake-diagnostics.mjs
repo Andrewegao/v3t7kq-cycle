@@ -1,66 +1,69 @@
-import { readFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { readFile, mkdtemp, mkdir, writeFile, rm, cp } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const workflow = await readFile(new URL('../.github/workflows/bake.yml', import.meta.url), 'utf8');
-
-// The reviewed producer exposes fixed-name progress, not arbitrary command logs.
-const joinedBake = workflow.split('      - name: bake → gate → publish immutable data release\n')[1]
-  ?.split('      - name:')[0];
+const joinedBake = workflow.split('      - name: bake → gate → publish immutable data release\n')[1]?.split('      - name:')[0];
 assert.ok(joinedBake, 'joined publisher step remains present');
 assert.match(joinedBake, /^          WEATHERX_BAKE_LIVE_PROGRESS: '1'$/m);
 assert.match(joinedBake, /run: bash ops\/bake-weatherx\.sh/);
-assert.doesNotMatch(joinedBake, /\btee\b|tail -f|tail --follow/, 'do not expose raw bake logs for live progress');
+assert.doesNotMatch(joinedBake, /\btee\b|tail -f|tail --follow/, 'reviewed FD9 fixed progress remains the only live output');
 
-// Run the actual final diagnostic step against a long failed-cycle fixture.
-// Early checkpoint/resource evidence must survive the existing 200-line tail,
-// without uploading the full internal bake log or dumping arbitrary old lines.
-const diagnosticBlock = workflow.split('      - name: cycle log\n')[1]?.split('\n  # Reporting')[0];
+const checkout = workflow.split('      - name: checkout exact public bake diagnostic controller\n')[1]?.split('      - name:')[0];
+assert.ok(checkout, 'exact public controller checkout remains present');
+assert.match(checkout, /continue-on-error: true/, 'diagnostic checkout cannot gate the publisher');
+assert.match(checkout, /ref: \$\{\{ github\.sha \}\}/);
+assert.match(checkout, /persist-credentials: false/);
+const relocation = workflow.split('      - name: relocate verified public diagnostic outside the private source\n')[1]?.split('      - name:')[0];
+assert.ok(relocation, 'diagnostic relocation remains present');
+assert.match(relocation, /continue-on-error: true/, 'diagnostic relocation cannot gate the publisher');
+const verifyController='test "$(git -C public-diagnostic-controller rev-parse HEAD)" = "$GITHUB_SHA"';
+const moveController='mv public-diagnostic-controller "$RUNNER_TEMP/public-diagnostic-controller"';
+assert.ok(relocation.indexOf(verifyController)>=0&&relocation.indexOf(verifyController)<relocation.indexOf(moveController),
+  'only the exact current controller can move to the executable path');
+
+const diagnosticBlock = workflow.split('      - name: cycle log\n')[1]?.split('      - name: retain encrypted bake diagnostic receipt')[0];
 assert.ok(diagnosticBlock, 'always-run cycle diagnostic step remains present');
 assert.match(diagnosticBlock, /if: always\(\)/);
+assert.match(diagnosticBlock, /bake-public-diagnostic\.mjs" scan-latest/);
+assert.match(diagnosticBlock, /\|\|\s+echo "bake diagnostic projection unavailable"/,
+  'missing or refused controller emits only one fixed fallback');
+assert.doesNotMatch(diagnosticBlock, /\bawk\b|\btail\b|\bcat\b|substr\(/,
+  'the final public diagnostic is projected by the schema validator only');
+assert.match(workflow, /path: \$\{\{ runner\.temp \}\}\/weatherx-bake-diagnostic\/receipt\.json/);
+assert.match(workflow, /bake-public-diagnostic\.mjs" retain/);
+assert.match(workflow, /continue-on-error: true[\s\S]*?ATMOS_SHA: d8cd45d123f60c30c413c14d46f68113e37468b7/);
+const uploadBlock=workflow.split('      - name: upload encrypted bake diagnostic receipt\n')[1]?.split('\n  # Reporting')[0];
+assert.match(uploadBlock,/continue-on-error: true/,'diagnostic artifact outages never change the bake result');
+
+// Run the actual final workflow shell with the exact controller layout Actions creates.
 const diagnosticScript = diagnosticBlock.split('        run: |\n')[1]
   .split('\n').map(line => line.startsWith('          ') ? line.slice(10) : line).join('\n');
 const fixture = await mkdtemp(join(tmpdir(), 'weatherx-bake-diagnostic-'));
 try {
   await mkdir(join(fixture, 'ops/logs'), { recursive: true });
-  const resource = 'model-input resource ecmwf peak-rss-kib=12345 elapsed-seconds=456.78';
-  const checkpoint = 'checkpoint: uncommitted input producer changes';
-  const privateMarker = 'DO_NOT_DUMP_UNRELATED_EARLY_LOG_CONTENT';
-  const timing = '[2026-09-05T07:00:00Z] bake-stage name=data-verify-obs-permanent-truth-ledger event=end status=0 elapsed_seconds=120';
-  const timingStart = '[2026-09-05T07:00:00Z] bake-stage name=native-ecmwf event=start';
-  const pointTiming = 'point-series worker model=nam-ak status=0 seconds=1.253';
-  const invalidTiming = '[2026-09-05T07:00:00Z] bake-stage name=native-gfs event=end status=0 elapsed_seconds=5 PRIVATE_ARG=hidden';
-  const regional = '[2026-08-30T18:13:00Z] regional-model install arome-antilles status=carried init=2026083012 reason=collector abstained: 2026083018 failed ValueError';
-  const installed = JSON.stringify({status:'installed-unqualified-inputs',models:['ecmwf','gfs','hrrr','aifs'],runId:'123',sourceSha:'a'.repeat(40),requiresEnrichment:true}).replaceAll(':', ': ').replaceAll(',', ', ');
-  const promoted = 'promoted cycle-123';
-  const completed = '[2026-09-05T07:00:00Z] === cycle complete ===';
-  const unsafeInstall = installed.slice(0,-1)+', "unexpected": "PRIVATE_DIAGNOSTIC"}';
-  await writeFile(join(fixture, 'ops/logs/bake-20260830.log'), [
-    privateMarker, resource, checkpoint, regional, timing, timingStart, pointTiming, invalidTiming, installed, promoted, completed, unsafeInstall,
-    '[2026-08-30T18:12:00+00:00] model-input start ecmwf',
-    '[2026-08-30T19:12:00+00:00] model-input end ecmwf exit=0',
-    'model-input resource icon peak-rss-kib=2345 elapsed-seconds=67.8',
-    '[2026-08-30T19:13:00+00:00] model-input start icon',
-    '[2026-08-30T19:40:00+00:00] model-input end icon exit=1',
-    ...Array.from({ length: 240 }, (_, i) => `browser detail ${i}`),
-    'WEATHER LAB GATE FAILED',
-  ].join('\n'));
-  const result = spawnSync('bash', ['-e', '-c', diagnosticScript], { cwd: fixture, encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr);
-  for (const expected of [resource, checkpoint, regional, timing, timingStart, pointTiming, installed, promoted, completed, 'model-input start ecmwf', 'model-input end ecmwf exit=0',
-    'model-input resource icon peak-rss-kib=2345', 'model-input start icon', 'model-input end icon exit=1', 'WEATHER LAB GATE FAILED']) {
-    assert.ok(result.stdout.includes(expected), `retained diagnostic: ${expected}`);
+  const runner = join(fixture, 'runner');
+  const controller = join(runner, 'public-diagnostic-controller');
+  await mkdir(join(controller, 'tools'), {recursive:true});
+  for (const name of ['bake-public-diagnostic.mjs','nam-hi-diagnostic.mjs']) {
+    await cp(new URL(`../tools/${name}`, import.meta.url), join(controller, 'tools', name));
   }
-  assert.ok(!result.stdout.includes(privateMarker), 'do not dump all old internal log content');
-  assert.ok(!result.stdout.includes(invalidTiming), 'structured diagnostics never retain trailing arguments');
-  assert.ok(!result.stdout.includes(unsafeInstall), 'new installation evidence never prints arbitrary properties');
-  await rm(join(fixture, 'ops/logs/bake-20260830.log'));
-  const missing = spawnSync('bash', ['-e', '-c', diagnosticScript], { cwd: fixture, encoding: 'utf8' });
-  assert.equal(missing.status, 0, 'missing log must not hide the original workflow failure');
-} finally {
-  await rm(fixture, { recursive: true, force: true });
-}
+  const secret = 'SYNTHETIC_PRIVATE_SOURCE_SENTINEL';
+  const timing = '[2026-09-05T07:00:00Z] bake-stage name=data-verify-observations event=end status=1 elapsed_seconds=120';
+  const regional = `[2026-09-05T07:01:00Z] regional-model install nam-hi status=absent init=- reason=${secret}`;
+  await writeFile(join(fixture, 'ops/logs/bake-20260905.log'), [timing, regional, `checkpoint: ${secret}`,
+    `[2026-09-05T07:02:00Z] bake-stage name=native-gfs event=end status=0 elapsed_seconds=5 PRIVATE=${secret}`,
+    ...Array.from({ length: 240 }, (_, index) => `private detail ${index} ${secret}`)].join('\n'));
+  const result = spawnSync('bash', ['-e', '-c', diagnosticScript], { cwd: fixture, encoding: 'utf8', env: {...process.env,RUNNER_TEMP:runner} });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.stdout.includes(timing),JSON.stringify(result));
+  assert.ok(result.stdout.includes('[2026-09-05T07:01:00Z] regional-model install nam-hi status=absent init=-'),JSON.stringify(result));
+  assert.ok(!result.stdout.includes(secret));
+  await rm(join(fixture, 'ops/logs/bake-20260905.log'));
+  const missing = spawnSync('bash', ['-e', '-c', diagnosticScript], {cwd:fixture,encoding:'utf8',env:{...process.env,RUNNER_TEMP:runner}});
+  assert.equal(missing.status,0,'missing log must not hide the original workflow failure');
+} finally { await rm(fixture, { recursive: true, force: true }); }
 
-console.log('bake diagnostic retention contracts: ok');
+console.log('bake diagnostic workflow contracts: ok');

@@ -39,6 +39,32 @@ const SHA = /^[a-f0-9]{40}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
 const ID = /^[1-9][0-9]{0,19}$/;
 const MAGIC = Buffer.from('WXUI1\0');
+const FORBIDDEN_DIRECTORIES = new Set([
+  'data', 'data-atmos', 'point-series', 'functions', 'node_modules', '.git', '.hg', '.svn',
+  '.github', '.codex', 'src', 'source', 'docs', 'ops', 'platform', 'tools', 'test', 'tests', 'scripts',
+]);
+const FORBIDDEN_BASENAME = /^(?:readme|dockerfile(?:\.[^/]*)?|makefile|rakefile|procfile|package(?:-lock)?\.json|(?:ts|js)config(?:\.[^/]*)?\.json|(?:vite|vitest|rollup|webpack|babel|eslint|prettier|postcss|tailwind)\.config\.[^/]+|wrangler(?:\.[^/]+)?|requirements(?:-[^/]+)?\.txt|gemfile(?:\.lock)?|pipfile(?:\.lock)?|go\.(?:mod|sum)|composer\.(?:json|lock)|bun\.lockb)$/i;
+const FORBIDDEN_FILE = /(?:^|\/)(?:\.env(?:\..*)?|\.DS_Store|id_(?:rsa|dsa|ecdsa|ed25519)|[^/]+\.(?:map|ts|tsx|jsx|mts|cts|mjs|cjs|vue|svelte|py|pyc|rb|php|go|rs|java|kt|swift|c|cc|cpp|cxx|h|hh|hpp|hxx|cs|fs|fsx|vb|scala|lua|pl|pm|r|dart|ex|exs|erl|hrl|clj|cljs|groovy|gradle|sh|bash|zsh|ps1|bat|cmd|sql|md|mdx|markdown|ya?ml|toml|ini|cfg|conf|jsonc|lock|diff|patch|pem|key|p12|pfx|crt|log|bak|orig|swp|tar|tgz|zip))(?:\.(?:br|gz))*$/i;
+const COMPRESSION_SUFFIXES = /(?:\.(?:br|gz))+$/i;
+const TEXT_FILE = /\.(?:css|csv|geojson|html?|js|json|svg|txt|webmanifest|xml)$/i;
+const FORBIDDEN_CREDENTIAL_SIGNATURES = [
+  ['private-key', /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/],
+  ['aws-access-key', /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/],
+  ['github-token', /\bgh[pousr]_[A-Za-z0-9_]{30,}\b/],
+  ['stripe-live-secret', /\bsk_live_[A-Za-z0-9]{16,}\b/],
+  ['openai-project-key', /\bsk-proj-[A-Za-z0-9_-]{20,}\b/],
+  ['google-api-key', /\bAIza[0-9A-Za-z_-]{35}\b/],
+];
+
+function validatePublicFile(path, bytes) {
+  if (/\.(?:js|css)$/i.test(path) && bytes.includes(Buffer.from('sourceMappingURL='))) {
+    throw new Error(`public UI artifact must not reference source maps: ${path}`);
+  }
+  if (!TEXT_FILE.test(path)) return;
+  const text = bytes.toString('utf8');
+  const leaked = FORBIDDEN_CREDENTIAL_SIGNATURES.find(([, signature]) => signature.test(text));
+  if (leaked) throw new Error(`public UI artifact contains a ${leaked[0]} signature: ${path}`);
+}
 
 export function gate(env, now = Date.now()) {
   assert.equal(env.GITHUB_REPOSITORY, REPOSITORY);
@@ -53,9 +79,13 @@ export function gate(env, now = Date.now()) {
 
 export function safePath(path) {
   assert.ok(typeof path === 'string' && path.length <= 240 && /^[A-Za-z0-9_./@+-]+$/.test(path), 'unsafe artifact path');
-  assert.ok(!path.startsWith('/') && path.split('/').every(p => p && p !== '.' && p !== '..'), 'path traversal');
-  assert.ok(!/^(data|data-atmos|point-series|functions|node_modules|\.git)(\/|$)/.test(path), 'source/data archive prohibited');
-  assert.ok(!/\.(map|ts|tsx|pem|key)$/.test(path) && !path.includes('.env'), 'private source/secret file prohibited');
+  const parts = path.split('/');
+  assert.ok(!path.startsWith('/') && parts.every(p => p && p !== '.' && p !== '..'), 'path traversal');
+  assert.ok(!parts.some(part => part.startsWith('.')), 'hidden artifact path prohibited');
+  assert.ok(!parts.some(part => FORBIDDEN_DIRECTORIES.has(part.toLowerCase())), 'source/data archive prohibited');
+  const basename = parts.at(-1).replace(COMPRESSION_SUFFIXES, '');
+  assert.ok(!FORBIDDEN_BASENAME.test(basename) && !FORBIDDEN_FILE.test(path) && !/\.env/i.test(path),
+    'private source/secret file prohibited');
   return path;
 }
 
@@ -73,6 +103,7 @@ export function readTree(root, profile = PROFILE) {
         assert.ok(total <= MAX_BYTES, `artifact exceeds byte limit (${MAX_BYTES}): ${path}`);
         countFile(path);
         const bytes = readFileSync(full);
+        validatePublicFile(path, bytes);
         files.push({ path, bytes: bytes.length, sha256: hash(bytes), base64: bytes.toString('base64') });
       }
     }
@@ -95,6 +126,7 @@ export function validateFiles(files, profile = PROFILE) {
     const raw = Buffer.from(file.base64, 'base64');
     assert.equal(raw.toString('base64'), file.base64, 'noncanonical file encoding');
     assert.equal(raw.length, file.bytes); assert.equal(hash(raw), file.sha256, 'file hash mismatch');
+    validatePublicFile(file.path, raw);
     for (const parent of file.path.split('/').slice(0,-1).map((_,i,a) => a.slice(0,i+1).join('/'))) {
       assert.ok(!files.some(f => f.path === parent), 'file/directory collision');
     }
