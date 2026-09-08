@@ -1,9 +1,43 @@
-# Source checkout isolation — preparation only
+# Source checkout isolation
 
-This manual probe is the first step toward isolating the UI builder's private
-source credential. It does not change `ui-staging.yml`, scheduled bakes, any
-publisher, or existing secret. It does not build or execute Atmos source, upload
-source artifacts, deploy a site/Worker, or publish weather data.
+The manual probe is the first step toward isolating the UI builder's private
+source credential. It does not build or execute Atmos source, upload source
+artifacts, deploy a site/Worker, or publish weather data. The subsequent builder
+migration below changes only the staging build job, not any publisher, scheduled
+bake, production UI workflow or existing secret.
+
+## Prepared builder migration — not activated
+
+On 2026-09-08, the owner-approved checkout-only probe passed in run
+34278389312 at Cycle 393c4f1. Independent API checks confirmed the distinct key
+is read-only, the environment permits only branch `main` (not tags), contains
+only `ATMOS_READONLY_KEY`, and has no environment variables. The probe enable
+switch was returned to false after the test; no existing consumer was migrated.
+
+The proposed `ui-staging.yml:build` migration selects that key-only environment,
+adds manual/main job admission before runner execution, refuses a missing key
+before any checkout, and uses the new key for exactly two source checkouts.
+Checkout credential persistence remains disabled. Profile resolution, private
+candidate encryption, application/release gates, publisher isolation, and the
+production workflow are unchanged. Missing access stops a new release before
+qualification; it cannot change an already served site.
+
+Do not merge/activate this candidate until the separately approved denied-ref
+environment integration check is recorded. The successful source-only probe and
+local mutation tests are not substitutes for that negative policy check. Never
+dispatch the staging release just to test credentials.
+
+This workflow is part of the candidate pipeline digest: after migration a new
+staging qualification is required before promotion; do not relabel or reuse an
+older candidate under the changed policy.
+
+Limitations: existing repository `ATMOS_DEPLOY_KEY` still serves other consumers.
+This change is one consumer migration, not complete repository-wide credential
+isolation. Protected-main workflow authors remain trusted. Keep the source-only
+environment free of additional secrets and variables; a variable added later
+could change build configuration through environment precedence. No browser,
+runtime API, weather-processing, dependency or rendering code changes here, so
+this change introduces no client-side memory or network work.
 
 ## Before enabling or dispatching
 
@@ -47,7 +81,7 @@ steps, tokens, source execution, or paths to the UI qualification job.
 
 ## Subsequent migration — separate review
 
-After the source-only probe succeeds, change only the two source checkouts in
+After the source-only and denied-ref probes succeed, change only the two source checkouts in
 `ui-staging.yml:build` to the new key-only environment and distinct secret name.
 Do not move the publisher/decryption credentials into the build job. Keep
 repository `ATMOS_DEPLOY_KEY` for all other consumers until individually migrated
