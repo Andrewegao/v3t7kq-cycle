@@ -1,0 +1,85 @@
+name: WeatherX isolated source checkout probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      atmos_sha:
+        description: Exact current Atmos master SHA approved for this source-only check
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weatherx-isolated-source-checkout-probe
+  cancel-in-progress: false
+
+jobs:
+  admit:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      atmos_sha: ${{ steps.admit.outputs.atmos_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - id: admit
+        env:
+          ATMOS_SHA: ${{ inputs.atmos_sha }}
+          SOURCE_CHECKOUT_PROBE_ENABLED: ${{ vars.SOURCE_CHECKOUT_PROBE_ENABLED }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          admitted="$(node tools/source-checkout-probe.mjs)"
+          printf 'atmos_sha=%s\n' "$admitted" >> "$GITHUB_OUTPUT"
+
+  source-checkout:
+    needs: admit
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    # Must be pre-created: exact-main policy, distinct read-only source key only.
+    # Never reuse ui-staging/ui-production: their publisher keys do not belong here.
+    environment: atmos-source-read-ui
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: require explicitly provisioned replacement key without fallback
+        env:
+          SOURCE_KEY_PROVISIONED: ${{ secrets.ATMOS_READONLY_KEY != '' }}
+        run: |
+          test "$SOURCE_KEY_PROVISIONED" = true || { echo 'source checkout probe not provisioned'; exit 1; }
+      - name: checkout fixed UI controller metadata only
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: 25c402db5149daa018e349a34a4beeba1f2dca45
+          ssh-key: ${{ secrets.ATMOS_READONLY_KEY }}
+          persist-credentials: false
+          fetch-depth: 1
+          sparse-checkout: /README.md
+          sparse-checkout-cone-mode: false
+          path: control
+      - name: verify fixed controller identity without executing its code
+        run: test "$(git -C control rev-parse HEAD)" = 25c402db5149daa018e349a34a4beeba1f2dca45
+      - name: checkout current master metadata only
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: master
+          ssh-key: ${{ secrets.ATMOS_READONLY_KEY }}
+          persist-credentials: false
+          fetch-depth: 1
+          sparse-checkout: /README.md
+          sparse-checkout-cone-mode: false
+          path: candidate
+      - name: verify owner-selected current master and publish only fixed status
+        env:
+          ATMOS_SHA: ${{ needs.admit.outputs.atmos_sha }}
+        run: |
+          [[ "$ATMOS_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git -C candidate rev-parse HEAD)" = "$ATMOS_SHA"
+          echo 'source checkout probe passed; no build, deployment or data publication performed'
