@@ -1,0 +1,146 @@
+# GMGSI satellite frame library: hourly tail + month backfill. Needs secrets ATMOS_DEPLOY_KEY,
+# R2_SATELLITE_ACCESS_KEY_ID, R2_SATELLITE_SECRET_ACCESS_KEY. Plan: atmos docs/SATELLITE_ARCHIVE.md.
+name: satellite-archive
+
+on:
+  schedule:
+    - cron: '25 * * * *'
+  workflow_dispatch:
+    inputs:
+      from:
+        description: 'Backfill start date (YYYY-MM-DD, UTC, inclusive)'
+        type: string
+      to:
+        description: 'Backfill end date (YYYY-MM-DD, UTC, inclusive)'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: satellite-archive-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RCLONE_VERSION: v1.75.0
+
+jobs:
+  hourly:
+    if: ${{ github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: weatherx-hq/atmos
+          ref: master
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          fetch-depth: 1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with: { python-version: '3.12' }
+      - name: venv + python deps
+        run: |
+          python -m venv data/.venv
+          data/.venv/bin/pip install -r data/requirements.txt
+      - name: install rclone ${{ env.RCLONE_VERSION }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
+            --retry-delay 5 --connect-timeout 20 \
+            "https://github.com/rclone/rclone/releases/download/${RCLONE_VERSION}/rclone-${RCLONE_VERSION}-linux-amd64.zip" \
+            -o rclone.zip
+          unzip -q rclone.zip
+          sudo install "rclone-${RCLONE_VERSION}-linux-amd64/rclone" /usr/local/bin/rclone
+          rclone version
+      - name: bake latest 3 hours (vis, ir, wv)
+        run: data/.venv/bin/python data/bake_satellite_archive.py --latest 3
+      - name: publish
+        env:
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_SATELLITE_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_SATELLITE_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          SAT_R2_REMOTE: weatherx:weatherx-satellite-archive
+        run: bash ops/satellite/publish.sh
+
+  backfill-plan:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      months: ${{ steps.plan.outputs.months }}
+    steps:
+      - name: split from/to into one matrix entry per month
+        id: plan
+        run: |
+          set -euo pipefail
+          [ -n "${{ inputs.from }}" ] || { echo "from is required" >&2; exit 2; }
+          [ -n "${{ inputs.to }}" ] || { echo "to is required" >&2; exit 2; }
+          MONTHS="$(python3 -c "
+          import json, sys
+          from datetime import date
+          start = date.fromisoformat('${{ inputs.from }}')
+          end = date.fromisoformat('${{ inputs.to }}')
+          if start > end:
+              sys.exit('from must be <= to')
+          out = []
+          y, m = start.year, start.month
+          while (y, m) <= (end.year, end.month):
+              month_start = date(y, m, 1)
+              month_end = date(y + (m == 12), (m % 12) + 1, 1)
+              from datetime import timedelta
+              month_end -= timedelta(days=1)
+              out.append({
+                  'from': max(month_start, start).isoformat(),
+                  'to': min(month_end, end).isoformat(),
+              })
+              y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+          print(json.dumps(out))
+          ")"
+          echo "months=$MONTHS" >> "$GITHUB_OUTPUT"
+
+  backfill:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: backfill-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    continue-on-error: true
+    strategy:
+      max-parallel: 4
+      matrix:
+        month: ${{ fromJson(needs.backfill-plan.outputs.months) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: weatherx-hq/atmos
+          ref: master
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          fetch-depth: 1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with: { python-version: '3.12' }
+      - name: venv + python deps
+        run: |
+          python -m venv data/.venv
+          data/.venv/bin/pip install -r data/requirements.txt
+      - name: install rclone ${{ env.RCLONE_VERSION }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
+            --retry-delay 5 --connect-timeout 20 \
+            "https://github.com/rclone/rclone/releases/download/${RCLONE_VERSION}/rclone-${RCLONE_VERSION}-linux-amd64.zip" \
+            -o rclone.zip
+          unzip -q rclone.zip
+          sudo install "rclone-${RCLONE_VERSION}-linux-amd64/rclone" /usr/local/bin/rclone
+          rclone version
+      - name: bake ${{ matrix.month.from }} to ${{ matrix.month.to }} (vis, ir, wv)
+        run: data/.venv/bin/python data/bake_satellite_archive.py --range "${{ matrix.month.from }}" "${{ matrix.month.to }}"
+      - name: publish
+        env:
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_SATELLITE_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_SATELLITE_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          SAT_R2_REMOTE: weatherx:weatherx-satellite-archive
+        run: bash ops/satellite/publish.sh
