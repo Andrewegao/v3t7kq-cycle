@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { generateKeyPairSync, createHash } from 'node:crypto';
 import { packBuild, unpackBuild, eligibleBuild } from '../tools/ui-build-transfer.mjs';
-import { hash, PROFILE, CONTROL_SHA, REPOSITORY, unseal, seal, validateFiles } from '../tools/ui-candidate.mjs';
+import { hash, PROFILE, CONTROL_SHA, REPOSITORY, unseal, seal, validateFiles, validateCandidate, controlShaFor } from '../tools/ui-candidate.mjs';
+import {ACCOUNT_CORE_PROFILE,requireProductionProfile} from '../tools/ui-staging-models.mjs';
 const keys=generateKeyPairSync('rsa',{modulusLength:3072,
   publicKeyEncoding:{type:'spki',format:'pem'},privateKeyEncoding:{type:'pkcs8',format:'pem'}});
 const context={sourceSha:'a'.repeat(40),workflowSha:'b'.repeat(40),runId:'123',attempt:'1',pipelineDigest:'c'.repeat(64)};
-function candidate() {
+function candidate(profile=PROFILE,buildProfile=undefined) {
   const contents={'index.html':'WeatherX','_worker.js':'private compiled functions','_routes.json':'{"version":1,"include":["/api/*"],"exclude":[]}'};
   const digest=createHash('sha256');
   const files=Object.entries(contents).sort(([a],[b])=>a<b?-1:1).map(([path,text])=>{
@@ -14,9 +15,10 @@ function candidate() {
     return {path,bytes:bytes.length,sha256:hash(bytes),base64:bytes.toString('base64')};
   });
   const receipt={gitSha:context.sourceSha,workflowRunId:context.runId,releaseId:`git-${context.sourceSha.slice(0,12)}-run-123`,
+    ...(buildProfile===undefined?{}:{buildProfile}),
     shellSha256:digest.digest('hex'),shellFileCount:3,shellBytes:files.reduce((n,f)=>n+f.bytes,0),indexSha256:hash('WeatherX')};
   const bytes=Buffer.from(JSON.stringify(receipt));files.push({path:'health/release.json',bytes:bytes.length,sha256:hash(bytes),base64:bytes.toString('base64')});
-  return {schemaVersion:1,controlSha:CONTROL_SHA,profile:PROFILE,...context,files,artifactDigest:validateFiles(files).digest};
+  return {schemaVersion:1,controlSha:controlShaFor(profile),profile,...context,files,artifactDigest:validateFiles(files,profile).digest};
 }
 const records=()=>({run:{repository:{full_name:REPOSITORY},path:'.github/workflows/ui-staging.yml',event:'workflow_dispatch',
   head_branch:'main',id:123,run_attempt:1,head_sha:context.workflowSha},
@@ -29,6 +31,19 @@ test('public-key envelope preserves exact unqualified build without exposing pri
   assert.ok(!bytes.equals(packBuild(c,keys.publicKey)));
   assert.throws(()=>unseal(bytes,'ab'.repeat(32)),'unqualified transport cannot enter production promotion');
   assert.throws(()=>seal(c,'ab'.repeat(32)),'unqualified payload cannot be sealed as qualified');
+});
+test('account profile and build receipt survive encrypted transfer without promotion or relabeling',()=>{
+  const profile=ACCOUNT_CORE_PROFILE,buildProfile={product:'lab',platformAccount:'1',platformDataAuth:'public'};
+  const c=candidate(profile,buildProfile),bytes=packBuild(c,keys.publicKey),decoded=unpackBuild(bytes,keys.privateKey);
+  assert.deepEqual(decoded,c);validateCandidate(decoded);
+  assert.throws(()=>requireProductionProfile(decoded.profile));
+  assert.throws(()=>validateCandidate({...decoded,profile:PROFILE,controlSha:CONTROL_SHA}),/relabeled/);
+  for(const bad of [undefined,{...buildProfile,platformAccount:'0'},{...buildProfile,platformDataAuth:'enforce'},
+    {...buildProfile,product:'road'},{...buildProfile,extra:true}])
+    assert.throws(()=>packBuild(candidate(profile,bad),keys.publicKey),/receipt differs/);
+  const r=records();
+  eligibleBuild(decoded,r.run,r.jobs,r.artifacts,{...context,profile});
+  assert.throws(()=>eligibleBuild(decoded,r.run,r.jobs,r.artifacts,{...context,profile:PROFILE}),/differs from requested profile/);
 });
 test('build ciphertext, header, length, recipient and fake qualification fail closed',()=>{
   const c=candidate(), bytes=packBuild(c,keys.publicKey);
