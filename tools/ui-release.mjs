@@ -137,8 +137,9 @@ async function projectSnapshot(stage) {
   assert.equal(payload.success, true);
   return validateProjectSnapshot(stage, payload.result, process.env.UI_PAGES_CONFIG_SHA256);
 }
-export function validatePublicModes(origin, health, data, profile=profileFor()) {
+export function validatePublicModes(origin, health, data, profile=profileFor(),phase='candidate') {
   assert.ok(Object.values(ORIGINS).includes(origin));
+  assert.ok(['preflight','candidate','rollback'].includes(phase), 'unknown UI verification phase');
   validateProfile(profile);
   if(origin===ORIGINS.production)requireProductionProfile(profile);
   // Staging has public/cacheable weather reads; production's reviewed platform
@@ -151,6 +152,9 @@ export function validatePublicModes(origin, health, data, profile=profileFor()) 
     assert.equal(data.authMode, 'public');
     assert.equal(data.dataSource, 'shared');
     assert.equal(data.sharedReadConfigured, true);
+    // An exact rollback must remain verifiable when candidate-only catalog
+    // qualification disappears. The shared/public read contract remains mandatory.
+    if (phase === 'rollback') return null;
     assert.equal(data.catalog?.status, 'available');
     assert.match(data.catalog?.catalogId ?? '', SAFE_CATALOG_ID, 'staging catalog identity is invalid');
     for (const model of CORE_CATALOG_MODELS) {
@@ -173,12 +177,12 @@ export function standaloneWeatherFeedVerificationRequired(stage, phase) {
 function verifyWeatherFeeds(stage) {
   run('node', [resolve(CONTROL,'ops/release/verify-weather-feeds.mjs'), ORIGINS[stage]]);
 }
-export async function publicModes(origin,profile=profileFor()) {
+export async function publicModes(origin,profile=profileFor(),phase='candidate') {
   assert.ok(Object.values(ORIGINS).includes(origin));
   const health = await json(`${origin}/api/platform/health`);
   const data = await json(`${origin}/api/platform/data-health`);
-  const catalogId = validatePublicModes(origin, health, data,profile);
-  if (origin === ORIGINS.staging) {
+  const catalogId = validatePublicModes(origin, health, data,profile,phase);
+  if (origin === ORIGINS.staging && phase !== 'rollback') {
     for (const model of CORE_CATALOG_MODELS) {
       const core = await get(`${origin}/data/_catalog/${catalogId}/${model}/index.json`);
       assert.match(core.headers.get('content-type')??'',/^application\/json(?:;|$)/i,
@@ -199,7 +203,8 @@ export async function publicModes(origin,profile=profileFor()) {
       }
     }
   } else {
-    // Production retains its reviewed mutable-alias probe and separate Worker contract.
+    // Production and an exact staging rollback retain the reviewed mutable-alias
+    // probe. Candidate/preflight staging alone requires immutable catalog proof.
     const core = await get(`${origin}/data/gfs/index.json`);
     assert.ok(core.headers.get('x-weatherx-catalog'), 'core model must use catalog authority');
   }
@@ -212,7 +217,7 @@ async function preflight(stage) {
   if(stage==='production') { requireProductionProfile(c.profile); verifyProductionGround(c.files); }
   else requireStagingApproval(c,process.env);
   gate(process.env); controller();
-  await projectSnapshot(stage); await publicModes(ORIGINS[stage],c.profile);
+  await projectSnapshot(stage); await publicModes(ORIGINS[stage],c.profile,'preflight');
   if (standaloneWeatherFeedVerificationRequired(stage, 'preflight')) verifyWeatherFeeds(stage);
 }
 export function requiredSourceGuard(profile) {
@@ -351,7 +356,7 @@ async function exactStaging(c) {
   assert.equal(hash(bytes), c.files.find(f=>f.path==='health/release.json').sha256, 'staging no longer serves this candidate');
   const index = await get(`${ORIGINS.staging}/?candidate=${c.artifactDigest}`);
   assert.equal(hash(index.bytes), c.files.find(f=>f.path==='index.html').sha256);
-  await publicModes(ORIGINS.staging,c.profile);
+  await publicModes(ORIGINS.staging,c.profile,'candidate');
 }
 async function deploy(stage) {
   await preflight(stage);
@@ -395,7 +400,7 @@ async function verify(stage) {
   const phase=process.env.RELEASE_GUARD_PHASE==='rollback'?'rollback':'candidate';
   if(stage==='production')requireProductionProfile(c.profile);
   else if(phase!=='rollback')requireStagingApproval(c,process.env);
-  controller(); await projectSnapshot(stage); await publicModes(ORIGINS[stage],c.profile);
+  controller(); await projectSnapshot(stage); await publicModes(ORIGINS[stage],c.profile,phase);
   if (stage === 'production' && phase !== 'rollback') await exactStaging(candidate());
   run('bash',[resolve(CONTROL,'ops/release/verify-platform-production.sh'),ORIGINS[stage]]);
   if (phase !== 'rollback') {
