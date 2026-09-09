@@ -74,16 +74,25 @@ export function configurationDigest(project) {
     source: project.source ?? null, domains: project.domains, config: project.deployment_configs?.production })));
 }
 export const STAGING_ALLOWED_ENV_VARS = Object.freeze({ FORECAST_FALLBACK_ACCESS: 'non-commercial' });
-export const STAGING_AI_SECRET_NAMES = Object.freeze(['AI_API_KEY', 'AI_ACCESS_CODE', 'AI_ACCESS_CODE_CENTRAL']);
+export const STAGING_AI_AUTH_POLICY = 'staging-account-v1';
+export const STAGING_AI_SERVICE = Object.freeze({
+  service: 'weatherx-platform-edge-staging',
+  environment: 'production',
+  entrypoint: 'StagingAiAdmission',
+});
+const STAGING_AI_ENV_NAMES = Object.freeze(['AI_API_KEY', 'AI_AUTH_POLICY']);
 export function stagingEnvVarAllowed(name, entry, context = 'production') {
   if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return false;
-  // Staging's main deployment can run the shared relay, never its preview context.
-  // API snapshots redact secret values: this proves type/shape, not key validity or
-  // provider spending limits. Dedicated credentials and a live probe remain required.
-  if (STAGING_AI_SECRET_NAMES.includes(name)) return context === 'production'
+  // The account-backed relay is available only in the staging project's main context.
+  // API snapshots redact the provider secret value: this proves type/shape, not key
+  // validity or the approved user/global counters. Live policy probes remain required.
+  if (name === 'AI_API_KEY') return context === 'production'
     && entry.type === 'secret_text'
     && Object.keys(entry).every(key => key === 'type' || key === 'value')
     && (!Object.hasOwn(entry, 'value') || typeof entry.value === 'string');
+  if (name === 'AI_AUTH_POLICY') return context === 'production'
+    && entry.type === 'plain_text' && entry.value === STAGING_AI_AUTH_POLICY
+    && Object.keys(entry).every(key => key === 'type' || key === 'value');
   if (!Object.hasOwn(STAGING_ALLOWED_ENV_VARS, name)) return false;
   // A plain_text entry must carry exactly the approved value; a secret_text entry (set through
   // `wrangler pages secret put`) carries no value in the API payload and is accepted by name only.
@@ -91,10 +100,20 @@ export function stagingEnvVarAllowed(name, entry, context = 'production') {
   if (entry.type === 'secret_text') return Object.keys(entry).every(key => key === 'type' || key === 'value');
   return false;
 }
+function stagingServiceBindingAllowed(name, entry, context) {
+  if (context !== 'production' || name !== 'WX_AI_ADMISSION'
+    || entry === null || typeof entry !== 'object' || Array.isArray(entry)) return false;
+  return entry.service === STAGING_AI_SERVICE.service
+    && entry.environment === STAGING_AI_SERVICE.environment
+    && entry.entrypoint === STAGING_AI_SERVICE.entrypoint
+    && Object.keys(entry).length === 3
+    && Object.keys(STAGING_AI_SERVICE).every(key => Object.hasOwn(entry, key));
+}
 export function validateStagingPagesBindings(project) {
   // Pages "production" means the main branch of THIS staging project, not WeatherX
-  // production. Neither context may give the public shell writable backend access.
-  // Only the fallback and the explicitly reviewed encrypted AI credential set are
+  // production. Neither context may give the shell direct database/storage access;
+  // the sole capability below may validate a session and consume bounded AI quota.
+  // Only the fallback and the explicitly reviewed account-backed AI profile are
   // allowed. A secret mislabeled plain_text must never become an exception.
   // Runtime-only API metadata is allowlisted; future nonempty resource maps fail closed.
   const runtimeFields = new Set(['compatibility_date', 'compatibility_flags', 'always_use_latest_compatibility_date',
@@ -110,16 +129,23 @@ export function validateStagingPagesBindings(project) {
       if (runtimeFields.has(field)) continue;
       if (field === 'env_vars' && record(value)) {
         for (const [name, entry] of Object.entries(value)) assert.ok(stagingEnvVarAllowed(name, entry, context), `staging Pages ${context}.env_vars.${name} bindings/resources must be empty unless explicitly approved by the staging environment policy`);
-        // Require both access tiers: the legacy relay otherwise treats the lone
-        // workspace code as central. Empty sets retain the existing AI-off path.
-        const aiCount = STAGING_AI_SECRET_NAMES.filter(name => Object.hasOwn(value, name)).length;
-        assert.ok(aiCount === 0 || aiCount === STAGING_AI_SECRET_NAMES.length,
-          `staging Pages ${context}.env_vars requires a complete encrypted AI credential set`);
+        continue;
+      }
+      if (field === 'services' && record(value)) {
+        for (const [name, entry] of Object.entries(value)) assert.ok(stagingServiceBindingAllowed(name, entry, context),
+          `staging Pages ${context}.services.${name} is not the approved staging AI admission binding; other bindings/resources must be empty`);
         continue;
       }
       assert.ok(value === null || value === undefined || (record(value) && Object.keys(value).length === 0),
         `staging Pages ${context}.${field} bindings/resources must be empty`);
     }
+    const envVars = record(config.env_vars) ? config.env_vars : {};
+    const services = record(config.services) ? config.services : {};
+    const aiEnvCount = STAGING_AI_ENV_NAMES.filter(name => Object.hasOwn(envVars, name)).length;
+    const aiServiceCount = Object.hasOwn(services, 'WX_AI_ADMISSION') ? 1 : 0;
+    assert.ok((aiEnvCount === 0 && aiServiceCount === 0)
+      || (context === 'production' && aiEnvCount === STAGING_AI_ENV_NAMES.length && aiServiceCount === 1),
+    `staging Pages ${context} requires the complete staging account AI profile or none of it`);
   }
 }
 export function describeConfiguration(project) {
