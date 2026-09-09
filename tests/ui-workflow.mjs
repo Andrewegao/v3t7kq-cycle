@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -19,7 +19,7 @@ test('staging private checkouts use the current Atmos repository owner',()=>{
   assert.equal((staging.match(/repository: weatherx-hq\/atmos/g)||[]).length,3);
   assert.doesNotMatch(staging,/repository: Andrewegao\/atmos/);
 });
-const {installPagesWorker}=await import('../tools/ui-release.mjs');
+const {installPagesWorker,platformVerificationEnvironment}=await import('../tools/ui-release.mjs');
 test('staging rejects stale public point data before expensive build work while production remains isolated',()=>{
   const preflight='node cycle/tools/ui-staging-preflight.mjs';
   assert.match(staging,new RegExp(preflight.replaceAll('.','\\.')));
@@ -84,6 +84,41 @@ test('guard is pinned, both candidate verification paths are inside automatic ro
   assert.doesNotMatch(source,/if \(standaloneWeatherFeedVerificationRequired\(stage, phase\)\)/);
   assert.match(source,/weather-lab-only-runtime\.mjs/);assert.match(source,/layer-switch-tint\.mjs/);
   assert.match(source,/cwd:uploadCwd/);assert.doesNotMatch(source,/cwd:dirname\(dist\)/);
+});
+test('only a staging candidate receives the bounded degraded-cache convergence window',()=>{
+  const base={RELEASE_GUARD_VERIFY_REQUIRED_SUCCESSES:'3',RELEASE_GUARD_VERIFY_SLEEP_SECONDS:'15'};
+  const staging=platformVerificationEnvironment('staging','candidate',base);
+  assert.notEqual(staging,base);
+  assert.deepEqual(staging,{...base,RELEASE_GUARD_VERIFY_ATTEMPTS:'50'});
+  // 600 s ordinary outer refresh + 60 s cache-only recovery + two more 15 s
+  // observations for the required three consecutive successes fit before attempt 50.
+  assert.ok((Number(staging.RELEASE_GUARD_VERIFY_ATTEMPTS)-1)*Number(staging.RELEASE_GUARD_VERIFY_SLEEP_SECONDS)>=690);
+  for(const [stage,phase] of [['production','candidate'],['production','rollback'],['staging','rollback']]){
+    assert.equal(platformVerificationEnvironment(stage,phase,base),base);
+    assert.equal(base.RELEASE_GUARD_VERIFY_ATTEMPTS,undefined);
+  }
+  const verify=source.slice(source.indexOf('async function verify(stage)'),source.indexOf('function retain()'));
+  assert.match(verify,/stage==='staging'&&phase==='candidate'[\s\S]*?run\('\/usr\/bin\/timeout',[\s\S]*?'--signal=KILL','15m','bash'[\s\S]*?platformVerificationEnvironment\(stage,phase\)[\s\S]*?else run\('bash'/);
+  assert.ok(verify.indexOf('verify-platform-production.sh')<verify.indexOf("if (phase !== 'rollback')"));
+  assert.doesNotMatch(verify,/catch\s*\(/); // exhaustion still throws into the rollback guard
+});
+const gnuTimeout=['/usr/bin/timeout','/opt/homebrew/bin/gtimeout','/usr/local/bin/gtimeout'].find(path=>
+  existsSync(path)&&spawnSync(path,['--version'],{encoding:'utf8'}).stdout?.startsWith('timeout (GNU coreutils)'));
+test('the candidate wallclock propagates failures and kills the whole verifier process group',
+  {skip:process.platform!=='linux'&&!gnuTimeout},()=>{
+  assert.ok(gnuTimeout,'GNU timeout is required on the Linux release runner');
+  const ordinary=spawnSync(gnuTimeout,['5s','bash','-c','exit 23'],{stdio:'pipe'});
+  assert.equal(ordinary.status,23,'an ordinary verifier failure must remain visible');
+  const temp=mkdtempSync(resolve(tmpdir(),'wx-ui-timeout-')),script=resolve(temp,'hold.sh');
+  const survived=resolve(temp,'survived');
+  try{
+    writeFileSync(script,"#!/usr/bin/env bash\nset -euo pipefail\ntrap '' TERM\nout=$1\n( trap '' TERM; sleep 3; printf survived > \"$out\" ) &\nwait $!\n",{mode:0o700});
+    const started=Date.now();
+    const result=spawnSync(gnuTimeout,['--signal=KILL','0.1s','bash',script,survived],{stdio:'pipe'});
+    assert.notEqual(result.status,0,'a real wallclock deadline must fail closed');
+    assert.ok(Date.now()-started<2000,'descendant kept the verifier process group alive');
+    assert.equal(existsSync(survived),false);
+  }finally{rmSync(temp,{recursive:true,force:true});}
 });
 test('only successful staging retains encrypted output; production has no build step',()=>{
   const order=['npm test --prefix atmos/app','bash ops/weather-lab-ready.sh','ui-release.mjs build\n',

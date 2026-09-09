@@ -31,6 +31,24 @@ Worker deployment, data publication, credential, environment change, or workflow
 - Current point preflight passed four probes across two locations.
 - Production workflow and controller pins have no diff; `git diff --check` passed.
 
+## Bounded staging cache convergence
+
+The staging candidate alone receives 50 attempts at the existing 15-second spacing,
+still requiring three consecutive healthy observations. This covers an inherited
+600-second hazards cache lifetime, the 60-second cache-only recovery window, and two
+additional successful observations. It does not relax freshness or turn exhaustion
+into success: failure still reaches the automatic rollback guard. A staging-only
+15-minute GNU timeout terminates the entire read-only verifier process group, so
+network deadlines cannot consume the 45-minute job and prevent rollback. Production
+and rollback retain their original commands and attempt policy. The regression was
+red before the change. The Linux process-group test must pass in CI; it is not claimed
+as exercised on this macOS host, which has no GNU timeout.
+
+The owner approved qualified merges and a staging-only deployment on 2026-09-09.
+The accompanying Atmos hazards repair is PR #196; private-boundary draft #195 is
+excluded. The release fuse may be reset only after recording the diagnosed causes
+and fresh candidate validation; this document does not bypass that guard.
+
 ## Release status
 
 This is a reviewed local change, not a merged or deployed controller. Existing staging

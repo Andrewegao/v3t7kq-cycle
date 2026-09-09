@@ -349,6 +349,18 @@ function environment(c) {
     RELEASE_GUARD_VERIFY_REQUIRED_SUCCESSES:'3',RELEASE_GUARD_VERIFY_SLEEP_SECONDS:'15',
     UI_CONTROL_ROOT:CONTROL,UI_CYCLE_ROOT:ROOT,WEATHERX_EXPECTED_RELEASE_ID:r.releaseId};
 }
+export function platformVerificationEnvironment(stage,phase,env=process.env) {
+  assert.ok(Object.hasOwn(ORIGINS,stage),'unknown UI target');
+  assert.ok(['candidate','rollback'].includes(phase),'unknown UI verification phase');
+  // The staging candidate can legitimately inherit a just-refreshed 600-second hazards document;
+  // its one-shot cache-only recovery is not eligible until another 60 seconds later. Keep the
+  // ordinary three-success/15-second soak intact, but give only this candidate transaction enough
+  // bounded observations to see that convergence. Production and exact rollback retain the pinned
+  // verifier's existing attempt policy byte-for-byte through the original environment object.
+  return stage==='staging'&&phase==='candidate'
+    ? {...env,RELEASE_GUARD_VERIFY_ATTEMPTS:'50'}
+    : env;
+}
 async function exactStaging(c) {
   // Conservative: promotion refuses if staging has since changed; never promote an unreviewed
   // latest build just because a previous build passed. Restage if this receipt is no longer live.
@@ -402,7 +414,14 @@ async function verify(stage) {
   else if(phase!=='rollback')requireStagingApproval(c,process.env);
   controller(); await projectSnapshot(stage); await publicModes(ORIGINS[stage],c.profile,phase);
   if (stage === 'production' && phase !== 'rollback') await exactStaging(candidate());
-  run('bash',[resolve(CONTROL,'ops/release/verify-platform-production.sh'),ORIGINS[stage]]);
+  const verifier=resolve(CONTROL,'ops/release/verify-platform-production.sh');
+  if(stage==='staging'&&phase==='candidate') {
+    // GNU timeout's default (non-foreground) mode owns a separate process group. A direct KILL
+    // therefore bounds the read-only verifier and every curl/node descendant even when a shell
+    // exits on TERM before timeout can escalate the rest of its group.
+    run('/usr/bin/timeout',['--signal=KILL','15m','bash',verifier,ORIGINS[stage]],
+      {env:platformVerificationEnvironment(stage,phase)});
+  } else run('bash',[verifier,ORIGINS[stage]]);
   if (phase !== 'rollback') {
     // Real built-site checks inside the rollback transaction, not after declaring success.
     if(stage==='staging'&&staticCompressionProfile(c.profile)) {
