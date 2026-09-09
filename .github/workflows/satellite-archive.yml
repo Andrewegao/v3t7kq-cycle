@@ -54,6 +54,8 @@ jobs:
           rclone version
       - name: bake latest 3 hours (vis, ir, wv)
         run: data/.venv/bin/python data/bake_satellite_archive.py --latest 3
+      - name: bake latest 3 hours of US radar (10-minute)
+        run: data/.venv/bin/python data/bake_radar_archive.py --latest 3
       - name: publish
         env:
           RCLONE_CONFIG_WEATHERX_TYPE: s3
@@ -135,6 +137,8 @@ jobs:
           rclone version
       - name: bake ${{ matrix.month.from }} to ${{ matrix.month.to }} (vis, ir, wv)
         run: data/.venv/bin/python data/bake_satellite_archive.py --range "${{ matrix.month.from }}" "${{ matrix.month.to }}"
+      - name: bake ${{ matrix.month.from }} to ${{ matrix.month.to }} US radar
+        run: data/.venv/bin/python data/bake_radar_archive.py --range "${{ matrix.month.from }}" "${{ matrix.month.to }}"
       - name: publish
         env:
           RCLONE_CONFIG_WEATHERX_TYPE: s3
