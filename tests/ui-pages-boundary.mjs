@@ -29,7 +29,7 @@ test('the real shared production D1 binding blocks staging even if its configura
   p.deployment_configs.preview.d1_databases = {};
   assert.equal(validate(p), p, 'the exact observed metadata is valid only after both shared D1 maps are empty');
 });
-test('both Pages production and preview reject every backend/secret binding family', () => {
+test('both Pages production and preview reject unapproved backend/secret binding families', () => {
   // Pages API maps are not Wrangler arrays; services and queue_producers are the
   // actual API keys used by Wrangler's Pages download/toEnvironment implementation.
   const fields = ['d1_databases', 'kv_namespaces', 'r2_buckets', 'services', 'service_bindings', 'queue_producers', 'queue_consumers',
@@ -42,7 +42,7 @@ test('both Pages production and preview reject every backend/secret binding fami
     }
   }
 });
-test('neither secret_text nor secrets disguised as plain_text enter the staging shell', () => {
+test('unapproved credentials are rejected whether secret_text or disguised as plain_text', () => {
   for (const context of ['production', 'preview']) for (const value of [{ type: 'secret_text' }, { type: 'secret_text', value: 'sensitive-fixture' },
     { type: 'plain_text', value: 'sensitive-fixture' }, { value: 'sensitive-fixture' }]) {
     const p = project(); p.deployment_configs[context].env_vars = { CREDENTIAL: value };
@@ -80,7 +80,7 @@ test('existing exact name/branch/runtime/canonical deployment/config-digest chec
   assert.throws(() => validateProjectSnapshot('unknown', project(), '0'.repeat(64)));
   const p = project(); assert.throws(() => validateProjectSnapshot('staging', p, '0'.repeat(64)), /configuration changed/);
 });
-test('staging admits exactly the noncommercial forecast fallback variable and nothing else', () => {
+test('staging fallback retains its exact noncommercial policy and refuses similarly named keys', () => {
   for (const context of ['production', 'preview']) {
     const p = project(); p.deployment_configs[context].env_vars = { FORECAST_FALLBACK_ACCESS: { type: 'plain_text', value: 'non-commercial' } };
     assert.equal(validate(p), p, context + ' plain_text non-commercial');
@@ -95,4 +95,40 @@ test('staging admits exactly the noncommercial forecast fallback variable and no
   }
   assert.equal(stagingEnvVarAllowed('FORECAST_FALLBACK_ACCESS', { type: 'plain_text', value: 'non-commercial' }), true);
   assert.equal(stagingEnvVarAllowed('CLOUDFLARE_API_TOKEN', { type: 'secret_text' }), false);
+});
+
+const aiSecrets = () => Object.fromEntries(['AI_API_KEY', 'AI_ACCESS_CODE', 'AI_ACCESS_CODE_CENTRAL'].map(name => [name, { type: 'secret_text' }]));
+test('staging AI admits only a complete encrypted relay credential set in its production context', () => {
+  const p = project(); p.deployment_configs.production.env_vars = aiSecrets();
+  const before = structuredClone(p);
+  assert.equal(validate(p), p);
+  assert.deepEqual(p, before);
+  p.deployment_configs.production.env_vars.FORECAST_FALLBACK_ACCESS = { type: 'plain_text', value: 'non-commercial' };
+  assert.equal(validate(p), p);
+  assert.throws(() => validateProjectSnapshot('staging', p, configurationDigest(project())), /configuration changed/);
+  for (const name of Object.keys(aiSecrets())) {
+    assert.equal(stagingEnvVarAllowed(name, { type: 'secret_text' }, 'production'), true);
+    assert.equal(stagingEnvVarAllowed(name, { type: 'secret_text' }, 'preview'), false);
+    for (const entry of [{ type: 'plain_text', value: 'sensitive-fixture' }, { type: 'secret_text', value: {} },
+      { type: 'secret_text', extra: 'sensitive-fixture' }, null, [], { value: 'sensitive-fixture' }]) {
+      const bad = project(); bad.deployment_configs.production.env_vars = { ...aiSecrets(), [name]: entry };
+      assert.throws(() => validate(bad), error => /env_vars/.test(error.message) && !error.message.includes('sensitive-fixture'));
+    }
+  }
+});
+test('partial AI configuration, preview credentials, model redirects and extra resources remain refused', () => {
+  const names = Object.keys(aiSecrets());
+  for (let mask = 1; mask < 7; mask++) {
+    const p = project(); p.deployment_configs.production.env_vars = Object.fromEntries(names.filter((_, i) => mask & (1 << i)).map(name => [name, { type: 'secret_text' }]));
+    assert.throws(() => validate(p), /complete encrypted AI credential set/);
+  }
+  const preview = project(); preview.deployment_configs.preview.env_vars = aiSecrets();
+  assert.throws(() => validate(preview), /preview.env_vars/);
+  for (const name of ['AI_MODEL', 'AI_API_URL', 'AI_EXTRA_KEY', 'CLOUDFLARE_API_TOKEN', 'STRIPE_SECRET_KEY']) {
+    const p = project(); p.deployment_configs.production.env_vars = { ...aiSecrets(), [name]: { type: 'secret_text' } };
+    assert.throws(() => validate(p), /env_vars/);
+  }
+  const p = project(); p.deployment_configs.production.env_vars = aiSecrets();
+  p.deployment_configs.production.services = { FUSION: { service: 'production-worker' } };
+  assert.throws(() => validate(p), /services/);
 });

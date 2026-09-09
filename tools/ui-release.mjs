@@ -74,8 +74,17 @@ export function configurationDigest(project) {
     source: project.source ?? null, domains: project.domains, config: project.deployment_configs?.production })));
 }
 export const STAGING_ALLOWED_ENV_VARS = Object.freeze({ FORECAST_FALLBACK_ACCESS: 'non-commercial' });
-export function stagingEnvVarAllowed(name, entry) {
-  if (!Object.hasOwn(STAGING_ALLOWED_ENV_VARS, name) || entry === null || typeof entry !== 'object' || Array.isArray(entry)) return false;
+export const STAGING_AI_SECRET_NAMES = Object.freeze(['AI_API_KEY', 'AI_ACCESS_CODE', 'AI_ACCESS_CODE_CENTRAL']);
+export function stagingEnvVarAllowed(name, entry, context = 'production') {
+  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return false;
+  // Staging's main deployment can run the shared relay, never its preview context.
+  // API snapshots redact secret values: this proves type/shape, not key validity or
+  // provider spending limits. Dedicated credentials and a live probe remain required.
+  if (STAGING_AI_SECRET_NAMES.includes(name)) return context === 'production'
+    && entry.type === 'secret_text'
+    && Object.keys(entry).every(key => key === 'type' || key === 'value')
+    && (!Object.hasOwn(entry, 'value') || typeof entry.value === 'string');
+  if (!Object.hasOwn(STAGING_ALLOWED_ENV_VARS, name)) return false;
   // A plain_text entry must carry exactly the approved value; a secret_text entry (set through
   // `wrangler pages secret put`) carries no value in the API payload and is accepted by name only.
   if (entry.type === 'plain_text') return entry.value === STAGING_ALLOWED_ENV_VARS[name] && Object.keys(entry).every(key => key === 'type' || key === 'value');
@@ -85,7 +94,8 @@ export function stagingEnvVarAllowed(name, entry) {
 export function validateStagingPagesBindings(project) {
   // Pages "production" means the main branch of THIS staging project, not WeatherX
   // production. Neither context may give the public shell writable backend access.
-  // All server-side env_vars are refused too: a secret can be mislabeled plain_text.
+  // Only the fallback and the explicitly reviewed encrypted AI credential set are
+  // allowed. A secret mislabeled plain_text must never become an exception.
   // Runtime-only API metadata is allowlisted; future nonempty resource maps fail closed.
   const runtimeFields = new Set(['compatibility_date', 'compatibility_flags', 'always_use_latest_compatibility_date',
     'usage_model', 'placement', 'limits', 'fail_open', 'build_image_major_version', 'wrangler_config_hash']);
@@ -99,9 +109,12 @@ export function validateStagingPagesBindings(project) {
     for (const [field, value] of Object.entries(config)) {
       if (runtimeFields.has(field)) continue;
       if (field === 'env_vars' && record(value)) {
-        // WeatherX is noncommercial and the Open-Meteo point fallback is intended on staging.
-        // Exactly one named, non-sensitive variable may exist; nothing else may be bound.
-        for (const [name, entry] of Object.entries(value)) assert.ok(stagingEnvVarAllowed(name, entry), `staging Pages ${context}.env_vars.${name} bindings/resources must be empty (only FORECAST_FALLBACK_ACCESS=non-commercial is approved)`);
+        for (const [name, entry] of Object.entries(value)) assert.ok(stagingEnvVarAllowed(name, entry, context), `staging Pages ${context}.env_vars.${name} bindings/resources must be empty unless explicitly approved by the staging environment policy`);
+        // Require both access tiers: the legacy relay otherwise treats the lone
+        // workspace code as central. Empty sets retain the existing AI-off path.
+        const aiCount = STAGING_AI_SECRET_NAMES.filter(name => Object.hasOwn(value, name)).length;
+        assert.ok(aiCount === 0 || aiCount === STAGING_AI_SECRET_NAMES.length,
+          `staging Pages ${context}.env_vars requires a complete encrypted AI credential set`);
         continue;
       }
       assert.ok(value === null || value === undefined || (record(value) && Object.keys(value).length === 0),
