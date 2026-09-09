@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { configurationDigest, stagingEnvVarAllowed, validateProjectSnapshot } from '../tools/ui-release.mjs';
+import { configurationDigest, STAGING_AI_AUTH_POLICY, STAGING_AI_SERVICE,
+  stagingEnvVarAllowed, validateProjectSnapshot } from '../tools/ui-release.mjs';
 
 function project(stage = 'staging') {
   return { name: stage === 'staging' ? 'weatherx-platform-staging' : 'atmos-platform', production_branch: 'main', source: null,
@@ -97,38 +98,69 @@ test('staging fallback retains its exact noncommercial policy and refuses simila
   assert.equal(stagingEnvVarAllowed('CLOUDFLARE_API_TOKEN', { type: 'secret_text' }), false);
 });
 
-const aiSecrets = () => Object.fromEntries(['AI_API_KEY', 'AI_ACCESS_CODE', 'AI_ACCESS_CODE_CENTRAL'].map(name => [name, { type: 'secret_text' }]));
-test('staging AI admits only a complete encrypted relay credential set in its production context', () => {
-  const p = project(); p.deployment_configs.production.env_vars = aiSecrets();
+const aiProfile = () => ({
+  env_vars: {
+    AI_API_KEY: { type: 'secret_text' },
+    AI_AUTH_POLICY: { type: 'plain_text', value: STAGING_AI_AUTH_POLICY },
+  },
+  services: { WX_AI_ADMISSION: { ...STAGING_AI_SERVICE } },
+});
+test('staging AI admits only the complete account-policy profile in its production context', () => {
+  const p = project(); Object.assign(p.deployment_configs.production, aiProfile());
   const before = structuredClone(p);
   assert.equal(validate(p), p);
   assert.deepEqual(p, before);
   p.deployment_configs.production.env_vars.FORECAST_FALLBACK_ACCESS = { type: 'plain_text', value: 'non-commercial' };
   assert.equal(validate(p), p);
   assert.throws(() => validateProjectSnapshot('staging', p, configurationDigest(project())), /configuration changed/);
-  for (const name of Object.keys(aiSecrets())) {
-    assert.equal(stagingEnvVarAllowed(name, { type: 'secret_text' }, 'production'), true);
-    assert.equal(stagingEnvVarAllowed(name, { type: 'secret_text' }, 'preview'), false);
+  assert.equal(stagingEnvVarAllowed('AI_API_KEY', { type: 'secret_text' }, 'production'), true);
+  assert.equal(stagingEnvVarAllowed('AI_AUTH_POLICY', { type: 'plain_text', value: STAGING_AI_AUTH_POLICY }, 'production'), true);
+  for (const name of ['AI_API_KEY', 'AI_AUTH_POLICY']) {
+    assert.equal(stagingEnvVarAllowed(name, p.deployment_configs.production.env_vars[name], 'preview'), false);
     for (const entry of [{ type: 'plain_text', value: 'sensitive-fixture' }, { type: 'secret_text', value: {} },
       { type: 'secret_text', extra: 'sensitive-fixture' }, null, [], { value: 'sensitive-fixture' }]) {
-      const bad = project(); bad.deployment_configs.production.env_vars = { ...aiSecrets(), [name]: entry };
+      const bad = project(); Object.assign(bad.deployment_configs.production, aiProfile());
+      bad.deployment_configs.production.env_vars[name] = entry;
       assert.throws(() => validate(bad), error => /env_vars/.test(error.message) && !error.message.includes('sensitive-fixture'));
     }
   }
 });
-test('partial AI configuration, preview credentials, model redirects and extra resources remain refused', () => {
-  const names = Object.keys(aiSecrets());
+test('partial AI configuration, preview credentials, legacy codes and extra resources remain refused', () => {
   for (let mask = 1; mask < 7; mask++) {
-    const p = project(); p.deployment_configs.production.env_vars = Object.fromEntries(names.filter((_, i) => mask & (1 << i)).map(name => [name, { type: 'secret_text' }]));
-    assert.throws(() => validate(p), /complete encrypted AI credential set/);
+    const p = project(), profile = aiProfile();
+    if (!(mask & 1)) delete profile.env_vars.AI_API_KEY;
+    if (!(mask & 2)) delete profile.env_vars.AI_AUTH_POLICY;
+    if (!(mask & 4)) delete profile.services.WX_AI_ADMISSION;
+    Object.assign(p.deployment_configs.production, profile);
+    assert.throws(() => validate(p), /complete staging account AI profile/);
   }
-  const preview = project(); preview.deployment_configs.preview.env_vars = aiSecrets();
-  assert.throws(() => validate(preview), /preview.env_vars/);
-  for (const name of ['AI_MODEL', 'AI_API_URL', 'AI_EXTRA_KEY', 'CLOUDFLARE_API_TOKEN', 'STRIPE_SECRET_KEY']) {
-    const p = project(); p.deployment_configs.production.env_vars = { ...aiSecrets(), [name]: { type: 'secret_text' } };
+  const preview = project(); Object.assign(preview.deployment_configs.preview, aiProfile());
+  assert.throws(() => validate(preview), /preview/);
+  for (const name of ['AI_ACCESS_CODE', 'AI_ACCESS_CODE_CENTRAL', 'AI_MODEL', 'AI_API_URL', 'AI_EXTRA_KEY', 'CLOUDFLARE_API_TOKEN', 'STRIPE_SECRET_KEY']) {
+    const p = project(); Object.assign(p.deployment_configs.production, aiProfile());
+    p.deployment_configs.production.env_vars[name] = { type: 'secret_text' };
     assert.throws(() => validate(p), /env_vars/);
   }
-  const p = project(); p.deployment_configs.production.env_vars = aiSecrets();
-  p.deployment_configs.production.services = { FUSION: { service: 'production-worker' } };
-  assert.throws(() => validate(p), /services/);
+  for (const mutate of [
+    p => p.deployment_configs.production.services.WX_AI_ADMISSION.service = 'weatherx-platform-edge-production',
+    p => p.deployment_configs.production.services.WX_AI_ADMISSION.environment = 'staging',
+    p => p.deployment_configs.production.services.WX_AI_ADMISSION.entrypoint = 'OtherEntrypoint',
+    p => { delete p.deployment_configs.production.services.WX_AI_ADMISSION.service; },
+    p => { delete p.deployment_configs.production.services.WX_AI_ADMISSION.environment; },
+    p => { delete p.deployment_configs.production.services.WX_AI_ADMISSION.entrypoint; },
+    p => { p.deployment_configs.production.services.WX_AI_ADMISSION = null; },
+    p => { p.deployment_configs.production.services.WX_AI_ADMISSION = []; },
+    p => p.deployment_configs.production.services.WX_AI_ADMISSION.extra = 'sensitive-fixture',
+    p => { p.deployment_configs.production.services = { OTHER: { ...STAGING_AI_SERVICE } }; },
+    p => { p.deployment_configs.production.service_bindings = p.deployment_configs.production.services; delete p.deployment_configs.production.services; },
+  ]) {
+    const p = project(); Object.assign(p.deployment_configs.production, aiProfile()); mutate(p);
+    assert.throws(() => validate(p), error => /service|profile|binding/.test(error.message) && !error.message.includes('sensitive-fixture'));
+  }
+});
+test('production validation remains independent from the staging AI profile policy', () => {
+  const p = project('production'); Object.assign(p.deployment_configs.production, aiProfile());
+  p.deployment_configs.production.env_vars.AI_ACCESS_CODE = { type: 'secret_text' };
+  p.deployment_configs.production.services.EXTRA = { service: 'production-worker', environment: 'production' };
+  assert.equal(validate(p, 'production'), p);
 });
