@@ -84,7 +84,9 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          ref: 25c402db5149daa018e349a34a4beeba1f2dca45
+          # Baseline artifacts keep the production-compatible controller; staging-only
+          # profiles use a separately reviewed literal pin. Never accept an input SHA here.
+          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && '25c402db5149daa018e349a34a4beeba1f2dca45' || 'edaf42ed5832eb1cacd5637a6c87bc1aa17c6891' }}
           ssh-key: ${{ secrets.ATMOS_READONLY_KEY }}
           persist-credentials: false
           path: control
@@ -169,7 +171,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          ref: 25c402db5149daa018e349a34a4beeba1f2dca45
+          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && '25c402db5149daa018e349a34a4beeba1f2dca45' || 'edaf42ed5832eb1cacd5637a6c87bc1aa17c6891' }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
           path: control

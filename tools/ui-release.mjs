@@ -8,6 +8,8 @@ import {installCompressionOverlay,selectCompressionAssets,validateCompressionFil
 import {verifyStaticCompression} from './ui-static-compression-wire.mjs';
 import {staticCompressionProfile} from './ui-staging-models.mjs';
 import {verifyProductionGround} from './ui-production-ground.mjs';
+import {accountQualificationRequired,runAccountQualification,readAccountProof,accountQualificationBinding,
+  requireAccountQualificationBinding} from './ui-staging-account-proof.mjs';
 import { controlShaFor, REPOSITORY, MAX_BYTES, gate, hash, createCandidate, validateCandidate,
   readTree, validateFiles, seal, unseal, restore, eligibleRun } from './ui-candidate.mjs';
 import { packBuild, unpackBuild, eligibleBuild } from './ui-build-transfer.mjs';
@@ -23,6 +25,7 @@ const PROJECTS = { staging: 'weatherx-platform-staging', production: 'atmos-plat
 export const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workflows/ui-release.yml',
   'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh',
   'tools/ui-staging-models.mjs','tools/ui-staging-model-browser.mjs','tools/ui-staging-core-browser.mjs','tools/ui-staging-preflight.mjs',
+  'tools/ui-staging-account-proof.mjs',
   'tools/ui-static-compression.mjs','tools/ui-static-compression-wire.mjs',
   'tools/ui-production-ground.mjs','docs/production-ground-review-20260907.md'];
 const run = (command, args, options = {}) => execFileSync(command, args, { stdio: 'inherit', ...options });
@@ -178,6 +181,7 @@ async function preflight(stage) {
 }
 export function requiredSourceGuard(profile) {
   validateProfile(profile);
+  if (profile.account) return controlShaFor(profile);
   if (staticCompressionProfile(profile)) return '0eeec07e06e5e48b53d41bf3590218a856432b32';
   if (coreReleaseProfile(profile)) return '0eeec07e06e5e48b53d41bf3590218a856432b32';
   return profile.stagingOnly ? STAGING_RELEASE_GUARD_SHA : null;
@@ -200,6 +204,7 @@ export function publicBuildEnvironment(profile,selection,env=process.env) {
     ATMOS_STATIC_COMPRESSION_PROFILE:staticCompressionProfile(profile)?'static-br11-v1':'',
     VITE_SPRITE_WEBP_QUALIFICATION:core?'1':'0',
     ATMOS_STAGING_EXPERIMENT_RELEASE:profile.stagingOnly?'1':'0',VITE_PRODUCT:'lab',VITE_APP:'lab',VITE_PLATFORM_ACCOUNT:profile.account?'1':'0',
+    ATMOS_STAGING_ACCOUNT_PROFILE:profile.account?'staging-account-v1':'',
     ...(profile.account?{VITE_PLATFORM_DATA_AUTH:'public'}:{}),
     ATMOS_STAGING_RELEASE_ROSTER:core?'1':'0',VITE_MODEL_EXPANSION_QUALIFICATION:profile.stagingOnly?'1':'0',VITE_MODEL_LOCAL_BASE:'',
     VITE_STAGING_MODEL_ADMISSION:selected?'1':'0',VITE_STAGING_MODEL_SELECTION_SHA256:profile.modelSelectionSha256??''};
@@ -334,6 +339,11 @@ async function deploy(stage) {
       artifactDigest:c.artifactDigest,qualifiedAt:new Date().toISOString(),fullTests:true,weatherLab:true,builtRuntime:true,probes:3};
     if(modelProof&&selectionProfile(c.profile))Object.assign(c.qualification,{modelSelectionSha256:c.profile.modelSelectionSha256,modelBrowserReceiptSha256:hash(modelProof),modelBrowserModels:selection.entries.length});
     if(modelProof&&coreReleaseProfile(c.profile))Object.assign(c.qualification,{coreProfile:c.profile.releaseRosterCore,coreBrowserReceiptSha256:hash(modelProof),coreBrowserModels:2});
+    if(c.profile.account){
+      const accountProof=await readAccountProof({runnerTemp:process.env.RUNNER_TEMP,controlRoot:CONTROL,
+        sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId});
+      Object.assign(c.qualification,accountQualificationBinding(c,accountProof));
+    }
     if(staticCompressionProfile(c.profile)){
       const proof=readFileSync(resolve(process.env.RUNNER_TEMP,'ui-compression-wire.json'));
       const manifest=validateCompressionFiles(c.files,true),wire=JSON.parse(proof);
@@ -371,14 +381,18 @@ async function verify(stage) {
     if(stage==='staging'&&coreReleaseProfile(c.profile))run('node',[resolve(ROOT,'tools/ui-staging-core-browser.mjs')],{cwd:ROOT,env:browserEnvironment(process.env,{
       BASE:ORIGINS.staging,UI_CONTROL_ROOT:CONTROL,WEATHERX_EXPECTED_RELEASE_ID:validateCandidate(c).releaseId,UI_EXPECTED_SOURCE_SHA:c.sourceSha,
       UI_MODEL_BROWSER_OUTPUT:resolve(process.env.RUNNER_TEMP,'ui-model-browser.json')})});
+    if(accountQualificationRequired(stage,phase,c.profile))await runAccountQualification({candidate:c,
+      releaseId:validateCandidate(c).releaseId,runnerTemp:process.env.RUNNER_TEMP,controlRoot:CONTROL});
   }
 }
-function retain() {
+async function retain() {
   const c=candidate(), out=resolve(process.env.RUNNER_TEMP,'ui-sealed');
-  let compressionProof;
+  let compressionProof,accountProof;
   const selection=requireStagingApproval(c,process.env);
   if(selectionProfile(c.profile)){assert.equal(c.qualification?.modelSelectionSha256,c.profile.modelSelectionSha256);assert.equal(c.qualification?.modelBrowserModels,selection.entries.length);assert.match(c.qualification?.modelBrowserReceiptSha256??'',/^[a-f0-9]{64}$/);}
   if(coreReleaseProfile(c.profile)){assert.equal(c.qualification?.coreProfile,c.profile.releaseRosterCore);assert.equal(c.qualification?.coreBrowserModels,2);assert.match(c.qualification?.coreBrowserReceiptSha256??'',/^[a-f0-9]{64}$/);}
+  if(c.profile.account){accountProof=await readAccountProof({runnerTemp:process.env.RUNNER_TEMP,controlRoot:CONTROL,
+    sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId,requireFresh:false});requireAccountQualificationBinding(c,accountProof);}
   if(staticCompressionProfile(c.profile)){
     const manifest=validateCompressionFiles(c.files,true);
     assert.equal(c.qualification?.staticCompressionSealSha256,manifest.sealSha256);
@@ -392,6 +406,7 @@ function retain() {
   // Controller-produced public paths/hashes/cache observations only; no bodies, server code,
   // request headers or credentials. Preserve the exact proof bound into the encrypted candidate.
   if(compressionProof)writeFileSync(resolve(out,'compression-wire.json'),compressionProof,{mode:0o600});
+  if(accountProof)writeFileSync(resolve(out,'account-qualification.json'),accountProof.bytes,{flag:'wx',mode:0o600});
   const summary={sourceSha:c.sourceSha,stagingRunId:c.runId,attempt:c.attempt,artifactDigest:c.artifactDigest,
     deploymentId:c.qualification.deploymentId,qualifiedAt:c.qualification.qualifiedAt};
   save(resolve(out,'summary.json'),summary);
@@ -440,7 +455,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     else if(command==='build') await build();
     else if(command==='deploy') await deploy(stage);
     else if(command==='verify') await verify(stage);
-    else if(command==='retain') retain();
+    else if(command==='retain') await retain();
     else if(command==='download') await download();
     else throw Error('unknown UI release command');
   } catch(error) { console.error(`UI release refused: ${error.message}`); process.exitCode=1; }
