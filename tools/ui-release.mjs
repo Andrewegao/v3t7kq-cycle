@@ -22,6 +22,8 @@ const STAGING_RELEASE_GUARD_SHA = '164a469189da2c8303c997d4020b3ae20da84cd7';
 const ACCOUNT = 'a89f9a1af485021fbc60a68b163c7c6e';
 const ORIGINS = { staging: 'https://staging.weatherx.org', production: 'https://weatherx.org' };
 const PROJECTS = { staging: 'weatherx-platform-staging', production: 'atmos-platform' };
+const SAFE_CATALOG_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
+const CORE_CATALOG_MODELS = ['ecmwf','gfs'];
 export const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workflows/ui-release.yml',
   'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh',
   'tools/ui-staging-models.mjs','tools/ui-staging-model-browser.mjs','tools/ui-staging-core-browser.mjs','tools/ui-staging-preflight.mjs',
@@ -145,7 +147,18 @@ export function validatePublicModes(origin, health, data, profile=profileFor()) 
   assert.equal(health.authMode, origin === ORIGINS.staging ? 'public' : 'observe');
   assert.equal(health.billingMode, profile.account ? 'enabled' : 'disabled');
   assert.equal(data.ok, true); assert.equal(data.catalogMode, 'serve');
-  if (origin === ORIGINS.staging) assert.equal(data.authMode, 'public');
+  if (origin === ORIGINS.staging) {
+    assert.equal(data.authMode, 'public');
+    assert.equal(data.dataSource, 'shared');
+    assert.equal(data.sharedReadConfigured, true);
+    assert.equal(data.catalog?.status, 'available');
+    assert.match(data.catalog?.catalogId ?? '', SAFE_CATALOG_ID, 'staging catalog identity is invalid');
+    for (const model of CORE_CATALOG_MODELS) {
+      assert.equal(data.catalog?.nativeViewport?.[model], true, `${model} native viewport is not qualified`);
+    }
+    return data.catalog.catalogId;
+  }
+  return null;
 }
 export function standaloneWeatherFeedVerificationRequired(stage, phase) {
   assert.ok(Object.hasOwn(ORIGINS, stage), 'unknown UI target');
@@ -164,9 +177,32 @@ export async function publicModes(origin,profile=profileFor()) {
   assert.ok(Object.values(ORIGINS).includes(origin));
   const health = await json(`${origin}/api/platform/health`);
   const data = await json(`${origin}/api/platform/data-health`);
-  validatePublicModes(origin, health, data,profile);
-  const core = await get(`${origin}/data/gfs/index.json`);
-  assert.ok(core.headers.get('x-weatherx-catalog'), 'core model must use catalog authority');
+  const catalogId = validatePublicModes(origin, health, data,profile);
+  if (origin === ORIGINS.staging) {
+    for (const model of CORE_CATALOG_MODELS) {
+      const core = await get(`${origin}/data/_catalog/${catalogId}/${model}/index.json`);
+      assert.match(core.headers.get('content-type')??'',/^application\/json(?:;|$)/i,
+        `${model} immutable index must be JSON`);
+      assert.equal(core.headers.get('x-weatherx-catalog'),catalogId,`${model} immutable catalog identity changed`);
+      assert.equal(core.headers.get('x-weatherx-data-source'),'shared',`${model} immutable index did not use the shared source`);
+      assert.equal(core.headers.get('x-weatherx-release'),null,`${model} immutable index used whole-release authority`);
+      const index=JSON.parse(core.bytes.toString('utf8'));
+      assert.equal(index?.schemaVersion,1,`${model} immutable index schema changed`);
+      assert.equal(index?.model,model,`${model} immutable index model changed`);
+      assert.ok(Array.isArray(index?.runs)&&index.runs.length>0,`${model} immutable index has no runs`);
+      for(const run of index.runs){
+        const time=typeof run?.init_time==='string'?Date.parse(run.init_time):Number.NaN;
+        assert.ok(Number.isFinite(time),`${model} immutable index has an invalid run time`);
+        const iso=new Date(time).toISOString();
+        assert.equal(run.path,`runs/${iso.slice(0,4)}${iso.slice(5,7)}${iso.slice(8,10)}${iso.slice(11,13)}/`,
+          `${model} immutable index run identity changed`);
+      }
+    }
+  } else {
+    // Production retains its reviewed mutable-alias probe and separate Worker contract.
+    const core = await get(`${origin}/data/gfs/index.json`);
+    assert.ok(core.headers.get('x-weatherx-catalog'), 'core model must use catalog authority');
+  }
   const ancillary = await get(`${origin}/data/ledger/index.json`);
   assert.ok(ancillary.headers.get('x-weatherx-release'), 'ledger must use whole-release authority');
 }

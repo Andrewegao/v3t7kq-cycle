@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { validatePublicModes } from '../tools/ui-release.mjs';
 test('staging requires public/cacheable weather with billing off', () => {
-  const data = { ok: true, authMode: 'public', catalogMode: 'serve' };
+  const data = { ok: true, authMode: 'public', catalogMode: 'serve', dataSource: 'shared', sharedReadConfigured: true,
+    catalog: { status: 'available', catalogId: '284-catalog', nativeViewport: { ecmwf: true, gfs: true } } };
   validatePublicModes('https://staging.weatherx.org', { ok: true, authMode: 'public', billingMode: 'disabled' }, data);
   for (const authMode of ['observe', 'enforce']) assert.throws(() =>
     validatePublicModes('https://staging.weatherx.org', { ok: true, authMode, billingMode: 'disabled' }, data));
