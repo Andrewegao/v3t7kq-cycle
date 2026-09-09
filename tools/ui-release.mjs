@@ -22,6 +22,8 @@ const STAGING_RELEASE_GUARD_SHA = '164a469189da2c8303c997d4020b3ae20da84cd7';
 const ACCOUNT = 'a89f9a1af485021fbc60a68b163c7c6e';
 const ORIGINS = { staging: 'https://staging.weatherx.org', production: 'https://weatherx.org' };
 const PROJECTS = { staging: 'weatherx-platform-staging', production: 'atmos-platform' };
+const SAFE_CATALOG_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
+const CORE_CATALOG_MODELS = ['ecmwf','gfs'];
 export const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workflows/ui-release.yml',
   'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh',
   'tools/ui-staging-models.mjs','tools/ui-staging-model-browser.mjs','tools/ui-staging-core-browser.mjs','tools/ui-staging-preflight.mjs',
@@ -135,8 +137,9 @@ async function projectSnapshot(stage) {
   assert.equal(payload.success, true);
   return validateProjectSnapshot(stage, payload.result, process.env.UI_PAGES_CONFIG_SHA256);
 }
-export function validatePublicModes(origin, health, data, profile=profileFor()) {
+export function validatePublicModes(origin, health, data, profile=profileFor(),phase='candidate') {
   assert.ok(Object.values(ORIGINS).includes(origin));
+  assert.ok(['preflight','candidate','rollback'].includes(phase), 'unknown UI verification phase');
   validateProfile(profile);
   if(origin===ORIGINS.production)requireProductionProfile(profile);
   // Staging has public/cacheable weather reads; production's reviewed platform
@@ -145,7 +148,21 @@ export function validatePublicModes(origin, health, data, profile=profileFor()) 
   assert.equal(health.authMode, origin === ORIGINS.staging ? 'public' : 'observe');
   assert.equal(health.billingMode, profile.account ? 'enabled' : 'disabled');
   assert.equal(data.ok, true); assert.equal(data.catalogMode, 'serve');
-  if (origin === ORIGINS.staging) assert.equal(data.authMode, 'public');
+  if (origin === ORIGINS.staging) {
+    assert.equal(data.authMode, 'public');
+    assert.equal(data.dataSource, 'shared');
+    assert.equal(data.sharedReadConfigured, true);
+    // An exact rollback must remain verifiable when candidate-only catalog
+    // qualification disappears. The shared/public read contract remains mandatory.
+    if (phase === 'rollback') return null;
+    assert.equal(data.catalog?.status, 'available');
+    assert.match(data.catalog?.catalogId ?? '', SAFE_CATALOG_ID, 'staging catalog identity is invalid');
+    for (const model of CORE_CATALOG_MODELS) {
+      assert.equal(data.catalog?.nativeViewport?.[model], true, `${model} native viewport is not qualified`);
+    }
+    return data.catalog.catalogId;
+  }
+  return null;
 }
 export function standaloneWeatherFeedVerificationRequired(stage, phase) {
   assert.ok(Object.hasOwn(ORIGINS, stage), 'unknown UI target');
@@ -160,13 +177,37 @@ export function standaloneWeatherFeedVerificationRequired(stage, phase) {
 function verifyWeatherFeeds(stage) {
   run('node', [resolve(CONTROL,'ops/release/verify-weather-feeds.mjs'), ORIGINS[stage]]);
 }
-export async function publicModes(origin,profile=profileFor()) {
+export async function publicModes(origin,profile=profileFor(),phase='candidate') {
   assert.ok(Object.values(ORIGINS).includes(origin));
   const health = await json(`${origin}/api/platform/health`);
   const data = await json(`${origin}/api/platform/data-health`);
-  validatePublicModes(origin, health, data,profile);
-  const core = await get(`${origin}/data/gfs/index.json`);
-  assert.ok(core.headers.get('x-weatherx-catalog'), 'core model must use catalog authority');
+  const catalogId = validatePublicModes(origin, health, data,profile,phase);
+  if (origin === ORIGINS.staging && phase !== 'rollback') {
+    for (const model of CORE_CATALOG_MODELS) {
+      const core = await get(`${origin}/data/_catalog/${catalogId}/${model}/index.json`);
+      assert.match(core.headers.get('content-type')??'',/^application\/json(?:;|$)/i,
+        `${model} immutable index must be JSON`);
+      assert.equal(core.headers.get('x-weatherx-catalog'),catalogId,`${model} immutable catalog identity changed`);
+      assert.equal(core.headers.get('x-weatherx-data-source'),'shared',`${model} immutable index did not use the shared source`);
+      assert.equal(core.headers.get('x-weatherx-release'),null,`${model} immutable index used whole-release authority`);
+      const index=JSON.parse(core.bytes.toString('utf8'));
+      assert.equal(index?.schemaVersion,1,`${model} immutable index schema changed`);
+      assert.equal(index?.model,model,`${model} immutable index model changed`);
+      assert.ok(Array.isArray(index?.runs)&&index.runs.length>0,`${model} immutable index has no runs`);
+      for(const run of index.runs){
+        const time=typeof run?.init_time==='string'?Date.parse(run.init_time):Number.NaN;
+        assert.ok(Number.isFinite(time),`${model} immutable index has an invalid run time`);
+        const iso=new Date(time).toISOString();
+        assert.equal(run.path,`runs/${iso.slice(0,4)}${iso.slice(5,7)}${iso.slice(8,10)}${iso.slice(11,13)}/`,
+          `${model} immutable index run identity changed`);
+      }
+    }
+  } else {
+    // Production and an exact staging rollback retain the reviewed mutable-alias
+    // probe. Candidate/preflight staging alone requires immutable catalog proof.
+    const core = await get(`${origin}/data/gfs/index.json`);
+    assert.ok(core.headers.get('x-weatherx-catalog'), 'core model must use catalog authority');
+  }
   const ancillary = await get(`${origin}/data/ledger/index.json`);
   assert.ok(ancillary.headers.get('x-weatherx-release'), 'ledger must use whole-release authority');
 }
@@ -176,7 +217,7 @@ async function preflight(stage) {
   if(stage==='production') { requireProductionProfile(c.profile); verifyProductionGround(c.files); }
   else requireStagingApproval(c,process.env);
   gate(process.env); controller();
-  await projectSnapshot(stage); await publicModes(ORIGINS[stage],c.profile);
+  await projectSnapshot(stage); await publicModes(ORIGINS[stage],c.profile,'preflight');
   if (standaloneWeatherFeedVerificationRequired(stage, 'preflight')) verifyWeatherFeeds(stage);
 }
 export function requiredSourceGuard(profile) {
@@ -308,6 +349,18 @@ function environment(c) {
     RELEASE_GUARD_VERIFY_REQUIRED_SUCCESSES:'3',RELEASE_GUARD_VERIFY_SLEEP_SECONDS:'15',
     UI_CONTROL_ROOT:CONTROL,UI_CYCLE_ROOT:ROOT,WEATHERX_EXPECTED_RELEASE_ID:r.releaseId};
 }
+export function platformVerificationEnvironment(stage,phase,env=process.env) {
+  assert.ok(Object.hasOwn(ORIGINS,stage),'unknown UI target');
+  assert.ok(['candidate','rollback'].includes(phase),'unknown UI verification phase');
+  // The staging candidate can legitimately inherit a just-refreshed 600-second hazards document;
+  // its one-shot cache-only recovery is not eligible until another 60 seconds later. Keep the
+  // ordinary three-success/15-second soak intact, but give only this candidate transaction enough
+  // bounded observations to see that convergence. Production and exact rollback retain the pinned
+  // verifier's existing attempt policy byte-for-byte through the original environment object.
+  return stage==='staging'&&phase==='candidate'
+    ? {...env,RELEASE_GUARD_VERIFY_ATTEMPTS:'50'}
+    : env;
+}
 async function exactStaging(c) {
   // Conservative: promotion refuses if staging has since changed; never promote an unreviewed
   // latest build just because a previous build passed. Restage if this receipt is no longer live.
@@ -315,7 +368,7 @@ async function exactStaging(c) {
   assert.equal(hash(bytes), c.files.find(f=>f.path==='health/release.json').sha256, 'staging no longer serves this candidate');
   const index = await get(`${ORIGINS.staging}/?candidate=${c.artifactDigest}`);
   assert.equal(hash(index.bytes), c.files.find(f=>f.path==='index.html').sha256);
-  await publicModes(ORIGINS.staging,c.profile);
+  await publicModes(ORIGINS.staging,c.profile,'candidate');
 }
 async function deploy(stage) {
   await preflight(stage);
@@ -359,9 +412,16 @@ async function verify(stage) {
   const phase=process.env.RELEASE_GUARD_PHASE==='rollback'?'rollback':'candidate';
   if(stage==='production')requireProductionProfile(c.profile);
   else if(phase!=='rollback')requireStagingApproval(c,process.env);
-  controller(); await projectSnapshot(stage); await publicModes(ORIGINS[stage],c.profile);
+  controller(); await projectSnapshot(stage); await publicModes(ORIGINS[stage],c.profile,phase);
   if (stage === 'production' && phase !== 'rollback') await exactStaging(candidate());
-  run('bash',[resolve(CONTROL,'ops/release/verify-platform-production.sh'),ORIGINS[stage]]);
+  const verifier=resolve(CONTROL,'ops/release/verify-platform-production.sh');
+  if(stage==='staging'&&phase==='candidate') {
+    // GNU timeout's default (non-foreground) mode owns a separate process group. A direct KILL
+    // therefore bounds the read-only verifier and every curl/node descendant even when a shell
+    // exits on TERM before timeout can escalate the rest of its group.
+    run('/usr/bin/timeout',['--signal=KILL','15m','bash',verifier,ORIGINS[stage]],
+      {env:platformVerificationEnvironment(stage,phase)});
+  } else run('bash',[verifier,ORIGINS[stage]]);
   if (phase !== 'rollback') {
     // Real built-site checks inside the rollback transaction, not after declaring success.
     if(stage==='staging'&&staticCompressionProfile(c.profile)) {

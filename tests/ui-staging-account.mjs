@@ -7,7 +7,7 @@ import {ACCOUNT_CORE_REQUEST as REQUEST, ACCOUNT_APPROVAL as APPROVAL, ACCOUNT_C
   CORE_RELEASE_REQUEST, CORE_RELEASE_PROFILE, BASELINE_PROFILE, STATIC_COMPRESSION_PROFILE,
   profileFor, validateProfile, requireProductionProfile, resolveSelectionRequest, requireStagingApproval,
   staticCompressionProfile, coreReleaseProfile} from '../tools/ui-staging-models.mjs';
-import {publicBuildEnvironment,requiredSourceGuard,validatePublicModes} from '../tools/ui-release.mjs';
+import {publicBuildEnvironment,publicModes,requiredSourceGuard,validatePublicModes} from '../tools/ui-release.mjs';
 import {CONTROL_SHA,STAGING_CONTROL_SHA,controlShaFor} from '../tools/ui-candidate.mjs';
 import {ACCOUNT_PROOF_MAX_BYTES,ACCOUNT_QUALIFICATION_TIMEOUT_MS,accountQualificationBinding,
   accountQualificationEnvironment,accountQualificationRequired,readAccountProofBytes,
@@ -15,6 +15,10 @@ import {ACCOUNT_PROOF_MAX_BYTES,ACCOUNT_QUALIFICATION_TIMEOUT_MS,accountQualific
 
 const NOW=Date.parse('2026-09-08T20:00:00.000Z'),SOURCE='a'.repeat(40),RELEASE='git-aaaaaaaaaaaa-run-123';
 const HARNESS='b'.repeat(64);
+const STAGING='https://staging.weatherx.org',CATALOG='284-065408ff-7e71-46aa-bdf4-57d3558901d7';
+const HEALTH={ok:true,authMode:'public',billingMode:'enabled'};
+const DATA={ok:true,catalogMode:'serve',authMode:'public',dataSource:'shared',sharedReadConfigured:true,pin:null,
+  catalog:{status:'available',catalogId:CATALOG,nativeViewport:{ecmwf:true,gfs:true}}};
 function proof(overrides={}){
   return {schemaVersion:1,startedAt:'2026-09-08T19:58:00.000Z',completedAt:'2026-09-08T19:59:00.000Z',ok:true,
     harnessSha256:HARNESS,failures:[],configuration:{expectedIdentity:{candidateSourceSha:SOURCE,candidateReleaseId:RELEASE}},
@@ -78,19 +82,142 @@ test('profile overrides conflicting caller flags but never expands the old profi
   }
 });
 test('only the exact staging account profile accepts the existing enabled backend',()=>{
-  const staging='https://staging.weatherx.org',production='https://weatherx.org';
-  const data={ok:true,catalogMode:'serve',authMode:'public'};
-  const health={ok:true,authMode:'public',billingMode:'enabled'};
-  validatePublicModes(staging,health,data,PROFILE);
+  const production='https://weatherx.org';
+  validatePublicModes(STAGING,HEALTH,DATA,PROFILE);
   for(const p of [BASELINE_PROFILE,CORE_RELEASE_PROFILE,STATIC_COMPRESSION_PROFILE])
-    assert.throws(()=>validatePublicModes(staging,health,data,p));
+    assert.throws(()=>validatePublicModes(STAGING,HEALTH,DATA,p));
   for(const change of [{ok:false},{authMode:'enforce'},{authMode:'observe'},{billingMode:'disabled'},{billingMode:'unknown'}])
-    assert.throws(()=>validatePublicModes(staging,{...health,...change},data,PROFILE));
+    assert.throws(()=>validatePublicModes(STAGING,{...HEALTH,...change},DATA,PROFILE));
   for(const change of [{ok:false},{authMode:'enforce'},{catalogMode:'disabled'}])
-    assert.throws(()=>validatePublicModes(staging,health,{...data,...change},PROFILE));
-  assert.throws(()=>validatePublicModes(production,{...health,authMode:'observe'},data,PROFILE));
-  assert.throws(()=>validatePublicModes(production,{...health,authMode:'observe'},data));
-  validatePublicModes(production,{...health,authMode:'observe',billingMode:'disabled'},data);
+    assert.throws(()=>validatePublicModes(STAGING,HEALTH,{...DATA,...change},PROFILE));
+  for(const change of [{dataSource:'own'},{sharedReadConfigured:false}])
+    assert.throws(()=>validatePublicModes(STAGING,HEALTH,{...DATA,...change},PROFILE));
+  for(const catalog of [undefined,null,{},
+    {...DATA.catalog,status:'unavailable'},
+    {...DATA.catalog,catalogId:null},
+    {...DATA.catalog,catalogId:'../current'},
+    {...DATA.catalog,nativeViewport:{ecmwf:false,gfs:true}},
+    {...DATA.catalog,nativeViewport:{ecmwf:true,gfs:false}},
+  ])assert.throws(()=>validatePublicModes(STAGING,HEALTH,{...DATA,catalog},PROFILE));
+  assert.throws(()=>validatePublicModes(production,{...HEALTH,authMode:'observe'},DATA,PROFILE));
+  assert.throws(()=>validatePublicModes(production,{...HEALTH,authMode:'observe'},DATA));
+  // Production deliberately retains the older health contract without the staging projection.
+  validatePublicModes(production,{...HEALTH,authMode:'observe',billingMode:'disabled'},
+    {ok:true,catalogMode:'serve',authMode:'public'});
+});
+function stagingModeFetch(indexChange={},options={}){
+  const paths=[];
+  const fetcher=async input=>{
+    const url=new URL(String(input));paths.push(url.pathname);
+    if(url.pathname==='/api/platform/health')return Response.json(HEALTH);
+    if(url.pathname==='/api/platform/data-health')return Response.json(options.data??DATA);
+    const match=new RegExp(`^/data/_catalog/${CATALOG}/(ecmwf|gfs)/index\\.json$`).exec(url.pathname);
+    if(match){
+      const model=match[1],change=indexChange[model]??indexChange;
+      const headers={'Content-Type':'application/json','X-WeatherX-Catalog':CATALOG,
+        'X-WeatherX-Data-Source':'shared',...(change.headers??{})};
+      if(change.removeHeader)delete headers[change.removeHeader];
+      return new Response(JSON.stringify(change.body??{schemaVersion:1,model,
+        runs:[{init_time:'2026-09-08T12:00:00Z',path:'runs/2026090812/'}]}),{status:change.status??200,headers});
+    }
+    if(url.pathname==='/data/gfs/index.json')return Response.json({},
+      {headers:options.mutableHeaders??{'X-WeatherX-Catalog':CATALOG}});
+    if(url.pathname==='/data/ledger/index.json')return Response.json({},
+      {headers:options.ledgerHeaders??{'X-WeatherX-Release':'release-a'}});
+    return new Response('missing',{status:404});
+  };
+  return {fetcher,paths};
+}
+test('staging public-mode proof binds both model indexes to the attested immutable catalog',async t=>{
+  const {fetcher,paths}=stagingModeFetch();t.mock.method(globalThis,'fetch',fetcher);
+  await publicModes(STAGING,PROFILE);
+  assert.deepEqual(paths,[
+    '/api/platform/health','/api/platform/data-health',
+    `/data/_catalog/${CATALOG}/ecmwf/index.json`,
+    `/data/_catalog/${CATALOG}/gfs/index.json`,
+    '/data/ledger/index.json',
+  ]);
+});
+test('staging immutable model proof rejects source, authority and body mismatches',async t=>{
+  const cases={
+    'missing catalog identity':{removeHeader:'X-WeatherX-Catalog'},
+    'different catalog identity':{headers:{'X-WeatherX-Catalog':'other'}},
+    'release authority':{headers:{'X-WeatherX-Release':'release-a'}},
+    'non-shared source':{headers:{'X-WeatherX-Data-Source':'own'}},
+    'wrong MIME':{headers:{'Content-Type':'text/html'}},
+    'wrong schema':{body:{schemaVersion:2,model:'ecmwf',runs:[{init_time:'2026-09-08T12:00:00Z',path:'runs/2026090812/'}]}},
+    'wrong model':{body:{schemaVersion:1,model:'gfs',runs:[{init_time:'2026-09-08T12:00:00Z',path:'runs/2026090812/'}]}},
+    'missing runs':{body:{schemaVersion:1,model:'ecmwf',runs:[]}},
+    'malformed run':{body:{schemaVersion:1,model:'ecmwf',runs:[{init_time:'not-a-time',path:'runs/latest/'}]}},
+    'mismatched run identity':{body:{schemaVersion:1,model:'ecmwf',runs:[{init_time:'2026-09-08T12:00:00Z',path:'runs/2026090818/'}]}},
+  };
+  for(const [name,change] of Object.entries(cases))await t.test(name,async t=>{
+    const {fetcher,paths}=stagingModeFetch({ecmwf:change});t.mock.method(globalThis,'fetch',fetcher);
+    await assert.rejects(publicModes(STAGING,PROFILE));
+    assert.deepEqual(paths,[
+      '/api/platform/health','/api/platform/data-health',
+      `/data/_catalog/${CATALOG}/ecmwf/index.json`,
+    ]);
+  });
+  await t.test('same identity guard covers the second model',async t=>{
+    const {fetcher,paths}=stagingModeFetch({gfs:{headers:{'X-WeatherX-Catalog':'other'}}});
+    t.mock.method(globalThis,'fetch',fetcher);
+    await assert.rejects(publicModes(STAGING,PROFILE));
+    assert.deepEqual(paths,[
+      '/api/platform/health','/api/platform/data-health',
+      `/data/_catalog/${CATALOG}/ecmwf/index.json`,
+      `/data/_catalog/${CATALOG}/gfs/index.json`,
+    ]);
+  });
+});
+test('rollback keeps the prior staging contract while candidate and preflight require catalog qualification',async t=>{
+  const oldShape={...DATA,catalog:undefined};
+  const falseFlags={...DATA,catalog:{status:'available',catalogId:CATALOG,nativeViewport:{ecmwf:false,gfs:false}}};
+  for(const data of [oldShape,falseFlags]){
+    validatePublicModes(STAGING,HEALTH,data,PROFILE,'rollback');
+    assert.throws(()=>validatePublicModes(STAGING,HEALTH,data,PROFILE,'candidate'));
+    assert.throws(()=>validatePublicModes(STAGING,HEALTH,data,PROFILE,'preflight'));
+  }
+  for(const [health,data] of [
+    [{...HEALTH,authMode:'enforce'},oldShape],
+    [HEALTH,{...oldShape,authMode:'enforce'}],
+    [HEALTH,{...oldShape,dataSource:'own'}],
+    [HEALTH,{...oldShape,sharedReadConfigured:false}],
+  ])assert.throws(()=>validatePublicModes(STAGING,health,data,PROFILE,'rollback'));
+  assert.throws(()=>validatePublicModes(STAGING,HEALTH,oldShape,PROFILE,'unknown'));
+
+  await t.test('reads the original mutable core and ancillary probes',async t=>{
+    const {fetcher,paths}=stagingModeFetch({}, {data:oldShape});t.mock.method(globalThis,'fetch',fetcher);
+    await publicModes(STAGING,PROFILE,'rollback');
+    assert.deepEqual(paths,[
+      '/api/platform/health','/api/platform/data-health','/data/gfs/index.json','/data/ledger/index.json',
+    ]);
+  });
+  await t.test('still requires mutable catalog authority',async t=>{
+    const {fetcher}=stagingModeFetch({}, {data:oldShape,mutableHeaders:{}});t.mock.method(globalThis,'fetch',fetcher);
+    await assert.rejects(publicModes(STAGING,PROFILE,'rollback'));
+  });
+  await t.test('still requires ancillary release authority',async t=>{
+    const {fetcher}=stagingModeFetch({}, {data:oldShape,ledgerHeaders:{}});t.mock.method(globalThis,'fetch',fetcher);
+    await assert.rejects(publicModes(STAGING,PROFILE,'rollback'));
+  });
+});
+test('production public-mode proof retains its previous health shape and mutable core probe',async t=>{
+  const production='https://weatherx.org',paths=[],phases=['preflight','candidate','rollback'];
+  t.mock.method(globalThis,'fetch',async input=>{
+    const url=new URL(String(input));paths.push(url.pathname);
+    if(url.pathname==='/api/platform/health')return Response.json({ok:true,authMode:'observe',billingMode:'disabled'});
+    if(url.pathname==='/api/platform/data-health')return Response.json({ok:true,authMode:'public',catalogMode:'serve'});
+    if(url.pathname==='/data/gfs/index.json')return Response.json({runs:[]},
+      {headers:{'X-WeatherX-Catalog':'production-current'}});
+    if(url.pathname==='/data/ledger/index.json')return Response.json({},
+      {headers:{'X-WeatherX-Release':'release-a'}});
+    return new Response('missing',{status:404});
+  });
+  for(const phase of phases)await publicModes(production,BASELINE_PROFILE,phase);
+  assert.deepEqual(paths,phases.flatMap(()=>[
+    '/api/platform/health','/api/platform/data-health','/data/gfs/index.json','/data/ledger/index.json',
+  ]));
 });
 test('workflow carries protected account approval without enabling or altering production',()=>{
   const read=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
@@ -99,8 +226,9 @@ test('workflow carries protected account approval without enabling or altering p
   assert.match(staging,/UI_STAGING_ACCOUNT_PROFILE_APPROVED: \$\{\{ vars\.UI_STAGING_ACCOUNT_PROFILE_APPROVED \}\}/);
   assert.match(staging,/default: approved/);
   assert.doesNotMatch(prod,/staging-account-v1|release-roster-core-account-v1|UI_STAGING_ACCOUNT_PROFILE_APPROVED/);
-  assert.match(read('tools/ui-release.mjs'),/publicModes\(ORIGINS\[stage\],c\.profile\)/);
-  assert.match(read('tools/ui-release.mjs'),/publicModes\(ORIGINS\.staging,c\.profile\)/);
+  assert.match(read('tools/ui-release.mjs'),/publicModes\(ORIGINS\[stage\],c\.profile,'preflight'\)/);
+  assert.match(read('tools/ui-release.mjs'),/publicModes\(ORIGINS\.staging,c\.profile,'candidate'\)/);
+  assert.match(read('tools/ui-release.mjs'),/publicModes\(ORIGINS\[stage\],c\.profile,phase\)/);
 });
 test('account browser qualification is candidate-staging-only and receives no credentials',()=>{
   for(const [stage,phase,profile,required] of [
@@ -162,16 +290,16 @@ test('missing proof and proof changes cannot satisfy the candidate binding',()=>
     assert.throws(()=>requireAccountQualificationBinding({...candidate,qualification:{}},accepted));
   }finally{rmSync(directory,{recursive:true,force:true});}
 });
-test('mode compatibility is checked before upload, not relaxed during rollback',()=>{
+test('base mode compatibility remains checked before upload and during rollback',()=>{
   const source=readFileSync(new URL('../tools/ui-release.mjs',import.meta.url),'utf8');
   const preflight=source.slice(source.indexOf('async function preflight(stage)'),source.indexOf('export function requiredSourceGuard'));
   const deploy=source.slice(source.indexOf('async function deploy(stage)'),source.indexOf('async function verify(stage)'));
   const verify=source.slice(source.indexOf('async function verify(stage)'),source.indexOf('function retain()'));
   assert.match(preflight,/requireStagingApproval\(c,process\.env\)/);
-  assert.match(preflight,/await publicModes\(ORIGINS\[stage\],c\.profile\)/);
+  assert.match(preflight,/await publicModes\(ORIGINS\[stage\],c\.profile,'preflight'\)/);
   assert.ok(deploy.indexOf('await preflight(stage)')<deploy.indexOf('guard-pages-deploy.sh'));
   assert.doesNotMatch(preflight,/catch\s*\(/);
-  assert.match(verify,/await publicModes\(ORIGINS\[stage\],c\.profile\)/);
+  assert.match(verify,/await publicModes\(ORIGINS\[stage\],c\.profile,phase\)/);
   assert.match(verify,/accountQualificationRequired\(stage,phase,c\.profile\)/);
   assert.match(verify,/await runAccountQualification\(/);
   assert.ok(verify.indexOf("if \(phase !== 'rollback'\)")<verify.indexOf('await runAccountQualification('));
