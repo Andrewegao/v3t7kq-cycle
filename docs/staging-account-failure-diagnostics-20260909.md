@@ -26,3 +26,13 @@ these local results. Incident fuse #193 remains open pending diagnosed candidate
 validation. The account cancellation harness correction is a separate Atmos
 change; any staging controller repin must use its reviewed merge, leaving the
 production-compatible controller untouched.
+
+The earlier Linux CI run 34323212210 passed all 156 UI contracts, including the GNU
+timeout case. Atmos #197 then merged as 53487719eb3ecf8b20f02cdb617487bc4e22d651;
+root verified its tree is byte-identical to the reviewed final head 142fedaa.
+Both staging workflow conditional refs and STAGING_CONTROL_SHA now use that merge.
+The production CONTROL_SHA and production workflow remain unchanged at 25c402db.
+Full account qualification on the exact candidate via a byte-preserving localhost
+proxy passed normal/slow cold/warm repeats, four account states and thirty lifecycle
+cycles. It is not a direct-host or China-device guarantee. Final combined Cycle CI
+and normal incident-fuse handling are still required before staging dispatch.
