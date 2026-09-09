@@ -8,11 +8,41 @@ import { ACCOUNT_APPROVAL, browserEnvironment } from './ui-staging-models.mjs';
 
 export const ACCOUNT_PROOF_FILE = 'ui-staging-account-proof.json';
 export const ACCOUNT_PROOF_MAX_BYTES = 1024 * 1024;
+export const ACCOUNT_FAILURE_RECEIPT_MAX_BYTES = 32 * 1024;
 export const ACCOUNT_PROOF_MAX_AGE_MS = 10 * 60 * 1000;
 export const ACCOUNT_PROOF_MAX_DURATION_MS = 16 * 60 * 1000;
 export const ACCOUNT_QUALIFICATION_TIMEOUT_MS = 15 * 60 * 1000;
 const HARNESS_RELATIVE = 'app/e2e/staging-account-qualification.mjs';
 const STAGING_ORIGIN = 'https://staging.weatherx.org';
+const ACCOUNT_CASES = Object.freeze(['live','fixture-401','fixture-503','fixture-timeout']);
+const FAILURE_KINDS = /^(?:Error|AssertionError|TimeoutError|AbortError|TypeError|DOMException|TargetClosedError):(timeout|closed|qualification|other)$/;
+const FAILURE_CHECKS = new Set([
+  'release receipt returned','release receipt must be JSON','release receipt must identify Lab',
+  'release receipt must identify account=1','release receipt must keep public weather data',
+  'account qualification requires the Lab product lock','account surface was not exercised after weather readiness',
+  'must issue exactly one bounded session request','live anonymous session must return 200',
+  'timeout account request did not start','timeout account dialog opened too late',
+  'timeout client deadline was not observed','timeout transport failure was not observed',
+  'timeout transport failure was not an abort','timeout failure and unavailable UI were not synchronized',
+  'timeout transport failure was not observed before dialog close',
+  'qualification attempted a mutating request','uncaught page errors were observed',
+  'console errors were observed','unexpected failed requests were observed',
+  'weather cancellation count exceeded the bound',
+  'account dialog retained heap exceeded the bound','account dialog retained documents exceeded the bound',
+  'account dialog retained nodes exceeded the bound','account dialog retained listeners exceeded the bound',
+  'repeated open/close must not refresh the session','cold+warm pair must issue one session read per navigation',
+  'timing account session did not settle before the navigation boundary',
+  'timing account session did not return anonymous success',
+  'cold+warm pair requires anonymous session success',
+  'warm page did not reuse a cached same-origin script or stylesheet',
+  'Timeout',
+]);
+const FAILURE_CATEGORIES = new Set(['invalid-url','external','account-session','platform-api','weather-data','asset',
+  'optional-overview-pbf','document','stylesheet','image','media','font','script','texttrack','xhr','fetch','eventsource',
+  'websocket','manifest','other']);
+const FAILURE_RESOURCE_TYPES = new Set(['document','stylesheet','image','media','font','script','texttrack','xhr','fetch',
+  'eventsource','websocket','manifest','other']);
+const FAILURE_NETWORK_KINDS = new Set(['timed-out','aborted','reset','refused','other']);
 
 function boundedRegularFile(path, limit, label) {
   let descriptor;
@@ -119,6 +149,76 @@ function sanitizedReceipt(receipt) {
   return Buffer.from(`${JSON.stringify(safe, null, 2)}\n`);
 }
 
+function safeInstant(value) {
+  if (typeof value !== 'string') return null;
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) ? new Date(milliseconds).toISOString() : null;
+}
+
+function safeFailureDetail(detail) {
+  if (detail === null || typeof detail !== 'object' || Array.isArray(detail)
+    || !FAILURE_CATEGORIES.has(detail.category) || !FAILURE_NETWORK_KINDS.has(detail.kind)
+    || !FAILURE_RESOURCE_TYPES.has(detail.resourceType)) return null;
+  return {category:detail.category,kind:detail.kind,resourceType:detail.resourceType};
+}
+
+function safeFailure(failure) {
+  const kind=typeof failure?.kind === 'string' && FAILURE_KINDS.test(failure.kind)
+    ? failure.kind : 'Error:other';
+  const check=typeof failure?.check === 'string'
+    && (FAILURE_CHECKS.has(failure.check) || FAILURE_KINDS.test(failure.check))
+    ? failure.check : 'unclassified';
+  const details=Array.isArray(failure?.details)
+    ? failure.details.slice(0,8).map(safeFailureDetail).filter(Boolean) : [];
+  return {kind,check,...(details.length?{details}:{})};
+}
+
+export function sanitizeAccountFailureReceipt(bytes, context) {
+  assert.ok(Buffer.isBuffer(bytes) && bytes.length > 0 && bytes.length <= ACCOUNT_PROOF_MAX_BYTES,
+    'failed account proof exceeds its byte bound');
+  assert.match(context?.sourceSha ?? '', /^[a-f0-9]{40}$/,
+    'account failure source SHA is invalid');
+  assert.match(context?.releaseId ?? '', /^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/,
+    'account failure release ID is invalid');
+  assert.match(context?.harnessSha256 ?? '', /^[a-f0-9]{64}$/,
+    'account failure harness SHA-256 is invalid');
+  let receipt;
+  try { receipt=JSON.parse(bytes); }
+  catch { throw new Error('failed account proof is not JSON'); }
+  assert.ok(receipt !== null && typeof receipt === 'object' && !Array.isArray(receipt),
+    'failed account proof must be an object');
+  const expectedIdentity=receipt?.configuration?.expectedIdentity;
+  const release=receipt?.releaseProfiles?.candidate;
+  const completed=new Set(Array.isArray(receipt.accountCases)
+    ? receipt.accountCases.map(row=>row?.name).filter(name=>ACCOUNT_CASES.includes(name)) : []);
+  const diagnostic={
+    schemaVersion:1,kind:'staging-account-qualification-failure',
+    startedAt:safeInstant(receipt.startedAt),completedAt:safeInstant(receipt.completedAt),ok:false,
+    harnessSha256:context.harnessSha256,
+    identity:{candidateSourceSha:context.sourceSha,candidateReleaseId:context.releaseId,
+      candidateOrigin:STAGING_ORIGIN},
+    observed:{
+      receiptSchemaMatches:receipt.schemaVersion===1,
+      receiptReportedFailure:receipt.ok===false,
+      harnessMatches:receipt.harnessSha256===context.harnessSha256,
+      safetyAccountMutationsZero:receipt?.safety?.accountMutations===0,
+      safetyScreenshotsZero:receipt?.safety?.screenshots===0,
+      configuredOriginMatches:receipt?.configuration?.base===STAGING_ORIGIN,
+      configuredIdentityMatches:expectedIdentity?.candidateSourceSha===context.sourceSha
+        && expectedIdentity?.candidateReleaseId===context.releaseId
+        && expectedIdentity?.baselineSourceSha===null && expectedIdentity?.baselineReleaseId===null,
+      releaseProfileMatches:release?.sourceSha===context.sourceSha && release?.releaseId===context.releaseId
+        && release?.product==='lab' && release?.platformAccount==='1' && release?.platformDataAuth==='public',
+    },
+    completedAccountCases:ACCOUNT_CASES.filter(name=>completed.has(name)),
+    failures:(Array.isArray(receipt.failures)?receipt.failures:[]).slice(0,4).map(safeFailure),
+  };
+  const safe=Buffer.from(`${JSON.stringify(diagnostic,null,2)}\n`);
+  assert.ok(safe.length>0 && safe.length<=ACCOUNT_FAILURE_RECEIPT_MAX_BYTES,
+    'account failure receipt exceeds its byte bound');
+  return {bytes:safe,sha256:hash(safe)};
+}
+
 export function validateAccountProofBytes(bytes, context, validateQualificationReceipt, now = Date.now()) {
   assert.ok(Buffer.isBuffer(bytes) && bytes.length > 0 && bytes.length <= ACCOUNT_PROOF_MAX_BYTES,
     'account qualification proof exceeds its byte bound');
@@ -165,17 +265,29 @@ export async function readAccountProof({ runnerTemp, controlRoot, sourceSha, rel
 }
 
 export async function runAccountQualification({ candidate, releaseId, runnerTemp, controlRoot,
-  env = process.env, execute = execFileSync }) {
+  env = process.env, execute = execFileSync, logger = console.error }) {
   assert.equal(candidate?.profile?.account, true, 'account qualification requires the account profile');
   const outputPath = accountProofPath(runnerTemp);
   assert.equal(existsSync(outputPath), false, 'account qualification proof already exists');
   const fixed = await harness(controlRoot);
-  execute(process.execPath, [fixed.path], {
-    cwd: resolve(controlRoot, 'app'),
-    env: accountQualificationEnvironment(env, { sourceSha: candidate.sourceSha, releaseId, outputPath }),
-    stdio: 'inherit',
-    timeout: ACCOUNT_QUALIFICATION_TIMEOUT_MS,
-  });
+  try {
+    execute(process.execPath, [fixed.path], {
+      cwd: resolve(controlRoot, 'app'),
+      env: accountQualificationEnvironment(env, { sourceSha: candidate.sourceSha, releaseId, outputPath }),
+      stdio: 'inherit',
+      timeout: ACCOUNT_QUALIFICATION_TIMEOUT_MS,
+    });
+  } catch (error) {
+    const safeLog=value=>{try{logger(value);}catch{}};
+    try {
+      if (existsSync(outputPath)) {
+        const diagnostic=sanitizeAccountFailureReceipt(readAccountProofBytes(outputPath),{
+          sourceSha:candidate.sourceSha,releaseId,harnessSha256:fixed.harnessSha256});
+        safeLog(diagnostic.bytes.toString('utf8').trimEnd());
+      }
+    } catch { safeLog('account failure diagnostic could not be projected'); }
+    throw error;
+  }
   const bytes = readAccountProofBytes(outputPath);
   return validateAccountProofBytes(bytes, {
     sourceSha: candidate.sourceSha, releaseId, harnessSha256: fixed.harnessSha256,

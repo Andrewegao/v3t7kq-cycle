@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {linkSync,mkdtempSync,readFileSync,rmSync,symlinkSync,writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {linkSync,mkdirSync,mkdtempSync,readFileSync,rmSync,symlinkSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {ACCOUNT_CORE_REQUEST as REQUEST, ACCOUNT_APPROVAL as APPROVAL, ACCOUNT_CORE_PROFILE as PROFILE,
@@ -10,8 +11,9 @@ import {ACCOUNT_CORE_REQUEST as REQUEST, ACCOUNT_APPROVAL as APPROVAL, ACCOUNT_C
 import {publicBuildEnvironment,publicModes,requiredSourceGuard,validatePublicModes} from '../tools/ui-release.mjs';
 import {CONTROL_SHA,STAGING_CONTROL_SHA,controlShaFor} from '../tools/ui-candidate.mjs';
 import {ACCOUNT_PROOF_MAX_BYTES,ACCOUNT_QUALIFICATION_TIMEOUT_MS,accountQualificationBinding,
-  accountQualificationEnvironment,accountQualificationRequired,readAccountProofBytes,
-  requireAccountQualificationBinding,validateAccountProofBytes} from '../tools/ui-staging-account-proof.mjs';
+  ACCOUNT_FAILURE_RECEIPT_MAX_BYTES,accountQualificationEnvironment,
+  accountQualificationRequired,readAccountProofBytes,requireAccountQualificationBinding,
+  runAccountQualification,sanitizeAccountFailureReceipt,validateAccountProofBytes} from '../tools/ui-staging-account-proof.mjs';
 
 const NOW=Date.parse('2026-09-08T20:00:00.000Z'),SOURCE='a'.repeat(40),RELEASE='git-aaaaaaaaaaaa-run-123';
 const HARNESS='b'.repeat(64);
@@ -267,6 +269,106 @@ test('account proof is bounded, fresh, identity-bound, harness-bound and sanitiz
   assert.throws(()=>validateAccountProofBytes(Buffer.from(JSON.stringify(wrongIdentity)),
     {sourceSha:SOURCE,releaseId:RELEASE,harnessSha256:HARNESS},strictReceiptValidator,NOW));
 });
+test('failed account receipt retains only controller-typed diagnostic metadata',()=>{
+  const failed=proof({ok:false,
+    accountCases:[{name:'live',privateBody:'SECRET-body'},{name:'fixture-401'},{name:'attacker-case'}],
+    failures:[{kind:'Error:qualification',check:'unexpected failed requests were observed',secret:'SECRET-token',details:[
+      {category:'asset',kind:'reset',resourceType:'script',assetName:'github_pat_credentialshaped123456789',url:'https://secret.invalid/token'},
+      {category:'external',kind:'other',resourceType:'fetch',assetName:null,headers:{authorization:'SECRET'}},
+      {category:'optional-overview-pbf',kind:'aborted',resourceType:'fetch',assetName:'overview-0-0-0.pbf'},
+      {category:'not-allowlisted',kind:'other',resourceType:'fetch',assetName:'SECRET-name'},
+    ]},{kind:'github_pat_credentialshaped123456789:other',check:'SECRET free-form failure'},
+    {kind:'AssertionError:qualification',check:'warm page did not reuse a cached same-origin script or stylesheet'}],
+  });
+  failed.configuration.expectedIdentity={candidateSourceSha:SOURCE,candidateReleaseId:RELEASE,
+    baselineSourceSha:null,baselineReleaseId:null};
+  failed.configuration.base='https://github_pat_credentialshaped.invalid';
+  failed.releaseProfiles.candidate={releaseId:RELEASE,sourceSha:SOURCE,product:'lab',platformAccount:'1',platformDataAuth:'public'};
+  const diagnostic=sanitizeAccountFailureReceipt(Buffer.from(JSON.stringify(failed)),
+    {sourceSha:SOURCE,releaseId:RELEASE,harnessSha256:HARNESS});
+  assert.ok(diagnostic.bytes.length<=ACCOUNT_FAILURE_RECEIPT_MAX_BYTES);
+  const retained=JSON.parse(diagnostic.bytes);
+  assert.deepEqual(retained.identity,{candidateSourceSha:SOURCE,candidateReleaseId:RELEASE,
+    candidateOrigin:'https://staging.weatherx.org'});
+  assert.deepEqual(retained.observed,{receiptSchemaMatches:true,receiptReportedFailure:true,harnessMatches:true,
+    safetyAccountMutationsZero:false,safetyScreenshotsZero:false,
+    configuredOriginMatches:false,configuredIdentityMatches:true,releaseProfileMatches:true});
+  assert.deepEqual(retained.completedAccountCases,['live','fixture-401']);
+  assert.deepEqual(retained.failures,[{kind:'Error:qualification',check:'unexpected failed requests were observed',
+    details:[
+      {category:'asset',kind:'reset',resourceType:'script'},
+      {category:'external',kind:'other',resourceType:'fetch'},
+      {category:'optional-overview-pbf',kind:'aborted',resourceType:'fetch'},
+    ]},{kind:'Error:other',check:'unclassified'},
+  {kind:'AssertionError:qualification',check:'warm page did not reuse a cached same-origin script or stylesheet'}]);
+  assert.doesNotMatch(diagnostic.bytes.toString(),/SECRET|authorization|https:\/\/secret|privateBody|privateDiagnostics|github_pat_|assetName/);
+  const maximalDetail={category:'asset',kind:'other',resourceType:'script',assetName:'github_pat_'+ 'a'.repeat(192)};
+  const bounded=sanitizeAccountFailureReceipt(Buffer.from(JSON.stringify({...failed,
+    failures:Array.from({length:20},()=>({kind:'Error:other',check:'Error:other',
+      details:Array.from({length:20},()=>maximalDetail)}))})),
+  {sourceSha:SOURCE,releaseId:RELEASE,harnessSha256:HARNESS});
+  const boundedValue=JSON.parse(bounded.bytes);
+  assert.ok(bounded.bytes.length<=ACCOUNT_FAILURE_RECEIPT_MAX_BYTES);
+  assert.equal(boundedValue.failures.length,4);
+  assert.ok(boundedValue.failures.every(row=>row.details.length===8));
+});
+test('failed child preserves its original refusal while logging only the sanitized account diagnostic',async()=>{
+  const directory=mkdtempSync(join(tmpdir(),'weatherx-account-failure-'));
+  try{
+    const harnessDirectory=join(directory,'control/app/e2e');mkdirSync(harnessDirectory,{recursive:true});
+    const harnessSource='export function validateQualificationReceipt(){ return true; }\n';
+    const harnessPath=join(harnessDirectory,'staging-account-qualification.mjs');
+    writeFileSync(harnessPath,harnessSource,{mode:0o600});
+    const harnessSha256=createHash('sha256').update(harnessSource).digest('hex');
+    const refusal=new Error('child refused'),logs=[];
+    const execute=(_command,_args,options)=>{
+      const failed=proof({ok:false,harnessSha256,accountCases:[{name:'live'}],
+        failures:[{kind:'Error:qualification',check:'weather cancellation count exceeded the bound'}]});
+      failed.configuration.expectedIdentity={candidateSourceSha:SOURCE,candidateReleaseId:RELEASE,
+        baselineSourceSha:null,baselineReleaseId:null};
+      failed.releaseProfiles.candidate={releaseId:RELEASE,sourceSha:SOURCE,product:'lab',platformAccount:'1',platformDataAuth:'public'};
+      writeFileSync(options.env.OUT,JSON.stringify(failed),{mode:0o600});
+      throw refusal;
+    };
+    await assert.rejects(runAccountQualification({candidate:{profile:PROFILE,sourceSha:SOURCE},releaseId:RELEASE,
+      runnerTemp:directory,controlRoot:join(directory,'control'),
+      env:{PATH:'/bin',HOME:directory,RUNNER_TEMP:directory,LANG:'C'},execute,logger:value=>logs.push(value)}),
+    error=>error===refusal);
+    assert.equal(logs.length,1);assert.ok(Buffer.byteLength(logs[0])<=ACCOUNT_FAILURE_RECEIPT_MAX_BYTES);
+    const diagnostic=JSON.parse(logs[0]);
+    assert.equal(diagnostic.ok,false);assert.equal(diagnostic.harnessSha256,harnessSha256);
+    assert.deepEqual(diagnostic.completedAccountCases,['live']);
+    assert.deepEqual(diagnostic.failures,[{kind:'Error:qualification',
+      check:'weather cancellation count exceeded the bound'}]);
+  }finally{rmSync(directory,{recursive:true,force:true});}
+});
+test('malformed, oversized or failed diagnostic logging never masks the original child refusal',async t=>{
+  for(const mode of ['malformed','oversized','logger-throws'])await t.test(mode,async()=>{
+    const directory=mkdtempSync(join(tmpdir(),'weatherx-account-failure-refusal-'));
+    try{
+      const harnessDirectory=join(directory,'control/app/e2e');mkdirSync(harnessDirectory,{recursive:true});
+      const harnessSource='export function validateQualificationReceipt(){ return true; }\n';
+      writeFileSync(join(harnessDirectory,'staging-account-qualification.mjs'),harnessSource,{mode:0o600});
+      const harnessSha256=createHash('sha256').update(harnessSource).digest('hex');
+      const refusal=new Error(`child refused: ${mode}`);
+      const execute=(_command,_args,options)=>{
+        if(mode==='malformed')writeFileSync(options.env.OUT,'not-json',{mode:0o600});
+        else if(mode==='oversized')writeFileSync(options.env.OUT,Buffer.alloc(ACCOUNT_PROOF_MAX_BYTES+1),{mode:0o600});
+        else {
+          const failed=proof({ok:false,harnessSha256,
+            failures:[{kind:'Error:qualification',check:'weather cancellation count exceeded the bound'}]});
+          writeFileSync(options.env.OUT,JSON.stringify(failed),{mode:0o600});
+        }
+        throw refusal;
+      };
+      const logs=[],logger=mode==='logger-throws'?()=>{throw new Error('logger refused');}:value=>logs.push(value);
+      await assert.rejects(runAccountQualification({candidate:{profile:PROFILE,sourceSha:SOURCE},releaseId:RELEASE,
+        runnerTemp:directory,controlRoot:join(directory,'control'),
+        env:{PATH:'/bin',HOME:directory,RUNNER_TEMP:directory,LANG:'C'},execute,logger}),error=>error===refusal);
+      if(mode!=='logger-throws')assert.deepEqual(logs,['account failure diagnostic could not be projected']);
+    }finally{rmSync(directory,{recursive:true,force:true});}
+  });
+});
 test('missing proof and proof changes cannot satisfy the candidate binding',()=>{
   const directory=mkdtempSync(join(tmpdir(),'weatherx-account-proof-'));
   try{
@@ -308,4 +410,10 @@ test('base mode compatibility remains checked before upload and during rollback'
   assert.match(source,/async function retain\(\)/);
   assert.match(source,/requireAccountQualificationBinding\(c,accountProof\)/);
   assert.match(source,/account-qualification\.json/);
+});
+test('workflow never exposes account failure diagnostics as an artifact',()=>{
+  const read=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
+  const staging=read('.github/workflows/ui-staging.yml'),prod=read('.github/workflows/ui-release.yml');
+  for(const workflow of [staging,prod])
+    assert.doesNotMatch(workflow,/ui-staging-account-(?:failure|proof)|retain failed account qualification metadata/);
 });
