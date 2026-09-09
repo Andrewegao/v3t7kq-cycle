@@ -11,7 +11,7 @@ test('compressed profile is an explicit staging request using the unchanged inpu
   assert.match(staging,/model_selection_sha256:\n\s+description:.*release-roster-core-br11-v1/);
   assert.match(staging,/model_selection_sha256:[\s\S]*?default: approved/);
   assert.match(staging,/APPROVED_STATIC_COMPRESSION: \$\{\{ vars\.UI_STAGING_STATIC_COMPRESSION_APPROVED \}\}/);
-  assert.match(staging,/resolveSelectionRequest\(process\.env\.REQUESTED_SELECTION,process\.env\.APPROVED_SELECTION,process\.env\.APPROVED_CORE_PROFILE,process\.env\.APPROVED_STATIC_COMPRESSION\)/);
+  assert.match(staging,/resolveSelectionRequest\(process\.env\.REQUESTED_SELECTION,process\.env\.APPROVED_SELECTION,process\.env\.APPROVED_CORE_PROFILE,process\.env\.APPROVED_STATIC_COMPRESSION,process\.env\.APPROVED_ACCOUNT_PROFILE\)/);
   assert.doesNotMatch(prod,/UI_STAGING_STATIC_COMPRESSION_APPROVED|release-roster-core-br11-v1|static-br11-v1/);
 });
 test('staging private checkouts use the current Atmos repository owner',()=>{

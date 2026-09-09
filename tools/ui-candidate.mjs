@@ -157,6 +157,10 @@ export function validateCandidate(candidate) {
   validateCandidateSelection(candidate);
   validateCompressionFiles(candidate.files,staticCompressionProfile(candidate.profile));
   const receipt = JSON.parse(Buffer.from(candidate.files.find(f => f.path === 'health/release.json').base64, 'base64'));
+  if(candidate.profile.account)assert.deepEqual(receipt.buildProfile,
+    {product:'lab',platformAccount:'1',platformDataAuth:'public'},'account staging build receipt differs from approved profile');
+  else if(receipt.buildProfile!==undefined)assert.ok(['0','unspecified'].includes(receipt.buildProfile?.platformAccount),
+    'account-enabled receipt cannot be relabeled as an account-off candidate');
   assert.equal(receipt.gitSha, candidate.sourceSha);
   assert.equal(receipt.workflowRunId, candidate.runId);
   assert.equal(receipt.releaseId, `git-${candidate.sourceSha.slice(0,12)}-run-${candidate.runId}`);

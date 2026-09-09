@@ -132,13 +132,15 @@ async function projectSnapshot(stage) {
   assert.equal(payload.success, true);
   return validateProjectSnapshot(stage, payload.result, process.env.UI_PAGES_CONFIG_SHA256);
 }
-export function validatePublicModes(origin, health, data) {
+export function validatePublicModes(origin, health, data, profile=profileFor()) {
   assert.ok(Object.values(ORIGINS).includes(origin));
+  validateProfile(profile);
+  if(origin===ORIGINS.production)requireProductionProfile(profile);
   // Staging has public/cacheable weather reads; production's reviewed platform
   // remains observe while its separate data Worker owns the public data routes.
   assert.equal(health.ok, true);
   assert.equal(health.authMode, origin === ORIGINS.staging ? 'public' : 'observe');
-  assert.equal(health.billingMode, 'disabled');
+  assert.equal(health.billingMode, profile.account ? 'enabled' : 'disabled');
   assert.equal(data.ok, true); assert.equal(data.catalogMode, 'serve');
   if (origin === ORIGINS.staging) assert.equal(data.authMode, 'public');
 }
@@ -155,11 +157,11 @@ export function standaloneWeatherFeedVerificationRequired(stage, phase) {
 function verifyWeatherFeeds(stage) {
   run('node', [resolve(CONTROL,'ops/release/verify-weather-feeds.mjs'), ORIGINS[stage]]);
 }
-export async function publicModes(origin) {
+export async function publicModes(origin,profile=profileFor()) {
   assert.ok(Object.values(ORIGINS).includes(origin));
   const health = await json(`${origin}/api/platform/health`);
   const data = await json(`${origin}/api/platform/data-health`);
-  validatePublicModes(origin, health, data);
+  validatePublicModes(origin, health, data,profile);
   const core = await get(`${origin}/data/gfs/index.json`);
   assert.ok(core.headers.get('x-weatherx-catalog'), 'core model must use catalog authority');
   const ancillary = await get(`${origin}/data/ledger/index.json`);
@@ -171,7 +173,7 @@ async function preflight(stage) {
   if(stage==='production') { requireProductionProfile(c.profile); verifyProductionGround(c.files); }
   else requireStagingApproval(c,process.env);
   gate(process.env); controller();
-  await projectSnapshot(stage); await publicModes(ORIGINS[stage]);
+  await projectSnapshot(stage); await publicModes(ORIGINS[stage],c.profile);
   if (standaloneWeatherFeedVerificationRequired(stage, 'preflight')) verifyWeatherFeeds(stage);
 }
 export function requiredSourceGuard(profile) {
@@ -197,7 +199,8 @@ export function publicBuildEnvironment(profile,selection,env=process.env) {
   return {...env,ATMOS_CODE_ONLY_BUILD:'1',ATMOS_PUBLIC_RELEASE:profile.stagingOnly?'0':'1',
     ATMOS_STATIC_COMPRESSION_PROFILE:staticCompressionProfile(profile)?'static-br11-v1':'',
     VITE_SPRITE_WEBP_QUALIFICATION:core?'1':'0',
-    ATMOS_STAGING_EXPERIMENT_RELEASE:profile.stagingOnly?'1':'0',VITE_PRODUCT:'lab',VITE_APP:'lab',VITE_PLATFORM_ACCOUNT:'0',
+    ATMOS_STAGING_EXPERIMENT_RELEASE:profile.stagingOnly?'1':'0',VITE_PRODUCT:'lab',VITE_APP:'lab',VITE_PLATFORM_ACCOUNT:profile.account?'1':'0',
+    ...(profile.account?{VITE_PLATFORM_DATA_AUTH:'public'}:{}),
     ATMOS_STAGING_RELEASE_ROSTER:core?'1':'0',VITE_MODEL_EXPANSION_QUALIFICATION:profile.stagingOnly?'1':'0',VITE_MODEL_LOCAL_BASE:'',
     VITE_STAGING_MODEL_ADMISSION:selected?'1':'0',VITE_STAGING_MODEL_SELECTION_SHA256:profile.modelSelectionSha256??''};
 }
@@ -248,7 +251,7 @@ async function build() {
     '--project-directory',app,'--outdir',workerOut,'--output-routes-path',resolve(dist,'_routes.json'),
     '--compatibility-date','2026-06-23','--minify','--sourcemap=false'], {cwd:app});
   await packagePagesWorker(profile,{app,dist,workerOut,overlay:resolve(process.env.RUNNER_TEMP,'ui-static-compression-overlay')});
-  run('node',[resolve(CONTROL,'ops/release/build-release-receipt.mjs'),dist,resolve(dist,'health/release.json')]);
+  run('node',[resolve(CONTROL,'ops/release/build-release-receipt.mjs'),dist,resolve(dist,'health/release.json')],{env:publicBuildEnvironment(profile,selection)});
   const c = createCandidate(dist,{sourceSha:process.env.ATMOS_SHA,runId:process.env.GITHUB_RUN_ID,
     attempt:process.env.GITHUB_RUN_ATTEMPT,workflowSha:process.env.GITHUB_SHA,pipelineDigest:pipelineDigest(profile),profile});
   save(stateFile(),c);
@@ -307,7 +310,7 @@ async function exactStaging(c) {
   assert.equal(hash(bytes), c.files.find(f=>f.path==='health/release.json').sha256, 'staging no longer serves this candidate');
   const index = await get(`${ORIGINS.staging}/?candidate=${c.artifactDigest}`);
   assert.equal(hash(index.bytes), c.files.find(f=>f.path==='index.html').sha256);
-  await publicModes(ORIGINS.staging);
+  await publicModes(ORIGINS.staging,c.profile);
 }
 async function deploy(stage) {
   await preflight(stage);
@@ -346,7 +349,7 @@ async function verify(stage) {
   const phase=process.env.RELEASE_GUARD_PHASE==='rollback'?'rollback':'candidate';
   if(stage==='production')requireProductionProfile(c.profile);
   else if(phase!=='rollback')requireStagingApproval(c,process.env);
-  controller(); await projectSnapshot(stage); await publicModes(ORIGINS[stage]);
+  controller(); await projectSnapshot(stage); await publicModes(ORIGINS[stage],c.profile);
   if (stage === 'production' && phase !== 'rollback') await exactStaging(candidate());
   run('bash',[resolve(CONTROL,'ops/release/verify-platform-production.sh'),ORIGINS[stage]]);
   if (phase !== 'rollback') {
