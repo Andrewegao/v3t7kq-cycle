@@ -1,7 +1,7 @@
 // Guarded orchestration only. This program never writes Workers, DNS, bindings, data or settings.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, chmodSync, existsSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, lstatSync, chmodSync, existsSync, unlinkSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {installCompressionOverlay,selectCompressionAssets,validateCompressionFiles} from './ui-static-compression.mjs';
@@ -320,13 +320,41 @@ export async function packagePagesWorker(profile,{app,dist,workerOut,overlay}) {
     origin:ORIGINS.staging,qualificationScope:'staging-only-nonpromotable'});
   installCompressionOverlay({dist,overlay,originalWorkerPath,originalRoutesPath});
 }
+// Reviewed against Atmos 4ec0b8baa1d33ca56d50e5e9797eca74293bd19b:
+// runtime layer/menu/native consumers request WebP; these JPGs are retained
+// generation sources, not runtime fallbacks. Keep the list explicit so a future
+// JPG cannot be silently removed merely because a same-name WebP exists.
+const STAGING_LEGACY_THUMBNAILS = Object.freeze(('aero apcp aqi aurora cape capei cat cbase cloud co ctop currents '
+  + 'dewpoint drought dust fire fog frzalt frzlvl gust hcc hurricanes icing jetwind lcc mcc mslp newsnow o3 o3surf '
+  + 'pm25 precip ptype radar radarGlobal rh satellite snod so2 soilm soilt solar spacewx sst swell swell2 swell3 '
+  + 'tec temp thermals uv vis waccum warnings waves wetbulb wind wperiod wpower wwave').split(' '));
+export function copyPublicShell(profile,{publicDir,shell}) {
+  validateProfile(profile);
+  assert.equal(existsSync(shell),false,'public shell destination must be new');
+  const excludes=['/data/','/data-atmos/'];
+  // account:true is accepted only for the exact staging-only account profile.
+  // Production-compatible and other qualified profiles retain their old bytes.
+  if(profile.account)for(const name of STAGING_LEGACY_THUMBNAILS){
+    const jpg=resolve(publicDir,'thumbs',`${name}.jpg`);
+    if(!existsSync(jpg))continue;
+    assert.ok(lstatSync(jpg).isFile(),`legacy thumbnail must be a regular file: ${name}`);
+    const webp=resolve(publicDir,'thumbs',`${name}.webp`);
+    assert.ok(lstatSync(webp).isFile(),`replacement thumbnail must be a regular file: ${name}`);
+    const bytes=readFileSync(webp);
+    assert.ok(bytes.length>=20 && bytes.subarray(0,4).toString()==='RIFF'
+      && bytes.subarray(8,12).toString()==='WEBP'
+      && bytes.readUInt32LE(4)===bytes.length-8,`invalid replacement WebP: ${name}`);
+    excludes.push(`/thumbs/${name}.jpg`);
+  }
+  mkdirSync(shell,{mode:0o700});
+  run('rsync',['-a',...excludes.flatMap(path=>['--exclude',path]),`${publicDir}/`,`${shell}/`]);
+}
 async function build() {
   buildGate(); controller();
   const profile=profileFor(process.env.MODEL_SELECTION_SHA256),selection=readSelection(ROOT,profile),tcSelection=readTcSelection(ROOT,profile);
   sourceIdentity(profile);
   const app = resolve(SOURCE, 'app'), shell = resolve(process.env.RUNNER_TEMP, 'ui-public-shell');
-  mkdirSync(shell, { mode: 0o700 });
-  run('rsync',['-a','--exclude','/data/','--exclude','/data-atmos/',`${app}/public/`,`${shell}/`]);
+  copyPublicShell(profile,{publicDir:resolve(app,'public'),shell});
   assert.ok(!existsSync(resolve(shell,SELECTION_ASSET)),'candidate source must not supply selection policy');
   assert.ok(!existsSync(resolve(shell,TC_SELECTION_ASSET)),'candidate source must not supply TC selection policy');
   if(selection){mkdirSync(dirname(resolve(shell,SELECTION_ASSET)),{recursive:true,mode:0o700});writeFileSync(resolve(shell,SELECTION_ASSET),selection.bytes,{flag:'wx',mode:0o600});}
