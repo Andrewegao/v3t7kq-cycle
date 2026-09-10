@@ -211,6 +211,18 @@ async function immutable(io, key, wanted, bodyOrFile) {
   else verifyRemote(before, wanted);
   verifyRemote(await io.get(key, wanted.bytes, false), wanted);
 }
+// Fixed small pool: stop claiming work on the first failure, then join every in-flight
+// operation before returning. No unbounded inventory of active promises or dangling writes.
+export async function payloadPool(items, worker) {
+  let next = 0, failure;
+  await Promise.all(Array.from({ length: Math.min(8, items.length) }, async () => {
+    while (!failure && next < items.length) {
+      const index = next++;
+      try { await worker(items[index], index); } catch (error) { failure ??= { error }; }
+    }
+  }));
+  if (failure) throw failure.error;
+}
 export async function preparePlaces(io, candidate, { qualification, approvedSourceSha, clock = Date.now, now = clock() } = {}) {
   validateQualification(qualification, candidate, approvedSourceSha); validateManifest(candidate.manifest); validateCompletion(candidate.completion);
   assert.deepEqual(candidate.manifestBody, encode(candidate.manifest), 'manifest changed after qualification');
@@ -224,7 +236,7 @@ export async function preparePlaces(io, candidate, { qualification, approvedSour
   // Pre-read every file before the first write so known local corruption cannot create a partial upload.
   for (const file of candidate.manifest.files) { const source = candidate.local.get(file.path); assert(source); const confined = await localFile(candidate.root, source.input); assert.equal(confined.file, source.file); const current = await readLocal(source.file, file.bytes, false); assert.equal(current.sha256, file.sha256, 'candidate changed before publication'); }
   const base = prefix(candidate.completion.kind, candidate.completion.identity);
-  for (const file of candidate.manifest.files) { sourceLive(); await immutable(io, base + file.path, file, candidate.local.get(file.path)); }
+  await payloadPool(candidate.manifest.files, async file => { sourceLive(); await immutable(io, base + file.path, file, candidate.local.get(file.path)); });
   sourceLive();
   await immutable(io, base + 'manifest.json', candidate.completion.manifest, candidate.manifestBody);
   // Completion is the reader's only immutable commit record. Never written before all remote bytes pass.
@@ -243,7 +255,10 @@ export async function activatePlaces(io, { kind, identity, expectedPointerSha256
   const remoteManifest = await io.get(base + 'manifest.json', completion.manifest.bytes, true); verifyRemote(remoteManifest, completion.manifest);
   const manifest = validateManifest(JSON.parse(remoteManifest.body)); assert.equal(manifest.kind, kind); assert.equal(manifest.identity, identity); assert.deepEqual(manifest.index, completion.index);
   assert.equal(manifest.files.length, completion.objectCount); assert.equal(manifest.files.reduce((sum, file) => sum + file.bytes, 0), completion.totalBytes);
-  for (const file of manifest.files) verifyRemote(await io.get(base + file.path, file.bytes, false), file);
+  await payloadPool(manifest.files, async file => {
+    if (completion.sourceExpiresAt) assert(finiteDate(completion.sourceExpiresAt) > clock(), 'source expired during verification');
+    verifyRemote(await io.get(base + file.path, file.bytes, false), file);
+  });
   const checkedAt = clock(); assert(checkedAt >= now);
   const pointer = validatePointer({ ...completion, createdAt: new Date(checkedAt).toISOString(), expiresAt,
     completion: { path: 'completion.json', bytes: completed.bytes, sha256: completed.sha256 } }, checkedAt);

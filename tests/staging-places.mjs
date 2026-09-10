@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { execFileSync } from 'node:child_process';
 import { ACCOUNT, BUCKET, LIMITS, hash, prefix, pointerKey, allowedKey, payloadPath, qualifyPlaces, preparePlaces,
-  activatePlaces, inspectPlaces, validateManifest, validateCompletion, validatePointer, createPlacesS3 } from '../tools/staging-places.mjs';
+  activatePlaces, inspectPlaces, validateManifest, validateCompletion, validatePointer, createPlacesS3, payloadPool } from '../tools/staging-places.mjs';
 
 const pin = 'a'.repeat(40);
 const encoded = value => Buffer.from(JSON.stringify(value) + '\n');
@@ -88,8 +88,8 @@ test('missing, extra, corrupted, linked and mixed-identity local data fail close
 test('corruption after qualification and partial remote upload never create completion', async t => {
   const f = await fixture(t), io = memory(); await writeFile(join(f.root, 'spots/us-ca-mavericks.json'), '{}');
   await assert.rejects(preparePlaces(io, f.candidate, approval(f.candidate))); assert.equal(io.writes.length, 0);
-  const fresh = await fixture(t), broken = memory(), put = broken.put;
-  broken.put = async (...args) => { if (broken.writes.length === 1) throw Error('uncertain write'); return put(...args); };
+  const fresh = await fixture(t), broken = memory(), put = broken.put; let attempts = 0;
+  broken.put = async (...args) => { if (++attempts === 2) throw Error('uncertain write'); return put(...args); };
   await assert.rejects(preparePlaces(broken, fresh.candidate, approval(fresh.candidate)));
   assert(!broken.writes.some(key => key.endsWith('/completion.json') || key.startsWith('shared-read/')));
 });
@@ -176,4 +176,25 @@ test('source expiry during transfer prevents completion and during activation pr
   fresh.get = async (...args) => { const result = await get(...args); time = now + 7 * 3600000; return result; };
   await assert.rejects(activatePlaces(fresh, { kind: 'surf', identity: 'surf-test', expectedPointerSha256: 'absent', approvedCompletionSha256: prepared.completion.sha256, now, clock: () => time, expiresAt: new Date(now + 3600000).toISOString() }));
   assert(!fresh.objects.has(pointerKey('surf')));
+});
+test('payload pool is bounded to eight, completes all successes, and joins failures without claiming new work', async () => {
+  const rows = Array.from({ length: 30 }, (_, i) => i); let active = 0, peak = 0; const completed = [];
+  await payloadPool(rows, async row => { active++; peak = Math.max(peak, active); await new Promise(resolve => setImmediate(resolve)); active--; completed.push(row); });
+  assert.equal(peak, 8); assert.equal(active, 0); assert.deepEqual(completed.sort((a, b) => a - b), rows);
+  let release, started = 0, joined = 0; const wait = new Promise(resolve => { release = resolve; });
+  const run = payloadPool(rows, async row => { started++; if (row === 0) throw Error('first failure'); await wait; joined++; });
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(started, 8);
+  release(); await assert.rejects(run, /first failure/); assert.equal(joined, 7); assert.equal(started, 8);
+});
+test('failed payload publication joins concurrent work before refusing completion or pointer', async t => {
+  const { candidate } = await fixture(t); const io = memory(), put = io.put; let active = 0, ended = 0;
+  io.put = async (...args) => { active++; try { await new Promise(resolve => setImmediate(resolve)); if (args[0].endsWith('index.json')) throw Error('failed index'); await put(...args); }
+    finally { active--; ended++; } };
+  await assert.rejects(preparePlaces(io, candidate, approval(candidate)), /failed index/);
+  assert.equal(active, 0); assert.equal(ended, candidate.manifest.files.length); assert(!io.writes.some(key => key.endsWith('completion.json') || key.startsWith('shared-read/')));
+  const fresh = memory(); const prepared = await preparePlaces(fresh, candidate, approval(candidate)); const get = fresh.get; active = 0; ended = 0;
+  fresh.get = async (...args) => { if (args[0].endsWith('manifest.json') || args[0].endsWith('completion.json')) return get(...args);
+    active++; try { await new Promise(resolve => setImmediate(resolve)); if (args[0].endsWith('index.json')) throw Error('failed readback'); return get(...args); } finally { active--; ended++; } };
+  await assert.rejects(activatePlaces(fresh, { kind: 'surf', identity: 'surf-test', expectedPointerSha256: 'absent', approvedCompletionSha256: prepared.completion.sha256, expiresAt: new Date(Date.now() + 3600000).toISOString() }), /failed readback/);
+  assert.equal(active, 0); assert.equal(ended, candidate.manifest.files.length); assert(!fresh.objects.has(pointerKey('surf')));
 });
