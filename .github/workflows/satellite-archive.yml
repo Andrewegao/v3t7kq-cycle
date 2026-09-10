@@ -36,6 +36,180 @@ env:
   RADAR_MAX_SOURCE_BYTES: '50000000000'
   RADAR_MAX_OUTPUT_BYTES: '4500000000'
   PUBLISH_VERIFY_MAX_BYTES: '7000000000'
+  # This controller runs after a failed producer/publisher step and receives no secrets.
+  # It copies only bounded, content-addressed JSON acquisition evidence into runner.temp.
+  SATELLITE_FAILURE_EVIDENCE_SCRIPT: |
+    import hashlib
+    import json
+    import os
+    import re
+    import shutil
+    from pathlib import Path
+
+    ROOT = Path("app/public/data-atmos/sat-archive/sat/v1")
+    TARGET = Path(os.environ["RUNNER_TEMP"]) / "satellite-acquisition-failure-evidence"
+    BUILD = TARGET.with_name(TARGET.name + ".building")
+    LEDGER_RE = re.compile(r"provenance/acquisitions/(gmgsi|radar-us)/([0-9a-f]{64})[.]json")
+    RECEIPT_RE = re.compile(r"provenance/batches/([0-9a-f]{64})[.]json")
+    MAX_LEDGERS = 4
+    MAX_LEDGER_BYTES = 4 * 1024 * 1024
+    MAX_OUTCOMES = 5000
+    MAX_RECEIPTS = 4
+    MAX_RECEIPT_BYTES = 8 * 1024 * 1024
+    MAX_RECEIPT_BYTES_TOTAL = 32 * 1024 * 1024
+
+    def digest(payload):
+        return hashlib.sha256(payload).hexdigest()
+
+    def bounded_file(path, maximum, relative):
+        resolved = path.resolve()
+        expected = ROOT.resolve() / relative
+        cursor = ROOT
+        has_symlink = False
+        for part in Path(relative).parts:
+            cursor /= part
+            has_symlink = has_symlink or cursor.is_symlink()
+        if resolved != expected or has_symlink or not path.is_file():
+            raise ValueError(f"unsafe evidence path: {relative}")
+        size = path.stat().st_size
+        if not 1 <= size <= maximum:
+            raise ValueError(f"evidence byte limit exceeded: {relative}")
+        payload = path.read_bytes()
+        if len(payload) != size:
+            raise ValueError(f"evidence changed while staging: {relative}")
+        return payload
+
+    def parse_json(payload, relative):
+        try:
+            body = json.loads(payload)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError(f"invalid evidence JSON: {relative}") from error
+        if not isinstance(body, dict):
+            raise ValueError(f"invalid evidence root: {relative}")
+        return body
+
+    shutil.rmtree(BUILD, ignore_errors=True)
+    shutil.rmtree(TARGET, ignore_errors=True)
+    ledger_paths = sorted(ROOT.glob("provenance/acquisitions/*/*.json")) if ROOT.is_dir() else []
+    output = Path(os.environ["GITHUB_OUTPUT"])
+    if not ledger_paths:
+        with output.open("a", encoding="utf-8") as handle:
+            handle.write("has_evidence=0\n")
+        raise SystemExit(0)
+    if len(ledger_paths) > MAX_LEDGERS:
+        raise ValueError("acquisition ledger count exceeds 4")
+
+    staged = []
+    receipt_bindings = {}
+    ledger_bytes = 0
+    for path in ledger_paths:
+        relative = path.relative_to(ROOT).as_posix()
+        match = LEDGER_RE.fullmatch(relative)
+        if not match:
+            raise ValueError(f"invalid acquisition ledger path: {relative}")
+        payload = bounded_file(path, MAX_LEDGER_BYTES, relative)
+        ledger_bytes += len(payload)
+        if ledger_bytes > MAX_LEDGER_BYTES:
+            raise ValueError("aggregate acquisition ledger bytes exceed 4 MiB")
+        if digest(payload) != match.group(2):
+            raise ValueError(f"acquisition ledger digest mismatch: {relative}")
+        body = parse_json(payload, relative)
+        outcomes = body.get("outcomes")
+        statuses = {
+            "baked": "baked",
+            "source-missing": "sourceMissing",
+            "checkpoint-verified": "checkpointVerified",
+            "local-existing": "localExisting",
+            "error": "error",
+        }
+        if (
+            body.get("schemaVersion") != 1
+            or body.get("kind") != "weatherx-satellite-acquisition-run-v1"
+            or body.get("family") != match.group(1)
+            or not isinstance(body.get("complete"), bool)
+            or not isinstance(outcomes, list)
+            or not 1 <= len(outcomes) <= MAX_OUTCOMES
+        ):
+            raise ValueError(f"invalid acquisition ledger identity: {relative}")
+        measured = {value: 0 for value in statuses.values()}
+        for outcome in outcomes:
+            if not isinstance(outcome, dict) or outcome.get("status") not in statuses:
+                raise ValueError(f"invalid acquisition outcome: {relative}")
+            measured[statuses[outcome["status"]]] += 1
+        expected_counts = {"requested": len(outcomes), **measured}
+        if body.get("counts") != expected_counts or body["complete"] != (measured["error"] == 0):
+            raise ValueError(f"inconsistent acquisition completion: {relative}")
+        receipt = body.get("sourceReceipt")
+        if bool(measured["baked"]) != (receipt is not None):
+            raise ValueError(f"inconsistent source receipt binding: {relative}")
+        if receipt is not None:
+            if not isinstance(receipt, dict) or set(receipt) != {"path", "bytes", "sha256"}:
+                raise ValueError(f"invalid source receipt binding: {relative}")
+            receipt_relative = receipt.get("path")
+            receipt_match = RECEIPT_RE.fullmatch(receipt_relative) if isinstance(receipt_relative, str) else None
+            if (
+                not receipt_match
+                or receipt.get("sha256") != receipt_match.group(1)
+                or not isinstance(receipt.get("bytes"), int)
+                or isinstance(receipt.get("bytes"), bool)
+                or not 1 <= receipt["bytes"] <= MAX_RECEIPT_BYTES
+            ):
+                raise ValueError(f"invalid source receipt binding: {relative}")
+            value = (receipt, match.group(1))
+            previous = receipt_bindings.setdefault(receipt_relative, value)
+            if previous != value:
+                raise ValueError(f"conflicting source receipt binding: {receipt_relative}")
+        destination = BUILD / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(payload)
+        staged.append({"path": relative, "bytes": len(payload), "sha256": digest(payload)})
+
+    if len(receipt_bindings) > MAX_RECEIPTS:
+        raise ValueError("source receipt count exceeds 4")
+    receipt_bytes = 0
+    for relative, (binding, family) in sorted(receipt_bindings.items()):
+        payload = bounded_file(ROOT / relative, MAX_RECEIPT_BYTES, relative)
+        receipt_bytes += len(payload)
+        if receipt_bytes > MAX_RECEIPT_BYTES_TOTAL:
+            raise ValueError("aggregate source receipt bytes exceed 32 MiB")
+        if len(payload) != binding["bytes"] or digest(payload) != binding["sha256"]:
+            raise ValueError(f"source receipt binding mismatch: {relative}")
+        body = parse_json(payload, relative)
+        if (
+            body.get("schemaVersion") != 1
+            or body.get("kind") != "weatherx-satellite-source-receipt-v1"
+            or body.get("family") != family
+            or not isinstance(body.get("frames"), list)
+            or not 1 <= len(body["frames"]) <= MAX_OUTCOMES
+        ):
+            raise ValueError(f"invalid source receipt identity: {relative}")
+        destination = BUILD / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(payload)
+        staged.append({"path": relative, "bytes": len(payload), "sha256": digest(payload)})
+
+    manifest = {
+        "schemaVersion": 1,
+        "kind": "weatherx-satellite-failure-evidence-artifact-v1",
+        "job": os.environ["SATELLITE_EVIDENCE_JOB"],
+        "workflowRunId": os.environ["GITHUB_RUN_ID"],
+        "workflowRunAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
+        "limits": {
+            "ledgers": MAX_LEDGERS,
+            "ledgerBytes": MAX_LEDGER_BYTES,
+            "receipts": MAX_RECEIPTS,
+            "receiptBytes": MAX_RECEIPT_BYTES_TOTAL,
+        },
+        "files": sorted(staged, key=lambda item: item["path"]),
+    }
+    BUILD.mkdir(parents=True, exist_ok=True)
+    (BUILD / "failure-evidence-manifest.json").write_text(
+        json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    BUILD.replace(TARGET)
+    with output.open("a", encoding="utf-8") as handle:
+        handle.write("has_evidence=1\n")
 
 jobs:
   hourly:
@@ -123,6 +297,21 @@ jobs:
           PUBLISH_MAX_CLASS_B_OPERATIONS: '400'
           PUBLISH_VERIFY_MAX_INDEX_BYTES: '4000000'
         run: bash ops/satellite/publish.sh
+      - name: stage bounded acquisition evidence after failure
+        if: ${{ failure() }}
+        id: acquisition_failure_evidence
+        env:
+          SATELLITE_EVIDENCE_JOB: hourly
+        run: python3 -c "$SATELLITE_FAILURE_EVIDENCE_SCRIPT"
+      - name: retain bounded acquisition evidence after failure
+        if: ${{ failure() && steps.acquisition_failure_evidence.outputs.has_evidence == '1' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: satellite-acquisition-failure-hourly-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/satellite-acquisition-failure-evidence
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 9
 
   backfill-plan:
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && vars.SATELLITE_ARCHIVE_ENABLED == '1' }}
@@ -248,3 +437,18 @@ jobs:
           PUBLISH_MAX_CLASS_B_OPERATIONS: '60000'
           PUBLISH_VERIFY_MAX_INDEX_BYTES: '4000000'
         run: bash ops/satellite/publish.sh
+      - name: stage bounded acquisition evidence after failure
+        if: ${{ failure() }}
+        id: acquisition_failure_evidence
+        env:
+          SATELLITE_EVIDENCE_JOB: backfill-${{ matrix.month.from }}-${{ matrix.month.to }}
+        run: python3 -c "$SATELLITE_FAILURE_EVIDENCE_SCRIPT"
+      - name: retain bounded acquisition evidence after failure
+        if: ${{ failure() && steps.acquisition_failure_evidence.outputs.has_evidence == '1' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: satellite-acquisition-failure-backfill-${{ matrix.month.from }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/satellite-acquisition-failure-evidence
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 9
