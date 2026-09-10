@@ -4,7 +4,7 @@ import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,existsSync,rmSync,symli
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {copyPublicShell} from '../tools/ui-release.mjs';
-import {ACCOUNT_CORE_PROFILE,BASELINE_PROFILE,CORE_RELEASE_PROFILE,STATIC_COMPRESSION_PROFILE} from '../tools/ui-staging-models.mjs';
+import {ACCOUNT_CORE_PROFILE,TC_RELEASE_PROFILE,BASELINE_PROFILE,CORE_RELEASE_PROFILE,STATIC_COMPRESSION_PROFILE} from '../tools/ui-staging-models.mjs';
 
 // A valid 1x1 WebP. The copy policy checks the envelope; browser qualification
 // separately verifies decoding and the real layer menu's runtime asset paths.
@@ -19,9 +19,10 @@ function fixture(t){
     'basemap-ground/0.pbf':'ground','data-fixtures/radiosondes/stations.json':'fallback','index.html':'shell'}))writeFileSync(join(source,path),bytes);
   return {source,shell};
 }
-test('exact staging account profile omits only reviewed legacy JPG copies, preserving sources and runtime bytes',t=>{
+for(const [name,profile] of [['account',ACCOUNT_CORE_PROFILE],['TC',TC_RELEASE_PROFILE]])
+test(`exact staging ${name} profile omits only reviewed legacy JPG copies, preserving sources and runtime bytes`,t=>{
   const {source,shell}=fixture(t);
-  copyPublicShell(ACCOUNT_CORE_PROFILE,{publicDir:source,shell});
+  copyPublicShell(profile,{publicDir:source,shell});
   assert.equal(existsSync(join(shell,'thumbs/wind.jpg')),false);
   assert.equal(readFileSync(join(source,'thumbs/wind.jpg'),'utf8'),'legacy');
   for(const p of ['thumbs/wind.webp','thumbs/unreviewed.jpg','thumbs/unreviewed.webp','basemap-ground/0.pbf','data-fixtures/radiosondes/stations.json','index.html'])assert.deepEqual(readFileSync(join(shell,p)),readFileSync(join(source,p)));
@@ -35,13 +36,13 @@ test('production-compatible and other profiles retain their existing thumbnail i
   }
 });
 test('missing, corrupt or symlink replacement fails before a shell is copied',t=>{
-  for(const replacement of ['missing','corrupt','symlink','wrong-length']){
+  for(const profile of [ACCOUNT_CORE_PROFILE,TC_RELEASE_PROFILE]) for(const replacement of ['missing','corrupt','symlink','wrong-length']){
     const {source,shell}=fixture(t),webp=join(source,'thumbs/wind.webp');
     rmSync(webp);
     if(replacement==='corrupt')writeFileSync(webp,'not a WebP');
     if(replacement==='symlink')symlinkSync(join(source,'thumbs/unreviewed.jpg'),webp);
     if(replacement==='wrong-length'){const bytes=Buffer.from(WEBP);bytes.writeUInt32LE(1,4);writeFileSync(webp,bytes);}
-    assert.throws(()=>copyPublicShell(ACCOUNT_CORE_PROFILE,{publicDir:source,shell}));
+    assert.throws(()=>copyPublicShell(profile,{publicDir:source,shell}));
     assert.equal(existsSync(shell),false);
   }
 });

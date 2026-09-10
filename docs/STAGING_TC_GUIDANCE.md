@@ -80,3 +80,20 @@ Validation: `node --test tests/staging-tc-guidance.mjs tests/ui-staging-tc-profi
 Prepared during the four-track finish goal on September 10. It has not been
 merged, dispatched or enabled. The prerequisite UI injection and exact source
 approval remain explicit rollout gates, not claims of completed staging service.
+
+## Reviewed thumbnail packaging follow-up
+
+The account packaging change on Cycle main `b2b56f9` is explicitly extended to
+the TC profile after auditing its actual layer-menu readers. Both paths in
+`LayerMenu.tsx` request `.webp`; no TC consumer requests the 60 allowlisted source
+JPGs. Other profiles and unknown filenames retain their original behavior. A
+missing, malformed or symlinked WebP counterpart fails closed before omission.
+The source tree retains every JPG; only redundant deployment copies are omitted.
+
+The local copy audit against Atmos `d6133ff91969c0950f606e89b81193a91378a62a`
+omitted 60 deployment copies (3,252,026 bytes), retained 4,687 source files
+byte-for-byte, and decoded all 60 WebP counterparts with Pillow 12.2.0. The
+5,000-file and 96 MiB candidate limits are unchanged. A complete rebuilt candidate
+still requires its own package and browser checks; this copy audit alone is not
+an Actions run or deployment. TC proof validation also requires exactly one
+1440×1000 and one 390×844 result, rejecting duplicate viewport receipts.

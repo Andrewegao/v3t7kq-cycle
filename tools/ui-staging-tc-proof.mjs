@@ -92,6 +92,7 @@ export function validateTcProofBytes(bytes,context,now=Date.now()){
   assert.equal(value.selectionSha256,TC_SELECTION_SHA256);assert.equal(value.fixtureInventorySha256,context.fixtureInventorySha256);
   assert.equal(value.cloudWrites,0);assert.equal(value.sharedStagingDeploy,false);const at=Date.parse(value.qualifiedAt);assert.ok(Number.isFinite(at)&&at<=now&&now-at<=10*60000);
   assert.ok(Array.isArray(value.viewports)&&value.viewports.length===2);for(const row of value.viewports){exactKeys(row,['width','height','models','pinnedTrackRequests'],'TC viewport');assert.ok([[1440,1000],[390,844]].some(([w,h])=>row.width===w&&row.height===h));assert.deepEqual(row.models,['gfs','ecmwf']);assert.ok(row.pinnedTrackRequests>=2);}
+  assert.deepEqual(value.viewports.map(row=>`${row.width}x${row.height}`).sort(),['1440x1000','390x844'],'TC proof requires one desktop and one mobile viewport');
   return value;
 }
 export async function runTcProof(env=process.env){

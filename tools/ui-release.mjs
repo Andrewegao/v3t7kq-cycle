@@ -332,9 +332,10 @@ export function copyPublicShell(profile,{publicDir,shell}) {
   validateProfile(profile);
   assert.equal(existsSync(shell),false,'public shell destination must be new');
   const excludes=['/data/','/data-atmos/'];
-  // account:true is accepted only for the exact staging-only account profile.
+  // Account and TC are independently reviewed, exact nonpromotable profiles.
+  // TC uses the same WebP-only thumbnail consumers; source JPGs remain untouched.
   // Production-compatible and other qualified profiles retain their old bytes.
-  if(profile.account)for(const name of STAGING_LEGACY_THUMBNAILS){
+  if(profile.account || tcGuidanceProfile(profile))for(const name of STAGING_LEGACY_THUMBNAILS){
     const jpg=resolve(publicDir,'thumbs',`${name}.jpg`);
     if(!existsSync(jpg))continue;
     assert.ok(lstatSync(jpg).isFile(),`legacy thumbnail must be a regular file: ${name}`);

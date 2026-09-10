@@ -87,7 +87,7 @@ test('isolated proof protocol and receipt are source, controller, fixture and no
     selectionSha256:TC_SELECTION_SHA256,fixtureInventorySha256:fixture.inventorySha256,qualifiedAt:new Date(NOW).toISOString(),cloudWrites:0,sharedStagingDeploy:false,
     viewports:[{width:1440,height:1000,models:['gfs','ecmwf'],pinnedTrackRequests:2},{width:390,height:844,models:['gfs','ecmwf'],pinnedTrackRequests:2}]};
   const bytes=Buffer.from(JSON.stringify(receipt));assert.equal(validateTcProofBytes(bytes,{sourceSha:source,releaseId:release,fixtureInventorySha256:fixture.inventorySha256},NOW).cloudWrites,0);
-  for(const mutation of [{cloudWrites:1},{sharedStagingDeploy:true},{selectionSha256:'0'.repeat(64)},{sourceSha:'b'.repeat(40)}]){
+  for(const mutation of [{cloudWrites:1},{sharedStagingDeploy:true},{selectionSha256:'0'.repeat(64)},{sourceSha:'b'.repeat(40)},{viewports:[receipt.viewports[0],receipt.viewports[0]]},{viewports:[receipt.viewports[1],receipt.viewports[1]]}]){
     const changed={...receipt,...mutation};assert.throws(()=>validateTcProofBytes(Buffer.from(JSON.stringify(changed)),{sourceSha:source,releaseId:release,fixtureInventorySha256:fixture.inventorySha256},NOW));
   }
 });
