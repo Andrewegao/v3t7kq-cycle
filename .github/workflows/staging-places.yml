@@ -104,7 +104,8 @@ jobs:
       - name: Install integrity-locked consumer dependencies without storage credentials
         run: npm ci --ignore-scripts --no-audit --no-fund --prefix control/app
       - name: Install hash-locked minimal offline place producer dependencies
-        run: python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r cycle/tools/staging-places-requirements.txt
+        run: >-
+          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r cycle/tools/staging-places-requirements.txt
       - name: Require actual pinned producer, consumer, coverage and requested-roster proof
         # No proof is accepted from the encrypted seed. Missing frozen checkpoint evidence
         # or unsupported family fails here, before the storage credential step.
