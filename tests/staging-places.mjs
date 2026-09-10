@@ -7,6 +7,7 @@ import { Readable } from 'node:stream';
 import { execFileSync } from 'node:child_process';
 import { ACCOUNT, BUCKET, LIMITS, hash, prefix, pointerKey, allowedKey, payloadPath, qualifyPlaces, preparePlaces,
   activatePlaces, inspectPlaces, validateManifest, validateCompletion, validatePointer, createPlacesS3, payloadPool } from '../tools/staging-places.mjs';
+import { placeFailureDiagnostic, placeProgress } from '../tools/staging-places-diagnostics.mjs';
 
 const pin = 'a'.repeat(40);
 const encoded = value => Buffer.from(JSON.stringify(value) + '\n');
@@ -224,4 +225,42 @@ test('failed payload publication joins concurrent work before refusing completio
     active++; try { await new Promise(resolve => setImmediate(resolve)); if (args[0].endsWith('index.json')) throw Error('failed readback'); return get(...args); } finally { active--; ended++; } };
   await assert.rejects(activatePlaces(fresh, { kind: 'surf', identity: 'surf-test', expectedPointerSha256: 'absent', approvedCompletionSha256: prepared.completion.sha256, expiresAt: new Date(Date.now() + 3600000).toISOString() }), /failed readback/);
   assert.equal(active, 0); assert.equal(ended, candidate.manifest.files.length); assert(!fresh.objects.has(pointerKey('surf')));
+});
+test('diagnostics never read provider messages or expose arbitrary status, names, keys, bodies or credentials', () => {
+  const malicious = { name: 'secret-name', code: 'secret-code', $metadata: { httpStatusCode: 599 }, key: 'private/key', body: 'private-body', credentials: 'private-key' };
+  Object.defineProperty(malicious, 'message', { get() { throw Error('message must never be read'); } });
+  assert.deepEqual(placeFailureDiagnostic(malicious), { schemaVersion: 1, kind: 'staging-place-failure', stage: 'workflow', operation: 'validate', category: 'unknown' });
+  for (const [error, category] of [[{ name: 'TimeoutError' }, 'timeout'], [{ code: 'ECONNRESET' }, 'network'], [{ code: 'ERR_ASSERTION' }, 'validation']]) assert.equal(placeFailureDiagnostic(error).category, category);
+  assert.equal(placeFailureDiagnostic({ $metadata: { httpStatusCode: 503 }, message: 'secret' }).httpStatus, 503);
+});
+test('adapter failure diagnostics preserve only whitelisted get/put status plus joined payload progress', async t => {
+  for (const operation of ['get', 'put']) {
+    const { candidate } = await fixture(t), calls = [], reports = [];
+    const env = { STAGING_R2_ACCOUNT_ID: ACCOUNT, STAGING_R2_WRITE_ACCESS_KEY_ID: 'test', STAGING_R2_WRITE_SECRET_ACCESS_KEY: 'test' };
+    const io = await createPlacesS3(env, { send: async command => {
+      const action = command.input.Body ? 'put' : 'get'; calls.push(action);
+      if (operation === 'put' && action === 'get') throw { $metadata: { httpStatusCode: 404 }, message: 'secret-missing-body' };
+      throw { $metadata: { httpStatusCode: operation === 'put' ? 429 : 403 }, name: 'private-name', code: 'private-code', message: 'private-provider-body', Key: 'private-key', credentials: 'private-credential' };
+    } });
+    let failure; try { await preparePlaces(io, candidate, { ...approval(candidate), report: row => reports.push(row) }); } catch (error) { failure = error; }
+    assert.deepEqual(placeFailureDiagnostic(failure), { schemaVersion: 1, kind: 'staging-place-failure', stage: 'prepare-payload', operation, category: 'http', httpStatus: operation === 'put' ? 429 : 403, completedPayloads: 0, totalPayloads: candidate.manifest.files.length });
+    assert(!JSON.stringify([placeFailureDiagnostic(failure), reports]).includes('private'));
+    assert.equal(calls.filter(action => action === operation).length, candidate.manifest.files.length, 'one request per scheduled payload, no retry');
+  }
+});
+test('integrity failure identifies metadata check and final joined completed count without leaking object paths', async t => {
+  const { candidate } = await fixture(t), io = memory(); await preparePlaces(io, candidate, approval(candidate));
+  io.objects.get(prefix('surf', 'surf-test') + candidate.manifest.files[0].path).customMetadata.sha256 = '0'.repeat(64);
+  let failure; try { await preparePlaces(io, candidate, approval(candidate)); } catch (error) { failure = error; }
+  const diagnostic = placeFailureDiagnostic(failure);
+  assert.equal(diagnostic.stage, 'prepare-payload'); assert.equal(diagnostic.operation, 'check-metadata'); assert.equal(diagnostic.category, 'integrity');
+  assert.equal(diagnostic.completedPayloads, candidate.manifest.files.length - 1); assert.equal(diagnostic.totalPayloads, candidate.manifest.files.length);
+  assert(!JSON.stringify(diagnostic).includes(candidate.manifest.files[0].path));
+});
+test('progress is bounded to start, each500 completions and final count; reporter failure is nonfatal', () => {
+  const reports = [], progress = placeProgress('prepare-payload', 11581, row => reports.push(row));
+  for (let i = 0; i < 11581; i++) progress.completed();
+  assert.deepEqual(reports.map(row => row.completedPayloads), [0, ...Array.from({ length: 23 }, (_, i) => (i + 1) * 500), 11581]);
+  assert(reports.every(row => Object.keys(row).sort().join(',') === 'completedPayloads,kind,schemaVersion,stage,totalPayloads'));
+  const throwing = placeProgress('activate-payload', 1, () => { throw Error('sink failed'); }); assert.doesNotThrow(() => throwing.completed());
 });

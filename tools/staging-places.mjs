@@ -8,6 +8,7 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Readable } from 'node:stream';
 import { ACCOUNT } from './shared-data.mjs';
+import { tagPlaceError, placeOperation, placeProgress, placeFailureDiagnostic } from './staging-places-diagnostics.mjs';
 
 export { ACCOUNT };
 export const BUCKET = 'weatherx-data-staging';
@@ -202,14 +203,18 @@ export function validateQualification(proof, candidate, approvedSourceSha) {
   return proof;
 }
 function verifyRemote(object, wanted) {
-  assert(object && object.bytes === wanted.bytes && object.sha256 === wanted.sha256, 'remote bytes differ');
-  assert(object.customMetadata?.sha256 === wanted.sha256 && !object.httpMetadata?.contentEncoding, 'remote metadata differs');
+  try { assert(object && object.bytes === wanted.bytes && object.sha256 === wanted.sha256, 'remote bytes differ'); }
+  catch (error) { throw tagPlaceError(error, { operation: 'check-bytes', category: 'integrity' }); }
+  try { assert(object.customMetadata?.sha256 === wanted.sha256 && !object.httpMetadata?.contentEncoding, 'remote metadata differs'); }
+  catch (error) { throw tagPlaceError(error, { operation: 'check-metadata', category: 'integrity' }); }
 }
-async function immutable(io, key, wanted, bodyOrFile) {
-  allowedKey(key); const before = await io.get(key, wanted.bytes, false);
-  if (!before) { await io.put(key, bodyOrFile, { ifNoneMatch: '*', sha256: wanted.sha256, bytes: wanted.bytes }); }
-  else verifyRemote(before, wanted);
-  verifyRemote(await io.get(key, wanted.bytes, false), wanted);
+async function immutable(io, key, wanted, bodyOrFile, stage, progress) {
+  allowedKey(key); const run = (operation, task) => placeOperation(stage, operation, progress, task);
+  const before = await run('get', () => io.get(key, wanted.bytes, false));
+  if (!before) { await run('put', () => io.put(key, bodyOrFile, { ifNoneMatch: '*', sha256: wanted.sha256, bytes: wanted.bytes })); }
+  else await run('check-bytes', () => verifyRemote(before, wanted));
+  const after = await run('get', () => io.get(key, wanted.bytes, false));
+  await run('check-bytes', () => verifyRemote(after, wanted));
 }
 // Fixed small pool: stop claiming work on the first failure, then join every in-flight
 // operation before returning. No unbounded inventory of active promises or dangling writes.
@@ -223,7 +228,7 @@ export async function payloadPool(items, worker) {
   }));
   if (failure) throw failure.error;
 }
-export async function preparePlaces(io, candidate, { qualification, approvedSourceSha, clock = Date.now, now = clock() } = {}) {
+export async function preparePlaces(io, candidate, { qualification, approvedSourceSha, clock = Date.now, now = clock(), report } = {}) {
   validateQualification(qualification, candidate, approvedSourceSha); validateManifest(candidate.manifest); validateCompletion(candidate.completion);
   assert.deepEqual(candidate.manifestBody, encode(candidate.manifest), 'manifest changed after qualification');
   assert.deepEqual(candidate.completionBody, encode(candidate.completion), 'completion changed after qualification');
@@ -234,51 +239,59 @@ export async function preparePlaces(io, candidate, { qualification, approvedSour
   const sourceLive = () => { const current = clock(); assert(Number.isFinite(current) && current >= now, 'invalid publication clock'); if (candidate.completion.sourceExpiresAt) assert(finiteDate(candidate.completion.sourceExpiresAt) > current, 'source expired during preparation'); };
   sourceLive();
   // Pre-read every file before the first write so known local corruption cannot create a partial upload.
-  for (const file of candidate.manifest.files) { const source = candidate.local.get(file.path); assert(source); const confined = await localFile(candidate.root, source.input); assert.equal(confined.file, source.file); const current = await readLocal(source.file, file.bytes, false); assert.equal(current.sha256, file.sha256, 'candidate changed before publication'); }
+  for (const file of candidate.manifest.files) await placeOperation('prepare-local', 'check-bytes', () => ({ completedPayloads: 0, totalPayloads: candidate.manifest.files.length }), async () => {
+    const source = candidate.local.get(file.path); assert(source); const confined = await localFile(candidate.root, source.input); assert.equal(confined.file, source.file); const current = await readLocal(source.file, file.bytes, false); assert.equal(current.sha256, file.sha256, 'candidate changed before publication'); });
   const base = prefix(candidate.completion.kind, candidate.completion.identity);
-  await payloadPool(candidate.manifest.files, async file => { sourceLive(); await immutable(io, base + file.path, file, candidate.local.get(file.path)); });
-  sourceLive();
-  await immutable(io, base + 'manifest.json', candidate.completion.manifest, candidate.manifestBody);
+  const progress = placeProgress('prepare-payload', candidate.manifest.files.length, report);
+  try { await payloadPool(candidate.manifest.files, async file => {
+    await placeOperation('prepare-payload', 'validate', progress.snapshot, () => sourceLive());
+    await immutable(io, base + file.path, file, candidate.local.get(file.path), 'prepare-payload', progress.snapshot); progress.completed();
+  }); } catch (error) { throw tagPlaceError(error, progress.snapshot()); }
+  await placeOperation('prepare-manifest', 'validate', progress.snapshot, () => sourceLive());
+  await immutable(io, base + 'manifest.json', candidate.completion.manifest, candidate.manifestBody, 'prepare-manifest', progress.snapshot);
   // Completion is the reader's only immutable commit record. Never written before all remote bytes pass.
   const completionReceipt = { path: 'completion.json', bytes: candidate.completionBody.length, sha256: hash(candidate.completionBody) };
-  sourceLive();
-  await immutable(io, base + 'completion.json', completionReceipt, candidate.completionBody);
+  await placeOperation('prepare-completion', 'validate', progress.snapshot, () => sourceLive());
+  await immutable(io, base + 'completion.json', completionReceipt, candidate.completionBody, 'prepare-completion', progress.snapshot);
   return { ...candidate.completion, completion: completionReceipt, activated: false };
 }
 export async function inspectPlaces(io, kind) { const object = await io.get(pointerKey(kind), LIMITS.completionBytes, false); return { pointerSha256: object?.sha256 ?? 'absent', bytes: object?.bytes ?? 0 }; }
-export async function activatePlaces(io, { kind, identity, expectedPointerSha256, approvedCompletionSha256, clock = Date.now, now = clock(), expiresAt }) {
+export async function activatePlaces(io, { kind, identity, expectedPointerSha256, approvedCompletionSha256, clock = Date.now, now = clock(), expiresAt, report }) {
   kindId(kind, identity); assert(expectedPointerSha256 === 'absent' || HASH.test(expectedPointerSha256 ?? '')); assert(HASH.test(approvedCompletionSha256 ?? ''));
-  const base = prefix(kind, identity), completed = await io.get(base + 'completion.json', LIMITS.completionBytes, true);
+  const base = prefix(kind, identity), completed = await placeOperation('activate-completion', 'get', null, () => io.get(base + 'completion.json', LIMITS.completionBytes, true));
   assert(completed && completed.sha256 === approvedCompletionSha256, 'unreviewed or absent completion');
   const completion = validateCompletion(JSON.parse(completed.body)); assert.equal(completion.kind, kind); assert.equal(completion.identity, identity);
   verifyRemote(completed, { bytes: completed.body.length, sha256: approvedCompletionSha256 });
-  const remoteManifest = await io.get(base + 'manifest.json', completion.manifest.bytes, true); verifyRemote(remoteManifest, completion.manifest);
+  const remoteManifest = await placeOperation('activate-manifest', 'get', null, () => io.get(base + 'manifest.json', completion.manifest.bytes, true)); verifyRemote(remoteManifest, completion.manifest);
   const manifest = validateManifest(JSON.parse(remoteManifest.body)); assert.equal(manifest.kind, kind); assert.equal(manifest.identity, identity); assert.deepEqual(manifest.index, completion.index);
   assert.equal(manifest.files.length, completion.objectCount); assert.equal(manifest.files.reduce((sum, file) => sum + file.bytes, 0), completion.totalBytes);
-  await payloadPool(manifest.files, async file => {
-    if (completion.sourceExpiresAt) assert(finiteDate(completion.sourceExpiresAt) > clock(), 'source expired during verification');
-    verifyRemote(await io.get(base + file.path, file.bytes, false), file);
-  });
+  const progress = placeProgress('activate-payload', manifest.files.length, report);
+  try { await payloadPool(manifest.files, async file => {
+    await placeOperation('activate-payload', 'validate', progress.snapshot, () => { if (completion.sourceExpiresAt) assert(finiteDate(completion.sourceExpiresAt) > clock(), 'source expired during verification'); });
+    const current = await placeOperation('activate-payload', 'get', progress.snapshot, () => io.get(base + file.path, file.bytes, false));
+    await placeOperation('activate-payload', 'check-bytes', progress.snapshot, () => verifyRemote(current, file)); progress.completed();
+  }); } catch (error) { throw tagPlaceError(error, progress.snapshot()); }
   const checkedAt = clock(); assert(checkedAt >= now);
   const pointer = validatePointer({ ...completion, createdAt: new Date(checkedAt).toISOString(), expiresAt,
     completion: { path: 'completion.json', bytes: completed.bytes, sha256: completed.sha256 } }, checkedAt);
-  const key = pointerKey(kind), before = await io.get(key, LIMITS.completionBytes, false);
+  const key = pointerKey(kind), before = await placeOperation('activate-pointer', 'get', progress.snapshot, () => io.get(key, LIMITS.completionBytes, false));
   assert.equal(before?.sha256 ?? 'absent', expectedPointerSha256, 'pointer changed; inspect before retry');
   const body = encode(pointer); assert(body.length <= LIMITS.completionBytes);
   validatePointer(pointer, clock());
   let reconciled = false;
-  try { await io.put(key, body, { ...(before ? { ifMatch: before.etag } : { ifNoneMatch: '*' }), bytes: body.length, sha256: hash(body) }); }
+  try { await placeOperation('activate-pointer', 'put', progress.snapshot, () => io.put(key, body, { ...(before ? { ifMatch: before.etag } : { ifNoneMatch: '*' }), bytes: body.length, sha256: hash(body) })); }
   catch {
     // A lost response is not proof of a failed conditional write. Reconcile read-only;
     // never retry the PUT or accept a different writer's pointer as our activation.
     try {
-      const current = await io.get(key, LIMITS.completionBytes, true);
+      const current = await placeOperation('activate-pointer', 'get', progress.snapshot, () => io.get(key, LIMITS.completionBytes, true));
       verifyRemote(current, { bytes: body.length, sha256: hash(body) });
       assert(Buffer.isBuffer(current.body) && current.body.equals(body), 'pointer bytes differ');
       reconciled = true;
-    } catch { throw new Error('activation outcome uncertain; inspect pointer before retry'); }
+    } catch (error) { const failure = new Error('activation outcome uncertain; inspect pointer before retry'); throw tagPlaceError(failure, { ...placeFailureDiagnostic(error), stage: 'activate-pointer', ...progress.snapshot() }); }
   }
-  if (!reconciled) verifyRemote(await io.get(key, LIMITS.completionBytes, false), { bytes: body.length, sha256: hash(body) });
+  if (!reconciled) { const current = await placeOperation('activate-pointer', 'get', progress.snapshot, () => io.get(key, LIMITS.completionBytes, false));
+    await placeOperation('activate-pointer', 'check-bytes', progress.snapshot, () => verifyRemote(current, { bytes: body.length, sha256: hash(body) })); }
   return { identity, pointerSha256: hash(body), expiresAt, activated: true, ...(reconciled ? { reconciled: true } : {}) };
 }
 
@@ -293,7 +306,9 @@ export async function createPlacesS3(env, injectedClient) {
     requestChecksumCalculation: 'WHEN_REQUIRED', responseChecksumValidation: 'WHEN_REQUIRED',
     credentials: { accessKeyId: env.STAGING_R2_WRITE_ACCESS_KEY_ID, secretAccessKey: env.STAGING_R2_WRITE_SECRET_ACCESS_KEY } });
   async function send(command, missing = false) { try { return await client.send(command, { abortSignal: AbortSignal.timeout(45000) }); }
-    catch (error) { if (missing && error?.$metadata?.httpStatusCode === 404) return null; throw new Error(error?.$metadata?.httpStatusCode === 412 ? 'staging place CAS conflict' : 'staging place request failed or uncertain'); } }
+    catch (error) { if (missing && error?.$metadata?.httpStatusCode === 404) return null;
+      const safe = new Error(error?.$metadata?.httpStatusCode === 412 ? 'staging place CAS conflict' : 'staging place request failed or uncertain');
+      throw tagPlaceError(safe, { ...placeFailureDiagnostic(error), stage: 'transport', operation: missing ? 'get' : 'put' }); } }
   return { close: () => client.destroy?.(), async get(key, maxBytes, collect = true) {
     allowedKey(key); assert(Number.isSafeInteger(maxBytes) && maxBytes > 0 && maxBytes <= LIMITS.fileBytes);
     const object = await send(new GetObjectCommand({ Bucket: BUCKET, Key: key }), true); if (!object) return null;
@@ -302,7 +317,8 @@ export async function createPlacesS3(env, injectedClient) {
       for await (const chunk of object.Body) { bytes += chunk.length; assert(bytes <= maxBytes); digest.update(chunk); if (collect) chunks.push(Buffer.from(chunk)); }
       assert.equal(bytes, object.ContentLength); assert(/^"[A-Za-z0-9-]+"$/.test(object.ETag ?? ''));
       return { bytes, sha256: digest.digest('hex'), etag: object.ETag, customMetadata: object.Metadata ?? {}, httpMetadata: { contentEncoding: object.ContentEncoding }, ...(collect ? { body: Buffer.concat(chunks) } : {}) };
-    } finally { object.Body?.destroy?.(); }
+    } catch (error) { throw tagPlaceError(error, { stage: 'transport', operation: error?.code === 'ERR_ASSERTION' ? 'check-bytes' : 'get' }); }
+    finally { object.Body?.destroy?.(); }
   }, async put(key, input, condition) {
     allowedKey(key); assert(Number.isSafeInteger(condition.bytes) && condition.bytes > 0 && condition.bytes <= LIMITS.fileBytes); assert(HASH.test(condition.sha256 ?? ''));
     const pointer = KINDS.some(kind => key === pointerKey(kind));
@@ -318,7 +334,8 @@ export async function createPlacesS3(env, injectedClient) {
       })());
     }
     try { const result = await send(new PutObjectCommand({ Bucket: BUCKET, Key: key, Body: body, ContentLength: condition.bytes, IfMatch: condition.ifMatch, IfNoneMatch: condition.ifNoneMatch,
-      Metadata: { sha256: condition.sha256 }, ContentType: 'application/json', CacheControl: pointer ? 'no-store' : 'public, max-age=31536000, immutable' })); assert(/^"[A-Za-z0-9-]+"$/.test(result.ETag ?? '')); }
+      Metadata: { sha256: condition.sha256 }, ContentType: 'application/json', CacheControl: pointer ? 'no-store' : 'public, max-age=31536000, immutable' }));
+      try { assert(/^"[A-Za-z0-9-]+"$/.test(result.ETag ?? '')); } catch (error) { throw tagPlaceError(error, { stage: 'transport', operation: 'check-metadata', category: 'integrity' }); } }
     finally { if (!Buffer.isBuffer(body)) body.destroy(); }
   } };
 }
