@@ -99,5 +99,5 @@ async function main(env, action) {
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main(process.env, process.argv[2]).catch(error => { console.error(JSON.stringify(placeFailureDiagnostic(error)));
-    console.error('staging place lane stopped; publication outcome may be uncertain; inspect qualification, approvals and current staging pointer before retry; no automatic retry was attempted'); process.exitCode = 1; });
+    console.error('staging place lane stopped; publication outcome may be uncertain; inspect qualification, approvals and current staging pointer before retry; no automatic write retry was attempted'); process.exitCode = 1; });
 }

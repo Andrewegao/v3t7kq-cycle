@@ -7,6 +7,7 @@ import { lstat, readdir, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Readable } from 'node:stream';
+import { setTimeout as delay } from 'node:timers/promises';
 import { ACCOUNT } from './shared-data.mjs';
 import { tagPlaceError, placeOperation, placeProgress, placeFailureDiagnostic } from './staging-places-diagnostics.mjs';
 
@@ -211,8 +212,8 @@ function verifyRemote(object, wanted) {
 async function immutable(io, key, wanted, bodyOrFile, stage, progress) {
   allowedKey(key); const run = (operation, task) => placeOperation(stage, operation, progress, task);
   const before = await run('get', () => io.get(key, wanted.bytes, false));
-  if (!before) { await run('put', () => io.put(key, bodyOrFile, { ifNoneMatch: '*', sha256: wanted.sha256, bytes: wanted.bytes })); }
-  else await run('check-bytes', () => verifyRemote(before, wanted));
+  if (before) { await run('check-bytes', () => verifyRemote(before, wanted)); return; }
+  await run('put', () => io.put(key, bodyOrFile, { ifNoneMatch: '*', sha256: wanted.sha256, bytes: wanted.bytes }));
   const after = await run('get', () => io.get(key, wanted.bytes, false));
   await run('check-bytes', () => verifyRemote(after, wanted));
 }
@@ -297,7 +298,7 @@ export async function activatePlaces(io, { kind, identity, expectedPointerSha256
 
 // A separate narrow adapter is necessary: existing search/shared adapters correctly reject this
 // prefix. Keep their fixed account, explicit credentials, single-write-attempt and CAS semantics.
-export async function createPlacesS3(env, injectedClient) {
+export async function createPlacesS3(env, injectedClient, { clock = Date.now, sleep = (ms, signal) => delay(ms, undefined, { signal }) } = {}) {
   assert.equal(env.STAGING_R2_ACCOUNT_ID, ACCOUNT);
   assert(env.STAGING_R2_WRITE_ACCESS_KEY_ID && env.STAGING_R2_WRITE_SECRET_ACCESS_KEY, 'staging-only credentials required');
   for (const key of Object.keys(env)) if (/^(AWS_|RCLONE_|CLOUDFLARE_|CF_API_|R2_PRODUCTION_|SHARED_R2_|UI_PRODUCTION_|STAGING_WORKER_)/.test(key)) assert(!env[key], 'unrelated credential refused');
@@ -305,8 +306,36 @@ export async function createPlacesS3(env, injectedClient) {
   const client = injectedClient ?? new S3Client({ region: 'auto', endpoint: `https://${ACCOUNT}.r2.cloudflarestorage.com`, forcePathStyle: true, maxAttempts: 1,
     requestChecksumCalculation: 'WHEN_REQUIRED', responseChecksumValidation: 'WHEN_REQUIRED',
     credentials: { accessKeyId: env.STAGING_R2_WRITE_ACCESS_KEY_ID, secretAccessKey: env.STAGING_R2_WRITE_SECRET_ACCESS_KEY } });
-  async function send(command, missing = false) { try { return await client.send(command, { abortSignal: AbortSignal.timeout(45000) }); }
-    catch (error) { if (missing && error?.$metadata?.httpStatusCode === 404) return null;
+  function retryAfter(error, now) {
+    // Read only this protocol field; never emit provider headers or response text.
+    const value = error?.$response?.headers?.['retry-after'];
+    if (typeof value !== 'string' || value.length > 128) return 0;
+    if (/^\d+$/.test(value)) return Number(value) * 1000;
+    if (/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(value)) {
+      const at = Date.parse(value); if (Number.isFinite(at)) return Math.max(0, at - now);
+    }
+    return 0;
+  }
+  async function send(command, missing = false) {
+    // Only a readonly GET's explicit429 may retry. All attempts and sleeps share
+    // the original deadline; PUT (including CAS) remains exactly one attempt.
+    const deadline = clock() + 45000, signal = AbortSignal.timeout(45000), backoff = [1000, 2000, 4000, 8000];
+    const timedOut = () => Object.assign(new Error('staging place operation deadline exceeded'), { name: 'TimeoutError' });
+    try {
+      for (let attempt = 0; ; attempt++) {
+        if (signal.aborted || clock() >= deadline) throw timedOut();
+        try { return await client.send(command, { abortSignal: signal }); }
+        catch (error) {
+          if (signal.aborted || clock() >= deadline) throw timedOut();
+          const status = error?.$metadata?.httpStatusCode;
+          if (missing && status === 404) return null;
+          if (!missing || status !== 429 || attempt >= backoff.length) throw error;
+          const now = clock(), wait = Math.max(backoff[attempt], retryAfter(error, now));
+          if (wait >= deadline - now) throw timedOut();
+          await sleep(wait, signal);
+        }
+      }
+    } catch (error) {
       const safe = new Error(error?.$metadata?.httpStatusCode === 412 ? 'staging place CAS conflict' : 'staging place request failed or uncertain');
       throw tagPlaceError(safe, { ...placeFailureDiagnostic(error), stage: 'transport', operation: missing ? 'get' : 'put' }); } }
   return { close: () => client.destroy?.(), async get(key, maxBytes, collect = true) {
