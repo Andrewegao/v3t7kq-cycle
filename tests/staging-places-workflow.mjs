@@ -4,7 +4,7 @@ import { readFile, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ACCOUNT } from '../tools/staging-places.mjs';
-import { placesGate, runRuntimeProof } from '../tools/staging-places-workflow.mjs';
+import { placesGate, runRuntimeProof, proofScopeArguments } from '../tools/staging-places-workflow.mjs';
 function environment() {
   return { GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', GITHUB_REPOSITORY: 'Andrewegao/v3t7kq-cycle',
     GITHUB_REF: 'refs/heads/main', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_JOB: 'places',
@@ -27,6 +27,13 @@ test('activation needs exact reviewed completion plus pointer precondition', () 
   const env = { ...environment(), PLACES_ACTION: 'activate' }; assert.throws(() => placesGate(env));
   Object.assign(env, { COMPLETION_SHA256: '9'.repeat(64), STAGING_PLACES_APPROVED_COMPLETION_SHA256: '9'.repeat(64), EXPECTED_POINTER_SHA256: 'absent' });
   placesGate(env); assert.throws(() => placesGate({ ...env, EXPECTED_POINTER_SHA256: '' }));
+});
+test('all three proof scopes use exact authenticated evidence pins and tide-only roster policy', () => {
+  assert.deepEqual(proofScopeArguments('tides', { kind: 'tide-checkpoint' }), ['--scope', 'staging-partial', '--min-available-stations', '1251']);
+  for (const [family, kind, path, scope] of [['surf', 'surf-stage', 'stage.json', 'full-pilot'], ['paragliding', 'paragliding-snapshot', 'all-sites.json', 'worldwide-snapshot']]) {
+    const args = proofScopeArguments(family, { kind, files: [{ path, sha256: 'a'.repeat(64) }] }); assert.deepEqual(args, ['--scope', scope, '--evidence-sha256', 'a'.repeat(64)]);
+    assert(!args.includes('--min-available-stations')); assert.throws(() => proofScopeArguments(family, { kind: 'tide-checkpoint', files: [] }));
+  }
 });
 test('runtime proof is never fabricated when committed qualifier is missing or credentials are present', async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'wx-proof-test-'))); t.after(() => rm(root, { recursive: true, force: true }));

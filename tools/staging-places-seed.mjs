@@ -12,6 +12,8 @@ import { LIMITS, KINDS, hash, prefix, payloadPath, validateManifest, qualifyPlac
 const MAGIC = Buffer.from('WXPS1\0');
 const SHA = /^[a-f0-9]{64}$/;
 export const MAX_ARCHIVE = LIMITS.totalBytes + LIMITS.manifestBytes + 8192;
+export const PG_EVIDENCE_FILE_BYTES = 32 * 1024 ** 2;
+const EVIDENCE_KINDS = { tides: 'tide-checkpoint', paragliding: 'paragliding-snapshot', surf: 'surf-stage' };
 const bytes = value => Buffer.from(JSON.stringify(value) + '\n');
 function seedKey(value) { assert(SHA.test(value ?? ''), 'dedicated 32-byte staging seed key required'); return Buffer.from(value, 'hex'); }
 export function noPublishCredentials(env) {
@@ -38,32 +40,44 @@ function validateHeader(header, pins) {
   for (const field of ['kind', 'sourceSha', 'manifestSha256']) assert.equal(header[field], pins[field], `seed ${field} pin differs`);
   const evidence = header.evidence;
   if (evidence !== null) {
-    assert(header.kind === 'tides' && evidence?.kind === 'tide-checkpoint' && Object.keys(evidence).sort().join(',') === 'files,kind');
+    assert(evidence?.kind === EVIDENCE_KINDS[header.kind] && Object.keys(evidence).sort().join(',') === 'files,kind');
     assert(Array.isArray(evidence.files) && evidence.files.length > 0); let previous = '';
-    for (const file of evidence.files) { assert(Object.keys(file).sort().join(',') === 'bytes,path,sha256'); evidencePath(file.path); assert(file.path > previous); previous = file.path;
-      assert(Number.isSafeInteger(file.bytes) && file.bytes > 0 && file.bytes <= LIMITS.fileBytes && SHA.test(file.sha256)); }
-    assert.equal(evidence.files[0].path, 'manifest.json');
+    for (const file of evidence.files) { assert(Object.keys(file).sort().join(',') === 'bytes,path,sha256'); evidencePath(header.kind, file.path); assert(file.path > previous); previous = file.path;
+      assert(Number.isSafeInteger(file.bytes) && file.bytes > 0 && file.bytes <= evidenceLimit(header.kind, file.path) && SHA.test(file.sha256)); }
+    evidenceRoster(header.kind, evidence.files);
   }
   const files = [...header.manifest.files, ...(evidence?.files ?? [])];
   assert(files.length <= LIMITS.files && files.reduce((sum, file) => sum + file.bytes, 0) <= LIMITS.totalBytes, 'combined payload/evidence budget');
   return header;
 }
-function evidencePath(path) { assert(typeof path === 'string' && /^(?:manifest\.json|products\/[0-9]{1,16}\/(?:hilo|6)\.json)$/.test(path), 'unsafe checkpoint evidence path'); return path; }
-export async function checkpointEvidence(root) {
+function evidencePath(kind, path) {
+  const pattern = kind === 'tides' ? /^(?:manifest\.json|products\/[0-9]{1,16}\/(?:hilo|6)\.json)$/ : kind === 'paragliding' ? /^(?:all-sites|manifest)\.json$/ : kind === 'surf' ? /^stage\.json$/ : /$a/;
+  assert(typeof path === 'string' && pattern.test(path), 'unsafe family evidence path'); return path;
+}
+function evidenceLimit(kind, path) { return kind === 'paragliding' && path === 'all-sites.json' ? PG_EVIDENCE_FILE_BYTES : LIMITS.fileBytes; }
+function evidenceRoster(kind, files) {
+  if (kind === 'tides') assert.equal(files[0]?.path, 'manifest.json');
+  else assert.deepEqual(files.map(file => file.path), kind === 'paragliding' ? ['all-sites.json', 'manifest.json'] : ['stage.json']);
+}
+export async function checkpointEvidence(root, kind = 'tides') {
+  assert(KINDS.includes(kind));
   assert(isAbsolute(root)); root = await realpath(root); const files = [], local = new Map(); let total = 0;
   async function walk(folder = '') { for (const entry of await readdir(resolve(root, folder), { withFileTypes: true })) {
     const path = folder ? `${folder}/${entry.name}` : entry.name; assert(!entry.isSymbolicLink());
-    if (entry.isDirectory()) { assert(/^(?:products|products\/[0-9]{1,16})$/.test(path)); await walk(path); }
-    else { evidencePath(path); const file = resolve(root, path), stat = await regular(file, LIMITS.fileBytes), digest = createHash('sha256'); let count = 0;
+    if (entry.isDirectory()) { assert(kind === 'tides' && /^(?:products|products\/[0-9]{1,16})$/.test(path)); await walk(path); }
+    else { evidencePath(kind, path); const file = resolve(root, path), stat = await regular(file, evidenceLimit(kind, path)), digest = createHash('sha256'); let count = 0;
       for await (const chunk of createReadStream(file, { flags: constants.O_RDONLY | constants.O_NOFOLLOW, start: 0, end: stat.size })) { count += chunk.length; assert(count <= stat.size); digest.update(chunk); }
       assert.equal(count, stat.size); total += count; assert(total <= LIMITS.totalBytes && files.length < LIMITS.files);
       const receipt = { path, bytes: count, sha256: digest.digest('hex') }; files.push(receipt); local.set(path, { file }); }
   } }
   await walk(); files.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
-  const manifest = JSON.parse(await readFileSmall(resolve(root, 'manifest.json'))); assert(manifest.kind === 'weatherx-tide-fetch' && Array.isArray(manifest.stations));
-  const ids = new Set(manifest.stations.map(row => String(row.id))); assert.equal(ids.size, manifest.stations.length);
-  assert(files.every(file => file.path === 'manifest.json' || ids.has(file.path.split('/')[1])), 'checkpoint station outside frozen roster');
-  return { document: { kind: 'tide-checkpoint', files }, local };
+  evidenceRoster(kind, files);
+  if (kind === 'tides') {
+    const manifest = JSON.parse(await readFileSmall(resolve(root, 'manifest.json'))); assert(manifest.kind === 'weatherx-tide-fetch' && Array.isArray(manifest.stations));
+    const ids = new Set(manifest.stations.map(row => String(row.id))); assert.equal(ids.size, manifest.stations.length);
+    assert(files.every(file => file.path === 'manifest.json' || ids.has(file.path.split('/')[1])), 'checkpoint station outside frozen roster');
+  }
+  return { document: { kind: EVIDENCE_KINDS[kind], files }, local };
 }
 async function readFileSmall(path) { const stat = await regular(path, LIMITS.fileBytes); const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW); try { return await read(handle, stat.size, 0); } finally { await handle.close(); } }
 export async function packSeed({ candidate, evidence = null, sourceSha, key, output }) {
@@ -78,8 +92,8 @@ export async function packSeed({ candidate, evidence = null, sourceSha, key, out
   const encrypt = async chunk => { plain.update(chunk); await emit(cipher.update(chunk)); };
   try {
     await emit(Buffer.concat([MAGIC, iv])); const length = Buffer.alloc(4); length.writeUInt32BE(metadata.length); await encrypt(length); await encrypt(metadata);
-    for (const [receipt, local] of [...candidate.manifest.files.map(file => [file, candidate.local.get(file.path)]), ...(evidence?.document.files ?? []).map(file => [file, evidence.local.get(file.path)])]) {
-      assert(local); const stat = await regular(local.file, LIMITS.fileBytes); assert.equal(stat.size, receipt.bytes);
+    for (const [receipt, local, limit] of [...candidate.manifest.files.map(file => [file, candidate.local.get(file.path), LIMITS.fileBytes]), ...(evidence?.document.files ?? []).map(file => [file, evidence.local.get(file.path), evidenceLimit(header.kind, file.path)])]) {
+      assert(local); const stat = await regular(local.file, limit); assert.equal(stat.size, receipt.bytes);
       let count = 0; const digest = createHash('sha256');
       const stream = createReadStream(local.file, { flags: constants.O_RDONLY | constants.O_NOFOLLOW, start: 0, end: receipt.bytes });
       try { for await (const chunk of stream) { count += chunk.length; assert(count <= receipt.bytes); digest.update(chunk); await encrypt(chunk); } } finally { stream.destroy(); }
@@ -120,7 +134,7 @@ export async function unpackSeed({ archive, output, evidenceOutput = output + '-
   assert.equal(cipherBytes, stat.size);
   assert.equal(digest.digest('hex'), ciphertextSha256, 'encrypted seed SHA differs');
   await newPath(output); await mkdir(output, { mode: 0o700 });
-  let madeEvidence = false;
+  let madeEvidence = false, authenticatedEvidence = null;
   const spool = resolve(output, '.authenticated-seed'), handle = await open(archive, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const prefix = await read(handle, MAGIC.length + 12, 0); assert(prefix.subarray(0, MAGIC.length).equals(MAGIC));
@@ -134,10 +148,10 @@ export async function unpackSeed({ archive, output, evidenceOutput = output + '-
     const source = await open(spool, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
       const length = (await read(source, 4, 0)).readUInt32BE(); assert(length > 0 && length <= LIMITS.manifestBytes + 4096);
-      const header = validateHeader(JSON.parse(await read(source, length, 4)), pins); let position = 4 + length;
+      const header = validateHeader(JSON.parse(await read(source, length, 4)), pins); authenticatedEvidence = header.evidence; let position = 4 + length;
       const payloads = header.manifest.files.map(file => ({ receipt: file, root: output, relative: inputPath(header.kind, header.identity, file.path) }));
       if (header.evidence) { await newPath(evidenceOutput); assert(evidenceOutput !== output && !evidenceOutput.startsWith(output + '/')); await mkdir(evidenceOutput, { mode: 0o700 }); madeEvidence = true;
-        payloads.push(...header.evidence.files.map(file => ({ receipt: file, root: evidenceOutput, relative: evidencePath(file.path) }))); }
+        payloads.push(...header.evidence.files.map(file => ({ receipt: file, root: evidenceOutput, relative: evidencePath(header.kind, file.path) }))); }
       assert.equal(position + payloads.reduce((sum, file) => sum + file.receipt.bytes, 0), count, 'extra or missing seed bytes');
       for (const { receipt, root, relative } of payloads) {
         const path = resolve(root, relative); assert(path.startsWith(root + '/'));
@@ -149,15 +163,15 @@ export async function unpackSeed({ archive, output, evidenceOutput = output + '-
     } finally { await source.close(); }
     await rm(spool);
     const candidate = await qualifyPlaces({ kind: pins.kind, root: output }); assert.equal(hash(candidate.manifestBody), pins.manifestSha256);
-    if (madeEvidence) await checkpointEvidence(evidenceOutput);
-    return candidate;
+    if (madeEvidence) assert.deepEqual((await checkpointEvidence(evidenceOutput, pins.kind)).document, authenticatedEvidence);
+    return { ...candidate, seedEvidence: authenticatedEvidence };
   } catch (error) { await rm(output, { recursive: true }); if (madeEvidence) await rm(evidenceOutput, { recursive: true }); throw error; } finally { await handle.close(); }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
     noPublishCredentials(process.env); assert.equal(process.argv[2], 'pack');
     const candidate = await qualifyPlaces({ kind: process.argv[3], root: process.argv[4] });
-    const evidence = process.argv[6] ? await checkpointEvidence(process.argv[6]) : null;
+    const evidence = process.argv[6] ? await checkpointEvidence(process.argv[6], process.argv[3]) : null;
     console.log(JSON.stringify(await packSeed({ candidate, evidence, sourceSha: process.env.ATMOS_SHA, key: process.env.STAGING_PLACES_SEED_KEY, output: process.argv[5] })));
   } catch { console.error('staging seed transport refused; no publication attempted'); process.exitCode = 1; }
 }

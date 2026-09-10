@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, stat, symlink, realpath } from
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCipheriv } from 'node:crypto';
-import { qualifyPlaces, hash } from '../tools/staging-places.mjs';
+import { qualifyPlaces, hash, LIMITS, validateManifest } from '../tools/staging-places.mjs';
 import { packSeed, unpackSeed, checkpointEvidence, downloadSeed, seedURL, noPublishCredentials, MAX_ARCHIVE } from '../tools/staging-places-seed.mjs';
 const key = '1'.repeat(64), sourceSha = 'a'.repeat(40), encode = row => Buffer.from(JSON.stringify(row) + '\n');
 async function fixture(t) {
@@ -81,4 +81,20 @@ test('frozen tide evidence is authenticated separately, preserves absence and ne
   assert.deepEqual((await checkpointEvidence(evidenceOutput)).document, evidence.document); await assert.rejects(stat(join(evidenceOutput, 'products/2')));
   await mkdir(join(checkpoint, 'products/3')); await writeFile(join(checkpoint, 'products/3/6.json'), '{}'); await assert.rejects(checkpointEvidence(checkpoint), /outside frozen roster/);
   await assert.rejects(packSeed({ candidate: f.candidate, evidence, sourceSha, key, output: join(f.root, 'mixed.wxps') }));
+});
+test('PG large source evidence streams separately without raising payload limits or allowing extra filenames', async t => {
+  const f = await fixture(t), root = join(f.root, 'evidence'); await mkdir(root);
+  await writeFile(join(root, 'all-sites.json'), Buffer.alloc(LIMITS.fileBytes + 1, 32)); await writeFile(join(root, 'manifest.json'), '{}');
+  const evidence = await checkpointEvidence(root, 'paragliding'), archive = join(f.root, 'pg-evidence.wxps');
+  const receipt = await packSeed({ candidate: f.candidate, evidence, sourceSha, key, output: archive });
+  const restored = await unpackSeed({ archive, output: join(f.root, 'pg-out'), key, ...receipt }); assert.deepEqual(restored.seedEvidence, evidence.document);
+  assert.equal(restored.manifest.files.length, f.candidate.manifest.files.length);
+  const large = structuredClone(f.candidate.manifest); large.files[0].bytes = LIMITS.fileBytes + 1; assert.throws(() => validateManifest(large));
+  await writeFile(join(root, 'extra.json'), '{}'); await assert.rejects(checkpointEvidence(root, 'paragliding'), /unsafe family/);
+  await assert.rejects(checkpointEvidence(root, 'surf'));
+});
+test('surf evidence accepts exactly its real stage filename and no PG or tide namespace', async t => {
+  const f = await fixture(t), root = join(f.root, 'evidence'); await mkdir(root); await writeFile(join(root, 'stage.json'), '{}');
+  const evidence = await checkpointEvidence(root, 'surf'); assert.equal(evidence.document.kind, 'surf-stage'); assert.deepEqual(evidence.document.files.map(file => file.path), ['stage.json']);
+  await assert.rejects(checkpointEvidence(root, 'paragliding')); await assert.rejects(checkpointEvidence(root, 'tides'));
 });

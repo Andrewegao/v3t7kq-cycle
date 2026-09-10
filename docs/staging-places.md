@@ -6,13 +6,15 @@
 
 必须单独配置 `STAGING_PLACES_SEED_KEY`（32 字节、64 个小写十六进制字符），不得复用 UI 或其他资料密钥。配置、上传 release asset、改变环境变量和执行 workflow 由获授权的操作员另行完成。本实现不会执行这些远端操作。
 
-本地 Node 22 命令：`node tools/staging-places-seed.mjs pack <family> <absolute-candidate-root> <new-absolute-output.wxps> [absolute-tide-checkpoint-root]`。仅此命令使用环境中的 `ATMOS_SHA` 和独立种子密钥；不接受任何发布凭据。候选根必须只含资料，不含日志、凭据或证明脚本。
+本地 Node 22 命令：`node tools/staging-places-seed.mjs pack <family> <absolute-candidate-root> <new-absolute-output.wxps> [absolute-evidence-root]`。仅此命令使用环境中的 `ATMOS_SHA` 和独立种子密钥；不接受任何发布凭据。候选根必须只含资料，不含日志、凭据或证明脚本。
 
 输出只有来源 SHA、资料清单 SHA、加密文件 SHA、归档明文 SHA、字节数。归档明文 SHA 是摘要，不是明文资料。仅把加密文件作为 Cycle 仓库 release asset 上传，文件名固定 `places-<family>-seed.wxps`。密钥、原始资料、源码和检查点都不能提交 Git 或上传明文 Actions artifact。
 
-`WXPS1` 使用随机 96 位 IV 的 AES-256-GCM；完整认证及加密/明文两个精确摘要通过后，才解释文件清单。文件按显式长度逐块处理，不执行 tar、脚本或任意归档路径。资料和检查点总计最多 20,000 文件、256 MiB；每文件最多 16 MiB，元数据最多约 4 MiB。已有输出、符号链接、硬链接、遍历、额外字节、错误摘要均拒绝。提取目录权限 0700、文件 0600，失败只移除本次新建目录。
+`WXPS1` 使用随机 96 位 IV 的 AES-256-GCM；完整认证及加密/明文两个精确摘要通过后，才解释文件清单。文件按显式长度逐块处理，不执行 tar、脚本或任意归档路径。资料和证据总计最多 20,000 文件、256 MiB；发布资料每文件最多 16 MiB，元数据最多约 4 MiB。仅独立证据中的 PG `all-sites.json` 允许最多 32 MiB，仍逐块处理，不改变发布资料上限。已有输出、符号链接、硬链接、遍历、额外字节、错误摘要均拒绝。提取目录权限 0700、文件 0600，失败只移除本次新建目录。
 
 潮汐检查点属于独立 `tide-checkpoint` 清单，仅允许 `manifest.json` 和 `products/<数字站号>/{hilo,6}.json`，站号必须属于冻结请求名单。检查点永远不进入 publisher manifest 或 R2。当前真实候选 1,254 个资料文件共 129,386,433 字节，加 2,503 个检查点文件 125,743,069 字节，合计 255,129,502 字节，低于既有上限；包含全部 1,256 个请求站，其中 1,251 个可用、5 个明确无资料，不伪造缺失产品。
+
+PG 证据类别为 `paragliding-snapshot`，必须且只能包含 `all-sites.json` 和 `manifest.json`；冲浪证据类别为 `surf-stage`，必须且只能包含 `stage.json`。全部证据经独立清单认证和逐文件摘要验证，运行资格检查前再次验证；PG/冲浪主证据 SHA 从这份认证清单导出，不信任种子内自带的资格声明。
 
 ## 人工操作与审批
 
@@ -22,13 +24,17 @@ workflow 只接受 hosted main 的 `workflow_dispatch`，使用共享 `weatherx-
 
 先 `prepare`，审查 completion 摘要，再以同一加密种子和精确审批执行 `activate`。两次均重新验证来源及实际消费者，逐个文件读回，completion 最后写入；激活使用 ETag CAS，不盲目重试。默认租约最多 24 小时，并受来源有效期约束，协议绝不超过 48 小时。滑翔伞租约不是来源新鲜度。
 
+资料上传和激活读回均使用固定最多 8 个并发任务。首个错误停止领取新任务，并等待所有在途任务结束，才报告失败；不在部分失败时写 completion 或指针。首次准备每个资料文件通常需要存在检查 GET、条件 PUT、校验 GET，激活还需要一次完整读回；PG 11,581 个文件因此仍有约 34,743 次首次准备请求及 11,581 次激活资料读回。并发减少串行等待，不代表已经测得 CI/远端耗时；不在本通道改动资料打包格式。
+
 ## 实际资格证明的接入边界
 
 固定入口为精确 Atmos SHA 内的 `app/e2e/qualify-staging-places.mjs`，文件摘要也须批准。执行参数：`--family tides --candidate-root <candidate> --source-sha <sha> --publisher-module <cycle>/tools/staging-places.mjs --manifest-sha256 <sha> --checkpoint-root <checkpoint> --scope staging-partial --min-available-stations 1251 --out <qualification.json>`。
 
 该入口须导入完整实际消费者模块与实际 producer，比较冻结源产品、完整请求名单、六分钟连续性及七天覆盖，只在成功后生成 publisher 所需精确证明：`{schemaVersion:1,kind,identity,sourceSha,manifestSha256,checks:{producer:true,consumer:true,coverage:true,roster:true}}`。工具不能通过单位测试成功、种子自带声明或手写 true 来冒充这份证明。
 
-当前操作适配器只允许潮汐。Atmos 资格入口未提交/未合并/摘要未审批、检查点缺失或证明失败都会在使用存储凭据前停止。冲浪及滑翔伞虽然可安全加密传输，但实际来源资格入口尚未接入，必须继续拒绝发布，不能绕过。自动更新真实冲浪/潮汐来源及滑翔伞续租属于后续独立通道，不在此人工种子 workflow 中推断授权。
+PG 使用 `--scope worldwide-snapshot --evidence-sha256 <all-sites.json原字节摘要>`，冲浪使用 `--scope full-pilot --evidence-sha256 <stage.json原字节摘要>`；两者都沿用 `--checkpoint-root` 指向独立证据根，且不传潮汐专用 `--min-available-stations`。冲浪资格是对已保留实际 stage 的验证及精确 finalize 重放，不声称重新验证未保留的原始 GRIB。
+
+Atmos 资格入口未提交/未合并/摘要未审批、证据缺失或证明失败都会在使用存储凭据前停止；不得绕过实际证明。Python 3.12 最小依赖包含实际三类 producer 导入所需 requests/NumPy，版本及 Linux x64/macOS wheel 摘要锁定；已在独立临时 venv 从 PyPI 禁用缓存下载安装并验证三个实际模块导入，另验证 Linux x64 wheel 可获取，但不冒充已执行 hosted Linux workflow。自动更新真实冲浪/潮汐来源及滑翔伞续租属于后续独立通道，不在此人工种子 workflow 中推断授权。
 
 ## 本地验证
 
