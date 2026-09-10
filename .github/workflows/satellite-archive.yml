@@ -1,5 +1,6 @@
-# GMGSI satellite frame library: hourly tail + month backfill. Needs secrets ATMOS_DEPLOY_KEY,
-# R2_SATELLITE_ACCESS_KEY_ID, R2_SATELLITE_SECRET_ACCESS_KEY. Plan: atmos docs/SATELLITE_ARCHIVE.md.
+# GMGSI satellite frame library: hourly tail + month backfill. Checks out atmos read-only.
+# The R2 credential must be Object Read & Write scoped only to weatherx-satellite-archive.
+# Current publication reads catalogs and writes objects; remote deletion is disabled in atmos.
 name: satellite-archive
 
 on:
@@ -18,11 +19,19 @@ permissions:
   contents: read
 
 concurrency:
-  group: satellite-archive-${{ github.workflow }}-${{ github.ref }}
+  # One global run across schedules, manual runs and refs. Month matrix entries are
+  # disjoint, while no other run can race their hydrated catalog snapshots.
+  group: satellite-archive
   cancel-in-progress: false
 
 env:
   RCLONE_VERSION: v1.75.0
+  SAT_MAX_HTTP_REQUESTS: '5000'
+  SAT_MAX_SOURCE_BYTES: '25000000000'
+  SAT_MAX_OUTPUT_BYTES: '2500000000'
+  RADAR_MAX_HTTP_REQUESTS: '5000'
+  RADAR_MAX_SOURCE_BYTES: '50000000000'
+  RADAR_MAX_OUTPUT_BYTES: '4500000000'
 
 jobs:
   hourly:
@@ -52,17 +61,34 @@ jobs:
           unzip -q rclone.zip
           sudo install "rclone-${RCLONE_VERSION}-linux-amd64/rclone" /usr/local/bin/rclone
           rclone version
+      - name: hydrate remote catalogs and resume checkpoints
+        env:
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_SATELLITE_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_SATELLITE_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: ${{ vars.R2_SATELLITE_ENDPOINT }}
+          SAT_R2_REMOTE: weatherx:weatherx-satellite-archive
+        run: bash ops/satellite/hydrate.sh
       - name: bake latest 3 hours (vis, ir, wv)
-        run: data/.venv/bin/python data/bake_satellite_archive.py --latest 3
+        run: >-
+          data/.venv/bin/python data/bake_satellite_archive.py --latest 3
+          --max-http-requests "$SAT_MAX_HTTP_REQUESTS"
+          --max-source-bytes "$SAT_MAX_SOURCE_BYTES"
+          --max-output-bytes "$SAT_MAX_OUTPUT_BYTES"
       - name: bake latest 3 hours of US radar (10-minute)
-        run: data/.venv/bin/python data/bake_radar_archive.py --latest 3
+        run: >-
+          data/.venv/bin/python data/bake_radar_archive.py --latest 3
+          --max-http-requests "$RADAR_MAX_HTTP_REQUESTS"
+          --max-source-bytes "$RADAR_MAX_SOURCE_BYTES"
+          --max-output-bytes "$RADAR_MAX_OUTPUT_BYTES"
       - name: publish
         env:
           RCLONE_CONFIG_WEATHERX_TYPE: s3
           RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
           RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_SATELLITE_ACCESS_KEY_ID }}
           RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_SATELLITE_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: ${{ vars.R2_SATELLITE_ENDPOINT }}
           SAT_R2_REMOTE: weatherx:weatherx-satellite-archive
         run: bash ops/satellite/publish.sh
 
@@ -73,6 +99,23 @@ jobs:
     outputs:
       months: ${{ steps.plan.outputs.months }}
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: weatherx-hq/atmos
+          ref: master
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          fetch-depth: 1
+      - name: enforce whole-archive storage budget
+        env:
+          EXISTING_STANDARD_GB: ${{ vars.R2_EXISTING_STANDARD_GB }}
+        run: |
+          set -euo pipefail
+          [ -n "$EXISTING_STANDARD_GB" ] || { echo "R2_EXISTING_STANDARD_GB is required" >&2; exit 2; }
+          python3 data/satellite_archive_budget.py \
+            --end "${{ inputs.to }}" \
+            --existing-standard-gb "$EXISTING_STANDARD_GB" \
+            --max-archive-gb 200 \
+            --max-account-storage-usd 20
       - name: split from/to into one matrix entry per month
         id: plan
         run: |
@@ -107,8 +150,8 @@ jobs:
     needs: backfill-plan
     runs-on: ubuntu-latest
     timeout-minutes: 340
-    continue-on-error: true
     strategy:
+      fail-fast: false
       max-parallel: 4
       matrix:
         month: ${{ fromJson(needs.backfill-plan.outputs.months) }}
@@ -135,16 +178,36 @@ jobs:
           unzip -q rclone.zip
           sudo install "rclone-${RCLONE_VERSION}-linux-amd64/rclone" /usr/local/bin/rclone
           rclone version
+      - name: hydrate remote catalogs and resume checkpoints
+        env:
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_SATELLITE_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_SATELLITE_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: ${{ vars.R2_SATELLITE_ENDPOINT }}
+          SAT_R2_REMOTE: weatherx:weatherx-satellite-archive
+        run: bash ops/satellite/hydrate.sh
       - name: bake ${{ matrix.month.from }} to ${{ matrix.month.to }} (vis, ir, wv)
-        run: data/.venv/bin/python data/bake_satellite_archive.py --range "${{ matrix.month.from }}" "${{ matrix.month.to }}"
+        run: >-
+          data/.venv/bin/python data/bake_satellite_archive.py
+          --range "${{ matrix.month.from }}" "${{ matrix.month.to }}"
+          --max-http-requests "$SAT_MAX_HTTP_REQUESTS"
+          --max-source-bytes "$SAT_MAX_SOURCE_BYTES"
+          --max-output-bytes "$SAT_MAX_OUTPUT_BYTES"
       - name: bake ${{ matrix.month.from }} to ${{ matrix.month.to }} US radar
-        run: data/.venv/bin/python data/bake_radar_archive.py --range "${{ matrix.month.from }}" "${{ matrix.month.to }}"
+        run: >-
+          data/.venv/bin/python data/bake_radar_archive.py
+          --range "${{ matrix.month.from }}" "${{ matrix.month.to }}"
+          --max-http-requests "$RADAR_MAX_HTTP_REQUESTS"
+          --max-source-bytes "$RADAR_MAX_SOURCE_BYTES"
+          --max-output-bytes "$RADAR_MAX_OUTPUT_BYTES"
       - name: publish
         env:
           RCLONE_CONFIG_WEATHERX_TYPE: s3
           RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
           RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_SATELLITE_ACCESS_KEY_ID }}
           RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_SATELLITE_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: ${{ vars.R2_SATELLITE_ENDPOINT }}
           SAT_R2_REMOTE: weatherx:weatherx-satellite-archive
+          PUBLISH_LATEST: '0'
         run: bash ops/satellite/publish.sh
