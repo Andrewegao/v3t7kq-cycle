@@ -91,7 +91,10 @@ jobs:
           RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_SATELLITE_SECRET_ACCESS_KEY }}
           RCLONE_CONFIG_WEATHERX_ENDPOINT: ${{ vars.R2_SATELLITE_ENDPOINT }}
           SAT_R2_REMOTE: weatherx:weatherx-satellite-archive
-        run: bash ops/satellite/hydrate.sh
+          HYDRATE_MAX_OBJECTS: '128'
+          HYDRATE_MAX_BYTES: '128000000'
+          HYDRATE_MAX_CLASS_B_OPERATIONS: '400'
+        run: bash ops/satellite/hydrate.sh --latest 3
       - name: bake latest 3 hours (vis, ir, wv)
         run: >-
           data/.venv/bin/python data/bake_satellite_archive.py --latest 3
@@ -112,6 +115,9 @@ jobs:
           RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_SATELLITE_SECRET_ACCESS_KEY }}
           RCLONE_CONFIG_WEATHERX_ENDPOINT: ${{ vars.R2_SATELLITE_ENDPOINT }}
           SAT_R2_REMOTE: weatherx:weatherx-satellite-archive
+          PUBLISH_MAX_CLASS_A_OPERATIONS: '128'
+          PUBLISH_MAX_CLASS_B_OPERATIONS: '400'
+          PUBLISH_VERIFY_MAX_INDEX_BYTES: '4000000'
         run: bash ops/satellite/publish.sh
 
   backfill-plan:
@@ -201,7 +207,10 @@ jobs:
           RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_SATELLITE_SECRET_ACCESS_KEY }}
           RCLONE_CONFIG_WEATHERX_ENDPOINT: ${{ vars.R2_SATELLITE_ENDPOINT }}
           SAT_R2_REMOTE: weatherx:weatherx-satellite-archive
-        run: bash ops/satellite/hydrate.sh
+          HYDRATE_MAX_OBJECTS: '20000'
+          HYDRATE_MAX_BYTES: '8000000000'
+          HYDRATE_MAX_CLASS_B_OPERATIONS: '60000'
+        run: bash ops/satellite/hydrate.sh --range "${{ matrix.month.from }}" "${{ matrix.month.to }}"
       - name: bake ${{ matrix.month.from }} to ${{ matrix.month.to }} (vis, ir, wv)
         run: >-
           data/.venv/bin/python data/bake_satellite_archive.py
@@ -225,4 +234,7 @@ jobs:
           RCLONE_CONFIG_WEATHERX_ENDPOINT: ${{ vars.R2_SATELLITE_ENDPOINT }}
           SAT_R2_REMOTE: weatherx:weatherx-satellite-archive
           PUBLISH_LATEST: '0'
+          PUBLISH_MAX_CLASS_A_OPERATIONS: '20000'
+          PUBLISH_MAX_CLASS_B_OPERATIONS: '60000'
+          PUBLISH_VERIFY_MAX_INDEX_BYTES: '4000000'
         run: bash ops/satellite/publish.sh
