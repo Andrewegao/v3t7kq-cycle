@@ -1,0 +1,74 @@
+name: WeatherX isolated staging cyclone guidance
+# Manual immutable data only. No serving-pointer writes or UI/Worker deployment.
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact qualified Atmos producer and validator commit
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-staging-tc-guidance
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: data-staging
+      url: https://staging.weatherx.org
+    env:
+      TC_SOURCE_SHA: ${{ inputs.source_sha }}
+      STAGING_TC_APPROVED_SOURCE_SHA: ${{ vars.STAGING_TC_APPROVED_SOURCE_SHA }}
+      STAGING_TC_GUIDANCE_ENABLED: ${{ vars.STAGING_TC_GUIDANCE_ENABLED }}
+      STAGING_DATA_ISOLATION_APPROVED: ${{ vars.STAGING_DATA_ISOLATION_APPROVED }}
+      STAGING_R2_ACCOUNT_ID: ${{ vars.STAGING_R2_ACCOUNT_ID }}
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Gate exact source and manual staging identity before private checkout
+        run: node cycle/tools/staging-tc-guidance.mjs
+      - name: Verify isolated workflow contracts without credentials
+        run: node --test cycle/tests/staging-tc-guidance.mjs
+      - name: Checkout qualified producer and publication validator
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: ${{ inputs.source_sha }}
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: atmos
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with: { python-version: '3.12' }
+      - name: Install and validate pinned producer without publication secrets
+        run: |
+          test "$(git -C atmos rev-parse HEAD)" = "$TC_SOURCE_SHA"
+          git -C atmos diff --quiet HEAD
+          python -m pip install --disable-pip-version-check -r atmos/data/requirements.txt
+          python -m unittest discover -s atmos/data -p test_tc_models.py
+          node --test atmos/ops/tc/test-staging-tc.mjs
+      - name: Bake bounded current source data locally
+        timeout-minutes: 4
+        run: |
+          node cycle/tools/staging-tc-guidance.mjs
+          python atmos/data/fetch_tc_models.py --output "$RUNNER_TEMP/weatherx-tc-source"
+      - name: Publish immutable staging candidate with exact downloaded-byte verification
+        timeout-minutes: 5
+        env:
+          STAGING_TC_PUBLISH_AUTHORIZATION: publish-staging-tc-guidance-v1
+          STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
+          STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
+        run: |
+          node cycle/tools/staging-tc-guidance.mjs
+          node atmos/ops/tc/prepare-staging-tc.mjs publish \
+            --source-dir "$RUNNER_TEMP/weatherx-tc-source" \
+            --output-dir "$RUNNER_TEMP/weatherx-tc-candidate" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+# Selection digest is reported by the validator. A separately qualified UI build
+# must pin its exact bytes. No Actions data artifacts or automatic activation.

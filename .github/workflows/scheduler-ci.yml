@@ -25,6 +25,7 @@ on:
       - ".github/workflows/staging-model-selection.yml"
       - ".github/workflows/staging-consumer-refresh.yml"
       - ".github/workflows/staging-search.yml"
+      - ".github/workflows/staging-tc-guidance.yml"
       - ".github/workflows/staging-search-reader.yml"
       - ".github/workflows/staging-data-activate.yml"
       - ".github/workflows/verify-backfill.yml"
