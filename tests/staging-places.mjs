@@ -264,3 +264,70 @@ test('progress is bounded to start, each500 completions and final count; reporte
   assert(reports.every(row => Object.keys(row).sort().join(',') === 'completedPayloads,kind,schemaVersion,stage,totalPayloads'));
   const throwing = placeProgress('activate-payload', 1, () => { throw Error('sink failed'); }); assert.doesNotThrow(() => throwing.completed());
 });
+test('existing exact immutable objects need one GET; newly written objects still require readback', async t => {
+  const { candidate } = await fixture(t), io = memory(), get = io.get, reads = [];
+  io.get = async (...args) => { reads.push(args[0]); return get(...args); };
+  await preparePlaces(io, candidate, approval(candidate));
+  assert.equal(new Set(reads).size, candidate.manifest.files.length + 2);
+  for (const key of new Set(reads)) assert.equal(reads.filter(row => row === key).length, 2, 'new PUT must be read back');
+  reads.length = 0; const writes = io.writes.length;
+  await preparePlaces(io, candidate, approval(candidate));
+  assert.equal(reads.length, candidate.manifest.files.length + 2);
+  assert.equal(new Set(reads).size, reads.length, 'verified existing objects are not read twice'); assert.equal(io.writes.length, writes);
+});
+const retryEnv = { STAGING_R2_ACCOUNT_ID: ACCOUNT, STAGING_R2_WRITE_ACCESS_KEY_ID: 'test', STAGING_R2_WRITE_SECRET_ACCESS_KEY: 'test' };
+const retryKey = prefix('surf', 'surf-test') + 'index.json';
+function throttled() { return { $metadata: { httpStatusCode: 429 }, message: 'private provider response', credentials: 'private credential' }; }
+test('GET429 backs off and recovers using one overall deadline signal and the same read command', async () => {
+  for (const absent of [false, true]) {
+    const calls = [], signals = [], delays = [], body = Buffer.from('{}'); let time = 0;
+    const io = await createPlacesS3(retryEnv, { send: async (command, options) => {
+      calls.push(command); signals.push(options.abortSignal); time += 100;
+      if (calls.length < 3) throw throttled();
+      if (absent) throw { $metadata: { httpStatusCode: 404 } };
+      return { ETag: '"fixture"', ContentLength: body.length, Metadata: { sha256: hash(body) }, Body: Readable.from([body]) };
+    } }, { clock: () => time, sleep: async (ms, signal) => { delays.push(ms); assert.equal(signal, signals[0]); time += ms; } });
+    const result = await io.get(retryKey, body.length);
+    assert.equal(result?.sha256 ?? null, absent ? null : hash(body)); assert.deepEqual(delays, [1000, 2000]);
+    assert.equal(calls.length, 3); assert(calls.every(command => command === calls[0])); assert(signals.every(signal => signal === signals[0]));
+  }
+});
+test('GET429 exhausts at five total attempts with bounded backoff and redacted diagnostics', async () => {
+  let time = 0, attempts = 0; const delays = [];
+  const io = await createPlacesS3(retryEnv, { send: async () => { attempts++; throw throttled(); } },
+    { clock: () => time, sleep: async ms => { delays.push(ms); time += ms; } });
+  await assert.rejects(io.get(retryKey, 2), error => { const row = placeFailureDiagnostic(error);
+    assert.equal(row.httpStatus, 429); assert.equal(row.operation, 'get'); assert(!JSON.stringify(row).includes('private')); return true; });
+  assert.equal(attempts, 5); assert.deepEqual(delays, [1000, 2000, 4000, 8000]); assert.equal(time, 15000);
+});
+test('GET429 never sleeps or starts another attempt beyond the original45second deadline', async () => {
+  for (const oversleep of [false, true]) {
+    let time = 0, attempts = 0, sleeps = 0;
+    const io = await createPlacesS3(retryEnv, { send: async () => { attempts++; time = oversleep ? 43000 : 44500; throw throttled(); } },
+      { clock: () => time, sleep: async () => { sleeps++; time = 45000; } });
+    await assert.rejects(io.get(retryKey, 2), error => { assert.equal(placeFailureDiagnostic(error).category, 'timeout'); return true; });
+    assert.equal(attempts, 1); assert.equal(sleeps, oversleep ? 1 : 0);
+  }
+});
+test('non429 GET errors and all PUT429 errors remain single-attempt with no backoff', async () => {
+  for (const failure of [{ $metadata: { httpStatusCode: 503 } }, { name: 'TimeoutError' }, { code: 'ECONNRESET' }, { $metadata: { httpStatusCode: 403 } }]) {
+    let attempts = 0, sleeps = 0;
+    const io = await createPlacesS3(retryEnv, { send: async () => { attempts++; throw failure; } }, { clock: () => 0, sleep: async () => { sleeps++; } });
+    await assert.rejects(io.get(retryKey, 2)); assert.equal(attempts, 1); assert.equal(sleeps, 0);
+  }
+  let attempts = 0, sleeps = 0; const body = Buffer.from('{}');
+  const io = await createPlacesS3(retryEnv, { send: async () => { attempts++; throw throttled(); } }, { clock: () => 0, sleep: async () => { sleeps++; } });
+  await assert.rejects(io.put(retryKey, body, { ifNoneMatch: '*', bytes: body.length, sha256: hash(body) }), error => { assert.equal(placeFailureDiagnostic(error).httpStatus, 429); return true; });
+  assert.equal(attempts, 1); assert.equal(sleeps, 0);
+});
+test('GET429 honors valid Retry-After seconds or HTTP date without crossing its deadline', async () => {
+  for (const [value, expected] of [['3', 3000], ['Thu, 01 Jan 1970 00:00:05 GMT', 5000], ['0', 1000], ['private-response', 1000], ['-1', 1000], ['60', null]]) {
+    let time = 0, attempts = 0; const delays = [];
+    const io = await createPlacesS3(retryEnv, { send: async () => {
+      attempts++; if (attempts === 1) throw { ...throttled(), $response: { headers: { 'retry-after': value, authorization: 'private-credential' } } };
+      throw { $metadata: { httpStatusCode: 404 } };
+    } }, { clock: () => time, sleep: async ms => { delays.push(ms); time += ms; } });
+    if (expected === null) { await assert.rejects(io.get(retryKey, 2), error => { assert.equal(placeFailureDiagnostic(error).category, 'timeout'); return true; }); assert.equal(attempts, 1); assert.deepEqual(delays, []); }
+    else { assert.equal(await io.get(retryKey, 2), null); assert.equal(attempts, 2); assert.deepEqual(delays, [expected]); }
+  }
+});
