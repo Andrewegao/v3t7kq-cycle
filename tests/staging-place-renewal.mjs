@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { ACCOUNT, hash, qualifyPlaces, allowedKey, pointerKey } from '../tools/staging-places.mjs';
-import { renewalGate, controllerDigest, CLOSURE, isolatedPythonArguments, renewQualified, readPriorPointer, verifyLive } from '../tools/staging-place-renewal.mjs';
+import { renewalGate, controllerDigest, CLOSURE, isolatedPythonArguments, renewQualified, readPriorPointer, verifyLive,
+  parseCollectorSuccess, collectorProcessFailure } from '../tools/staging-place-renewal.mjs';
 const policy = JSON.parse(await readFile('tools/staging-place-renewal-policy.json'));
 const encode = value => Buffer.from(JSON.stringify(value) + '\n');
 function environment() { return { GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', GITHUB_REPOSITORY: 'Andrewegao/v3t7kq-cycle',
@@ -53,6 +54,65 @@ test('collection and qualifier Python cannot import an arbitrary sibling shadow 
     { cwd: root, env, encoding: 'utf8' }).trim(), 'json');
   assert.match(await readFile('tools/staging-place-renewal.mjs', 'utf8'), /safeExecute\('python3', isolatedPythonArguments\(/);
   assert.match(await readFile('tools/staging-places-workflow.mjs', 'utf8'), /'--python', ISOLATED_PYTHON/);
+});
+const emptyRequestCounts = { http2xx: 0, http403: 0, http429: 0, http5xx: 0, httpOther: 0,
+  timeouts: 0, overlongRetryAfter: 0, pacerStopped: false };
+test('collector success exposes only exact validated bounded counts', () => {
+  const surf = { schemaVersion: 1, kind: 'staging-place-collection', status: 'succeeded', family: 'surf',
+    spotCount: 49, leadCount: 73, requestCounts: { ...emptyRequestCounts, http2xx: 74 } };
+  assert.deepEqual(parseCollectorSuccess(`${JSON.stringify(surf)}\n`, 'surf'), surf);
+  const tides = { schemaVersion: 1, kind: 'staging-place-collection', status: 'succeeded', family: 'tides',
+    rosterStationCount: 1256, requiredStationCount: 1251, availableStationCount: 1251, resumeAttempts: 1,
+    firstPassAvailableStationCount: 1169,
+    firstPassRequestCounts: { ...emptyRequestCounts, http2xx: 1169, http5xx: 1 },
+    requestCounts: { ...emptyRequestCounts, http2xx: 1251, http5xx: 1 } };
+  assert.deepEqual(parseCollectorSuccess(JSON.stringify(tides), 'tides'), tides);
+  for (const corrupt of [
+    { ...tides, privateMessage: '/private/provider?token=DO-NOT-PRINT' },
+    { ...tides, availableStationCount: 1250 },
+    { ...tides, requestCounts: { ...tides.requestCounts, privateUrl: 'https://private.invalid' } },
+  ]) assert.throws(() => parseCollectorSuccess(JSON.stringify(corrupt), 'tides'));
+  assert.throws(() => parseCollectorSuccess(`${JSON.stringify(tides)}\nPRIVATE`, 'tides'));
+});
+test('collector failure accepts only its exact safe schema and otherwise classifies the process', () => {
+  const receipt = { schemaVersion: 1, kind: 'staging-place-collection', status: 'failed', family: 'tides',
+    phase: 'fetch', class: 'minimum-availability', rosterStationCount: 1256, availableStationCount: 1250,
+    requiredStationCount: 1251, resumeAttempts: 1, firstPassAvailableStationCount: 1169,
+    firstPassRequestCounts: { ...emptyRequestCounts, http2xx: 1169, http5xx: 1 },
+    requestCounts: { ...emptyRequestCounts, http2xx: 1250, http5xx: 2 } };
+  const exact = Object.assign(new Error('outer private path'), { status: 1, stdout: '', stderr: `${JSON.stringify(receipt)}\n` });
+  assert.deepEqual(collectorProcessFailure(exact, 'tides'), receipt);
+  const secret = '/private/provider?token=DO-NOT-PRINT';
+  for (const stderr of [secret, `${JSON.stringify(receipt)}\n${secret}`,
+    JSON.stringify({ ...receipt, privateMessage: secret }), JSON.stringify({ ...receipt, family: 'surf' })]) {
+    const projected = collectorProcessFailure(Object.assign(new Error(secret), { status: 17, stdout: '', stderr }), 'tides');
+    assert.deepEqual(projected, { schemaVersion: 1, kind: 'staging-place-collection', status: 'failed', family: 'tides',
+      phase: 'process', class: 'process-exit', returnCode: 17 });
+    assert(!JSON.stringify(projected).includes(secret));
+  }
+  const withStdout = collectorProcessFailure({ status: 1, stdout: secret, stderr: JSON.stringify(receipt) }, 'tides');
+  assert.equal(withStdout.class, 'process-exit');
+});
+test('collector preserves the exact stopped-pacer receipt without claiming a resume', () => {
+  const counts = { ...emptyRequestCounts, http429: 1, overlongRetryAfter: 1, pacerStopped: true };
+  const receipt = { schemaVersion: 1, kind: 'staging-place-collection', status: 'failed', family: 'tides',
+    phase: 'fetch', class: 'provider-cooldown', rosterStationCount: 1256, availableStationCount: 1169,
+    requiredStationCount: 1251, resumeAttempts: 0, firstPassAvailableStationCount: 1169,
+    firstPassRequestCounts: counts, requestCounts: counts };
+  assert.deepEqual(collectorProcessFailure({ status: 1, stdout: '', stderr: `${JSON.stringify(receipt)}\n` }, 'tides'), receipt);
+  assert.equal(collectorProcessFailure({ status: 1, stdout: '', stderr: JSON.stringify({
+    ...receipt, firstPassAvailableStationCount: 1168 }) }, 'tides').class, 'process-exit');
+});
+test('collector subprocess return code and timeout never expose command paths or output', () => {
+  const secret = '/private/source/fetch_tides.py?key=DO-NOT-PRINT';
+  const exited = collectorProcessFailure({ status: 23, path: secret, stdout: secret, stderr: secret }, 'tides');
+  assert.deepEqual(exited, { schemaVersion: 1, kind: 'staging-place-collection', status: 'failed', family: 'tides',
+    phase: 'process', class: 'process-exit', returnCode: 23 });
+  const timedOut = collectorProcessFailure({ code: 'ETIMEDOUT', signal: 'SIGTERM', path: secret,
+    stdout: secret, stderr: secret }, 'tides');
+  assert.deepEqual(timedOut, { schemaVersion: 1, kind: 'staging-place-collection', status: 'failed', family: 'tides',
+    phase: 'process', class: 'process-timeout' });
+  assert(!JSON.stringify([exited, timedOut]).includes(secret));
 });
 async function fixture(t, kind = 'surf') {
   const root = await realpath(await mkdtemp(resolve(tmpdir(), 'wx-renewal-test-'))); t.after(() => rm(root, { recursive: true, force: true }));
