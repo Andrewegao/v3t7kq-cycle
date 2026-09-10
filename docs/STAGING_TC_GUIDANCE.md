@@ -87,7 +87,10 @@ The account packaging change on Cycle main `b2b56f9` is explicitly extended to
 the TC profile after auditing its actual layer-menu readers. Both paths in
 `LayerMenu.tsx` request `.webp`; no TC consumer requests the 60 allowlisted source
 JPGs. Other profiles and unknown filenames retain their original behavior. A
-missing, malformed or symlinked WebP counterpart fails closed before omission.
+missing or symlinked WebP, or an invalid RIFF/WEBP envelope or declared file
+length, fails closed before omission. This packaging check does not fully decode
+arbitrary future WebP payloads; the actual 60 counterparts were independently
+decoded for the source audit below.
 The source tree retains every JPG; only redundant deployment copies are omitted.
 
 The local copy audit against Atmos `d6133ff91969c0950f606e89b81193a91378a62a`
@@ -97,3 +100,16 @@ byte-for-byte, and decoded all 60 WebP counterparts with Pillow 12.2.0. The
 still requires its own package and browser checks; this copy audit alone is not
 an Actions run or deployment. TC proof validation also requires exactly one
 1440×1000 and one 390×844 result, rejecting duplicate viewport receipts.
+
+The complete local package for the same Atmos source, built with Cycle
+`71c1df7db03be2b32ec3827bffea3531177a26d1`, passed `createCandidate` at
+2026-09-10 08:06:51 UTC: **4,948 files / 25,731,680 bytes**, artifact digest
+`452930552260040de8fc3c354176e8698b37117e8ae6b8542e7cfb775713735b`.
+Its schema-only run ID `900005` is explicitly synthetic local qualification;
+it is not an Actions run. The current-master deployment identity guard was not
+claimed or bypassed for deployment. No artifact was uploaded or deployed.
+Manual real-browser checks on that package confirm decoded runtime menu WebPs,
+GFS GEFS30/30 and ECMWF ENS50/50 values with the older-run notice, HAFS-A's honest
+no-ensemble state at 390×844, and repeatable three-day cloud replay. Browser
+error logs were empty. These manual checks supplement the existing automated
+fixture proof; they do not stand in for the workflow's future exact-source gate.
