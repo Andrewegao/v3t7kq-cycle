@@ -19,12 +19,13 @@ const object = value => value && typeof value === 'object' && !Array.isArray(val
 const exact = (value, keys) => object(value) && Object.keys(value).length === keys.length && keys.every(k => Object.hasOwn(value, k));
 
 export function searchGate(env, action) {
-  assert.ok(['inspect', 'prepare', 'activate', 'revoke'].includes(action), 'unsupported search action');
+  assert.ok(['inspect', 'prepare', 'activate', 'revoke', 'renew'].includes(action), 'unsupported search action');
   assert.equal(env.GITHUB_ACTIONS, 'true', 'publication is cloud-only');
   assert.equal(env.RUNNER_ENVIRONMENT, 'github-hosted');
   assert.equal(env.GITHUB_REPOSITORY, 'Andrewegao/v3t7kq-cycle');
   assert.equal(env.GITHUB_REF, 'refs/heads/main');
-  assert.equal(env.GITHUB_EVENT_NAME, 'workflow_dispatch');
+  assert.ok(env.GITHUB_EVENT_NAME === 'workflow_dispatch' ||
+    (env.GITHUB_EVENT_NAME === 'schedule' && action === 'renew'), 'schedule may only renew');
   assert.equal(env.GITHUB_JOB, 'search');
   assert.equal(env.GITHUB_WORKFLOW_REF, 'Andrewegao/v3t7kq-cycle/.github/workflows/staging-search.yml@refs/heads/main');
   assert.equal(env.STAGING_SEARCH_ENABLED, 'true', 'search publication remains owner-gated');
@@ -41,6 +42,10 @@ export function searchGate(env, action) {
   if (action === 'activate') {
     assert.match(env.CANDIDATE_SHA256 ?? '', SHA);
     assert.equal(env.STAGING_SEARCH_APPROVED_CANDIDATE_SHA256, env.CANDIDATE_SHA256, 'candidate has not been reviewed');
+  }
+  if (action === 'renew') {
+    assert.equal(env.STAGING_SEARCH_RENEWAL_ENABLED, 'true', 'renewal is separately enabled');
+    assert.match(env.STAGING_SEARCH_APPROVED_CANDIDATE_SHA256 ?? '', SHA);
   }
 }
 
@@ -115,6 +120,13 @@ export async function prepareSearch(io, files) {
 
 export async function activateSearch(io, { candidateId, expectedPointerSha256, now = Date.now(), hours = 24 }) {
   assert.ok(Number.isFinite(now) && Number.isInteger(hours) && hours >= 1 && hours <= 48, 'invalid activation lifetime');
+  const c = await verifyCandidate(io, candidateId);
+  const pointer = { schemaVersion: 1, kind: 'search', candidateId,
+    createdAt: new Date(now).toISOString(), expiresAt: new Date(now + hours * 3_600_000).toISOString(), files: c.files };
+  return writePointer(io, pointer, expectedPointerSha256);
+}
+
+async function verifyCandidate(io, candidateId) {
   const manifest = await io.get(`${prefix(candidateId)}manifest.json`, 8192);
   assert.ok(manifest && manifest.sha256 === candidateId, 'candidate receipt missing or invalid');
   const files = {};
@@ -127,16 +139,42 @@ export async function activateSearch(io, { candidateId, expectedPointerSha256, n
   }
   const c = candidate(files);
   assert.equal(c.candidateId, candidateId, 'candidate bytes changed');
-  const pointer = { schemaVersion: 1, kind: 'search', candidateId,
-    createdAt: new Date(now).toISOString(), expiresAt: new Date(now + hours * 3_600_000).toISOString(), files: c.files };
-  return writePointer(io, pointer, expectedPointerSha256);
+  return c;
 }
 
-async function writePointer(io, pointer, expectedPointerSha256) {
+// Renew availability of unchanged reviewed metadata, never its source timestamp.
+// Absence/revocation/expiry requires a fresh manual activation, not resurrection.
+export async function renewSearch(io, { approvedCandidateId, clock = Date.now }) {
+  assert.match(approvedCandidateId, SHA);
+  const before = await io.get(POINTER_KEY, 8192);
+  assert.ok(before, 'renewal requires an active pointer');
+  const pointer = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(before.body));
+  assert.ok(exact(pointer, ['schemaVersion', 'kind', 'candidateId', 'createdAt', 'expiresAt', 'files']) &&
+    pointer.schemaVersion === 1 && pointer.kind === 'search', 'invalid active pointer');
+  assert.equal(pointer.candidateId, approvedCandidateId, 'active candidate is not approved');
+  const iso = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value);
+  assert.ok(iso(pointer.createdAt) && iso(pointer.expiresAt), 'invalid timestamp format');
+  const created = Date.parse(pointer.createdAt), expires = Date.parse(pointer.expiresAt);
+  const checkLive = () => {
+    const now = clock();
+    assert.ok(Number.isFinite(now) && Number.isFinite(created) && Number.isFinite(expires) && created <= now && expires > now &&
+      expires > created && expires - created <= 48 * 3_600_000, 'invalid or expired lease');
+    return now;
+  };
+  checkLive();
+  const c = await verifyCandidate(io, approvedCandidateId);
+  assert.deepEqual(pointer.files, c.files, 'pointer receipt differs from verified candidate');
+  const now = checkLive();
+  const renewed = { ...pointer, createdAt: new Date(now).toISOString(), expiresAt: new Date(now + 24 * 3_600_000).toISOString() };
+  return writePointer(io, renewed, before.sha256, checkLive);
+}
+
+async function writePointer(io, pointer, expectedPointerSha256, beforePut = () => {}) {
   assert.ok(expectedPointerSha256 === 'absent' || SHA.test(expectedPointerSha256 ?? ''), 'invalid pointer precondition');
   const before = await io.get(POINTER_KEY, 8192);
   assert.equal(before?.sha256 ?? 'absent', expectedPointerSha256, 'pointer changed; review before retry');
   const body = jsonBytes(pointer);
+  beforePut();
   await io.put(POINTER_KEY, body, { ...(before ? { ifMatch: before.etag } : { ifNoneMatch: '*' }), sha256: hash(body) });
   const after = await io.get(POINTER_KEY, 8192);
   assert.ok(after && after.sha256 === hash(body), 'pointer readback changed; inspect, do not overwrite');
@@ -171,6 +209,8 @@ async function main() {
     } else if (action === 'activate') {
       result = await activateSearch(io, { candidateId: process.env.CANDIDATE_SHA256,
         expectedPointerSha256: process.env.EXPECTED_POINTER_SHA256 });
+    } else if (action === 'renew') {
+      result = await renewSearch(io, { approvedCandidateId: process.env.STAGING_SEARCH_APPROVED_CANDIDATE_SHA256 });
     } else result = await revokeSearch(io, process.env.EXPECTED_POINTER_SHA256);
     console.log(JSON.stringify(result)); // Only identities and bounded receipts, never bodies or credentials.
   } finally { io.close(); }
