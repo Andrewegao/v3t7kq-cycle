@@ -100,6 +100,7 @@ test('failure artifact keeps only bounded content-addressed acquisition evidence
       complete: true,
       outcomes: [{ outputPath: 'ir/2026/09/10/12.webp', status: 'baked' }],
       counts: counts(['baked']),
+      runErrors: [],
       sourceReceipt: { path: receipt.relative, bytes: receipt.payload.length, sha256: receipt.digest },
     });
     const failed = writeAddressed(f.root, 'provenance/acquisitions/radar-us', {
@@ -107,8 +108,9 @@ test('failure artifact keeps only bounded content-addressed acquisition evidence
       kind: 'weatherx-satellite-acquisition-run-v1',
       family: 'radar-us',
       complete: false,
-      outcomes: [{ outputPath: 'radar-us/2026/09/10/1200.webp', status: 'error', error: 'source failed' }],
-      counts: counts(['error']),
+      outcomes: [{ outputPath: 'radar-us/2026/09/10/1200.webp', status: 'local-existing' }],
+      counts: counts(['local-existing']),
+      runErrors: ['publication finalization failed: catalog is unproven'],
       sourceReceipt: null,
     });
     mkdirSync(join(f.root, 'ir/2026/09/10'), { recursive: true });
@@ -176,6 +178,7 @@ test('digest, count and byte limit violations fail closed without an artifact', 
             complete: false,
             outcomes: [{ outputPath: `ir/2026/09/10/${String(index).padStart(2, '0')}.webp`, status: 'error' }],
             counts: counts(['error']),
+            runErrors: [],
             sourceReceipt: null,
             nonce: index,
           });

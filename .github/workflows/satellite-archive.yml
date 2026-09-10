@@ -137,7 +137,17 @@ env:
                 raise ValueError(f"invalid acquisition outcome: {relative}")
             measured[statuses[outcome["status"]]] += 1
         expected_counts = {"requested": len(outcomes), **measured}
-        if body.get("counts") != expected_counts or body["complete"] != (measured["error"] == 0):
+        run_errors = body.get("runErrors", [])
+        if (
+            not isinstance(run_errors, list)
+            or len(run_errors) > 16
+            or any(not isinstance(error, str) or not 1 <= len(error) <= 512 for error in run_errors)
+        ):
+            raise ValueError(f"invalid acquisition run errors: {relative}")
+        if (
+            body.get("counts") != expected_counts
+            or body["complete"] != (measured["error"] == 0 and not run_errors)
+        ):
             raise ValueError(f"inconsistent acquisition completion: {relative}")
         receipt = body.get("sourceReceipt")
         if bool(measured["baked"]) != (receipt is not None):
