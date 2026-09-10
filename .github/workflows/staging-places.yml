@@ -1,0 +1,116 @@
+# Dedicated encrypted place seeds; manual staging only. Missing actual source proofs fail closed.
+name: WeatherX staging place seed
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Prepare immutable objects, or activate a separately approved completion
+        required: true
+        type: choice
+        options: [prepare, activate]
+      family:
+        required: true
+        type: choice
+        options: [surf, paragliding, tides]
+      atmos_sha:
+        description: Exact reviewed Atmos producer and consumer commit
+        required: true
+        type: string
+      seed_tag:
+        description: Cycle release tag with the dedicated encrypted seed asset
+        required: true
+        type: string
+      seed_sha256:
+        description: Exact encrypted asset SHA-256
+        required: true
+        type: string
+      plaintext_sha256:
+        description: Exact authenticated archive plaintext SHA-256, not plaintext data
+        required: true
+        type: string
+      manifest_sha256:
+        description: Exact reviewed publisher manifest SHA-256
+        required: true
+        type: string
+      completion_sha256:
+        description: Activate only; reviewed preparation completion SHA-256
+        required: false
+        type: string
+      expected_pointer_sha256:
+        description: Activate only; current staging family pointer SHA-256 or absent
+        required: false
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-staging-publication
+  cancel-in-progress: false
+jobs:
+  places:
+    environment:
+      name: data-staging
+      url: https://staging.weatherx.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PLACES_ACTION: ${{ inputs.action }}
+      PLACES_KIND: ${{ inputs.family }}
+      ATMOS_SHA: ${{ inputs.atmos_sha }}
+      SEED_TAG: ${{ inputs.seed_tag }}
+      SEED_SHA256: ${{ inputs.seed_sha256 }}
+      PLAINTEXT_SHA256: ${{ inputs.plaintext_sha256 }}
+      MANIFEST_SHA256: ${{ inputs.manifest_sha256 }}
+      COMPLETION_SHA256: ${{ inputs.completion_sha256 }}
+      EXPECTED_POINTER_SHA256: ${{ inputs.expected_pointer_sha256 }}
+      STAGING_PLACES_ENABLED: ${{ vars.STAGING_PLACES_ENABLED }}
+      STAGING_DATA_ISOLATION_APPROVED: ${{ vars.STAGING_DATA_ISOLATION_APPROVED }}
+      STAGING_R2_ACCOUNT_ID: ${{ vars.STAGING_R2_ACCOUNT_ID }}
+      STAGING_PLACES_APPROVED_WORKFLOW_SHA: ${{ vars.STAGING_PLACES_APPROVED_WORKFLOW_SHA }}
+      STAGING_PLACES_APPROVED_ATMOS_SHA: ${{ vars.STAGING_PLACES_APPROVED_ATMOS_SHA }}
+      STAGING_PLACES_APPROVED_FAMILY: ${{ vars.STAGING_PLACES_APPROVED_FAMILY }}
+      STAGING_PLACES_APPROVED_SEED_SHA256: ${{ vars.STAGING_PLACES_APPROVED_SEED_SHA256 }}
+      STAGING_PLACES_APPROVED_PLAINTEXT_SHA256: ${{ vars.STAGING_PLACES_APPROVED_PLAINTEXT_SHA256 }}
+      STAGING_PLACES_APPROVED_MANIFEST_SHA256: ${{ vars.STAGING_PLACES_APPROVED_MANIFEST_SHA256 }}
+      STAGING_PLACES_APPROVED_COMPLETION_SHA256: ${{ vars.STAGING_PLACES_APPROVED_COMPLETION_SHA256 }}
+      STAGING_PLACES_APPROVED_QUALIFIER_SHA256: ${{ vars.STAGING_PLACES_APPROVED_QUALIFIER_SHA256 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Refuse unreviewed non-main publication before all credentials
+        run: node cycle/tools/staging-places-workflow.mjs gate
+      - name: Install integrity-locked publisher dependencies without credentials
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefix cycle/staging-controller
+      - name: Verify publication, transport and workflow contracts without credentials
+        working-directory: cycle
+        run: node --test tests/staging-places.mjs tests/staging-places-seed.mjs tests/staging-places-workflow.mjs
+      - name: Download only the exact encrypted public release asset
+        run: node cycle/tools/staging-places-workflow.mjs download
+      - name: Authenticate and decrypt with the dedicated staging seed key only
+        env:
+          STAGING_PLACES_SEED_KEY: ${{ secrets.STAGING_PLACES_SEED_KEY }}
+        run: node cycle/tools/staging-places-workflow.mjs decrypt
+      - name: Checkout reviewed producer and consumer with no retained Git credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: ${{ inputs.atmos_sha }}
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: control
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with: { python-version: '3.12' }
+      - name: Install integrity-locked consumer dependencies without storage credentials
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefix control/app
+      - name: Install version-pinned minimal offline tide producer dependencies
+        run: python3 -m pip install --disable-pip-version-check -r cycle/tools/staging-places-requirements.txt
+      - name: Require actual pinned producer, consumer, coverage and requested-roster proof
+        # No proof is accepted from the encrypted seed. Missing frozen checkpoint evidence
+        # or unsupported family fails here, before the storage credential step.
+        run: node cycle/tools/staging-places-workflow.mjs qualify
+      - name: Conditionally publish and read back this family in the fixed staging bucket only
+        env:
+          STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
+          STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
+        run: node cycle/tools/staging-places-workflow.mjs publish
