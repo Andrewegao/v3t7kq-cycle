@@ -25,6 +25,7 @@ SURF_LEADS = 73
 SURF_MIN_REMAINING = timedelta(hours=6)
 TIDE_REFERENCE_STATIONS = 1256
 TIDE_MIN_AVAILABLE = 1251
+TIDE_CHECKPOINT_MANIFEST_MAX_BYTES = 2_097_152
 _CREDENTIAL = re.compile(
     r"^(?:STAGING_R2_WRITE_|STAGING_PLACES_SEED_KEY$|UI_|AWS_|RCLONE_|"
     r"CLOUDFLARE_|CF_API_|R2_|SHARED_R2_|STAGING_WORKER_)"
@@ -218,6 +219,55 @@ def _freeze_tide_roster(
     return manifest
 
 
+def _tide_minimum_failure_count(error: BaseException) -> int | None:
+    """Recognize only the pinned producer's explicit partial-minimum refusal."""
+    if type(error) is not RuntimeError or len(error.args) != 1 or type(error.args[0]) is not str:
+        return None
+    message = error.args[0]
+    if len(message) > 160:
+        return None
+    match = re.fullmatch(
+        r"Staging tide minimum not met \(([0-9]{1,4}) available, ([0-9]{1,4}) required\); "
+        r"previous catalog preserved",
+        message,
+    )
+    if match is None:
+        return None
+    available, required = map(int, match.groups())
+    if required != TIDE_MIN_AVAILABLE or not 0 < available < required:
+        return None
+    return available
+
+
+def _tide_manifest_seal(checkpoint: Path) -> str:
+    path = checkpoint / "manifest.json"
+    try:
+        stat = path.stat()
+        if (path.is_symlink() or not path.is_file() or stat.st_nlink != 1
+                or path.resolve() != path
+                or not 0 < stat.st_size <= TIDE_CHECKPOINT_MANIFEST_MAX_BYTES):
+            raise CollectionRefused("frozen tide manifest changed")
+        body = path.read_bytes()
+    except OSError as error:
+        raise CollectionRefused("frozen tide manifest changed") from error
+    if len(body) != stat.st_size:
+        raise CollectionRefused("frozen tide manifest changed")
+    return hashlib.sha256(body).hexdigest()
+
+
+def _require_frozen_tide_manifest(
+    producer: ModuleType,
+    checkpoint: Path,
+    manifest: dict[str, Any],
+    retrieved: datetime,
+    manifest_sha256: str,
+) -> None:
+    if (_tide_manifest_seal(checkpoint) != manifest_sha256
+            or producer._checkpoint_manifest(checkpoint) != manifest
+            or manifest.get("retrievedAt") != _iso(retrieved)):
+        raise CollectionRefused("frozen tide manifest changed")
+
+
 def collect_tides(
     root: Path,
     producer: ModuleType,
@@ -230,28 +280,47 @@ def collect_tides(
     candidate = root / "candidate"
     checkpoint.mkdir(mode=0o700)
     session = _session(session_factory or producer._session)
+    resume_attempts = 0
+    first_pass_available = None
     try:
         with contextlib.redirect_stdout(_Sink()), contextlib.redirect_stderr(_Sink()):
             manifest = _freeze_tide_roster(producer, checkpoint, session, retrieved)
-            catalog, failed = producer.bake_v2(
-                session,
-                manifest["stations"],
-                candidate / "v2",
-                candidate / "tides.json",
-                now=retrieved,
-                include_subordinate=False,
-                checkpoint_dir=checkpoint,
-                staging_partial=True,
-                min_available_stations=TIDE_MIN_AVAILABLE,
+            manifest_sha256 = _tide_manifest_seal(checkpoint)
+
+            def bake() -> tuple[dict[str, Any], int]:
+                return producer.bake_v2(
+                    session,
+                    manifest["stations"],
+                    candidate / "v2",
+                    candidate / "tides.json",
+                    now=retrieved,
+                    include_subordinate=False,
+                    checkpoint_dir=checkpoint,
+                    staging_partial=True,
+                    min_available_stations=TIDE_MIN_AVAILABLE,
+                )
+
+            try:
+                catalog, failed = bake()
+            except Exception as error:
+                first_pass_available = _tide_minimum_failure_count(error)
+                if first_pass_available is None:
+                    raise
+                _require_frozen_tide_manifest(
+                    producer, checkpoint, manifest, retrieved, manifest_sha256
+                )
+                resume_attempts = 1
+                # Exactly one retry reuses the same session, manifest and product cache.
+                # The outer 45-minute process deadline remains the overall bound.
+                catalog, failed = bake()
+            _require_frozen_tide_manifest(
+                producer, checkpoint, manifest, retrieved, manifest_sha256
             )
     finally:
         close = getattr(session, "close", None)
         if callable(close):
             close()
 
-    frozen = producer._checkpoint_manifest(checkpoint)
-    if frozen != manifest or frozen.get("retrievedAt") != _iso(retrieved):
-        raise CollectionRefused("tide checkpoint identity changed during collection")
     available = catalog.get("stations")
     availability = catalog.get("availability")
     if (
@@ -266,7 +335,7 @@ def collect_tides(
         or availability.get("unavailableCount") != failed
     ):
         raise CollectionRefused("tide staging availability contract differs")
-    return {
+    result = {
         "family": "tides",
         "identity": catalog["datasetId"],
         "candidate": "candidate",
@@ -274,6 +343,12 @@ def collect_tides(
         "requestedStationCount": TIDE_REFERENCE_STATIONS,
         "availableStationCount": len(available),
     }
+    if resume_attempts:
+        result.update({
+            "resumeAttempts": resume_attempts,
+            "firstPassAvailableStationCount": first_pass_available,
+        })
+    return result
 
 
 def collect(

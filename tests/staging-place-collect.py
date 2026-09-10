@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import subprocess
 import sys
@@ -123,18 +124,81 @@ class TideProducer:
 
 
 class FailingTideProducer(TideProducer):
+    def __init__(self):
+        super().__init__()
+        self.bake_calls = 0
+
     def bake_v2(self, *args, **kwargs):
+        self.bake_calls += 1
         raise RuntimeError("provider body must not become success")
 
 
 class TimestampChangingTideProducer(TideProducer):
+    def __init__(self):
+        super().__init__()
+        self.bake_calls = 0
+
     def bake_v2(self, *args, **kwargs):
+        self.bake_calls += 1
         catalog, failed = super().bake_v2(*args, **kwargs)
         path = kwargs["checkpoint_dir"] / "manifest.json"
         manifest = json.loads(path.read_text())
         manifest["retrievedAt"] = "2000-01-01T00:00:00Z"
         path.write_text(json.dumps(manifest))
         return catalog, failed
+
+
+class InvalidCatalogTideProducer(TideProducer):
+    def __init__(self):
+        super().__init__()
+        self.bake_calls = 0
+
+    def bake_v2(self, *args, **kwargs):
+        self.bake_calls += 1
+        catalog, failed = super().bake_v2(*args, **kwargs)
+        catalog["retrievedAt"] = "2000-01-01T00:00:00Z"
+        return catalog, failed
+
+
+class ResumableTideProducer(TideProducer):
+    def __init__(self, fail_second=False, tamper_manifest=False):
+        super().__init__()
+        self.fail_second = fail_second
+        self.tamper_manifest = tamper_manifest
+        self.bake_calls = 0
+        self.sessions = []
+        self.manifest_hashes = []
+        self.cached_product = None
+
+    def bake_v2(self, session, stations, output, legacy, **kwargs):
+        self.bake_calls += 1
+        self.sessions.append(session)
+        manifest_path = kwargs["checkpoint_dir"] / "manifest.json"
+        self.manifest_hashes.append(hashlib.sha256(manifest_path.read_bytes()).hexdigest())
+        cached = kwargs["checkpoint_dir"] / "products" / "1" / "hilo.json"
+        if self.bake_calls == 1:
+            cached.parent.mkdir(parents=True)
+            cached.write_text('{"cached":true}')
+            self.cached_product = cached.read_bytes()
+            if self.tamper_manifest:
+                manifest_path.write_bytes(manifest_path.read_bytes() + b"\n")
+            raise RuntimeError(
+                "Staging tide minimum not met (1169 available, 1251 required); previous catalog preserved"
+            )
+        assert cached.read_bytes() == self.cached_product
+        if self.fail_second:
+            raise RuntimeError(
+                "Staging tide minimum not met (1249 available, 1251 required); previous catalog preserved"
+            )
+        return super().bake_v2(session, stations, output, legacy, **kwargs)
+
+
+class WrongTypeMinimumTideProducer(FailingTideProducer):
+    def bake_v2(self, *args, **kwargs):
+        self.bake_calls += 1
+        raise ValueError(
+            "Staging tide minimum not met (1169 available, 1251 required); previous catalog preserved"
+        )
 
 
 class PlaceCollector(unittest.TestCase):
@@ -186,12 +250,58 @@ class PlaceCollector(unittest.TestCase):
         self.assertFalse(producer.bake_args[0].trust_env)
         self.assertTrue(producer.bake_args[0].closed)
 
+    def test_tides_resume_exact_minimum_failure_once_using_same_frozen_checkpoint(self):
+        now = datetime(2026, 9, 10, 17, 19, 59, tzinfo=timezone.utc)
+        producer = ResumableTideProducer()
+        session = Session()
+        result = collector.collect(self.source, self.base / "run", "tides", env={},
+            clock=lambda: now, modules={"tides": producer}, session_factory=lambda: session)
+        self.assertEqual(producer.bake_calls, 2)
+        self.assertIs(producer.sessions[0], producer.sessions[1])
+        self.assertEqual(producer.manifest_hashes[0], producer.manifest_hashes[1])
+        self.assertEqual(result["resumeAttempts"], 1)
+        self.assertEqual(result["firstPassAvailableStationCount"], 1169)
+        self.assertEqual(result["availableStationCount"], 1251)
+        self.assertTrue(session.closed)
+
+    def test_tides_do_not_retry_nonminimum_errors_or_matching_text_of_wrong_type(self):
+        now = datetime(2026, 9, 10, 17, 19, 59, tzinfo=timezone.utc)
+        for index, producer in enumerate((FailingTideProducer(), WrongTypeMinimumTideProducer(),
+                                          InvalidCatalogTideProducer())):
+            session = Session()
+            with self.subTest(producer=type(producer).__name__), self.assertRaises(Exception):
+                collector.collect(self.source, self.base / f"nonminimum-{index}", "tides", env={},
+                    clock=lambda: now, modules={"tides": producer}, session_factory=lambda: session)
+            self.assertEqual(producer.bake_calls, 1)
+            self.assertTrue(session.closed)
+
+    def test_tides_second_minimum_failure_gets_no_third_attempt(self):
+        now = datetime(2026, 9, 10, 17, 19, 59, tzinfo=timezone.utc)
+        producer = ResumableTideProducer(fail_second=True)
+        session = Session()
+        with self.assertRaises(Exception):
+            collector.collect(self.source, self.base / "run", "tides", env={},
+                clock=lambda: now, modules={"tides": producer}, session_factory=lambda: session)
+        self.assertEqual(producer.bake_calls, 2)
+        self.assertTrue(session.closed)
+
+    def test_tides_manifest_byte_tamper_blocks_resume(self):
+        now = datetime(2026, 9, 10, 17, 19, 59, tzinfo=timezone.utc)
+        producer = ResumableTideProducer(tamper_manifest=True)
+        session = Session()
+        with self.assertRaises(Exception):
+            collector.collect(self.source, self.base / "run", "tides", env={},
+                clock=lambda: now, modules={"tides": producer}, session_factory=lambda: session)
+        self.assertEqual(producer.bake_calls, 1)
+        self.assertTrue(session.closed)
+
     def test_tides_do_not_accept_arbitrary_failure_or_rewritten_checkpoint_clock(self):
         now = datetime(2026, 9, 10, 17, 19, 59, tzinfo=timezone.utc)
         for index, producer in enumerate((FailingTideProducer(), TimestampChangingTideProducer())):
             with self.subTest(producer=type(producer).__name__), self.assertRaises(Exception):
                 collector.collect(self.source, self.base / f"run-{index}", "tides", env={},
                     clock=lambda: now, modules={"tides": producer})
+            self.assertEqual(producer.bake_calls, 1)
 
     def test_refuses_existing_or_checkout_nested_root_and_publication_credentials(self):
         existing = self.base / "existing"
@@ -205,7 +315,7 @@ class PlaceCollector(unittest.TestCase):
         self.assertFalse((self.base / "run").exists())
 
     def test_cli_failure_is_fixed_and_does_not_echo_private_source_or_environment(self):
-        result = subprocess.run([sys.executable, str(REPO / "tools/staging-place-collect.py"),
+        result = subprocess.run([sys.executable, "-I", "-B", str(REPO / "tools/staging-place-collect.py"),
             "--source", "/private/source-name", "--root", str(self.base / "run"), "--family", "surf"],
             env={"PATH": "/usr/bin:/bin", "STAGING_R2_WRITE_SECRET_ACCESS_KEY": "DO-NOT-PRINT"},
             capture_output=True, text=True)

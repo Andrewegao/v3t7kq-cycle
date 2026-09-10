@@ -89,6 +89,17 @@ async function fixture(t, kind = 'surf') {
     const b = Buffer.isBuffer(input) ? input : await readFile(input.file); writes.push(key); putObject(key, b); } };
   return { now, candidate, proof, policy: p, objects, writes, io, putObject };
 }
+function legacyTidePointer(f, { identity = 'noaa-coops-20260910T170000Z',
+  sourceExpiresAt = new Date(f.now + 2 * 86400000).toISOString() } = {}) {
+  const completion = { ...f.candidate.completion, identity, sourceExpiresAt };
+  const completionBody = encode(completion);
+  return { ...completion, createdAt: new Date(f.now - 3600000).toISOString(), expiresAt: new Date(f.now + 3600000).toISOString(),
+    completion: { path: 'completion.json', bytes: completionBody.length, sha256: hash(completionBody) } };
+}
+function correctionFor(pointer, correctedSourceExpiresAt) {
+  return { kind: pointer.kind, identity: pointer.identity, sourceExpiresAt: pointer.sourceExpiresAt, correctedSourceExpiresAt,
+    completion: structuredClone(pointer.completion), manifest: structuredClone(pointer.manifest) };
+}
 for (const kind of ['surf', 'paragliding']) test(`${kind}: real primitives verify all bytes and activate only own pointer`, async t => {
   const f = await fixture(t, kind); const options = { clock: () => f.now };
   const result = await renewQualified(f.io, f.candidate, f.proof, f.policy, options); assert.equal(result.activated, true);
@@ -148,6 +159,53 @@ test('tides cannot replace a newer same-coverage dataset with an older collectio
   f.writes.length = 0;
   await assert.rejects(renewQualified(f.io, f.candidate, f.proof, f.policy, { clock: () => f.now + 1000 }), /newer tide/);
   assert.equal(f.writes.length, 0);
+});
+test('one exact legacy tide metadata correction changes only the comparison baseline', async t => {
+  const f = await fixture(t, 'tides'), prior = legacyTidePointer(f);
+  const corrected = new Date(f.now + 12 * 3600000).toISOString();
+  const migrationPolicy = { ...f.policy, tidePriorFreshnessCorrection: correctionFor(prior, corrected) };
+  f.putObject(pointerKey('tides'), encode(prior)); f.writes.length = 0;
+  const result = await renewQualified(f.io, f.candidate, f.proof, migrationPolicy, { clock: () => f.now });
+  assert(result.activated);
+  assert.equal(JSON.parse(f.objects.get(pointerKey('tides')).body).identity, f.candidate.completion.identity);
+  assert(f.writes.every(key => key === pointerKey('tides') || key.includes(`/snapshots/${f.candidate.completion.identity}/`)));
+  assert(!f.writes.some(key => key.includes(`/snapshots/${prior.identity}/`)), 'legacy immutable objects must not be rewritten');
+});
+test('every legacy tide correction pin is exact and a normal newer prior still rejects', async t => {
+  const mutations = [
+    value => { value.kind = 'surf'; },
+    value => { value.identity = 'noaa-coops-20260910T165959Z'; },
+    value => { value.sourceExpiresAt = new Date(Date.parse(value.sourceExpiresAt) + 1000).toISOString(); },
+    value => { value.correctedSourceExpiresAt = value.sourceExpiresAt; },
+    value => { value.completion.path = 'other.json'; },
+    value => { value.completion.bytes += 1; },
+    value => { value.completion.sha256 = '0'.repeat(64); },
+    value => { value.manifest.path = 'other.json'; },
+    value => { value.manifest.bytes += 1; },
+    value => { value.manifest.sha256 = '0'.repeat(64); },
+  ];
+  for (const mutate of mutations) {
+    const f = await fixture(t, 'tides'), prior = legacyTidePointer(f);
+    const correction = correctionFor(prior, new Date(f.now + 12 * 3600000).toISOString()); mutate(correction);
+    f.putObject(pointerKey('tides'), encode(prior)); f.writes.length = 0;
+    await assert.rejects(renewQualified(f.io, f.candidate, f.proof,
+      { ...f.policy, tidePriorFreshnessCorrection: correction }, { clock: () => f.now }));
+    assert.equal(f.writes.length, 0);
+  }
+  const f = await fixture(t, 'tides'), newer = legacyTidePointer(f, { identity: 'noaa-coops-20260910T190000Z' });
+  const correction = correctionFor(legacyTidePointer(f), new Date(f.now + 12 * 3600000).toISOString());
+  f.putObject(pointerKey('tides'), encode(newer)); f.writes.length = 0;
+  await assert.rejects(renewQualified(f.io, f.candidate, f.proof,
+    { ...f.policy, tidePriorFreshnessCorrection: correction }, { clock: () => f.now }), /freshness rollback/);
+  assert.equal(f.writes.length, 0);
+});
+test('migration policy pins the independently verified legacy tide receipts and corrected expiry', () => {
+  assert.deepEqual(policy.tidePriorFreshnessCorrection, {
+    kind: 'tides', identity: 'noaa-coops-20260910T171959Z',
+    sourceExpiresAt: '2026-09-11T23:54:00.000Z', correctedSourceExpiresAt: '2026-09-11T08:12:00.000Z',
+    completion: { path: 'completion.json', bytes: 414, sha256: 'b77bdaefe79374c46bee90ab905865dab585e2e2f5649c7072d9f3141da19715' },
+    manifest: { path: 'manifest.json', bytes: 164453, sha256: '2dc0c5d3201842a8eed1230c938f1c46a699422987b75f2834824d8c54abee97' },
+  });
 });
 test('prior pointer corruption is rejected, not treated as absent', () => {
   assert.equal(readPriorPointer(null, 'surf', Date.now()), null);

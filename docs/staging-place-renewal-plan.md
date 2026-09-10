@@ -43,9 +43,21 @@ Independent review closed three defects before activation: tide expiry now uses 
 earliest event/sample coverage end across every station; all qualification Python
 executes with isolated module imports; and the minimum six-hour freshness horizon is
 rechecked immediately before conditional activation after remote readback. Fresh Node
-22 verification has 250 passing tests, zero failures and two existing skips; the Python
-collector has six passing tests. No runtime/UI code changed.
+22 verification has 253 passing tests, zero failures and two existing skips; the Python
+collector has 10 passing tests. No runtime/UI code changed.
 
 The first real tide pass retained 2,370 valid products but only 1,169 complete stations,
-below the unchanged 1,251 minimum. Its frozen checkpoint is being resumed through the
-pinned producer for missing products only. This is not a successful qualification yet.
+below the unchanged 1,251 minimum. One bounded pinned-producer resume reused that exact
+frozen manifest and cached products, recovered all 1,251 required stations in 39.2 seconds,
+and retained identity `noaa-coops-20260910T220750Z`; qualification and activation remain
+separate gates. The scheduled collector now permits only that exact minimum-station failure
+to trigger one in-process resume under the existing overall 45-minute deadline.
+
+The currently served `noaa-coops-20260910T171959Z` completion predates the corrected tide
+expiry rule and records sample-only expiry `2026-09-11T23:54:00.000Z`; exact archived bytes
+prove its earliest event-limited expiry was `2026-09-11T08:12:00.000Z`. A reviewed migration
+policy pins that prior identity, both dates, and its full completion and manifest receipts.
+Only when every pin matches may renewal use the corrected date as the comparison baseline;
+the old completion is never rewritten, and qualification, newer-identity, six-hour final-CAS
+freshness, and pointer CAS gates remain unchanged. The exception becomes inert after a newer
+pointer replaces that exact legacy pointer.

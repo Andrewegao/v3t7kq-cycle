@@ -31,6 +31,35 @@ export function isolatedPythonArguments(entry, args = []) {
   assert.equal(resolve(entry), entry, 'isolated Python entrypoint must be absolute');
   return ['-I', '-B', entry, ...args];
 }
+function canonicalPolicyInstant(value) {
+  const instant = Date.parse(value);
+  assert(Number.isFinite(instant) && new Date(instant).toISOString() === value, 'invalid tide correction timestamp');
+  return instant;
+}
+export function validateTidePriorFreshnessCorrection(value) {
+  assert(value && typeof value === 'object' && !Array.isArray(value));
+  assert.deepEqual(Object.keys(value).sort(), ['kind', 'identity', 'sourceExpiresAt', 'correctedSourceExpiresAt', 'completion', 'manifest'].sort());
+  assert.equal(value.kind, 'tides'); assert(/^noaa-coops-\d{8}T\d{6}Z$/.test(value.identity));
+  for (const [name, receipt, path, limit] of [['completion', value.completion, 'completion.json', LIMITS.completionBytes],
+    ['manifest', value.manifest, 'manifest.json', LIMITS.manifestBytes]]) {
+    assert(receipt && typeof receipt === 'object' && !Array.isArray(receipt), `invalid tide correction ${name}`);
+    assert.deepEqual(Object.keys(receipt).sort(), ['path', 'bytes', 'sha256'].sort());
+    assert.equal(receipt.path, path); assert(Number.isSafeInteger(receipt.bytes) && receipt.bytes > 0 && receipt.bytes <= limit);
+    assert(SHA.test(receipt.sha256));
+  }
+  const legacy = canonicalPolicyInstant(value.sourceExpiresAt);
+  const corrected = canonicalPolicyInstant(value.correctedSourceExpiresAt);
+  assert(corrected < legacy, 'corrected tide freshness must precede legacy metadata');
+  return { legacy, corrected };
+}
+function correctedTidePriorFreshness(prior, correction) {
+  const { corrected } = validateTidePriorFreshnessCorrection(correction);
+  assert.deepEqual({ kind: prior.kind, identity: prior.identity, sourceExpiresAt: prior.sourceExpiresAt,
+    completion: prior.completion, manifest: prior.manifest },
+  { kind: correction.kind, identity: correction.identity, sourceExpiresAt: correction.sourceExpiresAt,
+    completion: correction.completion, manifest: correction.manifest }, 'forecast freshness rollback refused');
+  return corrected;
+}
 export function renewalGate(env, policy, digest) {
   for (const [key, value] of Object.entries({ GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted',
     GITHUB_REPOSITORY: 'Andrewegao/v3t7kq-cycle', GITHUB_REF: 'refs/heads/main', GITHUB_JOB: 'renew',
@@ -44,6 +73,7 @@ export function renewalGate(env, policy, digest) {
   assert(policy.schemaVersion === 1 && SHA.test(policy.qualifierSha256));
   assert(SHA.test(digest) && env.STAGING_PLACES_RENEWAL_CONTROLLER_SHA256 === digest, 'unapproved controller closure');
   assert(policy.minimumForecastLeaseHours === 6 && policy.leaseHours === 24);
+  validateTidePriorFreshnessCorrection(policy.tidePriorFreshnessCorrection);
   for (const key of Object.keys(env)) if (/^(AWS_|RCLONE_|CLOUDFLARE_|CF_API_|R2_|SHARED_R2_|UI_|STAGING_WORKER_)/.test(key)) assert(!env[key], 'foreign credential refused');
   for (const path of [env.RUNNER_TEMP, env.GITHUB_WORKSPACE]) assert(path && resolve(path) === path);
   let run;
@@ -74,6 +104,7 @@ export function readPriorPointer(object, kind, now) {
 }
 export async function renewQualified(io, candidate, proof, policy, { clock = Date.now, report } = {}) {
   validateQualification(proof, candidate, policy.sourceSha);
+  validateTidePriorFreshnessCorrection(policy.tidePriorFreshnessCorrection);
   const { kind, identity, sourceExpiresAt } = candidate.completion;
   const before = await io.get(pointerKey(kind), LIMITS.completionBytes, true);
   const prior = readPriorPointer(before, kind, clock());
@@ -85,7 +116,12 @@ export async function renewQualified(io, candidate, proof, policy, { clock = Dat
     assert.equal(hash(candidate.manifestBody), policy.paragliding.manifestSha256);
     if (prior) assert.equal(prior.identity, identity, 'do not replace a newer approved static directory');
   } else if (prior) {
-    assert(Date.parse(sourceExpiresAt) >= Date.parse(prior.sourceExpiresAt), 'forecast freshness rollback refused');
+    const candidateFreshness = Date.parse(sourceExpiresAt), priorFreshness = Date.parse(prior.sourceExpiresAt);
+    if (candidateFreshness < priorFreshness) {
+      assert.equal(kind, 'tides', 'forecast freshness rollback refused');
+      assert(candidateFreshness >= correctedTidePriorFreshness(prior, policy.tidePriorFreshnessCorrection),
+        'forecast freshness rollback refused');
+    }
     // Tide windows collected on the same UTC day can have the same coverage end.
     // Their fixed-width dataset timestamps provide the required same-window ordering.
     if (kind === 'tides') {

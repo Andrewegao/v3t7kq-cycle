@@ -6,6 +6,22 @@
   "directoryTideSchedule": "47 5,17 * * *",
   "minimumForecastLeaseHours": 6,
   "leaseHours": 24,
+  "tidePriorFreshnessCorrection": {
+    "kind": "tides",
+    "identity": "noaa-coops-20260910T171959Z",
+    "sourceExpiresAt": "2026-09-11T23:54:00.000Z",
+    "correctedSourceExpiresAt": "2026-09-11T08:12:00.000Z",
+    "completion": {
+      "path": "completion.json",
+      "bytes": 414,
+      "sha256": "b77bdaefe79374c46bee90ab905865dab585e2e2f5649c7072d9f3141da19715"
+    },
+    "manifest": {
+      "path": "manifest.json",
+      "bytes": 164453,
+      "sha256": "2dc0c5d3201842a8eed1230c938f1c46a699422987b75f2834824d8c54abee97"
+    }
+  },
   "paragliding": {
     "tag": "staging-places-20260910-v1",
     "sourceSha": "0024da5a06925140d9681ef46303f751fda9ef54",
