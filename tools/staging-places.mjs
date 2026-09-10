@@ -266,9 +266,20 @@ export async function activatePlaces(io, { kind, identity, expectedPointerSha256
   assert.equal(before?.sha256 ?? 'absent', expectedPointerSha256, 'pointer changed; inspect before retry');
   const body = encode(pointer); assert(body.length <= LIMITS.completionBytes);
   validatePointer(pointer, clock());
-  await io.put(key, body, { ...(before ? { ifMatch: before.etag } : { ifNoneMatch: '*' }), bytes: body.length, sha256: hash(body) });
-  verifyRemote(await io.get(key, LIMITS.completionBytes, false), { bytes: body.length, sha256: hash(body) });
-  return { identity, pointerSha256: hash(body), expiresAt, activated: true };
+  let reconciled = false;
+  try { await io.put(key, body, { ...(before ? { ifMatch: before.etag } : { ifNoneMatch: '*' }), bytes: body.length, sha256: hash(body) }); }
+  catch {
+    // A lost response is not proof of a failed conditional write. Reconcile read-only;
+    // never retry the PUT or accept a different writer's pointer as our activation.
+    try {
+      const current = await io.get(key, LIMITS.completionBytes, true);
+      verifyRemote(current, { bytes: body.length, sha256: hash(body) });
+      assert(Buffer.isBuffer(current.body) && current.body.equals(body), 'pointer bytes differ');
+      reconciled = true;
+    } catch { throw new Error('activation outcome uncertain; inspect pointer before retry'); }
+  }
+  if (!reconciled) verifyRemote(await io.get(key, LIMITS.completionBytes, false), { bytes: body.length, sha256: hash(body) });
+  return { identity, pointerSha256: hash(body), expiresAt, activated: true, ...(reconciled ? { reconciled: true } : {}) };
 }
 
 // A separate narrow adapter is necessary: existing search/shared adapters correctly reject this

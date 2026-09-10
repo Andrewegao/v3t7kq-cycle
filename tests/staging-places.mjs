@@ -111,6 +111,33 @@ test('activation rereads all immutable data, requires exact completion approval 
   io.objects.get(prefix('surf', 'surf-test') + candidate.manifest.files[0].path).body = Buffer.from('changed');
   await assert.rejects(activatePlaces(io, { ...params, expectedPointerSha256: result.pointerSha256 }));
 });
+test('lost pointer PUT response reconciles exact stored bytes without a second PUT', async t => {
+  for (const existing of [false, true]) {
+    const { candidate, now } = await fixture(t), io = memory(); const prepared = await preparePlaces(io, candidate, approval(candidate));
+    const params = { kind: 'surf', identity: 'surf-test', expectedPointerSha256: 'absent', approvedCompletionSha256: prepared.completion.sha256, clock: () => now, expiresAt: new Date(now + 3600000).toISOString() };
+    if (existing) { const before = await activatePlaces(io, params); params.expectedPointerSha256 = before.pointerSha256; params.expiresAt = new Date(now + 2 * 3600000).toISOString(); }
+    const put = io.put, get = io.get; let puts = 0, reconciliations = 0;
+    io.put = async (...args) => { assert.equal(args[0], pointerKey('surf')); puts++; await put(...args); throw Error('private lost response details'); };
+    io.get = async (...args) => { if (args[0] === pointerKey('surf') && puts) { reconciliations++; assert.equal(args[1], LIMITS.completionBytes); assert.equal(args[2], true); } return get(...args); };
+    const result = await activatePlaces(io, params);
+    assert.equal(result.activated, true); assert.equal(result.reconciled, true); assert.equal(puts, 1); assert.equal(reconciliations, 1);
+    assert.equal(result.pointerSha256, hash(io.objects.get(pointerKey('surf')).body));
+  }
+});
+test('lost pointer response with absent, different, bad metadata or unreadable state is explicitly uncertain', async t => {
+  for (const failure of ['absent', 'different', 'metadata', 'get-failure']) {
+    const { candidate, now } = await fixture(t), io = memory(); const prepared = await preparePlaces(io, candidate, approval(candidate));
+    const put = io.put, get = io.get; let puts = 0, reads = 0;
+    io.put = async (...args) => { puts++; if (failure !== 'absent') await put(...args);
+      if (failure === 'different') io.objects.get(pointerKey('surf')).body = Buffer.from('{"foreign":true}');
+      if (failure === 'metadata') io.objects.get(pointerKey('surf')).customMetadata.sha256 = '0'.repeat(64);
+      throw Error('private lost response details'); };
+    io.get = async (...args) => { if (args[0] === pointerKey('surf') && puts) { reads++; if (failure === 'get-failure') throw Error('private read failure'); } return get(...args); };
+    await assert.rejects(activatePlaces(io, { kind: 'surf', identity: 'surf-test', expectedPointerSha256: 'absent', approvedCompletionSha256: prepared.completion.sha256, clock: () => now, expiresAt: new Date(now + 3600000).toISOString() }),
+      error => /activation outcome uncertain; inspect pointer before retry/.test(error.message) && !error.message.includes('private'));
+    assert.equal(puts, 1); assert.equal(reads, 1);
+  }
+});
 test('lease cannot relabel expired surf or outlive 48 hours; PG source expiry remains null', async t => {
   const { candidate, now } = await fixture(t), io = memory(); const prepared = await preparePlaces(io, candidate, approval(candidate));
   await assert.rejects(activatePlaces(io, { kind: 'surf', identity: 'surf-test', expectedPointerSha256: 'absent', approvedCompletionSha256: prepared.completion.sha256, now, expiresAt: new Date(now + 49 * 3600000).toISOString() }));

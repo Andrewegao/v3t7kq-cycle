@@ -89,5 +89,5 @@ async function main(env, action) {
   } finally { io.close(); }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  main(process.env, process.argv[2]).catch(() => { console.error('staging place lane refused; inspect pinned qualification and approval gates; no unverified activation'); process.exitCode = 1; });
+  main(process.env, process.argv[2]).catch(() => { console.error('staging place lane stopped; publication outcome may be uncertain; inspect qualification, approvals and current staging pointer before retry; no automatic retry was attempted'); process.exitCode = 1; });
 }
