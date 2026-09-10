@@ -8,7 +8,7 @@ import {BASELINE_PROFILE,validateProfile,validateCandidateSelection,requireProdu
 import {validateCompressionFiles} from './ui-static-compression.mjs';
 
 export const CONTROL_SHA = '25c402db5149daa018e349a34a4beeba1f2dca45';
-export const STAGING_CONTROL_SHA = '246ea7c0bb1c38b4dc1217657bad582a22b030e8';
+export const STAGING_CONTROL_SHA = '04146c3f67891ed714e1d5bbd27b6998ba0e96ad';
 export const REPOSITORY = 'Andrewegao/v3t7kq-cycle';
 export const FREEZE_UNTIL = '2026-08-31T11:00:00Z';
 export const MAX_BYTES = 96 * 1024 * 1024;
