@@ -1,0 +1,78 @@
+name: WeatherX staging search reader code-only qualification
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Inspect only, or upload and qualify the approved code with existing settings unchanged
+        type: choice
+        options: [inspect, rollout]
+        default: inspect
+        required: true
+      source_sha:
+        description: Exact reviewed Atmos commit, also required in approved source variable
+        type: string
+        required: true
+      exclusive_window:
+        description: Rollout only - EXCLUSIVE-STAGING-WORKER-CODE-ONLY (no other staging Worker edits during run)
+        type: string
+        required: false
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-staging-publication
+  cancel-in-progress: false
+jobs:
+  reader:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: data-staging
+      url: https://staging.weatherx.org
+    env:
+      READER_ACTION: ${{ inputs.action }}
+      READER_SOURCE_SHA: ${{ inputs.source_sha }}
+      EXCLUSIVE_WINDOW_CONFIRMATION: ${{ inputs.exclusive_window }}
+      STAGING_SEARCH_READER_ENABLED: ${{ vars.STAGING_SEARCH_READER_ENABLED }}
+      STAGING_SEARCH_READER_APPROVED_SOURCE_SHA: ${{ vars.STAGING_SEARCH_READER_APPROVED_SOURCE_SHA }}
+      STAGING_SEARCH_READER_APPROVED_VERSION: ${{ vars.STAGING_SEARCH_READER_APPROVED_VERSION }}
+      STAGING_SEARCH_READER_APPROVED_BOUNDARY_SHA256: ${{ vars.STAGING_SEARCH_READER_APPROVED_BOUNDARY_SHA256 }}
+      STAGING_R2_ACCOUNT_ID: ${{ vars.STAGING_R2_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Refuse unapproved execution before credentials
+        run: node cycle/tools/staging-search-reader.mjs gate
+      - name: Controller failure and isolation contracts
+        run: node --test cycle/tests/staging-search-reader.mjs
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: ${{ inputs.source_sha }}
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: control
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with: { python-version: '3.12' }
+      - name: Install locked dependencies and qualify source without deployment credentials
+        working-directory: control/platform/edge
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          python -m pip install pillow==11.3.0
+          npm run check
+          node scripts/verify-config.mjs staging
+          npm exec -- esbuild --version
+      - name: Inspect or execute guarded staging-only code update
+        id: update
+        timeout-minutes: 10
+        env:
+          STAGING_WORKER_API_TOKEN: ${{ secrets.STAGING_WORKER_API_TOKEN }}
+        run: node cycle/tools/staging-search-reader.mjs
+      - name: Recover only an owned interrupted activation
+        if: ${{ always() && inputs.action == 'rollout' && (steps.update.outcome == 'failure' || steps.update.outcome == 'cancelled') }}
+        timeout-minutes: 5
+        env:
+          READER_ACTION: recover
+          STAGING_WORKER_API_TOKEN: ${{ secrets.STAGING_WORKER_API_TOKEN }}
+        run: node cycle/tools/staging-search-reader.mjs
