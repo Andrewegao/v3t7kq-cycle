@@ -7,10 +7,14 @@ import {resolve} from 'node:path';
 
 export const STAGING_ORIGIN='https://staging.weatherx.org';
 export const SELECTION_ASSET='assets/staging-model-selection.json';
+export const TC_SELECTION_ASSET='assets/staging-tc-guidance-selection.json';
 export const CORE_RELEASE_REQUEST='release-roster-core-v1';
 export const STATIC_COMPRESSION_REQUEST='release-roster-core-br11-v1';
 export const ACCOUNT_CORE_REQUEST='release-roster-core-account-v1';
+export const TC_RELEASE_REQUEST='release-roster-core-tc-v1';
 export const ACCOUNT_APPROVAL='staging-account-v1';
+export const TC_APPROVAL='staging-tc-guidance-v1';
+export const TC_SELECTION_SHA256='112f801de98c63d2b9017eddecf416e4e83ea673c21ce08001d48a2fca0345c5';
 export const MAX_SELECTION_BYTES=1024*1024;
 export const MODELS=['icon','hrrr-ak','hrdps','nam','nam-hi','nam-ak','arome-antilles'];
 const HASH=/^[a-f0-9]{64}$/,COMMIT=/^[a-f0-9]{40}$/,RUN=/^[1-9]\d{0,19}$/,ATTEMPT=/^[1-9]\d{0,3}$/;
@@ -20,13 +24,22 @@ export const CORE_RELEASE_PROFILE=Object.freeze({...BASELINE_PROFILE,expandedMod
 export const STATIC_COMPRESSION_PROFILE=Object.freeze({...CORE_RELEASE_PROFILE,staticCompression:'static-br11-v1'});
 // A distinct, non-promotable profile. Existing defaults never acquire account/billing.
 export const ACCOUNT_CORE_PROFILE=Object.freeze({...CORE_RELEASE_PROFILE,account:true,stagingAccount:ACCOUNT_APPROVAL});
+// TC release flags require account=0. Keep this separate from the existing account-enabled
+// staging profile and qualify it only as an isolated, non-deployed build artifact.
+export const TC_RELEASE_PROFILE=Object.freeze({...CORE_RELEASE_PROFILE,tcGuidance:TC_APPROVAL,tcSelectionSha256:TC_SELECTION_SHA256});
 const rawSelectionProfile=profile=>typeof profile?.modelSelectionSha256==='string';
 export function selectionProfile(profile){validateProfile(profile);return rawSelectionProfile(profile);}
 export function coreReleaseProfile(profile){validateProfile(profile);return profile.releaseRosterCore===CORE_RELEASE_REQUEST;}
 export function staticCompressionProfile(profile){validateProfile(profile);return profile.staticCompression==='static-br11-v1';}
-export function resolveSelectionRequest(requested='approved',approved,approvedCore,approvedStaticCompression,approvedAccount){
-  assert.ok(requested==='approved'||requested==='none'||requested===CORE_RELEASE_REQUEST||requested===STATIC_COMPRESSION_REQUEST||requested===ACCOUNT_CORE_REQUEST||HASH.test(requested??''),'invalid staging selection request');
+export function tcGuidanceProfile(profile){validateProfile(profile);return profile.tcGuidance===TC_APPROVAL;}
+export function resolveSelectionRequest(requested='approved',approved,approvedCore,approvedStaticCompression,approvedAccount,approvedTc){
+  assert.ok(requested==='approved'||requested==='none'||requested===CORE_RELEASE_REQUEST||requested===STATIC_COMPRESSION_REQUEST||requested===ACCOUNT_CORE_REQUEST||requested===TC_RELEASE_REQUEST||HASH.test(requested??''),'invalid staging selection request');
   if(requested==='none')return 'none';
+  if(requested===TC_RELEASE_REQUEST){
+    assert.equal(approvedCore,CORE_RELEASE_REQUEST,'protected staging core profile approval required');
+    assert.equal(approvedTc,TC_APPROVAL,'protected staging TC profile approval required');
+    return TC_RELEASE_REQUEST;
+  }
   if(requested===ACCOUNT_CORE_REQUEST){
     assert.equal(approvedCore,CORE_RELEASE_REQUEST,'protected staging core profile approval required');
     assert.equal(approvedAccount,ACCOUNT_APPROVAL,'protected staging account profile approval required');
@@ -50,12 +63,14 @@ export function canonical(value){
 function keys(object,expected){assert.ok(object&&typeof object==='object'&&!Array.isArray(object));assert.deepEqual(Object.keys(object).sort(),expected.split(' ').sort());return object;}
 export function profileFor(selection='none'){
   if(selection===undefined||selection==='none')return BASELINE_PROFILE;
+  if(selection===TC_RELEASE_REQUEST)return TC_RELEASE_PROFILE;
   if(selection===CORE_RELEASE_REQUEST)return CORE_RELEASE_PROFILE;
   if(selection===ACCOUNT_CORE_REQUEST)return ACCOUNT_CORE_PROFILE;
   if(selection===STATIC_COMPRESSION_REQUEST)return STATIC_COMPRESSION_PROFILE;
   assert.match(selection,HASH);return {...BASELINE_PROFILE,expandedModels:true,stagingOnly:true,modelSelectionSha256:selection};
 }
 export function validateProfile(profile){
+  if(profile?.tcGuidance!==undefined||profile?.tcSelectionSha256!==undefined){assert.deepEqual(profile,TC_RELEASE_PROFILE);return profile;}
   if(profile?.stagingAccount!==undefined){assert.deepEqual(profile,ACCOUNT_CORE_PROFILE);return profile;}
   if(profile?.staticCompression!==undefined){assert.deepEqual(profile,STATIC_COMPRESSION_PROFILE);return profile;}
   if(profile?.expandedModels===false){assert.deepEqual(profile,BASELINE_PROFILE);return profile;}
@@ -110,6 +125,25 @@ export function readSelection(root,profile,now=Date.now()){
   const stat=lstatSync(path);assert.ok(stat.isFile()&&stat.nlink===1&&stat.size>0&&stat.size<=MAX_SELECTION_BYTES);
   const bytes=readFileSync(path);return {bytes,bundle:validateSelection(bytes,profile.modelSelectionSha256,now)};
 }
+export function validateTcSelection(bytes,expected=TC_SELECTION_SHA256,now=Date.now()){
+  assert.ok(Buffer.isBuffer(bytes)&&bytes.length>0&&bytes.length<=16*1024,'bounded TC selection bytes required');
+  assert.match(expected??'',HASH);assert.equal(digest(bytes),expected,'TC selection bytes differ from approved profile');
+  const value=keys(JSON.parse(bytes),'v targetOrigin catalogId catalogSha256 manifestPath manifestSha256 componentManifestSha256 inventorySha256 generatedAt');
+  assert.equal(value.v,1);assert.equal(value.targetOrigin,STAGING_ORIGIN);
+  assert.match(value.catalogId??'',/^stage-tc-guidance-[A-Za-z0-9-]{1,96}$/);
+  assert.equal(value.manifestPath,`/data-atmos/_catalog/${value.catalogId}/tc-models/manifest.json`);
+  for(const key of ['catalogSha256','manifestSha256','componentManifestSha256','inventorySha256'])assert.match(value[key]??'',HASH);
+  const generated=Date.parse(value.generatedAt);assert.ok(Number.isFinite(generated)&&new Date(generated).toISOString()===value.generatedAt);
+  if(now!==null)assert.ok(generated<=now&&now-generated<=18*3600000,'stale or future TC selection');
+  return value;
+}
+export function readTcSelection(root,profile,now=Date.now()){
+  validateProfile(profile);if(!tcGuidanceProfile(profile))return null;
+  const folder=resolve(root,'staging-tc-selections',profile.tcSelectionSha256),path=resolve(folder,'selection.json');
+  for(const p of [resolve(root,'staging-tc-selections'),folder,path]){const s=lstatSync(p);assert.ok(!s.isSymbolicLink());assert.equal(realpathSync(p),p);}
+  const stat=lstatSync(path);assert.ok(stat.isFile()&&stat.nlink===1&&stat.size>0&&stat.size<=16*1024);
+  const bytes=readFileSync(path);return {bytes,selection:validateTcSelection(bytes,profile.tcSelectionSha256,now),root:folder};
+}
 // Historical transport inspection is structural. Every build/staging admission
 // and browser qualification explicitly supplies a live clock again.
 export function validateCandidateSelection(candidate,now=null){
@@ -117,12 +151,20 @@ export function validateCandidateSelection(candidate,now=null){
   if(!rawSelectionProfile(profile)){assert.equal(asset,undefined,'non-selection profile cannot carry experimental selection');return null;}
   assert.ok(asset,'experimental selection asset required');return validateSelection(Buffer.from(asset.base64,'base64'),profile.modelSelectionSha256,now);
 }
+export function validateCandidateTcSelection(candidate,now=null){
+  const profile=validateProfile(candidate.profile),asset=candidate.files.find(f=>f.path===TC_SELECTION_ASSET);
+  if(!tcGuidanceProfile(profile)){assert.equal(asset,undefined,'non-TC profile cannot carry cyclone selection');return null;}
+  assert.ok(asset,'TC profile selection asset required');
+  return validateTcSelection(Buffer.from(asset.base64,'base64'),profile.tcSelectionSha256,now);
+}
 export function requireStagingApproval(candidate,env,now=Date.now()){
   const expected=profileFor(env.MODEL_SELECTION_SHA256);assert.deepEqual(candidate.profile,expected,'candidate differs from requested UI profile');
   const bundle=validateCandidateSelection(candidate,now);
+  validateCandidateTcSelection(candidate,now);
   if(rawSelectionProfile(expected))assert.equal(env.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256,expected.modelSelectionSha256,'protected staging selection approval required');
   if(expected.releaseRosterCore===CORE_RELEASE_REQUEST)assert.equal(env.UI_STAGING_CORE_PROFILE_APPROVED,CORE_RELEASE_REQUEST,'protected staging core profile approval required');
   if(expected.account)assert.equal(env.UI_STAGING_ACCOUNT_PROFILE_APPROVED,ACCOUNT_APPROVAL,'protected staging account profile approval required');
+  if(tcGuidanceProfile(expected))assert.equal(env.UI_STAGING_TC_PROFILE_APPROVED,TC_APPROVAL,'protected staging TC profile approval required');
   if(staticCompressionProfile(expected))assert.equal(env.UI_STAGING_STATIC_COMPRESSION_APPROVED,'static-br11-v1','protected staging static compression approval required');
   return bundle;
 }
