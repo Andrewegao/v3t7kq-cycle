@@ -8,7 +8,7 @@ import {BASELINE_PROFILE,validateProfile,validateCandidateSelection,validateCand
 import {validateCompressionFiles} from './ui-static-compression.mjs';
 
 export const CONTROL_SHA = '25c402db5149daa018e349a34a4beeba1f2dca45';
-export const STAGING_CONTROL_SHA = '246ea7c0bb1c38b4dc1217657bad582a22b030e8';
+export const STAGING_CONTROL_SHA = '04146c3f67891ed714e1d5bbd27b6998ba0e96ad';
 // Exact reviewed Atmos controller containing the TC release guard and browser harness.
 // Candidate source must both descend from this commit and equal origin/master.
 export const TC_CONTROL_SHA = '0b5ccc8335b1147b13f4c525a126b82bf026ed88';
