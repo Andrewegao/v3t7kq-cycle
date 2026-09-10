@@ -25,8 +25,12 @@ test('manual hosted gate binds environment, family, source, workflow and every s
 });
 test('activation needs exact reviewed completion plus pointer precondition', () => {
   const env = { ...environment(), PLACES_ACTION: 'activate' }; assert.throws(() => placesGate(env));
-  Object.assign(env, { COMPLETION_SHA256: '9'.repeat(64), STAGING_PLACES_APPROVED_COMPLETION_SHA256: '9'.repeat(64), EXPECTED_POINTER_SHA256: 'absent' });
+  Object.assign(env, { COMPLETION_SHA256: '9'.repeat(64), STAGING_PLACES_APPROVED_COMPLETION_SHA256: '9'.repeat(64), EXPECTED_POINTER_SHA256: 'absent', STAGING_PLACES_APPROVED_POINTER_SHA256: 'absent' });
   placesGate(env); assert.throws(() => placesGate({ ...env, EXPECTED_POINTER_SHA256: '' }));
+  assert.throws(() => placesGate({ ...env, STAGING_PLACES_APPROVED_POINTER_SHA256: undefined }));
+  assert.throws(() => placesGate({ ...env, EXPECTED_POINTER_SHA256: 'a'.repeat(64) }));
+  Object.assign(env, { EXPECTED_POINTER_SHA256: 'a'.repeat(64), STAGING_PLACES_APPROVED_POINTER_SHA256: 'a'.repeat(64) }); placesGate(env);
+  assert.throws(() => placesGate({ ...env, STAGING_PLACES_APPROVED_POINTER_SHA256: 'absent' }));
 });
 test('all three proof scopes use exact authenticated evidence pins and tide-only roster policy', () => {
   assert.deepEqual(proofScopeArguments('tides', { kind: 'tide-checkpoint' }), ['--scope', 'staging-partial', '--min-available-stations', '1251']);

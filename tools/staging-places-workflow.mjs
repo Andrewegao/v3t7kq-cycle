@@ -25,6 +25,7 @@ export function placesGate(env) {
   if (env.PLACES_ACTION === 'activate') {
     assert(SHA.test(env.COMPLETION_SHA256 ?? '') && env.COMPLETION_SHA256 === env.STAGING_PLACES_APPROVED_COMPLETION_SHA256);
     assert(env.EXPECTED_POINTER_SHA256 === 'absent' || SHA.test(env.EXPECTED_POINTER_SHA256 ?? ''));
+    assert.equal(env.EXPECTED_POINTER_SHA256, env.STAGING_PLACES_APPROVED_POINTER_SHA256, 'pointer precondition has not been approved');
   }
   assert(env.RUNNER_TEMP && resolve(env.RUNNER_TEMP) === env.RUNNER_TEMP && env.GITHUB_WORKSPACE && resolve(env.GITHUB_WORKSPACE) === env.GITHUB_WORKSPACE);
   return { root: resolve(env.RUNNER_TEMP, 'weatherx-staging-places'), source: resolve(env.GITHUB_WORKSPACE, 'control'),
