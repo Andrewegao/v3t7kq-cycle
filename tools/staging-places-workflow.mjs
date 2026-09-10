@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { ACCOUNT, KINDS, hash, qualifyPlaces, validateQualification, preparePlaces, activatePlaces, createPlacesS3 } from './staging-places.mjs';
 import { downloadSeed, unpackSeed, checkpointEvidence, noPublishCredentials, seedURL } from './staging-places-seed.mjs';
+import { placeFailureDiagnostic } from './staging-places-diagnostics.mjs';
 const SHA = /^[a-f0-9]{64}$/;
 export function placesGate(env) {
   for (const [key, value] of Object.entries({ GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', GITHUB_REPOSITORY: 'Andrewegao/v3t7kq-cycle',
@@ -63,6 +64,18 @@ export async function runRuntimeProof(env, context, execute = execFileSync) {
   await writeFile(resolve(context.root, 'qualified.json'), JSON.stringify({ sourceSha: context.sourceSha, manifestSha256: context.manifestSha256, qualificationSha256: hash(Buffer.from(JSON.stringify(proof))) }) + '\n', { flag: 'wx', mode: 0o600 });
   return { qualified: true, family: context.kind, identity: candidate.completion.identity, manifestSha256: context.manifestSha256 };
 }
+export async function publishQualifiedPlaces(io, candidate, proof, context, env, report) {
+  assert(['prepare', 'activate'].includes(env.PLACES_ACTION));
+  validateQualification(proof, candidate, context.sourceSha);
+  assert.equal(candidate.completion.kind, context.kind); assert.equal(hash(candidate.manifestBody), context.manifestSha256);
+  if (env.PLACES_ACTION === 'activate') assert.equal(hash(candidate.completionBody), env.COMPLETION_SHA256, 'local completion differs from approval');
+  if (env.PLACES_ACTION === 'prepare') return preparePlaces(io, candidate, { qualification: proof, approvedSourceSha: context.sourceSha, report });
+  // Activation is verification plus pointer CAS only. Missing immutable objects must
+  // fail closed, not trigger another preparation or repair upload under activation authority.
+  const end = Math.min(Date.now() + 24 * 3600000, candidate.completion.sourceExpiresAt ? Date.parse(candidate.completion.sourceExpiresAt) : Infinity);
+  return activatePlaces(io, { kind: context.kind, identity: candidate.completion.identity, expectedPointerSha256: env.EXPECTED_POINTER_SHA256,
+    approvedCompletionSha256: env.COMPLETION_SHA256, expiresAt: new Date(end).toISOString(), report });
+}
 async function main(env, action) {
   const context = placesGate(env); if (action === 'gate') return;
   if (action === 'download') { noPublishCredentials(env); assert(!env.STAGING_PLACES_SEED_KEY); assert.equal(await realpath(env.RUNNER_TEMP), env.RUNNER_TEMP); await mkdir(context.root, { mode: 0o700 });
@@ -81,14 +94,10 @@ async function main(env, action) {
   if (env.PLACES_ACTION === 'activate') assert.equal(hash(candidate.completionBody), env.COMPLETION_SHA256, 'local completion differs from approval');
   const io = await createPlacesS3(env);
   try {
-    const prepared = await preparePlaces(io, candidate, { qualification: proof, approvedSourceSha: context.sourceSha });
-    if (env.PLACES_ACTION === 'prepare') { console.log(JSON.stringify(prepared)); return; }
-    assert.equal(prepared.completion.sha256, env.COMPLETION_SHA256);
-    const end = Math.min(Date.now() + 24 * 3600000, candidate.completion.sourceExpiresAt ? Date.parse(candidate.completion.sourceExpiresAt) : Infinity);
-    console.log(JSON.stringify(await activatePlaces(io, { kind: context.kind, identity: candidate.completion.identity, expectedPointerSha256: env.EXPECTED_POINTER_SHA256,
-      approvedCompletionSha256: env.COMPLETION_SHA256, expiresAt: new Date(end).toISOString() })));
+    console.log(JSON.stringify(await publishQualifiedPlaces(io, candidate, proof, context, env, row => console.log(JSON.stringify(row)))));
   } finally { io.close(); }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  main(process.env, process.argv[2]).catch(() => { console.error('staging place lane stopped; publication outcome may be uncertain; inspect qualification, approvals and current staging pointer before retry; no automatic retry was attempted'); process.exitCode = 1; });
+  main(process.env, process.argv[2]).catch(error => { console.error(JSON.stringify(placeFailureDiagnostic(error)));
+    console.error('staging place lane stopped; publication outcome may be uncertain; inspect qualification, approvals and current staging pointer before retry; no automatic retry was attempted'); process.exitCode = 1; });
 }

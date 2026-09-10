@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { readFile, mkdtemp, realpath, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ACCOUNT } from '../tools/staging-places.mjs';
-import { placesGate, runRuntimeProof, proofScopeArguments } from '../tools/staging-places-workflow.mjs';
+import { ACCOUNT, hash, qualifyPlaces, prefix, pointerKey, allowedKey } from '../tools/staging-places.mjs';
+import { placesGate, runRuntimeProof, proofScopeArguments, publishQualifiedPlaces } from '../tools/staging-places-workflow.mjs';
 function environment() {
   return { GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', GITHUB_REPOSITORY: 'Andrewegao/v3t7kq-cycle',
     GITHUB_REF: 'refs/heads/main', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_JOB: 'places',
@@ -57,4 +57,42 @@ test('workflow scopes credentials to separate steps and never uploads plaintext 
   assert(writer.includes(' publish') && !writer.includes('STAGING_PLACES_SEED_KEY:'));
   assert(text.indexOf('mjs qualify') < text.indexOf('STAGING_R2_WRITE_ACCESS_KEY_ID:'));
   for (const match of text.matchAll(/uses: ([^\s]+)@([^\s]+)/g)) assert(/^[a-f0-9]{40}$/.test(match[2]));
+});
+async function publicationFixture(t) {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'wx-place-action-test-'))); t.after(() => rm(root, { recursive: true, force: true }));
+  const identity = 'a'.repeat(20), sourceSha = 'b'.repeat(40), encode = value => Buffer.from(JSON.stringify(value) + '\n');
+  await mkdir(join(root, `versions/${identity}/cells`), { recursive: true }); await mkdir(join(root, `versions/${identity}/sites`));
+  const cell = encode({ revision: identity, sites: [{ id: 1 }] }); await writeFile(join(root, `versions/${identity}/cells/1_2.json`), cell);
+  await writeFile(join(root, `versions/${identity}/sites/1.json`), encode({ id: 1, revision: identity }));
+  await writeFile(join(root, 'index.json'), encode({ schema: 1, revision: identity, count: 1, cells: [{ key: '1_2', sha256: hash(cell) }] }));
+  const candidate = await qualifyPlaces({ kind: 'paragliding', root }), manifestSha256 = hash(candidate.manifestBody), context = { kind: 'paragliding', sourceSha, manifestSha256 };
+  const proof = { schemaVersion: 1, kind: context.kind, identity, sourceSha, manifestSha256, checks: { producer: true, consumer: true, coverage: true, roster: true } };
+  const objects = new Map(), reads = [], writes = [];
+  const io = { async get(key, max, collect = true) { allowedKey(key); reads.push(key); const value = objects.get(key); if (!value) return null; assert(value.body.length <= max);
+    return { ...value, bytes: value.body.length, sha256: hash(value.body), ...(collect ? {} : { body: undefined }) }; },
+  async put(key, input, condition) { allowedKey(key); writes.push(key); const before = objects.get(key); assert(condition.ifNoneMatch ? !before : before?.etag === condition.ifMatch);
+    const body = Buffer.isBuffer(input) ? input : await readFile(input.file); assert.equal(body.length, condition.bytes); assert.equal(hash(body), condition.sha256);
+    objects.set(key, { body, etag: `"${writes.length}"`, customMetadata: { sha256: condition.sha256 }, httpMetadata: {} }); } };
+  const prepared = await publishQualifiedPlaces(io, candidate, proof, context, { PLACES_ACTION: 'prepare' });
+  assert.equal(prepared.activated, false); assert.equal(writes.length, candidate.manifest.files.length + 2); assert(writes.at(-1).endsWith('/completion.json')); assert(!objects.has(pointerKey(context.kind)));
+  reads.length = 0; writes.length = 0;
+  return { candidate, proof, context, io, objects, reads, writes, base: prefix(context.kind, identity), env: { PLACES_ACTION: 'activate', COMPLETION_SHA256: prepared.completion.sha256, EXPECTED_POINTER_SHA256: 'absent' } };
+}
+test('activation action reads each prepared payload once and only writes the pointer', async t => {
+  const f = await publicationFixture(t); const result = await publishQualifiedPlaces(f.io, f.candidate, f.proof, f.context, f.env);
+  assert.equal(result.activated, true); assert.deepEqual(f.writes, [pointerKey(f.context.kind)]);
+  for (const file of f.candidate.manifest.files) assert.equal(f.reads.filter(key => key === f.base + file.path).length, 1, file.path);
+  assert.equal(f.reads.length, f.candidate.manifest.files.length + 4, 'one payload scan, completion, manifest and pointer before/after');
+});
+test('activation never repairs missing payload, manifest or completion objects', async t => {
+  for (const missing of ['sites/1.json', 'manifest.json', 'completion.json']) {
+    const f = await publicationFixture(t); f.objects.delete(f.base + missing);
+    await assert.rejects(publishQualifiedPlaces(f.io, f.candidate, f.proof, f.context, f.env)); assert.deepEqual(f.writes, []); assert(!f.objects.has(f.base + missing));
+  }
+});
+test('activation retains exact proof and completion approval before remote reads', async t => {
+  const f = await publicationFixture(t);
+  await assert.rejects(publishQualifiedPlaces(f.io, f.candidate, f.proof, f.context, { ...f.env, COMPLETION_SHA256: '0'.repeat(64) }));
+  await assert.rejects(publishQualifiedPlaces(f.io, f.candidate, { ...f.proof, sourceSha: '0'.repeat(40) }, f.context, f.env));
+  assert.deepEqual(f.reads, []); assert.deepEqual(f.writes, []);
 });
