@@ -1,13 +1,15 @@
 # Search metadata only. No weather publication, production writes, UI or Worker deployment.
 name: WeatherX staging search candidate
 on:
+  schedule:
+    - cron: '17 */6 * * *'
   workflow_dispatch:
     inputs:
       action:
         description: Inspect pointer, prepare candidate, activate reviewed bytes, or revoke staging override
         required: true
         type: choice
-        options: [inspect, prepare, activate, revoke]
+        options: [inspect, prepare, activate, revoke, renew]
       source_release:
         description: Prepare only - immutable whole release containing the five metadata directories
         required: false
@@ -27,17 +29,19 @@ concurrency:
   cancel-in-progress: false
 jobs:
   search:
+    if: github.event_name != 'schedule' || vars.STAGING_SEARCH_SCHEDULE_ENABLED == 'true'
     environment:
       name: data-staging
       url: https://staging.weatherx.org
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      SEARCH_ACTION: ${{ inputs.action }}
+      SEARCH_ACTION: ${{ github.event_name == 'schedule' && 'renew' || inputs.action }}
       SOURCE_RELEASE: ${{ inputs.source_release }}
       CANDIDATE_SHA256: ${{ inputs.candidate_sha256 }}
       EXPECTED_POINTER_SHA256: ${{ inputs.expected_pointer_sha256 }}
       STAGING_SEARCH_ENABLED: ${{ vars.STAGING_SEARCH_ENABLED }}
+      STAGING_SEARCH_RENEWAL_ENABLED: ${{ vars.STAGING_SEARCH_RENEWAL_ENABLED }}
       STAGING_SEARCH_APPROVED_CANDIDATE_SHA256: ${{ vars.STAGING_SEARCH_APPROVED_CANDIDATE_SHA256 }}
       STAGING_DATA_ISOLATION_APPROVED: ${{ vars.STAGING_DATA_ISOLATION_APPROVED }}
       STAGING_R2_ACCOUNT_ID: ${{ vars.STAGING_R2_ACCOUNT_ID }}
