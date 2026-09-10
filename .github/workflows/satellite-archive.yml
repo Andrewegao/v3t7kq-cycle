@@ -8,11 +8,19 @@ on:
     - cron: '25 * * * *'
   workflow_dispatch:
     inputs:
+      policy:
+        description: 'Manual archive policy'
+        required: true
+        type: choice
+        options:
+          - storm-window-3d-v1
       from:
-        description: 'Backfill start date (YYYY-MM-DD, UTC, inclusive)'
+        description: 'Storm window start (YYYY-MM-DD, UTC, inclusive)'
+        required: true
         type: string
       to:
-        description: 'Backfill end date (YYYY-MM-DD, UTC, inclusive)'
+        description: 'Storm window end (YYYY-MM-DD, UTC, inclusive; at most 3 days)'
+        required: true
         type: string
 
 permissions:
@@ -324,7 +332,8 @@ jobs:
           compression-level: 9
 
   backfill-plan:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && vars.SATELLITE_ARCHIVE_ENABLED == '1' }}
+    # A one-off storm-window approval cannot activate the recurring hourly writer.
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.policy == 'storm-window-3d-v1' && vars.SATELLITE_ARCHIVE_STORM_PILOT_ENABLED == '1' }}
     environment:
       name: satellite-archive
     runs-on: ubuntu-latest
@@ -359,7 +368,7 @@ jobs:
           R2_SATELLITE_RESERVED_30D_CLASS_A_MILLION: ${{ vars.R2_SATELLITE_RESERVED_30D_CLASS_A_MILLION }}
           R2_SATELLITE_RESERVED_30D_CLASS_B_MILLION: ${{ vars.R2_SATELLITE_RESERVED_30D_CLASS_B_MILLION }}
         run: bash ops/satellite/check-account-budget.sh
-      - name: validate one bounded historical month
+      - name: validate one bounded historical storm window
         id: plan
         env:
           FROM_DATE: ${{ inputs.from }}
@@ -369,15 +378,27 @@ jobs:
           python3 data/satellite_archive_backfill_plan.py \
             --from "$FROM_DATE" \
             --to "$TO_DATE" \
+            --max-inclusive-days 3 \
             --github-output "$GITHUB_OUTPUT"
 
   backfill:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && vars.SATELLITE_ARCHIVE_ENABLED == '1' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.policy == 'storm-window-3d-v1' && vars.SATELLITE_ARCHIVE_STORM_PILOT_ENABLED == '1' }}
     environment:
       name: satellite-archive
     needs: backfill-plan
     runs-on: ubuntu-latest
     timeout-minutes: 340
+    env:
+      # Three complete UTC days, all three GMGSI channels hourly, and US radar
+      # every 10 minutes. These are producer and publication hard ceilings.
+      SAT_MAX_HTTP_REQUESTS: '432'
+      SAT_MAX_SOURCE_BYTES: '2376000000'
+      SAT_MAX_OUTPUT_BYTES: '216000000'
+      RADAR_MAX_HTTP_REQUESTS: '432'
+      RADAR_MAX_SOURCE_BYTES: '4320000000'
+      RADAR_MAX_OUTPUT_BYTES: '432000000'
+      PUBLISH_VERIFY_MAX_OBJECTS: '648'
+      PUBLISH_VERIFY_MAX_BYTES: '648000000'
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -416,14 +437,15 @@ jobs:
           RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_SATELLITE_SECRET_ACCESS_KEY }}
           RCLONE_CONFIG_WEATHERX_ENDPOINT: ${{ vars.R2_SATELLITE_ENDPOINT }}
           SAT_R2_REMOTE: weatherx:weatherx-satellite-archive
-          HYDRATE_MAX_OBJECTS: '20000'
-          HYDRATE_MAX_BYTES: '8000000000'
-          HYDRATE_MAX_CLASS_B_OPERATIONS: '60000'
+          HYDRATE_MAX_OBJECTS: '801'
+          HYDRATE_MAX_BYTES: '2000000000'
+          HYDRATE_MAX_CLASS_B_OPERATIONS: '3200'
         run: bash ops/satellite/hydrate.sh --range "${{ matrix.month.from }}" "${{ matrix.month.to }}"
       - name: bake ${{ matrix.month.from }} to ${{ matrix.month.to }} (vis, ir, wv)
         run: >-
           data/.venv/bin/python data/bake_satellite_archive.py
           --range "${{ matrix.month.from }}" "${{ matrix.month.to }}"
+          --channels vis,ir,wv
           --max-http-requests "$SAT_MAX_HTTP_REQUESTS"
           --max-source-bytes "$SAT_MAX_SOURCE_BYTES"
           --max-output-bytes "$SAT_MAX_OUTPUT_BYTES"
@@ -431,6 +453,7 @@ jobs:
         run: >-
           data/.venv/bin/python data/bake_radar_archive.py
           --range "${{ matrix.month.from }}" "${{ matrix.month.to }}"
+          --fine
           --max-http-requests "$RADAR_MAX_HTTP_REQUESTS"
           --max-source-bytes "$RADAR_MAX_SOURCE_BYTES"
           --max-output-bytes "$RADAR_MAX_OUTPUT_BYTES"
@@ -443,8 +466,8 @@ jobs:
           RCLONE_CONFIG_WEATHERX_ENDPOINT: ${{ vars.R2_SATELLITE_ENDPOINT }}
           SAT_R2_REMOTE: weatherx:weatherx-satellite-archive
           PUBLISH_LATEST: '0'
-          PUBLISH_MAX_CLASS_A_OPERATIONS: '20000'
-          PUBLISH_MAX_CLASS_B_OPERATIONS: '60000'
+          PUBLISH_MAX_CLASS_A_OPERATIONS: '660'
+          PUBLISH_MAX_CLASS_B_OPERATIONS: '3300'
           PUBLISH_VERIFY_MAX_INDEX_BYTES: '4000000'
         run: bash ops/satellite/publish.sh
       - name: stage bounded acquisition evidence after failure

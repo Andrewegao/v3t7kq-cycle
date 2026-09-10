@@ -36,7 +36,8 @@ async function fixture(t, kind = 'surf') {
     // Filename is producer canonical JSON, deliberately distinct from wire-byte SHA.
     const availabilityPath = `versions/${datasetId}/availability-${'b'.repeat(64)}.json`;
     await write(`v2/${availabilityPath}`, availability);
-    const station = { id: '1', sampleCoverage: { startMs: now - 3600000, endMs: now + 9 * 86400000 }, packs: [{ path: `versions/${datasetId}/stations/1/window.json` }] };
+    const station = { id: '1', eventCoverage: { startMs: now - 6 * 3600000, endMs: now + 9 * 86400000 },
+      sampleCoverage: { startMs: now - 86400000, endMs: now + 9 * 86400000 }, packs: [{ path: `versions/${datasetId}/stations/1/window.json` }] };
     await write(`v2/${station.packs[0].path}`, { schemaVersion: 2, datasetId, stationId: '1', source, datum });
     await write('v2/catalog.json', { schemaVersion: 2, datasetId, source, datum, stations: [station], availability: { path: availabilityPath, requestedCount: 2, availableCount: 1, unavailableCount: 1 } });
     await write('tides.json', { stations: [{ id: '1' }] });
@@ -146,6 +147,39 @@ test('lease cannot relabel expired surf or outlive 48 hours; PG source expiry re
   assert.throws(() => validateCompletion({ ...pg.candidate.completion, sourceExpiresAt: new Date(now + 3600000).toISOString() }));
   const tides = await fixture(t, 'tides');
   assert.throws(() => validateCompletion({ ...tides.candidate.completion, sourceExpiresAt: null }), /requires source expiry/);
+});
+test('tide source expiry uses the earliest event or sample end across every station', async t => {
+  const f = await fixture(t, 'tides'), catalogPath = join(f.root, 'v2/catalog.json');
+  const catalog = JSON.parse(await readFile(catalogPath));
+  const sidecar = f.candidate.local.get(f.candidate.manifest.files.find(row => row.path.startsWith('availability-')).path);
+  await rm(sidecar.file); delete catalog.availability;
+  const second = structuredClone(catalog.stations[0]); second.id = '2';
+  second.packs = [{ path: `versions/${catalog.datasetId}/stations/2/window.json` }];
+  await f.write(`v2/${second.packs[0].path}`, { schemaVersion: 2, datasetId: catalog.datasetId, stationId: '2', source: catalog.source, datum: catalog.datum });
+  catalog.stations.push(second);
+
+  catalog.stations[0].sampleCoverage.endMs = f.now + 10 * 86400000;
+  catalog.stations[0].eventCoverage.endMs = f.now + 8 * 86400000;
+  catalog.stations[1].sampleCoverage.endMs = f.now + 9 * 86400000;
+  catalog.stations[1].eventCoverage.endMs = f.now + 11 * 86400000;
+  await writeFile(catalogPath, encoded(catalog));
+  assert.equal((await qualifyPlaces({ kind: 'tides', root: f.root, now: f.now })).completion.sourceExpiresAt,
+    new Date(f.now + 86400000).toISOString(), 'event end is the limiting seven-day coverage');
+
+  catalog.stations[0].eventCoverage.endMs = f.now + 12 * 86400000;
+  catalog.stations[1].sampleCoverage.endMs = f.now + 8.5 * 86400000;
+  await writeFile(catalogPath, encoded(catalog));
+  assert.equal((await qualifyPlaces({ kind: 'tides', root: f.root, now: f.now })).completion.sourceExpiresAt,
+    new Date(f.now + 1.5 * 86400000).toISOString(), 'sample end is the limiting seven-day coverage');
+});
+test('tide qualification rejects missing or non-finite event and sample coverage', async t => {
+  for (const [field, value] of [['eventCoverage', null], ['sampleCoverage', null],
+    ['eventCoverage', { startMs: 0, endMs: null }], ['sampleCoverage', { startMs: null, endMs: 1 }]]) {
+    const f = await fixture(t, 'tides'), catalogPath = join(f.root, 'v2/catalog.json');
+    const catalog = JSON.parse(await readFile(catalogPath)); catalog.stations[0][field] = value;
+    await writeFile(catalogPath, encoded(catalog));
+    await assert.rejects(qualifyPlaces({ kind: 'tides', root: f.root, now: f.now }), /invalid tide/);
+  }
 });
 test('availability roster evidence must preserve requested, available and unavailable station identities', async t => {
   const f = await fixture(t, 'tides');

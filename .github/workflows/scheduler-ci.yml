@@ -28,6 +28,7 @@ on:
       - ".github/workflows/staging-consumer-refresh.yml"
       - ".github/workflows/staging-search.yml"
       - ".github/workflows/staging-tc-guidance.yml"
+      - ".github/workflows/staging-place-renewal.yml"
       - ".github/workflows/staging-search-reader.yml"
       - ".github/workflows/staging-data-activate.yml"
       - ".github/workflows/verify-backfill.yml"
@@ -76,6 +77,7 @@ jobs:
         run: |
           npm ci --ignore-scripts --prefix staging-controller
           node --test tests/staging-*.mjs
+          python3 tests/staging-place-collect.py
           python3 tests/staging-consumer-reuse.py
           node --test tests/model-inputs*.mjs
       - name: Consumer refresh workflow safety contract

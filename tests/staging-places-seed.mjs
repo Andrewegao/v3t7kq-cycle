@@ -69,7 +69,10 @@ test('frozen tide evidence is authenticated separately, preserves absence and ne
   await mkdir(join(root, `v2/versions/${datasetId}/stations/1`), { recursive: true }); await mkdir(join(checkpoint, 'products/1'), { recursive: true });
   const source = { provider: 'NOAA CO-OPS' }, datum = { id: 'MLLW' };
   await writeFile(join(root, `v2/versions/${datasetId}/stations/1/window.json`), encode({ schemaVersion: 2, datasetId, stationId: '1', source, datum }));
-  await writeFile(join(root, 'v2/catalog.json'), encode({ schemaVersion: 2, datasetId, source, datum, stations: [{ id: '1', sampleCoverage: { endMs: Date.now() + 9 * 86400000 }, packs: [{ path: `versions/${datasetId}/stations/1/window.json` }] }] }));
+  const now = Date.now();
+  await writeFile(join(root, 'v2/catalog.json'), encode({ schemaVersion: 2, datasetId, source, datum, stations: [{ id: '1',
+    eventCoverage: { startMs: now - 6 * 3600000, endMs: now + 9 * 86400000 }, sampleCoverage: { startMs: now - 86400000, endMs: now + 9 * 86400000 },
+    packs: [{ path: `versions/${datasetId}/stations/1/window.json` }] }] }));
   await writeFile(join(root, 'tides.json'), encode({ stations: [] }));
   await writeFile(join(checkpoint, 'manifest.json'), encode({ kind: 'weatherx-tide-fetch', stations: [{ id: '1' }, { id: '2' }] }));
   await writeFile(join(checkpoint, 'products/1/6.json'), encode({ source: 'six-minute-source' })); await writeFile(join(checkpoint, 'products/1/hilo.json'), encode({ source: 'event-source' }));

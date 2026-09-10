@@ -153,11 +153,19 @@ export async function qualifyPlaces({ kind, root, now = Date.now() }) {
         assert(detail.value.schemaVersion === 2 && detail.value.datasetId === identity && detail.value.stationId === station.id, 'tide pack identity mismatch');
         assert.deepEqual(detail.value.source, value.source); assert.deepEqual(detail.value.datum, value.datum); mount(path, input);
       }
-      // Data availability and completeness are certified by pinned producer+consumer proofs.
-      // This publisher does not drop unavailable stations or fabricate samples.
-      if (station.sampleCoverage) expires = Math.min(expires, station.sampleCoverage.endMs - 7 * 86400000);
+      // Both curves are required by the pinned qualifier for seven-day use. Preserve
+      // the earliest real end across every admitted station instead of extending the
+      // pointer to the longer curve or silently skipping malformed coverage.
+      for (const field of ['eventCoverage', 'sampleCoverage']) {
+        const coverage = station[field];
+        assert(coverage && typeof coverage === 'object' && !Array.isArray(coverage)
+          && Number.isSafeInteger(coverage.startMs) && Number.isSafeInteger(coverage.endMs)
+          && coverage.startMs <= coverage.endMs, `invalid tide ${field}`);
+        expires = Math.min(expires, coverage.endMs - 7 * 86400000);
+      }
     }
-    if (Number.isFinite(expires)) { assert(expires > now, 'tide seven-day window exhausted'); sourceExpiresAt = new Date(expires).toISOString(); }
+    assert(Number.isFinite(expires) && expires > now, 'tide seven-day window exhausted');
+    sourceExpiresAt = new Date(expires).toISOString();
     const availabilityPath = value.availability?.path;
     if (availabilityPath !== undefined) {
       const lead = `versions/${identity}/`; assert(typeof availabilityPath === 'string' && availabilityPath.startsWith(lead));
@@ -257,8 +265,10 @@ export async function preparePlaces(io, candidate, { qualification, approvedSour
   return { ...candidate.completion, completion: completionReceipt, activated: false };
 }
 export async function inspectPlaces(io, kind) { const object = await io.get(pointerKey(kind), LIMITS.completionBytes, false); return { pointerSha256: object?.sha256 ?? 'absent', bytes: object?.bytes ?? 0 }; }
-export async function activatePlaces(io, { kind, identity, expectedPointerSha256, approvedCompletionSha256, clock = Date.now, now = clock(), expiresAt, report }) {
+export async function activatePlaces(io, { kind, identity, expectedPointerSha256, approvedCompletionSha256,
+  clock = Date.now, now = clock(), expiresAt, minimumSourceHorizonMs = 0, report }) {
   kindId(kind, identity); assert(expectedPointerSha256 === 'absent' || HASH.test(expectedPointerSha256 ?? '')); assert(HASH.test(approvedCompletionSha256 ?? ''));
+  assert(Number.isSafeInteger(minimumSourceHorizonMs) && minimumSourceHorizonMs >= 0, 'invalid minimum activation horizon');
   const base = prefix(kind, identity), completed = await placeOperation('activate-completion', 'get', null, () => io.get(base + 'completion.json', LIMITS.completionBytes, true));
   assert(completed && completed.sha256 === approvedCompletionSha256, 'unreviewed or absent completion');
   const completion = validateCompletion(JSON.parse(completed.body)); assert.equal(completion.kind, kind); assert.equal(completion.identity, identity);
@@ -278,7 +288,10 @@ export async function activatePlaces(io, { kind, identity, expectedPointerSha256
   const key = pointerKey(kind), before = await placeOperation('activate-pointer', 'get', progress.snapshot, () => io.get(key, LIMITS.completionBytes, false));
   assert.equal(before?.sha256 ?? 'absent', expectedPointerSha256, 'pointer changed; inspect before retry');
   const body = encode(pointer); assert(body.length <= LIMITS.completionBytes);
-  validatePointer(pointer, clock());
+  const casAt = clock(); assert(Number.isFinite(casAt) && casAt >= checkedAt, 'invalid activation clock');
+  if (completion.sourceExpiresAt) assert(finiteDate(completion.sourceExpiresAt) - casAt >= minimumSourceHorizonMs,
+    'source freshness below minimum activation horizon');
+  validatePointer(pointer, casAt);
   let reconciled = false;
   try { await placeOperation('activate-pointer', 'put', progress.snapshot, () => io.put(key, body, { ...(before ? { ifMatch: before.etag } : { ifNoneMatch: '*' }), bytes: body.length, sha256: hash(body) })); }
   catch {

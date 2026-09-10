@@ -1,0 +1,95 @@
+name: WeatherX staging place renewal
+on:
+  schedule:
+    - cron: '37 1,7,13,19 * * *'
+    - cron: '47 5,17 * * *'
+  workflow_dispatch:
+    inputs:
+      family:
+        description: Renew only this staging family using the reviewed policy
+        required: true
+        type: choice
+        default: all
+        options: [all, surf, paragliding, tides]
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-staging-publication
+  cancel-in-progress: false
+jobs:
+  renew:
+    if: vars.STAGING_PLACES_RENEWAL_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        family: [surf, paragliding, tides]
+    environment:
+      name: data-staging
+      url: https://staging.weatherx.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      PLACES_KIND: ${{ matrix.family }}
+      REQUESTED_FAMILY: ${{ inputs.family }}
+      RENEWAL_SCHEDULE: ${{ github.event.schedule }}
+      ATMOS_SHA: ${{ vars.STAGING_PLACES_RENEWAL_ATMOS_SHA }}
+      STAGING_PLACES_RENEWAL_ENABLED: ${{ vars.STAGING_PLACES_RENEWAL_ENABLED }}
+      STAGING_PLACES_RENEWAL_CONTROLLER_SHA256: ${{ vars.STAGING_PLACES_RENEWAL_CONTROLLER_SHA256 }}
+      STAGING_DATA_ISOLATION_APPROVED: ${{ vars.STAGING_DATA_ISOLATION_APPROVED }}
+      STAGING_R2_ACCOUNT_ID: ${{ vars.STAGING_R2_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Check reviewed closure, fixed staging scope and independent family schedule
+        id: plan
+        run: node cycle/tools/staging-place-renewal.mjs plan
+      - name: Install integrity-locked publisher dependencies
+        if: steps.plan.outputs.run == 'true'
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefix cycle/staging-controller
+      - name: Checkout exact private producer and consumer without retained credentials
+        if: steps.plan.outputs.run == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: ${{ env.ATMOS_SHA }}
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: control
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        if: steps.plan.outputs.run == 'true'
+        with: { python-version: '3.12' }
+      - name: Install offline consumer and hash-locked producer dependencies
+        if: steps.plan.outputs.run == 'true'
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund --prefix control/app
+          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r cycle/tools/staging-places-requirements.txt
+      - name: Install hash-locked native GRIB decoder for fresh surf collection
+        if: steps.plan.outputs.run == 'true' && matrix.family == 'surf'
+        run: >-
+          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r cycle/tools/staging-place-renewal-requirements.txt
+      - name: Collect real forecast sources with no storage or seed credentials
+        if: steps.plan.outputs.run == 'true' && matrix.family != 'paragliding'
+        run: node cycle/tools/staging-place-renewal.mjs collect
+      - name: Download approved encrypted static directory, no provider polling
+        if: steps.plan.outputs.run == 'true' && matrix.family == 'paragliding'
+        run: node cycle/tools/staging-place-renewal.mjs download
+      - name: Authenticate static snapshot using only its dedicated seed key
+        if: steps.plan.outputs.run == 'true' && matrix.family == 'paragliding'
+        env:
+          STAGING_PLACES_SEED_KEY: ${{ secrets.STAGING_PLACES_SEED_KEY }}
+        run: node cycle/tools/staging-place-renewal.mjs decrypt
+      - name: Require actual producer, consumer, complete roster and coverage qualification
+        if: steps.plan.outputs.run == 'true'
+        run: node cycle/tools/staging-place-renewal.mjs qualify
+      - name: Publish immutable qualified objects and conditionally activate this staging family
+        if: steps.plan.outputs.run == 'true'
+        env:
+          STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
+          STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
+        run: node cycle/tools/staging-place-renewal.mjs publish
+      - name: Verify staging serves the exact new index and a representative detail
+        if: steps.plan.outputs.run == 'true'
+        run: node cycle/tools/staging-place-renewal.mjs verify-live

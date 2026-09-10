@@ -74,9 +74,12 @@ for (const name of satelliteSecretJobs) {
   const event = name === 'hourly' ? 'schedule' : 'workflow_dispatch';
   assert.match(block, /\n    environment:\n      name: satellite-archive\n/,
     `${name} must use the dedicated protected satellite environment`);
+  const approval = name === 'hourly'
+    ? "vars.SATELLITE_ARCHIVE_ENABLED == '1'"
+    : "inputs.policy == 'storm-window-3d-v1' && vars.SATELLITE_ARCHIVE_STORM_PILOT_ENABLED == '1'";
   assert.ok(block.includes(
-    `\n    if: \${{ github.event_name == '${event}' && github.ref == 'refs/heads/main' && vars.SATELLITE_ARCHIVE_ENABLED == '1' }}\n`,
-  ), `${name} must reject the wrong event or ref before secrets are available`);
+    `\n    if: \${{ github.event_name == '${event}' && github.ref == 'refs/heads/main' && ${approval} }}\n`,
+  ), `${name} must reject the wrong event, ref or independent approval before secrets are available`);
   assert.equal((block.match(/ssh-key: \$\{\{ secrets\.ATMOS_DEPLOY_KEY \}\}/g) || []).length, 1);
   assert.equal((block.match(/persist-credentials: false/g) || []).length, 1,
     `${name} private checkout must not persist its deploy key`);
