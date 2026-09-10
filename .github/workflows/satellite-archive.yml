@@ -19,13 +19,16 @@ permissions:
   contents: read
 
 concurrency:
-  # One global run across schedules, manual runs and refs. Month matrix entries are
-  # disjoint, while no other run can race their hydrated catalog snapshots.
+  # One global writer across schedules, manual runs and refs. Month entries are disjoint,
+  # but no other run may race their hydrated catalog snapshots.
   group: satellite-archive
   cancel-in-progress: false
 
 env:
   RCLONE_VERSION: v1.75.0
+  # Official v1.75.0 linux-amd64 release digest from downloads.rclone.org/v1.75.0/SHA256SUMS.
+  RCLONE_SHA256: 'aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa'
+  COST_PROJECTION_MAX_AGE_HOURS: '24'
   SAT_MAX_HTTP_REQUESTS: '5000'
   SAT_MAX_SOURCE_BYTES: '25000000000'
   SAT_MAX_OUTPUT_BYTES: '2500000000'
@@ -54,6 +57,15 @@ jobs:
           ref: ${{ vars.SATELLITE_ARCHIVE_ATMOS_SHA }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 1
+      - name: require a fresh whole-account 30-day cost projection
+        env:
+          R2_COST_PROJECTION_OBSERVED_AT: ${{ vars.R2_COST_PROJECTION_OBSERVED_AT }}
+          R2_PROJECTED_30D_STANDARD_GB_MONTH: ${{ vars.R2_PROJECTED_30D_STANDARD_GB_MONTH }}
+          R2_PROJECTED_30D_CLASS_A_MILLION: ${{ vars.R2_PROJECTED_30D_CLASS_A_MILLION }}
+          R2_PROJECTED_30D_CLASS_B_MILLION: ${{ vars.R2_PROJECTED_30D_CLASS_B_MILLION }}
+          R2_SATELLITE_RESERVED_30D_CLASS_A_MILLION: ${{ vars.R2_SATELLITE_RESERVED_30D_CLASS_A_MILLION }}
+          R2_SATELLITE_RESERVED_30D_CLASS_B_MILLION: ${{ vars.R2_SATELLITE_RESERVED_30D_CLASS_B_MILLION }}
+        run: bash ops/satellite/check-account-budget.sh
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with: { python-version: '3.12' }
       - name: venv + python deps
@@ -67,6 +79,7 @@ jobs:
             --retry-delay 5 --connect-timeout 20 \
             "https://github.com/rclone/rclone/releases/download/${RCLONE_VERSION}/rclone-${RCLONE_VERSION}-linux-amd64.zip" \
             -o rclone.zip
+          echo "$RCLONE_SHA256  rclone.zip" | sha256sum -c -
           unzip -q rclone.zip
           sudo install "rclone-${RCLONE_VERSION}-linux-amd64/rclone" /usr/local/bin/rclone
           rclone version
@@ -125,31 +138,15 @@ jobs:
           ref: ${{ vars.SATELLITE_ARCHIVE_ATMOS_SHA }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 1
-      - name: enforce whole-archive storage budget
+      - name: require a fresh whole-account 30-day cost projection
         env:
-          END_DATE: ${{ inputs.to }}
-          EXISTING_STANDARD_GB: ${{ vars.R2_EXISTING_STANDARD_GB }}
-          EXISTING_CLASS_A_MILLION: ${{ vars.R2_EXISTING_CLASS_A_MILLION }}
-          EXISTING_CLASS_B_MILLION: ${{ vars.R2_EXISTING_CLASS_B_MILLION }}
-          RESERVED_CLASS_A_MILLION: ${{ vars.R2_SATELLITE_RESERVED_CLASS_A_MILLION }}
-          RESERVED_CLASS_B_MILLION: ${{ vars.R2_SATELLITE_RESERVED_CLASS_B_MILLION }}
-        run: |
-          set -euo pipefail
-          [ -n "$EXISTING_STANDARD_GB" ] || { echo "R2_EXISTING_STANDARD_GB is required" >&2; exit 2; }
-          [ -n "$EXISTING_CLASS_A_MILLION" ] || { echo "R2_EXISTING_CLASS_A_MILLION is required" >&2; exit 2; }
-          [ -n "$EXISTING_CLASS_B_MILLION" ] || { echo "R2_EXISTING_CLASS_B_MILLION is required" >&2; exit 2; }
-          [ -n "$RESERVED_CLASS_A_MILLION" ] || { echo "R2_SATELLITE_RESERVED_CLASS_A_MILLION is required" >&2; exit 2; }
-          [ -n "$RESERVED_CLASS_B_MILLION" ] || { echo "R2_SATELLITE_RESERVED_CLASS_B_MILLION is required" >&2; exit 2; }
-          python3 data/satellite_archive_budget.py \
-            --end "$END_DATE" \
-            --existing-standard-gb "$EXISTING_STANDARD_GB" \
-            --existing-class-a-million "$EXISTING_CLASS_A_MILLION" \
-            --existing-class-b-million "$EXISTING_CLASS_B_MILLION" \
-            --reserved-class-a-million "$RESERVED_CLASS_A_MILLION" \
-            --reserved-class-b-million "$RESERVED_CLASS_B_MILLION" \
-            --max-archive-gb 200 \
-            --max-account-storage-usd 20 \
-            --max-account-total-usd 20
+          R2_COST_PROJECTION_OBSERVED_AT: ${{ vars.R2_COST_PROJECTION_OBSERVED_AT }}
+          R2_PROJECTED_30D_STANDARD_GB_MONTH: ${{ vars.R2_PROJECTED_30D_STANDARD_GB_MONTH }}
+          R2_PROJECTED_30D_CLASS_A_MILLION: ${{ vars.R2_PROJECTED_30D_CLASS_A_MILLION }}
+          R2_PROJECTED_30D_CLASS_B_MILLION: ${{ vars.R2_PROJECTED_30D_CLASS_B_MILLION }}
+          R2_SATELLITE_RESERVED_30D_CLASS_A_MILLION: ${{ vars.R2_SATELLITE_RESERVED_30D_CLASS_A_MILLION }}
+          R2_SATELLITE_RESERVED_30D_CLASS_B_MILLION: ${{ vars.R2_SATELLITE_RESERVED_30D_CLASS_B_MILLION }}
+        run: bash ops/satellite/check-account-budget.sh
       - name: validate one bounded historical month
         id: plan
         env:
@@ -192,6 +189,7 @@ jobs:
             --retry-delay 5 --connect-timeout 20 \
             "https://github.com/rclone/rclone/releases/download/${RCLONE_VERSION}/rclone-${RCLONE_VERSION}-linux-amd64.zip" \
             -o rclone.zip
+          echo "$RCLONE_SHA256  rclone.zip" | sha256sum -c -
           unzip -q rclone.zip
           sudo install "rclone-${RCLONE_VERSION}-linux-amd64/rclone" /usr/local/bin/rclone
           rclone version
