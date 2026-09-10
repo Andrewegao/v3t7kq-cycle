@@ -2,12 +2,13 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile, realpath, lstat, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { ACCOUNT, KINDS, hash, qualifyPlaces, validateQualification, preparePlaces, activatePlaces, createPlacesS3 } from './staging-places.mjs';
 import { downloadSeed, unpackSeed, checkpointEvidence, noPublishCredentials, seedURL } from './staging-places-seed.mjs';
 import { placeFailureDiagnostic } from './staging-places-diagnostics.mjs';
 const SHA = /^[a-f0-9]{64}$/;
+const ISOLATED_PYTHON = fileURLToPath(new URL('./staging-place-python', import.meta.url));
 export function placesGate(env) {
   for (const [key, value] of Object.entries({ GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', GITHUB_REPOSITORY: 'Andrewegao/v3t7kq-cycle',
     GITHUB_REF: 'refs/heads/main', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_JOB: 'places',
@@ -56,7 +57,8 @@ export async function runRuntimeProof(env, context, execute = execFileSync) {
   assert.deepEqual((await checkpointEvidence(checkpoints, context.kind)).document, evidence, 'source evidence changed after authenticated decryption');
   execute(process.execPath, [entry, '--family', context.kind, '--candidate-root', resolve(context.root, 'candidate'), '--source-sha', context.sourceSha,
     '--publisher-module', resolve(env.GITHUB_WORKSPACE, 'cycle/tools/staging-places.mjs'), '--manifest-sha256', context.manifestSha256,
-    '--checkpoint-root', checkpoints, ...proofScopeArguments(context.kind, evidence), '--out', resolve(context.root, 'qualification.json')], {
+    '--checkpoint-root', checkpoints, ...proofScopeArguments(context.kind, evidence), '--python', ISOLATED_PYTHON,
+    '--out', resolve(context.root, 'qualification.json')], {
     cwd: context.source, env: { PATH: env.PATH, LANG: 'C.UTF-8', NO_COLOR: '1', TMPDIR: env.RUNNER_TEMP }, stdio: 'pipe', timeout: 20 * 60000, maxBuffer: 65536,
   });
   const candidate = await qualifyPlaces({ kind: context.kind, root: resolve(context.root, 'candidate') }); assert.equal(hash(candidate.manifestBody), context.manifestSha256);

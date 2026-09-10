@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "e5bc38aeebb15515ad45ca5b2dfdef1cffba4deb",
+  "qualifierSha256": "740b495b7649d377d62e4d821ddd58928389326649ec229c6b450cc12be617cd",
+  "surfSchedule": "37 1,7,13,19 * * *",
+  "directoryTideSchedule": "47 5,17 * * *",
+  "minimumForecastLeaseHours": 6,
+  "leaseHours": 24,
+  "tidePriorFreshnessCorrection": {
+    "kind": "tides",
+    "identity": "noaa-coops-20260910T171959Z",
+    "sourceExpiresAt": "2026-09-11T23:54:00.000Z",
+    "correctedSourceExpiresAt": "2026-09-11T08:12:00.000Z",
+    "completion": {
+      "path": "completion.json",
+      "bytes": 414,
+      "sha256": "b77bdaefe79374c46bee90ab905865dab585e2e2f5649c7072d9f3141da19715"
+    },
+    "manifest": {
+      "path": "manifest.json",
+      "bytes": 164453,
+      "sha256": "2dc0c5d3201842a8eed1230c938f1c46a699422987b75f2834824d8c54abee97"
+    }
+  },
+  "paragliding": {
+    "tag": "staging-places-20260910-v1",
+    "sourceSha": "0024da5a06925140d9681ef46303f751fda9ef54",
+    "identity": "213938613d861734c6d3",
+    "manifestSha256": "70e5b95dcce7042287f3d3ec2cb82cfb7daa8ee4308d3cf775a23de4f8a077d8",
+    "plaintextSha256": "4ec3b03e4936a542347faf09255d62037e966addf410ca6117a5830060a6df80",
+    "ciphertextSha256": "ba273526ffcc3c71f072801844e733762ad26e8d91f8635628596df09459b97c"
+  }
+}
