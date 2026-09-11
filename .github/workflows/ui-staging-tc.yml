@@ -78,10 +78,11 @@ jobs:
           npm ci --prefix control/app
           cd control/app && npx playwright install --with-deps chromium
       - name: verify release architecture and full application
+        working-directory: atmos
         run: |
-          node atmos/ops/platform/test-independent-ui-release.mjs
-          node atmos/ops/release/test-production-verifiers.mjs
-          npm test --prefix atmos/app
+          node ops/platform/test-independent-ui-release.mjs
+          node ops/release/test-production-verifiers.mjs
+          npm test --prefix app
       - name: Weather Lab release gate
         working-directory: atmos
         env:
