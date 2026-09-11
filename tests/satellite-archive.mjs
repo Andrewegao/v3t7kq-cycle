@@ -236,11 +236,11 @@ test('hourly and backfill failure retention remain protected and secret-free', (
   assert.equal((workflow.match(/vars\.SATELLITE_ARCHIVE_STORM_PILOT_ENABLED == '1'/g) ?? []).length, 2);
   assert.equal((workflow.match(/inputs\.policy == 'storm-window-3d-v1'/g) ?? []).length, 2);
   assert.equal((workflow.match(/vars\.SATELLITE_ARCHIVE_ROLLING_YEAR_ENABLED == '1'/g) ?? []).length, 2);
-  assert.match(satelliteJobs.backfill, /max-parallel: 1/);
+  assert.match(satelliteJobs.backfill, /max-parallel: 4/);
+  assert.match(satelliteJobs.backfill, /fromJson\(needs.backfill-plan.outputs.month_shards\)/);
   assert.match(satelliteJobs.backfill, /PUBLISH_LATEST: '0'/);
   assert.match(workflow, /--max-inclusive-days 3/);
-  assert.match(workflow, /--channels vis,ir,wv/);
-  assert.match(workflow, /--fine/);
+  assert.match(workflow, /data\/run_satellite_archive_month_shard.py/);
   assert.match(workflow, /SAT_MAX_HTTP_REQUESTS: '432'/);
   assert.match(workflow, /SAT_MAX_SOURCE_BYTES: '2376000000'/);
   assert.match(workflow, /SAT_MAX_OUTPUT_BYTES: '216000000'/);
@@ -272,29 +272,32 @@ test('hourly and backfill failure retention remain protected and secret-free', (
   assert.doesNotMatch(controller, /R2_|SECRET|TOKEN|credential|\.webp['"]|latest\.json|rclone|requests|urlopen/);
 });
 
-test('rolling-year radar uses age-aware sampling while storm replay keeps fine frames', () => {
-  const step = workflow.split('      - name: bake ${{ matrix.month.from }} to ${{ matrix.month.to }} US radar\n')[1]
-    .split('\n      - name: publish')[0];
-  const script = step.split('        run: |\n')[1].split('\n')
-    .map(line => line.startsWith('          ') ? line.slice(10) : line).join('\n')
-    .replaceAll('${{ matrix.month.from }}', '2025-09-11')
-    .replaceAll('${{ matrix.month.to }}', '2025-09-13');
-  const cwd = mkdtempSync(join(tmpdir(), 'satellite-radar-cadence-'));
+test('month runner receives exact shard and producer policy separately from budget policy', () => {
+  const step = workflow.split('      - name: run bounded transactions for ${{ matrix.month.month }}\n')[1]
+    .split('      - name: stage bounded acquisition evidence')[0];
+  assert.match(step, /MONTH_SHARD_JSON: \$\{\{ toJson\(matrix.month\) \}\}/);
+  assert.match(step, /MONTH_SHARD_POLICY: \$\{\{ inputs.policy \}\}/);
+  assert.match(step, /ARCHIVE_POLICY: rolling-year-v1/);
+  assert.match(step, /ARCHIVE_END_DATE: \$\{\{ vars.SATELLITE_ARCHIVE_BUDGET_END_DATE \}\}/);
+  assert.match(step, /ARCHIVE_BUDGET_SCOPE:/);
+  assert.match(step, /PUBLISH_LATEST: '0'/);
+  const script = step.split('        run: >-\n')[1].trim().split('\n').map(line => line.trim()).join(' ');
+  const cwd = mkdtempSync(join(tmpdir(), 'satellite-month-shard-'));
   try {
     const executable = join(cwd, 'data/.venv/bin/python');
     mkdirSync(dirname(executable), { recursive: true });
     writeFileSync(executable, '#!/bin/sh\nprintf "%s\\n" "$@" > "$ARGUMENT_LOG"\n');
     chmodSync(executable, 0o700);
+    const shard = JSON.stringify({ month: '2026-09', chunks: [{ from: '2026-09-10', to: '2026-09-10' }] });
     for (const policy of ['rolling-year-v1', 'storm-window-3d-v1']) {
       const log = join(cwd, 'args');
       execFileSync('bash', ['-c', script], { cwd, env: {
-        ...process.env, ARCHIVE_POLICY: policy, ARGUMENT_LOG: log,
-        RADAR_MAX_HTTP_REQUESTS: '432', RADAR_MAX_SOURCE_BYTES: '4320000000', RADAR_MAX_OUTPUT_BYTES: '432000000',
+        ...process.env, MONTH_SHARD_JSON: shard, MONTH_SHARD_POLICY: policy,
+        ARCHIVE_POLICY: 'rolling-year-v1', ARGUMENT_LOG: log,
       } });
-      const args = readFileSync(log, 'utf8').trim().split('\n');
-      assert.deepEqual(args.slice(0, 4), ['data/bake_radar_archive.py', '--range', '2025-09-11', '2025-09-13']);
-      assert.equal(args.includes('--fine'), policy === 'storm-window-3d-v1');
-      assert.equal(args.at(-1), '432000000');
+      assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n'), [
+        'data/run_satellite_archive_month_shard.py', '--shard-json', shard, '--policy', policy,
+      ]);
     }
   } finally {
     rmSync(cwd, { recursive: true, force: true });
