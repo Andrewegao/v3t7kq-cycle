@@ -4,11 +4,14 @@ import assert from 'node:assert/strict';
 import { createHash, createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
-import {BASELINE_PROFILE,validateProfile,validateCandidateSelection,requireProductionProfile,staticCompressionProfile} from './ui-staging-models.mjs';
+import {BASELINE_PROFILE,validateProfile,validateCandidateSelection,validateCandidateTcSelection,requireProductionProfile,staticCompressionProfile,tcGuidanceProfile} from './ui-staging-models.mjs';
 import {validateCompressionFiles} from './ui-static-compression.mjs';
 
 export const CONTROL_SHA = '25c402db5149daa018e349a34a4beeba1f2dca45';
 export const STAGING_CONTROL_SHA = '04146c3f67891ed714e1d5bbd27b6998ba0e96ad';
+// Exact reviewed Atmos controller containing the TC release guard and browser harness.
+// Candidate source must both descend from this commit and equal origin/master.
+export const TC_CONTROL_SHA = '0b5ccc8335b1147b13f4c525a126b82bf026ed88';
 export const REPOSITORY = 'Andrewegao/v3t7kq-cycle';
 export const FREEZE_UNTIL = '2026-08-31T11:00:00Z';
 export const MAX_BYTES = 96 * 1024 * 1024;
@@ -18,6 +21,7 @@ export const MAX_FILES = 5000;
 const MAX_COMPRESSION_SIDECARS = 512;
 function fileBudget(profile) {
   const compressed = staticCompressionProfile(profile);
+  const ordinaryLimit = MAX_FILES;
   let ordinary = 0, sidecars = 0, manifests = 0;
   return path => {
     if (compressed && /^__wx_encoded\/[a-f0-9]{64}\.br$/.test(path)) {
@@ -25,7 +29,7 @@ function fileBudget(profile) {
     } else if (compressed && path === 'static-compression-manifest.json') {
       assert.ok(++manifests <= 1, 'artifact exceeds compression manifest file limit (1)');
     } else {
-      assert.ok(++ordinary <= MAX_FILES, `artifact exceeds ordinary file limit (${MAX_FILES}): ${path}`);
+      assert.ok(++ordinary <= ordinaryLimit, `artifact exceeds ordinary file limit (${ordinaryLimit}): ${path}`);
     }
   };
 }
@@ -33,7 +37,7 @@ export const hash = value => createHash('sha256').update(value).digest('hex');
 export const PROFILE = BASELINE_PROFILE;
 export function controlShaFor(profile = PROFILE) {
   validateProfile(profile);
-  return profile.stagingOnly ? STAGING_CONTROL_SHA : CONTROL_SHA;
+  return tcGuidanceProfile(profile) ? TC_CONTROL_SHA : profile.stagingOnly ? STAGING_CONTROL_SHA : CONTROL_SHA;
 }
 const SHA = /^[a-f0-9]{40}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
@@ -114,7 +118,8 @@ export function readTree(root, profile = PROFILE) {
 
 export function validateFiles(files, profile = PROFILE) {
   const compressed = staticCompressionProfile(profile), countFile = fileBudget(profile);
-  assert.ok(Array.isArray(files) && files.length > 0 && files.length <= MAX_FILES + (compressed ? MAX_COMPRESSION_SIDECARS + 1 : 0), 'invalid file inventory');
+  const ordinaryLimit=MAX_FILES;
+  assert.ok(Array.isArray(files) && files.length > 0 && files.length <= ordinaryLimit + (compressed ? MAX_COMPRESSION_SIDECARS + 1 : 0), 'invalid file inventory');
   const seen = new Set(); let total = 0;
   for (const file of files) {
     safePath(file.path);
@@ -155,6 +160,7 @@ export function validateCandidate(candidate) {
   assert.match(candidate.pipelineDigest, DIGEST);
   assert.equal(validateFiles(candidate.files, candidate.profile).digest, candidate.artifactDigest, 'inventory mismatch');
   validateCandidateSelection(candidate);
+  validateCandidateTcSelection(candidate);
   validateCompressionFiles(candidate.files,staticCompressionProfile(candidate.profile));
   const receipt = JSON.parse(Buffer.from(candidate.files.find(f => f.path === 'health/release.json').base64, 'base64'));
   if(candidate.profile.account)assert.deepEqual(receipt.buildProfile,

@@ -10,10 +10,10 @@ import {staticCompressionProfile} from './ui-staging-models.mjs';
 import {verifyProductionGround} from './ui-production-ground.mjs';
 import {accountQualificationRequired,runAccountQualification,readAccountProof,accountQualificationBinding,
   requireAccountQualificationBinding} from './ui-staging-account-proof.mjs';
-import { controlShaFor, REPOSITORY, MAX_BYTES, gate, hash, createCandidate, validateCandidate,
+import { controlShaFor, TC_CONTROL_SHA, REPOSITORY, MAX_BYTES, gate, hash, createCandidate, validateCandidate,
   readTree, validateFiles, seal, unseal, restore, eligibleRun } from './ui-candidate.mjs';
 import { packBuild, unpackBuild, eligibleBuild } from './ui-build-transfer.mjs';
-import {profileFor,validateProfile,selectionProfile,coreReleaseProfile,canonical as profileCanonical,readSelection,requireProductionProfile,requireStagingApproval,SELECTION_ASSET,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt} from './ui-staging-models.mjs';
+import {profileFor,validateProfile,selectionProfile,coreReleaseProfile,tcGuidanceProfile,canonical as profileCanonical,readSelection,readTcSelection,requireProductionProfile,requireStagingApproval,SELECTION_ASSET,TC_SELECTION_ASSET,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt} from './ui-staging-models.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONTROL = resolve(ROOT, '../control');
@@ -24,9 +24,9 @@ const ORIGINS = { staging: 'https://staging.weatherx.org', production: 'https://
 const PROJECTS = { staging: 'weatherx-platform-staging', production: 'atmos-platform' };
 const SAFE_CATALOG_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
 const CORE_CATALOG_MODELS = ['ecmwf','gfs'];
-export const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workflows/ui-release.yml',
+export const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workflows/ui-staging-tc.yml', '.github/workflows/ui-release.yml',
   'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh',
-  'tools/ui-staging-models.mjs','tools/ui-staging-model-browser.mjs','tools/ui-staging-core-browser.mjs','tools/ui-staging-preflight.mjs',
+  'tools/ui-staging-models.mjs','tools/ui-staging-model-browser.mjs','tools/ui-staging-core-browser.mjs','tools/ui-staging-tc-proof.mjs','tools/ui-staging-preflight.mjs',
   'tools/ui-staging-account-proof.mjs',
   'tools/ui-static-compression.mjs','tools/ui-static-compression-wire.mjs',
   'tools/ui-production-ground.mjs','docs/production-ground-review-20260907.md'];
@@ -34,7 +34,8 @@ const run = (command, args, options = {}) => execFileSync(command, args, { stdio
 const git = (args, cwd = ROOT) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore','pipe','pipe'] }).trim();
 export const pipelineDigest = (profile=profileFor(),root=ROOT) => hash(POLICY_FILES.map(p => `${p}\0${hash(readFileSync(resolve(root,p)))}`)
   .concat([`profile\0${hash(Buffer.from(profileCanonical(validateProfile(profile))))}`])
-  .concat(selectionProfile(profile)?[`staging-selections/${profile.modelSelectionSha256}.json\0${hash(readSelection(root,profile,null).bytes)}`]:[]).join('\n'));
+  .concat(selectionProfile(profile)?[`staging-selections/${profile.modelSelectionSha256}.json\0${hash(readSelection(root,profile,null).bytes)}`]:[])
+  .concat(tcGuidanceProfile(profile)?[`staging-tc-selections/${profile.tcSelectionSha256}/selection.json\0${hash(readTcSelection(root,profile,null).bytes)}`]:[]).join('\n'));
 const stateFile = () => resolve(process.env.RUNNER_TEMP, 'ui-candidate.json');
 function save(file, value) { mkdirSync(dirname(file), { recursive: true, mode: 0o700 }); writeFileSync(file, JSON.stringify(value), { mode: 0o600 }); }
 function candidate() { const c = JSON.parse(readFileSync(stateFile())); validateCandidate(c); return c; }
@@ -261,6 +262,7 @@ async function preflight(stage) {
 }
 export function requiredSourceGuard(profile) {
   validateProfile(profile);
+  if (tcGuidanceProfile(profile)) return TC_CONTROL_SHA;
   if (profile.account) return controlShaFor(profile);
   if (staticCompressionProfile(profile)) return '0eeec07e06e5e48b53d41bf3590218a856432b32';
   if (coreReleaseProfile(profile)) return '0eeec07e06e5e48b53d41bf3590218a856432b32';
@@ -285,6 +287,8 @@ export function publicBuildEnvironment(profile,selection,env=process.env) {
     VITE_SPRITE_WEBP_QUALIFICATION:core?'1':'0',
     ATMOS_STAGING_EXPERIMENT_RELEASE:profile.stagingOnly?'1':'0',VITE_PRODUCT:'lab',VITE_APP:'lab',VITE_PLATFORM_ACCOUNT:profile.account?'1':'0',
     ATMOS_STAGING_ACCOUNT_PROFILE:profile.account?'staging-account-v1':'',
+    VITE_TC_MODELS:tcGuidanceProfile(profile)?'1':'0',
+    VITE_TC_MODELS_SELECTION_SHA256:tcGuidanceProfile(profile)?profile.tcSelectionSha256:'',
     ...(profile.account?{VITE_PLATFORM_DATA_AUTH:'public'}:{}),
     ATMOS_STAGING_RELEASE_ROSTER:core?'1':'0',VITE_MODEL_EXPANSION_QUALIFICATION:profile.stagingOnly?'1':'0',VITE_MODEL_LOCAL_BASE:'',
     VITE_STAGING_MODEL_ADMISSION:selected?'1':'0',VITE_STAGING_MODEL_SELECTION_SHA256:profile.modelSelectionSha256??''};
@@ -328,9 +332,10 @@ export function copyPublicShell(profile,{publicDir,shell}) {
   validateProfile(profile);
   assert.equal(existsSync(shell),false,'public shell destination must be new');
   const excludes=['/data/','/data-atmos/'];
-  // account:true is accepted only for the exact staging-only account profile.
+  // Account and TC are independently reviewed, exact nonpromotable profiles.
+  // TC uses the same WebP-only thumbnail consumers; source JPGs remain untouched.
   // Production-compatible and other qualified profiles retain their old bytes.
-  if(profile.account)for(const name of STAGING_LEGACY_THUMBNAILS){
+  if(profile.account || tcGuidanceProfile(profile))for(const name of STAGING_LEGACY_THUMBNAILS){
     const jpg=resolve(publicDir,'thumbs',`${name}.jpg`);
     if(!existsSync(jpg))continue;
     assert.ok(lstatSync(jpg).isFile(),`legacy thumbnail must be a regular file: ${name}`);
@@ -347,12 +352,14 @@ export function copyPublicShell(profile,{publicDir,shell}) {
 }
 async function build() {
   buildGate(); controller();
-  const profile=profileFor(process.env.MODEL_SELECTION_SHA256),selection=readSelection(ROOT,profile);
+  const profile=profileFor(process.env.MODEL_SELECTION_SHA256),selection=readSelection(ROOT,profile),tcSelection=readTcSelection(ROOT,profile);
   sourceIdentity(profile);
   const app = resolve(SOURCE, 'app'), shell = resolve(process.env.RUNNER_TEMP, 'ui-public-shell');
   copyPublicShell(profile,{publicDir:resolve(app,'public'),shell});
   assert.ok(!existsSync(resolve(shell,SELECTION_ASSET)),'candidate source must not supply selection policy');
+  assert.ok(!existsSync(resolve(shell,TC_SELECTION_ASSET)),'candidate source must not supply TC selection policy');
   if(selection){mkdirSync(dirname(resolve(shell,SELECTION_ASSET)),{recursive:true,mode:0o700});writeFileSync(resolve(shell,SELECTION_ASSET),selection.bytes,{flag:'wx',mode:0o600});}
+  if(tcSelection){mkdirSync(dirname(resolve(shell,TC_SELECTION_ASSET)),{recursive:true,mode:0o700});writeFileSync(resolve(shell,TC_SELECTION_ASSET),tcSelection.bytes,{flag:'wx',mode:0o600});}
   run('npm',['run','build'],{cwd:app,env:{...publicBuildEnvironment(profile,selection),ATMOS_PUBLIC_SHELL_DIR:shell}});
   const dist = resolve(app,'dist');
   // Compile once BEFORE qualification; production must never discover/recompile functions/.
@@ -376,7 +383,12 @@ function buildGate() {
   assert.equal(process.env.GITHUB_JOB,'build');assert.equal(process.env.UI_BUILDS_ENABLED,'true');
   assert.ok(process.env.UI_BUILD_PUBLIC_KEY?.includes('BEGIN PUBLIC KEY'));
   for(const k of ['CLOUDFLARE_API_TOKEN','UI_BUILD_PRIVATE_KEY','UI_CANDIDATE_KEY']) assert.equal(process.env[k],undefined);
-  readSelection(ROOT,profileFor(process.env.MODEL_SELECTION_SHA256));
+  const profile=profileFor(process.env.MODEL_SELECTION_SHA256);
+  readSelection(ROOT,profile);readTcSelection(ROOT,profile);
+  if(tcGuidanceProfile(profile)){
+    assert.equal(process.env.UI_STAGING_CORE_PROFILE_APPROVED,profile.releaseRosterCore,'protected staging core profile approval required');
+    assert.equal(process.env.UI_STAGING_TC_PROFILE_APPROVED,profile.tcGuidance,'protected staging TC profile approval required');
+  }
 }
 function pack() {
   buildGate();controller();

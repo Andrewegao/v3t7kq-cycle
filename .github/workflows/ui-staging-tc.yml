@@ -1,0 +1,120 @@
+# Build and qualify one account-off TC experiment on loopback. This workflow has no
+# Pages, Worker, R2, candidate-sealing, production, or shared-staging credentials.
+name: WeatherX isolated TC UI qualification
+run-name: Isolated TC UI ${{ inputs.atmos_sha }}
+on:
+  workflow_dispatch:
+    inputs:
+      atmos_sha:
+        description: Exact 40-character current Atmos master SHA to qualify
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-ui-tc-build
+  cancel-in-progress: false
+jobs:
+  build:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    environment:
+      name: atmos-source-read-ui
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      UI_BUILDS_ENABLED: ${{ vars.UI_BUILDS_ENABLED }}
+      UI_BUILD_PUBLIC_KEY: ${{ vars.UI_BUILD_PUBLIC_KEY }}
+      UI_STAGING_CORE_PROFILE_APPROVED: ${{ vars.UI_STAGING_CORE_PROFILE_APPROVED }}
+      UI_STAGING_TC_PROFILE_APPROVED: ${{ vars.UI_STAGING_TC_PROFILE_APPROVED }}
+      ATMOS_SHA: ${{ inputs.atmos_sha }}
+      MODEL_SELECTION_SHA256: release-roster-core-tc-v1
+      VITE_FUSION_CALIBRATION_ENABLED: '0'
+      VITE_PLATFORM_ACCOUNT: '0'
+      VITE_MODEL_EXPANSION_QUALIFICATION: '0'
+      VITE_MODEL_LOCAL_BASE: ''
+      VITE_STAGING_MODEL_ADMISSION: '0'
+      VITE_STAGING_MODEL_SELECTION_SHA256: ''
+      WX_GROUND_QUALIFICATION_SCOPE: staging-qualification-only
+    steps:
+      - name: require isolated source key without legacy fallback
+        env:
+          SOURCE_KEY_PROVISIONED: ${{ secrets.ATMOS_READONLY_KEY != '' }}
+        run: test "$SOURCE_KEY_PROVISIONED" = true
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, fetch-depth: 0, persist-credentials: false }
+      - name: checkout exact reviewed TC release controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: 0b5ccc8335b1147b13f4c525a126b82bf026ed88
+          ssh-key: ${{ secrets.ATMOS_READONLY_KEY }}
+          persist-credentials: false
+          path: control
+      - name: checkout exact candidate Atmos source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: ${{ inputs.atmos_sha }}
+          fetch-depth: 0
+          ssh-key: ${{ secrets.ATMOS_READONLY_KEY }}
+          persist-credentials: false
+          path: atmos
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with: { python-version: '3.11' }
+      - name: verify exact current-master source and fixed profile
+        run: |
+          [[ "$ATMOS_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git -C atmos rev-parse HEAD)" = "$ATMOS_SHA"
+          test "$ATMOS_SHA" = "$(git -C atmos rev-parse origin/master)"
+          git -C atmos merge-base --is-ancestor 0b5ccc8335b1147b13f4c525a126b82bf026ed88 HEAD
+          node cycle/tools/ui-release.mjs build-gate
+      - name: install locked build and browser dependencies
+        run: |
+          python3.11 -m pip install Pillow==12.2.0
+          npm ci --prefix atmos/app
+          npm ci --prefix control/platform/edge
+          npm ci --prefix control/app
+          cd control/app && npx playwright install --with-deps chromium
+      - name: verify release architecture and full application
+        run: |
+          node atmos/ops/platform/test-independent-ui-release.mjs
+          node atmos/ops/release/test-production-verifiers.mjs
+          npm test --prefix atmos/app
+      - name: Weather Lab release gate
+        working-directory: atmos
+        env:
+          LIVE_DATA: '1'
+        run: bash ops/weather-lab-ready.sh
+      - name: build exact account-off TC artifact once
+        run: node cycle/tools/ui-release.mjs build
+      - name: qualify exact built bytes on isolated loopback
+        env:
+          BASE: http://127.0.0.1:4166
+          UI_CONTROL_ROOT: ${{ github.workspace }}/control
+          UI_TC_DIST: ${{ github.workspace }}/atmos/app/dist
+          UI_TC_FIXTURE_ROOT: ${{ github.workspace }}/cycle/staging-tc-selections/4f39b84b86bcf3e90bb5e54f8296f7231ddfc74363c5e2830a7324a5327a21c7
+          UI_TC_PROOF_OUTPUT: ${{ runner.temp }}/ui-tc-proof.json
+          UI_TC_SELECTION_SHA256: 4f39b84b86bcf3e90bb5e54f8296f7231ddfc74363c5e2830a7324a5327a21c7
+          UI_TC_CONTROL_SHA: 0b5ccc8335b1147b13f4c525a126b82bf026ed88
+          UI_EXPECTED_SOURCE_SHA: ${{ inputs.atmos_sha }}
+        run: |
+          export WEATHERX_EXPECTED_RELEASE_ID="git-${ATMOS_SHA:0:12}-run-${GITHUB_RUN_ID}"
+          npm run --prefix atmos/app preview -- --host 127.0.0.1 --port 4166 --strictPort > "$RUNNER_TEMP/ui-tc-preview.log" 2>&1 &
+          preview_pid=$!
+          trap 'kill "$preview_pid" 2>/dev/null || true' EXIT
+          node --input-type=module -e 'for(let i=0;i<60;i++){try{const r=await fetch("http://127.0.0.1:4166/health/release.json");if(r.ok)process.exit(0)}catch{}await new Promise(resolve=>setTimeout(resolve,500))}process.exit(1)'
+          node cycle/tools/ui-staging-tc-proof.mjs
+      - name: encrypt exact build for review
+        run: node cycle/tools/ui-release.mjs pack-build
+      - name: retain encrypted build and sanitized local proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ui-tc-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ui-build/build.wxub
+            ${{ runner.temp }}/ui-tc-proof.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
