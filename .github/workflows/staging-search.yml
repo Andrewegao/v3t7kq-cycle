@@ -43,6 +43,8 @@ jobs:
       STAGING_SEARCH_ENABLED: ${{ vars.STAGING_SEARCH_ENABLED }}
       STAGING_SEARCH_RENEWAL_ENABLED: ${{ vars.STAGING_SEARCH_RENEWAL_ENABLED }}
       STAGING_SEARCH_APPROVED_CANDIDATE_SHA256: ${{ vars.STAGING_SEARCH_APPROVED_CANDIDATE_SHA256 }}
+      STAGING_SEARCH_V4_APPROVED_SOURCE_SHA: ${{ vars.STAGING_SEARCH_V4_APPROVED_SOURCE_SHA }}
+      STAGING_SEARCH_V4_APPROVED_RELEASE_ID: ${{ vars.STAGING_SEARCH_V4_APPROVED_RELEASE_ID }}
       STAGING_DATA_ISOLATION_APPROVED: ${{ vars.STAGING_DATA_ISOLATION_APPROVED }}
       STAGING_R2_ACCOUNT_ID: ${{ vars.STAGING_R2_ACCOUNT_ID }}
     steps:
@@ -50,6 +52,8 @@ jobs:
         with: { path: cycle, persist-credentials: false }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22 }
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with: { python-version: '3.12' }
       - name: Refuse unreviewed or non-main execution before using credentials
         run: node cycle/tools/staging-search.mjs gate
       - name: Install integrity-locked S3 client without credentials
@@ -61,13 +65,16 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          ref: 7db13615f8efef72080f4062e095087c2a8c0ba8
+          ref: dfa25e9f473f15d5e2f630fe78c268b73234bd3a
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: control
           persist-credentials: false
       - name: Build both indexes from one immutable published directory snapshot
         if: inputs.action == 'prepare'
         run: node cycle/tools/staging-search-build.mjs
+      - name: Verify the reviewed V4 shell is the canonical staging release
+        if: inputs.action == 'activate'
+        run: node cycle/tools/staging-search.mjs compatibility
       - name: Write staging search objects or pointer only (conditional writes, verified readback)
         env:
           STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
