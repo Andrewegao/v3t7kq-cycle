@@ -1,0 +1,577 @@
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import {
+  linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync,
+  truncateSync, writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, resolve } from 'node:path';
+import { Readable } from 'node:stream';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { gunzipSync, gzipSync } from 'node:zlib';
+import {
+  ACCOUNT, COMPONENTS, CONFIRMATION, DATA, MODEL, SOURCE_SHA, controllerDigest,
+  createCandidateS3, gate, hash, loadCatalogValidator, prepareCandidate, qualifyPointPacks, readPolicy, verifySource,
+} from '../tools/staging-wind100.mjs';
+
+const MISSING = -32768;
+const FIELDS = [
+  { id: 'temperature', scaleInv: 100 },
+  { id: 'wind_u', scaleInv: 20 },
+  { id: 'wind_v', scaleInv: 20 },
+  { id: 'wind_gust', scaleInv: 20 },
+  { id: 'precipitation', scaleInv: 50 },
+  { id: 'dewpoint', scaleInv: 100 },
+  { id: 'solar_radiation', scaleInv: 1 },
+  { id: 'wind100_u', scaleInv: 20 },
+  { id: 'wind100_v', scaleInv: 20 },
+];
+
+function semantics(initializedAt, leads) {
+  return { schemaVersion: 1, contract: 'weatherx-native-wind100-grib-v1', model: 'ecmwf',
+    initializedAt: initializedAt.replace('.000Z', 'Z'), verifiedLeadHours: leads,
+    deliveryGrid: 'global-regular-ll-0.25-degree-v1', fields: {
+      wind100_u: { sourceParameter: '100u', discipline: 0, parameterCategory: 2, parameterNumber: 2,
+        typeOfLevel: 'heightAboveGround', level: 100, sourceUnits: 'm s**-1', outputUnits: 'm/s', stepType: 'instant', earthRelative: true },
+      wind100_v: { sourceParameter: '100v', discipline: 0, parameterCategory: 2, parameterNumber: 3,
+        typeOfLevel: 'heightAboveGround', level: 100, sourceUnits: 'm s**-1', outputUnits: 'm/s', stepType: 'instant', earthRelative: true },
+    } };
+}
+
+function encode(value) {
+  return Buffer.from(`${JSON.stringify(value)}\n`);
+}
+
+function inventoryHash(rows) {
+  return createHash('sha256').update(JSON.stringify(rows)).digest('hex');
+}
+
+function writePack(path, { chunkX, chunkY, width, height, leads = 2, mutate = ({ value }) => value }) {
+  const raw = Buffer.alloc(14 + width * height * FIELDS.length * leads * 2);
+  raw.write('WXPS', 0, 'ascii');
+  raw.writeUInt8(1, 4);
+  raw.writeUInt8(width, 5);
+  raw.writeUInt8(height, 6);
+  raw.writeUInt8(FIELDS.length, 7);
+  raw.writeUInt16LE(leads, 8);
+  raw.writeUInt16LE(chunkX, 10);
+  raw.writeUInt16LE(chunkY, 12);
+  let offset = 14;
+  for (const field of FIELDS) {
+    for (let cell = 0; cell < width * height; cell++) {
+      for (let lead = 0; lead < leads; lead++) {
+        let value = field.id === 'wind100_u' ? 60 + lead : field.id === 'wind100_v' ? 80 + lead : 10;
+        value = mutate({ cell, field: field.id, lead, value });
+        raw.writeInt16LE(value, offset);
+        offset += 2;
+      }
+    }
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, gzipSync(raw, { mtime: 0 }));
+}
+
+function writeNpy(path, shape, values) {
+  let dictionary = `{'descr': '<i2', 'fortran_order': False, 'shape': (${shape.join(', ')},), }`;
+  const padding = (16 - ((10 + Buffer.byteLength(dictionary) + 1) % 16)) % 16;
+  dictionary += `${' '.repeat(padding)}\n`;
+  const header = Buffer.alloc(10);
+  Buffer.from([0x93, 0x4e, 0x55, 0x4d, 0x50, 0x59, 1, 0]).copy(header);
+  header.writeUInt16LE(Buffer.byteLength(dictionary), 8);
+  const data = Buffer.alloc(values.length * 2);
+  values.forEach((value, index) => data.writeInt16LE(value, index * 2));
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, Buffer.concat([header, Buffer.from(dictionary, 'latin1'), data]));
+}
+
+function fixture(t, mutate = ({ value }) => value) {
+  const root = realpathSync(mkdtempSync(resolve(tmpdir(), 'weatherx-wind100-test-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const pointRoot = resolve(root, 'point-series');
+  const grid = { lon0: -180, lat0: 90, lonStep: 1, latStep: -1, width: 3, height: 2, wrapLongitude: true };
+  const policy = {
+    sourceSha: 'a'.repeat(40), model: 'ecmwf', hours: 3, leadCount: 2, freshnessHours: 30,
+    minimumForecastLeaseHours: 6, nativeCadenceSeconds: 10800, storageFields: FIELDS.map(field => ({ ...field })),
+    grid,
+    chunk: { width: 2, height: 1 },
+    native100m: { contract: 'weatherx-native-wind100-grib-v1', requiredJointCoveragePermille: 1000,
+      sourceParameters: { wind100_u: '100u', wind100_v: '100v' }, sourceUnits: 'm s**-1',
+      levelType: 'heightAboveGround', level: 100, stepType: 'instant', earthRelative: true,
+      deliveryGrid: 'global-regular-ll-0.25-degree-v1' },
+  };
+  const stageRoot = resolve(root, 'data/.ecmwf-point');
+  const initializedAt = '2026-09-10T12:00:00.000Z';
+  const descriptor = {
+    runId: '2026091012', initializedAt,
+    generatedAt: '2026-09-10T12:10:00.000Z', freshUntil: '2026-09-11T18:00:00.000Z',
+    source: 'synthetic ECMWF', license: { id: 'CC-BY-4.0', redistributionAllowed: true, reviewedAt: '2026-09-01T00:00:00.000Z' },
+    resolutionDegrees: 0.25, nativeCadenceSeconds: 10800, grid, chunk: { width: 2, height: 1 },
+    variables: {
+      temperature: { kind: 'instantaneous', units: 'degC' },
+      wind_speed: { kind: 'instantaneous', units: 'm/s' },
+      precipitation: { kind: 'interval', units: 'mm/h' },
+      wind_speed_100m: { kind: 'instantaneous', units: 'm/s' },
+    },
+    storage: { format: 'WXPS1', missing: MISSING, leadHours: [0, 3], fields: FIELDS.map(field => ({ ...field })) },
+    fieldSemantics: semantics(initializedAt, [0, 3]),
+  };
+  const catalog = { schemaVersion: 2, models: { ecmwf: descriptor } };
+  const catalogPath = resolve(pointRoot, 'v2/catalog.json');
+  mkdirSync(dirname(catalogPath), { recursive: true });
+  writeFileSync(catalogPath, encode(catalog));
+  for (let chunkY = 0; chunkY < 2; chunkY++) {
+    for (let chunkX = 0; chunkX < 2; chunkX++) {
+      const width = chunkX === 0 ? 2 : 1;
+      writePack(resolve(pointRoot, `v2/ecmwf/${descriptor.runId}/chunks/${chunkY}/${chunkX}.bin.gz`), {
+        chunkX, chunkY, width, height: 1, mutate: value => mutate({ ...value, chunkX, chunkY }),
+      });
+    }
+  }
+  const stageMeta = {
+    schemaVersion: 2, model: 'ecmwf', run: '20260910/12z', steps: [0, 3], grid,
+    fields: FIELDS.map(field => field.id), fieldSemantics: semantics(initializedAt, [0, 3]),
+  };
+  mkdirSync(stageRoot, { recursive: true });
+  writeFileSync(resolve(stageRoot, 'meta.json'), encode(stageMeta));
+  for (const field of FIELDS) {
+    const values = [];
+    for (let lead = 0; lead < 2; lead++) {
+      for (let y = 0; y < 2; y++) {
+        for (let x = 0; x < 3; x++) {
+          const chunkX = Math.floor(x / 2), chunkY = y, cell = x % 2;
+          const original = field.id === 'wind100_u' ? 60 + lead : field.id === 'wind100_v' ? 80 + lead : 10;
+          values.push(mutate({ cell, field: field.id, lead, value: original, chunkX, chunkY }));
+        }
+      }
+    }
+    writeNpy(resolve(stageRoot, `${field.id}.i16.npy`), [2, 2, 3], values);
+  }
+  const paths = [catalogPath,
+    ...[0, 1].flatMap(chunkY => [0, 1].map(chunkX =>
+      resolve(pointRoot, `v2/ecmwf/${descriptor.runId}/chunks/${chunkY}/${chunkX}.bin.gz`))),
+  ];
+  const objects = paths.map(path => {
+    const relative = path.slice(pointRoot.length + 1);
+    const bytes = readFileSync(path);
+    return { path: `point-series/${relative}`, bytes: bytes.length, sha256: hash(bytes) };
+  }).sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  const structuralReport = {
+    schemaVersion: 2, objectCount: objects.length, manifestSha256: inventoryHash(objects),
+    models: { ecmwf: descriptor }, objects,
+  };
+  const sourceEvidence = {
+    sourceSha: policy.sourceSha,
+    files: [{ path: 'data/build_point_series.py', sha256: 'b'.repeat(64) }],
+  };
+  const stageInventory = [resolve(stageRoot, 'meta.json'), ...FIELDS.map(field => resolve(stageRoot, `${field.id}.i16.npy`))]
+    .map(path => ({ path: path.slice(stageRoot.length + 1), bytes: readFileSync(path).length, sha256: hash(readFileSync(path)) }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+  const sealedManifest = { schemaVersion: 1, status: 'unqualified-core-inputs', model: 'ecmwf',
+    sourceSha: policy.sourceSha, runId: 'fixture-1', forecastRun: descriptor.runId,
+    files: [{ path: 'app/public/data/ecmwf/index.json', size: 10, sha256: 'c'.repeat(64) },
+      ...stageInventory.map(row => ({ path: `data/.ecmwf-point/${row.path}`, size: row.bytes, sha256: row.sha256 }))] };
+  const mapProof = { model: 'ecmwf', generationTime: initializedAt, ageHours: 1,
+    variables: 10, frames: 2, horizonHours: 3, runs: 2 };
+  const mapRoot = resolve(root, 'app/public/data/ecmwf'); mkdirSync(mapRoot, { recursive: true });
+  writeFileSync(resolve(mapRoot, 'index.json'), encode({ schemaVersion: 1, model: 'ecmwf', runs: [] }));
+  return { root, pointRoot, stageRoot, catalogPath, catalog, descriptor, policy, structuralReport,
+    sourceEvidence, sealedManifest, mapProof, mapRoot, now: Date.parse('2026-09-10T13:00:00Z'), model: 'ecmwf' };
+}
+
+function environment(digest = controllerDigest()) {
+  return {
+    GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted',
+    GITHUB_REPOSITORY: 'Andrewegao/v3t7kq-cycle', GITHUB_EVENT_NAME: 'workflow_dispatch',
+    GITHUB_REF: 'refs/heads/main', GITHUB_JOB: 'wind100',
+    GITHUB_WORKFLOW_REF: 'Andrewegao/v3t7kq-cycle/.github/workflows/staging-wind100.yml@refs/heads/main',
+    GITHUB_RUN_ID: '1234', GITHUB_RUN_ATTEMPT: '1',
+    STAGING_DATA_ISOLATION_APPROVED: 'true', STAGING_WIND100_ENABLED: 'true',
+    STAGING_R2_ACCOUNT_ID: ACCOUNT,
+    ATMOS_SHA: SOURCE_SHA, STAGING_WIND100_CONTROLLER_SHA256: digest,
+    WIND100_CONFIRMATION: CONFIRMATION, MODEL_ID: 'ecmwf',
+  };
+}
+
+test('synthetic pack layout matches the exact pinned Python producer golden byte-for-byte', t => {
+  // Generated by SOURCE_SHA data/build_point_series.py (blob
+  // 88d040923e99130f4c5bcd32ce76c2cae3971f69e1af736b9d92ea3766405f80)
+  // from a two-cell, two-lead stage. This prevents a self-consistent but wrong
+  // JS fixture/validator field ordering from going green.
+  const root = realpathSync(mkdtempSync(resolve(tmpdir(), 'weatherx-wxps-golden-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const path = resolve(root, '0.bin.gz');
+  writePack(path, { chunkX: 0, chunkY: 0, width: 2, height: 1 });
+  assert.equal(readFileSync(path).toString('base64'),
+    'H4sIAAAAAAAAEwuPCAhmZGLkZGIAAS4yoQ2DLRgHMASCMQB7u4G+VgAAAA==');
+  assert.equal(hash(readFileSync(path)), '60e9fd15171fa22c3b779c71e9690748714ab224d763294612fd9585f33c9885');
+});
+
+test('policy fixes one reviewed ECMWF source, exact semantics and dependency closure', () => {
+  const policy = readPolicy();
+  assert.equal(policy.sourceSha, SOURCE_SHA);
+  assert.deepEqual({ model: policy.model, hours: policy.hours, leadCount: policy.leadCount,
+    freshnessHours: policy.freshnessHours, minimumForecastLeaseHours: policy.minimumForecastLeaseHours,
+    nativeCadenceSeconds: policy.nativeCadenceSeconds },
+  { model: 'ecmwf', hours: 336, leadCount: 81, freshnessHours: 30,
+    minimumForecastLeaseHours: 6, nativeCadenceSeconds: 10800 });
+  assert.deepEqual(policy.chunk, { width: 16, height: 16 });
+  assert.equal(Math.ceil(policy.grid.width / policy.chunk.width) * Math.ceil(policy.grid.height / policy.chunk.height), 4140);
+  assert.deepEqual(policy.storageFields.map(field => field.id), [
+    'temperature', 'wind_u', 'wind_v', 'wind_gust', 'precipitation', 'dewpoint',
+    'solar_radiation', 'wind100_u', 'wind100_v',
+  ]);
+  assert.equal(policy.native100m.requiredJointCoveragePermille, 1000);
+  assert.equal(policy.native100m.contract, 'weatherx-native-wind100-grib-v1');
+  assert.equal(policy.dependencyLock.path, 'tools/staging-wind100-requirements.txt');
+  assert.ok(Object.keys(policy.sourceClosure).includes('data/native_wind100.py'));
+  assert.ok(Object.keys(policy.sourceClosure).includes('ops/core_model_artifact.py'));
+  assert.ok(Object.keys(policy.sourceClosure).includes('ops/platform/publish-r2-component.sh'));
+  assert.ok(Object.values(policy.sourceClosure).every(value => /^[a-f0-9]{64}$/.test(value)));
+});
+
+test('gate is manual hosted main, ECMWF-only, exact-controller and credential-free', () => {
+  const env = environment();
+  assert.deepEqual(gate(env), { model: 'ecmwf', sourceSha: SOURCE_SHA, invocation: '1234-1' });
+  for (const patch of [
+    { GITHUB_EVENT_NAME: 'schedule' }, { GITHUB_REF: 'refs/heads/dev' }, { GITHUB_JOB: 'other' },
+    { ATMOS_SHA: 'c'.repeat(40) }, { MODEL_ID: 'gfs' }, { WIND100_CONFIRMATION: 'yes' },
+    { STAGING_WIND100_ENABLED: 'false' }, { STAGING_WIND100_CONTROLLER_SHA256: 'e'.repeat(64) },
+    { GITHUB_RUN_ID: 'not-a-run' }, { GITHUB_RUN_ATTEMPT: '0' },
+    { R2_PRODUCTION_ACCESS_KEY_ID: 'secret' }, { SHARED_R2_READ_SECRET_ACCESS_KEY: 'secret' },
+    { CLOUDFLARE_API_TOKEN: 'secret' }, { AWS_ACCESS_KEY_ID: 'secret' },
+    { STAGING_R2_WRITE_ACCESS_KEY_ID: 'secret' }, { CATALOG_PROMOTION_KEY: 'secret' },
+  ]) assert.throws(() => gate({ ...env, ...patch }), JSON.stringify(patch));
+});
+
+test('credential gates accept only the exact staging account, buckets and inert component mode', () => {
+  const common = { ...environment(), STAGING_R2_WRITE_ACCESS_KEY_ID: 'id', STAGING_R2_WRITE_SECRET_ACCESS_KEY: 'secret',
+    RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: 'id', RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: 'secret',
+    RCLONE_CONFIG_WEATHERX_ENDPOINT: `https://${ACCOUNT}.r2.cloudflarestorage.com`,
+    COMPONENT_R2_REMOTE: `weatherx:${COMPONENTS}` };
+  const hydrate = { ...common, CATALOG_R2_REMOTE: `weatherx:${DATA}`, COMPONENT_ID: MODEL,
+    ALLOW_EMPTY_CATALOG: '0', ALLOW_MISSING_COMPONENT: '0', HYDRATE_MISSING_FROM_RELEASE: '0' };
+  assert.equal(gate(hydrate, readPolicy(), controllerDigest(), 'hydrate').model, MODEL);
+  assert.throws(() => gate({ ...hydrate, CATALOG_R2_REMOTE: 'weatherx:weatherx-data-production' }, readPolicy(), controllerDigest(), 'hydrate'));
+  const components = { ...common, PROMOTE: '0', CATALOG_ENDPOINT: 'https://invalid.invalid', CATALOG_PROMOTION_KEY: 'unused-promote-zero' };
+  assert.equal(gate(components, readPolicy(), controllerDigest(), 'components').model, MODEL);
+  assert.throws(() => gate({ ...components, PROMOTE: '1' }, readPolicy(), controllerDigest(), 'components'));
+  assert.throws(() => gate({ ...components, COMPONENT_R2_REMOTE: 'weatherx:weatherx-components-production' }, readPolicy(), controllerDigest(), 'components'));
+});
+
+test('source verification requires the exact clean commit and every pinned byte', t => {
+  const f = fixture(t);
+  const source = resolve(f.root, 'source');
+  mkdirSync(resolve(source, 'data'), { recursive: true });
+  writeFileSync(resolve(source, 'data/fetch.py'), 'reviewed\n');
+  execFileSync('git', ['init', '-q'], { cwd: source });
+  execFileSync('git', ['add', '.'], { cwd: source });
+  execFileSync('git', ['-c', 'user.name=WeatherX Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'fixture'], { cwd: source });
+  const sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: source, encoding: 'utf8' }).trim();
+  const policy = { sourceSha, sourceClosure: { 'data/fetch.py': hash(Buffer.from('reviewed\n')) } };
+  assert.equal(verifySource(source, policy).files.length, 1);
+  writeFileSync(resolve(source, 'data/fetch.py'), 'changed\n');
+  assert.throws(() => verifySource(source, policy));
+});
+
+test('isolated Python wrapper restores only the reviewed Atmos data import root', t => {
+  const root = realpathSync(mkdtempSync(resolve(tmpdir(), 'weatherx-wind100-python-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(resolve(root, 'data'), { recursive: true });
+  writeFileSync(resolve(root, 'data/hrrr_point.py'), 'VALUE = "local-reviewed-helper"\n');
+  writeFileSync(resolve(root, 'data/json.py'), 'raise RuntimeError("unreviewed sibling executed")\n');
+  writeFileSync(resolve(root, 'data/build_point_series.py'),
+    'import argparse, hrrr_point, json\np=argparse.ArgumentParser();p.parse_args();print(hrrr_point.VALUE, json.dumps("stdlib"))\n');
+  const wrapper = fileURLToPath(new URL('../tools/staging-wind100-python.py', import.meta.url));
+  assert.equal(execFileSync('python3', ['-I', wrapper, root, 'data/build_point_series.py'], { encoding: 'utf8' }).trim(),
+    'local-reviewed-helper "stdlib"');
+  assert.throws(() => execFileSync('python3', ['-I', wrapper, root, 'data/unreviewed.py'], { stdio: 'pipe' }));
+
+  const allowed = resolve(root, 'data/build_point_series.py');
+  const replacement = resolve(root, 'data/replacement.py');
+  rmSync(allowed);
+  writeFileSync(replacement, 'print("must not execute")\n');
+  symlinkSync('replacement.py', allowed);
+  assert.throws(() => execFileSync('python3', ['-I', wrapper, root, 'data/build_point_series.py'], { stdio: 'pipe' }),
+    /invalid Atmos entry point/);
+  rmSync(allowed);
+  linkSync(replacement, allowed);
+  assert.throws(() => execFileSync('python3', ['-I', wrapper, root, 'data/build_point_series.py'], { stdio: 'pipe' }),
+    /invalid Atmos entry point/);
+});
+
+test('qualification decodes every actual WXPS byte and binds its complete inventory', async t => {
+  const f = fixture(t);
+  const receipt = await qualifyPointPacks(f);
+  assert.equal(receipt.status, 'CREDENTIAL_FREE_POINT_PACK_INTEGRITY_QUALIFIED_NOT_PUBLISHED');
+  assert.equal(receipt.runId, '2026091012');
+  assert.equal(receipt.pointPacks.objectCount, 4);
+  assert.equal(receipt.pointPacks.cellCount, 6);
+  assert.match(receipt.pointPacks.inventorySha256, /^[a-f0-9]{64}$/);
+  assert.match(receipt.pointPacks.catalogSha256, /^[a-f0-9]{64}$/);
+  assert.equal(receipt.pointPacks.allFieldsExactlyMatchSourceStage, true);
+  assert.deepEqual(receipt.native100m.perLead.map(row => [row.leadHour, row.jointPresentCells, row.oneSidedMissingCells]), [
+    [0, 6, 0], [3, 6, 0],
+  ]);
+  assert.deepEqual(receipt.native100m.perLead.map(row => [row.uMinRaw, row.uMaxRaw, row.vMinRaw, row.vMaxRaw]), [
+    [60, 60, 80, 80], [61, 61, 81, 81],
+  ]);
+  assert.equal(receipt.native100m.minimumJointCoveragePermille, 1000);
+  assert.equal(receipt.credentialFreeIntegrityQualification, true);
+  assert.equal(receipt.decodedProviderSemanticsVerified, true);
+  assert.equal(receipt.scientificRangePolicyApproved, false);
+  assert.equal(receipt.dependencyClosureApproved, true);
+  assert.equal(receipt.stagingCatalogPrepared, false);
+  assert.equal(receipt.sharedReadCanaryActivated, false);
+  assert.equal(receipt.productionWritten, false);
+  assert.equal(receipt.sourceClosure.files, 1);
+  assert.equal(receipt.sourceStage.objectCount, FIELDS.length + 1);
+  assert.match(receipt.sourceStage.inventorySha256, /^[a-f0-9]{64}$/);
+});
+
+test('one finite cell cannot satisfy the per-lead native coverage contract', async t => {
+  const f = fixture(t, ({ field, chunkX, chunkY, cell, value }) => {
+    if ((field === 'wind100_u' || field === 'wind100_v') && !(chunkX === 0 && chunkY === 0 && cell === 0)) return MISSING;
+    return value;
+  });
+  await assert.rejects(qualifyPointPacks(f), /joint native 100m coverage/);
+});
+
+test('one-sided U\/V missing values never qualify', async t => {
+  const f = fixture(t, ({ field, chunkX, chunkY, cell, lead, value }) =>
+    field === 'wind100_v' && chunkX === 0 && chunkY === 0 && cell === 0 && lead === 1 ? MISSING : value);
+  await assert.rejects(qualifyPointPacks(f), /one-sided native 100m missing value/);
+});
+
+test('every expected lead must independently meet coverage', async t => {
+  const f = fixture(t, ({ field, lead, value }) =>
+    (field === 'wind100_u' || field === 'wind100_v') && lead === 1 ? MISSING : value);
+  await assert.rejects(qualifyPointPacks(f), /lead 3.*joint native 100m coverage/);
+});
+
+test('missing, extra, malformed or report-unbound packs never qualify', async t => {
+  for (const mode of ['missing', 'extra', 'header', 'bytes', 'report']) {
+    await t.test(mode, async t => {
+      const f = fixture(t);
+      const pack = resolve(f.pointRoot, `v2/ecmwf/${f.descriptor.runId}/chunks/0/0.bin.gz`);
+      if (mode === 'missing') rmSync(pack);
+      if (mode === 'extra') {
+        const extra = resolve(f.pointRoot, `v2/ecmwf/${f.descriptor.runId}/chunks/9/9.bin.gz`);
+        mkdirSync(dirname(extra), { recursive: true });
+        writeFileSync(extra, readFileSync(pack));
+      }
+      if (mode === 'header') writePack(pack, { chunkX: 1, chunkY: 0, width: 2, height: 1 });
+      if (mode === 'bytes') {
+        const bytes = readFileSync(pack);
+        bytes[bytes.length - 1] ^= 1;
+        writeFileSync(pack, bytes);
+      }
+      if (mode === 'report') f.structuralReport.manifestSha256 = 'f'.repeat(64);
+      await assert.rejects(qualifyPointPacks(f));
+    });
+  }
+});
+
+test('oversized sparse inputs are rejected before they can be read into memory', async t => {
+  for (const [kind, limit, message] of [
+    ['pack', 512 * 1024, /WXPS pack is empty or oversized/],
+    ['catalog', 512 * 1024, /point catalog is empty or oversized/],
+    ['meta', 64 * 1024, /source-stage metadata is empty or oversized/],
+  ]) {
+    await t.test(kind, async t => {
+      const f = fixture(t);
+      const path = kind === 'pack'
+        ? resolve(f.pointRoot, `v2/ecmwf/${f.descriptor.runId}/chunks/0/0.bin.gz`)
+        : kind === 'catalog' ? f.catalogPath : resolve(f.stageRoot, 'meta.json');
+      truncateSync(path, limit + 1);
+      await assert.rejects(qualifyPointPacks(f), message);
+    });
+  }
+});
+
+test('WXPS U/V values must exactly equal their source-stage cells', async t => {
+  const f = fixture(t);
+  const pack = resolve(f.pointRoot, `v2/ecmwf/${f.descriptor.runId}/chunks/0/0.bin.gz`);
+  writePack(pack, {
+    chunkX: 0, chunkY: 0, width: 2, height: 1,
+    mutate: ({ field, cell, lead, value }) => field === 'wind100_u' && cell === 1 && lead === 1 ? value + 1 : value,
+  });
+  const bytes = readFileSync(pack);
+  const object = f.structuralReport.objects.find(value => value.path.endsWith('/chunks/0/0.bin.gz'));
+  object.bytes = bytes.length;
+  object.sha256 = hash(bytes);
+  f.structuralReport.manifestSha256 = inventoryHash(f.structuralReport.objects);
+  await assert.rejects(qualifyPointPacks(f), /differs from source stage/);
+});
+
+test('WXPS surface values must exactly equal their source-stage cells', async t => {
+  const f = fixture(t);
+  const pack = resolve(f.pointRoot, `v2/ecmwf/${f.descriptor.runId}/chunks/0/0.bin.gz`);
+  writePack(pack, {
+    chunkX: 0, chunkY: 0, width: 2, height: 1,
+    mutate: ({ field, cell, lead, value }) => field === 'temperature' && cell === 1 && lead === 1 ? value + 1 : value,
+  });
+  const bytes = readFileSync(pack);
+  const object = f.structuralReport.objects.find(value => value.path.endsWith('/chunks/0/0.bin.gz'));
+  object.bytes = bytes.length;
+  object.sha256 = hash(bytes);
+  f.structuralReport.manifestSha256 = inventoryHash(f.structuralReport.objects);
+  await assert.rejects(qualifyPointPacks(f), /packed temperature differs from source stage/);
+});
+
+test('descriptor must expose native 100m semantics and exact storage', async t => {
+  for (const mode of ['variable', 'field', 'scale', 'leads', 'freshness', 'semantics']) {
+    await t.test(mode, async t => {
+      const f = fixture(t);
+      if (mode === 'variable') delete f.catalog.models.ecmwf.variables.wind_speed_100m;
+      if (mode === 'field') f.catalog.models.ecmwf.storage.fields.pop();
+      if (mode === 'scale') f.catalog.models.ecmwf.storage.fields.at(-1).scaleInv = 10;
+      if (mode === 'leads') f.catalog.models.ecmwf.storage.leadHours = [0, 6];
+      if (mode === 'freshness') f.catalog.models.ecmwf.freshUntil = '2026-09-11T17:59:59.000Z';
+      if (mode === 'semantics') f.catalog.models.ecmwf.fieldSemantics.fields.wind100_u.level = 10;
+      writeFileSync(f.catalogPath, encode(f.catalog));
+      await assert.rejects(qualifyPointPacks(f));
+    });
+  }
+});
+
+async function publicationFixture(t) {
+  const f = fixture(t), qualification = await qualifyPointPacks(f);
+  qualification.invocation = '1234-1';
+  const request = { model: MODEL, sourceSha: f.policy.sourceSha, invocation: '1234-1' };
+  const rows = {};
+  for (const id of [MODEL, `point-${MODEL}`]) {
+    const artifactId = `stage-wind100-${id}-1234-1`, rootPrefix = `components/${id}/${artifactId}/`;
+    const pointInventory = qualification.pointPacks.inventory.map(row => ({
+      path: row.path.slice(`v2/${MODEL}/`.length), size: row.bytes, sha256: row.sha256,
+    }));
+    const expected = id === MODEL ? qualification.map : { objectCount: pointInventory.length, inventorySha256: inventoryHash(pointInventory) };
+    const manifest = { schemaVersion: 1, componentId: id, artifactId,
+      generationTime: qualification.initializedAt, completedAt: '2026-09-10T13:05:00.000Z', rootPrefix,
+      mounts: [id === MODEL ? `data/${MODEL}/` : `point-series/v2/${MODEL}/`], objectCount: expected.objectCount,
+      inventorySha256: expected.inventorySha256, quality: { status: 'passed', checks: id === MODEL
+        ? ['manifest', 'inventory', 'remote_bytes', 'coverage', 'freshness', 'live_superset', 'horizon', 'cadence', 'grid', 'referenced_bytes', 'native_viewport']
+        : ['manifest', 'inventory', 'remote_bytes', 'point_series'] },
+      ...(id === MODEL ? {} : { pointSeries: { schemaVersion: 1, modelId: MODEL, descriptor: qualification.pointPacks.descriptor } }) };
+    const body = Buffer.from(`${JSON.stringify(manifest)}\n`), manifestSha256 = hash(body), manifestKey = `${rootPrefix}component.json`;
+    rows[id] = { body, receipt: { manifestKey, manifestSha256, expectedPreviousManifestSha256: null, expectedRollbackEpoch: 0 } };
+  }
+  const saved = new Map(Object.values(rows).map(row => [row.receipt.manifestKey, { body: row.body, sha256: hash(row.body), metadata: {},
+    httpMetadata: { contentType: 'application/json', cacheControl: 'public, max-age=31536000, immutable', contentEncoding: undefined } }]));
+  const writes = [];
+  const io = { get: async (bucket, key) => { assert.equal(bucket, COMPONENTS); return saved.get(key) ?? null; },
+    immutable: async (bucket, key, body, metadata) => { assert.equal(bucket, DATA); writes.push({ key, body, metadata }); } };
+  return { f, qualification, request, rows, io, writes, saved };
+}
+
+test('qualified pair prepares only an immutable non-serving staging selection', async t => {
+  const f = await publicationFixture(t);
+  const selection = await prepareCandidate({ request: f.request, qualification: f.qualification,
+    mapReceipt: f.rows[MODEL].receipt, pointReceipt: f.rows[`point-${MODEL}`].receipt,
+    io: f.io, policy: f.f.policy, now: () => Date.parse('2026-09-10T13:10:00Z') });
+  assert.equal(selection.status, 'DATA_QUALIFIED_NOT_ACTIVATED');
+  assert.equal(selection.activated, false); assert.equal(selection.sharedReadPinChanged, false);
+  assert.deepEqual(f.writes.map(row => row.key), [
+    'catalogs/snapshots/stage-wind100-1234-1.json',
+    'staging-candidates/wind100/stage-wind100-1234-1/selection.json',
+  ]);
+  assert.ok(f.writes.every(row => row.metadata.sha256 === hash(row.body)));
+});
+
+test('the pinned reader must accept the isolated catalog before either metadata write', async t => {
+  const f = await publicationFixture(t);
+  await assert.rejects(prepareCandidate({ request: f.request, qualification: f.qualification,
+    mapReceipt: f.rows[MODEL].receipt, pointReceipt: f.rows[`point-${MODEL}`].receipt,
+    io: f.io, policy: f.f.policy, now: () => Date.parse('2026-09-10T13:10:00Z'),
+    catalogValidator: () => false }), /pinned data reader rejected/);
+  assert.equal(f.writes.length, 0);
+});
+
+test('publication rechecks lease after remote manifests and rejects semantic or receipt tampering', async t => {
+  for (const mode of ['lease', 'descriptor', 'receipt', 'quality', 'inventory']) await t.test(mode, async t => {
+    const f = await publicationFixture(t);
+    if (mode === 'descriptor') f.qualification.pointPacks.descriptor.fieldSemantics.fields.wind100_v.level = 10;
+    if (mode === 'receipt') f.rows[MODEL].receipt.manifestSha256 = 'e'.repeat(64);
+    if (mode === 'quality' || mode === 'inventory') {
+      const manifest = JSON.parse(f.rows[MODEL].body); manifest.quality.checks.pop();
+      if (mode === 'inventory') {
+        manifest.quality.checks.push('native_viewport');
+        manifest.inventorySha256 = 'f'.repeat(64);
+      }
+      const body = Buffer.from(`${JSON.stringify(manifest)}\n`);
+      f.rows[MODEL].receipt.manifestSha256 = hash(body);
+      f.saved.set(f.rows[MODEL].receipt.manifestKey, { body, sha256: hash(body), metadata: {},
+        httpMetadata: { contentType: 'application/json', cacheControl: 'public, max-age=31536000, immutable', contentEncoding: undefined } });
+    }
+    let calls = 0;
+    await assert.rejects(prepareCandidate({ request: f.request, qualification: f.qualification,
+      mapReceipt: f.rows[MODEL].receipt, pointReceipt: f.rows[`point-${MODEL}`].receipt, io: f.io,
+      policy: f.f.policy, now: () => mode === 'lease' && ++calls > 1
+        ? Date.parse('2026-09-11T13:00:01Z') : Date.parse('2026-09-10T13:10:00Z') }));
+    assert.equal(f.writes.length, 0);
+  });
+});
+
+test('catalog validator loader exposes the exact TypeScript reader from a verified source root', async t => {
+  const root = realpathSync(mkdtempSync(resolve(tmpdir(), 'weatherx-wind100-reader-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(resolve(root, 'platform/edge/src'), { recursive: true });
+  writeFileSync(resolve(root, 'platform/edge/src/catalog.ts'),
+    'export function isDataCatalog(value: unknown): boolean { return value === "reviewed-catalog"; }\n');
+  const validator = await loadCatalogValidator(root);
+  try {
+    assert.equal(validator.validate('reviewed-catalog'), true);
+    assert.equal(validator.validate('other'), false);
+  } finally { validator.close(); }
+});
+
+test('S3 adapter is confined to two staging manifests and two immutable metadata keys', async () => {
+  class GetObjectCommand { constructor(input) { this.input = input; } }
+  class PutObjectCommand { constructor(input) { this.input = input; } }
+  const commands = [], stored = new Map();
+  const client = { send: async command => { commands.push(command); const key = `${command.input.Bucket}/${command.input.Key}`;
+    if (command instanceof PutObjectCommand) { stored.set(key, { body: Buffer.from(command.input.Body), metadata: command.input.Metadata }); return {}; }
+    const value = stored.get(key); if (!value) throw { $metadata: { httpStatusCode: 404 } };
+    return { ContentLength: value.body.length, Body: Readable.from([value.body]), Metadata: value.metadata,
+      ContentType: 'application/json', CacheControl: 'public, max-age=31536000, immutable' }; } };
+  const env = { ...environment(), STAGING_R2_ACCOUNT_ID: ACCOUNT,
+    STAGING_R2_WRITE_ACCESS_KEY_ID: 'fixture-id', STAGING_R2_WRITE_SECRET_ACCESS_KEY: 'fixture-secret' };
+  const request = gate(env, readPolicy(), controllerDigest(), 'metadata');
+  const io = await createCandidateS3(env, request, client, { GetObjectCommand, PutObjectCommand });
+  const body = Buffer.from('{}\n'), metadata = { sha256: hash(body) };
+  await io.immutable(DATA, 'catalogs/snapshots/stage-wind100-1234-1.json', body, metadata);
+  assert.equal(commands[0].input.IfNoneMatch, '*'); assert.equal(commands[0].input.Bucket, DATA);
+  await assert.rejects(io.immutable('weatherx-data-production', 'catalogs/snapshots/stage-wind100-1234-1.json', body, metadata));
+  await assert.rejects(io.immutable(DATA, 'catalogs/current.json', body, metadata));
+  await assert.rejects(io.get(COMPONENTS, 'components/gfs/x/component.json', 10));
+});
+
+test('workflow is manual ECMWF-only, sealed, hash-locked and cannot promote or deploy', () => {
+  const source = readFileSync(new URL('../.github/workflows/staging-wind100.yml', import.meta.url), 'utf8');
+  const code = source.split('\n').filter(line => !/^\s*#/.test(line)).join('\n');
+  assert.match(code, /workflow_dispatch:/);
+  assert.doesNotMatch(code, /\n  (?:schedule|push|pull_request|workflow_run|workflow_call):/);
+  assert.doesNotMatch(code, /jobs:\n  wind100:\n    if:/);
+  assert.doesNotMatch(code, /options: \[ecmwf, gfs\]/);
+  assert.match(code, /MODEL_ID: ecmwf/);
+  assert.match(code, /--require-hashes --only-binary=:all:/);
+  assert.match(code, /core_model_artifact\.py/); assert.match(code, /seal --model ecmwf/);
+  assert.match(code, /CORE_MODEL_PACKS_DIR/);
+  assert.match(code, /build_point_series\.py/);
+  assert.match(code, /staging-wind100-python\.py/);
+  assert.doesNotMatch(code, /python -I data\/(?:fetch|build_point_series)/);
+  assert.match(code, /validate-point-series\.mjs/);
+  assert.match(code, /staging-wind100\.mjs qualify/);
+  assert.match(code, /PROMOTE: '0'/);
+  assert.match(code, /weatherx-data-staging/);
+  assert.match(code, /weatherx-components-staging/);
+  assert.doesNotMatch(code, /PUBLISH:\s*['"]?1|submit-catalog-mutation|weatherx-(?:data|components)-production/);
+  assert.doesNotMatch(code, /wrangler|pages|deploy|shared-read\/pin\.json|staging-shared-read|catalogs\/current|releases\/current/);
+  for (const line of source.split('\n').filter(value => value.includes('uses:'))) assert.match(line, /@[a-f0-9]{40}\b/);
+  const secrets = [...new Set([...source.matchAll(/secrets\.([A-Z_0-9]+)/g)].map(match => match[1]))].sort();
+  assert.deepEqual(secrets, ['ATMOS_DEPLOY_KEY', 'STAGING_R2_WRITE_ACCESS_KEY_ID', 'STAGING_R2_WRITE_SECRET_ACCESS_KEY']);
+  assert.doesNotMatch(code, /\btee\b/);
+  const qualify = source.split('- name: Qualify')[1].split('- name: Upload immutable')[0];
+  assert.doesNotMatch(qualify, /secrets\.|RCLONE_|CATALOG_|STAGING_R2/);
+});
