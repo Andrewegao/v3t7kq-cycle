@@ -268,6 +268,8 @@ test('V2 activation accepts only the approved canonical V4 staging release', asy
     return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } });
   };
   assert.deepEqual(await verifyV4Staging(env, fetcherFor(receipt)), { releaseId, sourceSha: UI_SHA });
+  assert.deepEqual(await verifyV4Staging(env, fetcherFor({...receipt,
+    buildProfile:{...baseProfile,wind100:{...wind100,dynamic:true}}})), { releaseId, sourceSha: UI_SHA });
   assert.deepEqual(await verifyV4Staging(env, fetcherFor({ ...receipt, buildProfile: baseProfile })),
     { releaseId, sourceSha: UI_SHA });
   for (const change of [
@@ -279,6 +281,12 @@ test('V2 activation accepts only the approved canonical V4 staging release', asy
     { value: { ...receipt, buildProfile: { ...receipt.buildProfile, extra: true } } },
     { value: { ...receipt, buildProfile: { ...receipt.buildProfile,
       wind100: { ...wind100, extra: true } } } },
+    { value: { ...receipt, buildProfile: { ...receipt.buildProfile,
+      wind100: { ...wind100, dynamic: false } } } },
+    { value: { ...receipt, buildProfile: { ...receipt.buildProfile,
+      wind100: { ...wind100, dynamic: 'true' } } } },
+    { value: { ...receipt, buildProfile: { ...receipt.buildProfile,
+      wind100: { ...wind100, dynamic: true, extra: true } } } },
     { value: { ...receipt, buildProfile: { ...receipt.buildProfile,
       wind100: { ...wind100, catalogId: 'stage-wind100-other' } } } },
     { value: { ...receipt, buildProfile: { ...receipt.buildProfile,

@@ -120,7 +120,9 @@ function validStagingBuildProfile(value) {
       value.product !== 'lab' || value.platformAccount !== '1' || value.platformDataAuth !== 'public') return false;
   if (!Object.hasOwn(value, 'wind100')) return true;
   const wind100 = value.wind100;
-  return exact(wind100, ['catalogId', 'runId', 'selectionSha256']) &&
+  const dynamic = object(wind100) && Object.hasOwn(wind100, 'dynamic');
+  return exact(wind100, dynamic ? ['catalogId', 'runId', 'selectionSha256', 'dynamic'] : ['catalogId', 'runId', 'selectionSha256']) &&
+    (!dynamic || wind100.dynamic === true) &&
     WIND100_CATALOG.test(wind100.catalogId ?? '') && validWind100Run(wind100.runId) &&
     SHA.test(wind100.selectionSha256 ?? '');
 }
