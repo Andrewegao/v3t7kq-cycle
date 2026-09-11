@@ -328,8 +328,9 @@ test('hourly and backfill shell helpers inherit the installed Python environment
     const setup = jobs[name].split('name: venv + python deps')[1].split('name: install rclone')[0];
     assert.match(setup, /echo "\$PWD\/data\/\.venv\/bin" >> "\$GITHUB_PATH"/);
     assert.match(setup, /export PATH="\$PWD\/data\/\.venv\/bin:\$PATH"/);
-    assert.match(setup, /PYTHONPATH=data python3 -c/);
+    assert.match(setup, /python3 -c/);
+    assert.match(setup, /sys\.path\.insert\(0, "data"\)/);
     assert.match(setup, /assert sys\.prefix != sys\.base_prefix/);
-    assert.ok(setup.indexOf('pip install') < setup.indexOf('PYTHONPATH=data'));
+    assert.ok(setup.indexOf('pip install') < setup.indexOf('python3 -c'));
   }
 });

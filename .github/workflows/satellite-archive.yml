@@ -277,7 +277,7 @@ jobs:
           data/.venv/bin/pip install -r data/requirements.txt
           echo "$PWD/data/.venv/bin" >> "$GITHUB_PATH"
           export PATH="$PWD/data/.venv/bin:$PATH"
-          PYTHONPATH=data python3 -c 'import netCDF4, numpy, requests, sys; from PIL import Image; import satellite_publication_index, validate_satellite_archive, validate_satellite_source_receipts, verify_satellite_publish_listing; assert sys.prefix != sys.base_prefix'
+          python3 -c 'import netCDF4, numpy, requests, sys; from PIL import Image; sys.path.insert(0, "data"); import satellite_publication_index, validate_satellite_archive, validate_satellite_source_receipts, verify_satellite_publish_listing; assert sys.prefix != sys.base_prefix'
       - name: install rclone ${{ env.SATELLITE_RCLONE_RELEASE }}
         run: |
           set -euo pipefail
@@ -456,7 +456,7 @@ jobs:
           data/.venv/bin/pip install -r data/requirements.txt
           echo "$PWD/data/.venv/bin" >> "$GITHUB_PATH"
           export PATH="$PWD/data/.venv/bin:$PATH"
-          PYTHONPATH=data python3 -c 'import netCDF4, numpy, requests, sys; from PIL import Image; import satellite_publication_index, validate_satellite_archive, validate_satellite_source_receipts, verify_satellite_publish_listing; assert sys.prefix != sys.base_prefix'
+          python3 -c 'import netCDF4, numpy, requests, sys; from PIL import Image; sys.path.insert(0, "data"); import satellite_publication_index, validate_satellite_archive, validate_satellite_source_receipts, verify_satellite_publish_listing; assert sys.prefix != sys.base_prefix'
       - name: install rclone ${{ env.SATELLITE_RCLONE_RELEASE }}
         run: |
           set -euo pipefail
