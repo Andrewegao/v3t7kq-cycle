@@ -36,6 +36,7 @@ jobs:
       wind100_catalog_id: ${{ steps.selection.outputs.wind100_catalog_id }}
       wind100_run_id: ${{ steps.selection.outputs.wind100_run_id }}
       wind100_selection_sha256: ${{ steps.selection.outputs.wind100_selection_sha256 }}
+      wind100_dynamic: ${{ steps.selection.outputs.wind100_dynamic }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { path: cycle, persist-credentials: false }
@@ -53,6 +54,7 @@ jobs:
           STAGING_WIND100_UI_CATALOG_ID: ${{ vars.STAGING_WIND100_UI_CATALOG_ID }}
           STAGING_WIND100_UI_RUN_ID: ${{ vars.STAGING_WIND100_UI_RUN_ID }}
           STAGING_WIND100_UI_SELECTION_SHA256: ${{ vars.STAGING_WIND100_UI_SELECTION_SHA256 }}
+          STAGING_WIND100_UI_DYNAMIC: ${{ vars.STAGING_WIND100_UI_DYNAMIC }}
         run: |
           node --input-type=module <<'NODE'
           import { appendFileSync } from 'node:fs';
@@ -60,7 +62,7 @@ jobs:
           const selection = resolveSelectionRequest(process.env.REQUESTED_SELECTION,process.env.APPROVED_SELECTION,process.env.APPROVED_CORE_PROFILE,process.env.APPROVED_STATIC_COMPRESSION,process.env.APPROVED_ACCOUNT_PROFILE);
           const pin = resolveWind100BuildPin(profileFor(selection), process.env);
           appendFileSync(process.env.GITHUB_OUTPUT,
-            `model_selection_sha256=${selection}\nwind100_enabled=${pin ? 'true' : ''}\nwind100_catalog_id=${pin?.catalogId ?? ''}\nwind100_run_id=${pin?.runId ?? ''}\nwind100_selection_sha256=${pin?.selectionSha256 ?? ''}\n`);
+            `model_selection_sha256=${selection}\nwind100_enabled=${pin ? 'true' : ''}\nwind100_catalog_id=${pin?.catalogId ?? ''}\nwind100_run_id=${pin?.runId ?? ''}\nwind100_selection_sha256=${pin?.selectionSha256 ?? ''}\nwind100_dynamic=${pin?.dynamic === true ? 'true' : ''}\n`);
           NODE
   build:
     # Source-read key only. No publisher token, decryption or promotion-signing key.
@@ -81,6 +83,7 @@ jobs:
       STAGING_WIND100_UI_CATALOG_ID: ${{ needs.profile.outputs.wind100_catalog_id }}
       STAGING_WIND100_UI_RUN_ID: ${{ needs.profile.outputs.wind100_run_id }}
       STAGING_WIND100_UI_SELECTION_SHA256: ${{ needs.profile.outputs.wind100_selection_sha256 }}
+      STAGING_WIND100_UI_DYNAMIC: ${{ needs.profile.outputs.wind100_dynamic }}
       VITE_FUSION_CALIBRATION_ENABLED: ${{ vars.FUSION_CALIBRATION_RUNTIME_ENABLED == 'true' && '1' || '0' }}
       VITE_PLATFORM_ACCOUNT: '0'
       VITE_MODEL_EXPANSION_QUALIFICATION: '0'
@@ -186,6 +189,7 @@ jobs:
       STAGING_WIND100_UI_CATALOG_ID: ${{ vars.STAGING_WIND100_UI_CATALOG_ID }}
       STAGING_WIND100_UI_RUN_ID: ${{ vars.STAGING_WIND100_UI_RUN_ID }}
       STAGING_WIND100_UI_SELECTION_SHA256: ${{ vars.STAGING_WIND100_UI_SELECTION_SHA256 }}
+      STAGING_WIND100_UI_DYNAMIC: ${{ vars.STAGING_WIND100_UI_DYNAMIC }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { path: cycle, fetch-depth: 0, persist-credentials: false }

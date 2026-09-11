@@ -32,10 +32,10 @@ export function selectionProfile(profile){validateProfile(profile);return rawSel
 export function coreReleaseProfile(profile){validateProfile(profile);return profile.releaseRosterCore===CORE_RELEASE_REQUEST;}
 export function staticCompressionProfile(profile){validateProfile(profile);return profile.staticCompression==='static-br11-v1';}
 export function tcGuidanceProfile(profile){validateProfile(profile);return profile.tcGuidance===TC_APPROVAL;}
-const WIND100_CATALOG=/^stage-wind100-[1-9]\d{0,19}-[1-9]\d{0,5}$/;
+const WIND100_CATALOG=/^stage-wind100-(?:recurring-)?[1-9]\d{0,19}-[1-9]\d{0,5}$/;
 const WIND100_RUN=/^\d{10}$/;
 const WIND100_HASH=/^[a-f0-9]{64}$/;
-const WIND100_APPROVAL_KEYS=Object.freeze(['STAGING_WIND100_UI_CATALOG_ID','STAGING_WIND100_UI_RUN_ID','STAGING_WIND100_UI_SELECTION_SHA256']);
+const WIND100_APPROVAL_KEYS=Object.freeze(['STAGING_WIND100_UI_CATALOG_ID','STAGING_WIND100_UI_RUN_ID','STAGING_WIND100_UI_SELECTION_SHA256','STAGING_WIND100_UI_DYNAMIC']);
 export function validateWind100Pin(value){
   assert.ok(value&&typeof value==='object'&&!Array.isArray(value),'staging Wind100 pin is missing');
   assert.deepEqual(Object.keys(value).sort(),['catalogId','runId','selectionSha256']);
@@ -48,6 +48,15 @@ export function validateWind100Pin(value){
   assert.match(selectionSha256??'',WIND100_HASH,'invalid staging Wind100 selection digest');
   return Object.freeze({catalogId,runId,selectionSha256});
 }
+export function validateWind100BuildProfile(value){
+  assert.ok(value&&typeof value==='object'&&!Array.isArray(value),'staging Wind100 build profile is missing');
+  const dynamic=Object.hasOwn(value,'dynamic');
+  assert.deepEqual(Object.keys(value).sort(),(dynamic?['catalogId','dynamic','runId','selectionSha256']:['catalogId','runId','selectionSha256']).sort());
+  const pin=validateWind100Pin({catalogId:value.catalogId,runId:value.runId,selectionSha256:value.selectionSha256});
+  if(!dynamic)return pin;
+  assert.equal(value.dynamic,true,'staging Wind100 dynamic presentation must be exactly true');
+  return Object.freeze({...pin,dynamic:true});
+}
 export function resolveWind100BuildPin(profile,env={}){
   validateProfile(profile);
   const enabled=env.STAGING_WIND100_UI_ENABLED??'';
@@ -58,8 +67,12 @@ export function resolveWind100BuildPin(profile,env={}){
   }
   assert.equal(enabled,'true','protected staging Wind100 UI approval must be exactly true');
   assert.deepEqual(profile,ACCOUNT_CORE_PROFILE,'Wind100 UI is approved only for the account-standard staging profile');
-  return validateWind100Pin({catalogId:env.STAGING_WIND100_UI_CATALOG_ID??'',runId:env.STAGING_WIND100_UI_RUN_ID??'',
+  const pin=validateWind100Pin({catalogId:env.STAGING_WIND100_UI_CATALOG_ID??'',runId:env.STAGING_WIND100_UI_RUN_ID??'',
     selectionSha256:env.STAGING_WIND100_UI_SELECTION_SHA256??''});
+  const dynamic=env.STAGING_WIND100_UI_DYNAMIC??'';
+  assert.equal(typeof dynamic,'string','invalid staging Wind100 dynamic presentation approval');
+  assert.ok(dynamic===''||dynamic==='true','protected staging Wind100 dynamic presentation approval must be exactly true or empty');
+  return dynamic==='true'?Object.freeze({...pin,dynamic:true}):pin;
 }
 export function resolveSelectionRequest(requested='approved',approved,approvedCore,approvedStaticCompression,approvedAccount,approvedTc){
   assert.ok(requested==='approved'||requested==='none'||requested===CORE_RELEASE_REQUEST||requested===STATIC_COMPRESSION_REQUEST||requested===ACCOUNT_CORE_REQUEST||requested===TC_RELEASE_REQUEST||HASH.test(requested??''),'invalid staging selection request');

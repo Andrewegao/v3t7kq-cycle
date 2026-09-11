@@ -12,21 +12,35 @@ import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 
-export const SOURCE_SHA = '14f79bad3e2c9b78a34c2486563ffff18d06eb31';
+export const SOURCE_SHA = '9174329db6ca8527569e67f14ef70406dedefb69';
 export const CONFIRMATION = 'native-wind100-staging-only';
 export const DATA = 'weatherx-data-staging';
 export const COMPONENTS = 'weatherx-components-staging';
 export const MODEL = 'ecmwf';
 export const ACCOUNT = 'a89f9a1af485021fbc60a68b163c7c6e';
+export const RECURRING_PUBLICATION_MODE = 'point-only-recurring-v1';
+export const RECURRING_COMPONENT_PREFIX = 'components/point-ecmwf/stage-wind100-recurring-point-ecmwf-';
+export const RECURRING_CATALOG_PREFIX = 'catalogs/snapshots/stage-wind100-recurring-';
+export const RECURRING_SELECTION_PREFIX = 'staging-candidates/wind100/stage-wind100-recurring-';
 const REPOSITORY = 'Andrewegao/v3t7kq-cycle';
 const WORKFLOW = `${REPOSITORY}/.github/workflows/staging-wind100.yml@refs/heads/main`;
+const BAKE_WORKFLOW = `${REPOSITORY}/.github/workflows/bake.yml@refs/heads/main`;
 const SHA = /^[a-f0-9]{64}$/;
 const COMMIT = /^[a-f0-9]{40}$/;
 const RUN = /^\d{10}$/;
+const MANUAL_CATALOG_ID = /^stage-wind100-[1-9]\d{0,19}-[1-9]\d{0,5}$/;
+const RECURRING_CATALOG_ID = /^stage-wind100-recurring-[1-9]\d{0,19}-[1-9]\d{0,5}$/;
+const RECURRING_COMPONENT_KEY = /^components\/point-ecmwf\/stage-wind100-recurring-point-ecmwf-[1-9]\d{0,19}-[1-9]\d{0,5}\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+$/;
 const MISSING = -32768;
 const MAX_PACK_BYTES = 512 * 1024;
 const MAX_UNPACKED_BYTES = 1024 * 1024;
 const MAX_JSON_BYTES = 512 * 1024;
+const MAX_RECURRING_PREFIX_OBJECTS = 50_000;
+export const POINTER_KEY = 'staging-candidates/wind100/current-v1.json';
+export const MAX_POINTER_BYTES = 16 * 1024;
+const POINTER_KIND = 'weatherx-staging-native-wind100-pointer';
+const TARGET_ORIGIN = 'https://staging.weatherx.org';
+const POINT_SOURCE = 'ECMWF IFS 0.25 degree direct open-data GRIB';
 // This is the reviewed ceiling used by the pinned map catalog/reference reader.
 // It bounds files, not traversal entries: every expected ancestor directory is
 // derived below from the two authenticated run manifests.
@@ -44,6 +58,7 @@ const CACHE = 'public, max-age=31536000, immutable';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONTROLLER_FILES = [
   '.github/workflows/staging-wind100.yml',
+  '.github/workflows/staging-wind100-recurring.yml',
   'tools/staging-wind100-policy.json',
   'tools/staging-wind100.mjs',
   'tools/staging-wind100-python.py',
@@ -77,6 +92,96 @@ const MAX_STACK_TAIL_CHARS = 64 * 1024;
 
 export function hash(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
+}
+
+function sealedPointRows(manifest) {
+  assert.ok(Array.isArray(manifest?.files));
+  const rows = manifest.files.filter(row => typeof row?.path === 'string'
+    && row.path.startsWith('data/.ecmwf-point/'));
+  assert.ok(rows.length >= 5 && rows.length <= 32, 'sealed ECMWF point-stage inventory is incomplete or oversized');
+  for (const row of rows) {
+    exactKeys(row, ['path', 'sha256', 'size'], 'sealed point-stage object');
+    assert.match(row.path, /^data\/\.ecmwf-point\/[A-Za-z0-9._-]+$/);
+    assert.match(row.sha256 ?? '', SHA); assert.ok(Number.isSafeInteger(row.size) && row.size > 0);
+  }
+  assert.equal(new Set(rows.map(row => row.path)).size, rows.length);
+  return rows;
+}
+
+export function sealedPointInputSha(manifest) {
+  return hash(JSON.stringify(sealedPointRows(manifest)));
+}
+
+function pythonInventorySha(rows) {
+  return hash(JSON.stringify(rows.map(row => ({ bytes: row.bytes, path: row.path, sha256: row.sha256 }))));
+}
+
+export function validateWind100Pointer(value) {
+  exactKeys(value, ['schemaVersion', 'kind', 'targetOrigin', 'updatedAt', 'entries'], 'wind100 pointer');
+  assert.equal(value.schemaVersion, 1);
+  assert.equal(value.kind, POINTER_KIND);
+  assert.equal(value.targetOrigin, TARGET_ORIGIN);
+  assert.ok(Number.isFinite(Date.parse(value.updatedAt)), 'wind100 pointer update time is invalid');
+  assert.ok(Array.isArray(value.entries) && value.entries.length >= 1 && value.entries.length <= 2,
+    'wind100 pointer must retain one or two entries');
+  let previousRun = null;
+  for (const entry of value.entries) {
+    exactKeys(entry, ['runId', 'catalogId', 'catalogSha256', 'selectionKey', 'selectionSha256',
+      'sourceSha', 'inputSha256', 'initializedAt', 'freshUntil'], 'wind100 pointer entry');
+    assert.match(entry.runId ?? '', RUN);
+    assert.ok(MANUAL_CATALOG_ID.test(entry.catalogId ?? '') || RECURRING_CATALOG_ID.test(entry.catalogId ?? ''),
+      'wind100 pointer catalog ID is invalid');
+    assert.equal(entry.selectionKey, `staging-candidates/wind100/${entry.catalogId}/selection.json`);
+    assert.match(entry.catalogSha256 ?? '', SHA); assert.match(entry.selectionSha256 ?? '', SHA);
+    assert.match(entry.sourceSha ?? '', COMMIT);
+    assert.match(entry.inputSha256 ?? '', SHA);
+    const initialized = finiteTime(entry.initializedAt, 'wind100 initialization');
+    assert.equal(new Date(initialized).toISOString().replace(/[-:T]/g, '').slice(0, 10), entry.runId);
+    assert.ok(finiteTime(entry.freshUntil, 'wind100 expiry') > initialized);
+    if (previousRun !== null) assert.ok(previousRun > entry.runId, 'wind100 pointer entries are not newest-first');
+    previousRun = entry.runId;
+  }
+  assert.equal(new Set(value.entries.map(entry => entry.runId)).size, value.entries.length,
+    'wind100 pointer repeats a run');
+  return value;
+}
+
+export function pointerEntry(selection, selectionSha256) {
+  const fields = ['schemaVersion', 'kind', 'status', 'targetOrigin', 'model', 'runId', 'catalogId',
+    'catalogSha256', 'sourceSha', 'inputSha256', 'invocation', 'qualificationCanonicalSha256',
+    'initializedAt', 'freshUntil', 'createdAt', 'isolatedStagingCandidate', 'sharedReadPinChanged',
+    'productionWritten', 'activated'];
+  if (selection?.publicationMode !== undefined) fields.push('publicationMode');
+  exactKeys(selection, fields, 'wind100 selection');
+  assert.equal(selection.schemaVersion, 1);
+  assert.equal(selection.kind, 'weatherx-staging-native-wind100-selection');
+  assert.equal(selection.status, 'DATA_QUALIFIED_NOT_ACTIVATED');
+  assert.equal(selection.targetOrigin, TARGET_ORIGIN); assert.equal(selection.model, MODEL);
+  if (selection.publicationMode !== undefined) {
+    assert.equal(selection.publicationMode, RECURRING_PUBLICATION_MODE);
+    assert.match(selection.catalogId ?? '', RECURRING_CATALOG_ID);
+  } else assert.match(selection.catalogId ?? '', MANUAL_CATALOG_ID);
+  assert.match(selectionSha256 ?? '', SHA);
+  return {
+    runId: selection.runId, catalogId: selection.catalogId, catalogSha256: selection.catalogSha256,
+    selectionKey: `staging-candidates/wind100/${selection.catalogId}/selection.json`, selectionSha256,
+    sourceSha: selection.sourceSha, inputSha256: selection.inputSha256,
+    initializedAt: selection.initializedAt, freshUntil: selection.freshUntil,
+  };
+}
+
+export function nextWind100Pointer(current, entry, updatedAt) {
+  if (current != null) {
+    validateWind100Pointer(current);
+    assert.ok(entry.runId >= current.entries[0].runId, 'Wind100 model run regressed');
+    assert.ok(finiteTime(updatedAt, 'pointer update') >= finiteTime(current.updatedAt, 'prior pointer update'),
+      'Wind100 pointer update time regressed');
+  }
+  const entries = [entry, ...(current?.entries ?? []).filter(row => row.runId !== entry.runId)]
+    .sort((left, right) => right.runId.localeCompare(left.runId)).slice(0, 2);
+  const value = { schemaVersion: 1, kind: POINTER_KIND, targetOrigin: TARGET_ORIGIN, updatedAt, entries };
+  validateWind100Pointer(value);
+  return value;
 }
 
 export function createQualificationTrace() {
@@ -186,6 +291,14 @@ export function readPolicy(path = policyPath()) {
   assert.equal(policy.schemaVersion, 3);
   assert.match(policy.sourceSha ?? '', COMMIT);
   assert.equal(policy.sourceSha, SOURCE_SHA);
+  assert.equal(policy.coreSourceSha, 'd8cd45d123f60c30c413c14d46f68113e37468b7');
+  assert.equal(policy.recurringPublicationMode, RECURRING_PUBLICATION_MODE);
+  assert.deepEqual(policy.recurringStorage, {
+    componentObjectPrefix: RECURRING_COMPONENT_PREFIX,
+    catalogObjectPrefix: RECURRING_CATALOG_PREFIX,
+    selectionObjectPrefix: RECURRING_SELECTION_PREFIX,
+    maximumComponentPrefixObjects: MAX_RECURRING_PREFIX_OBJECTS,
+  });
   assert.equal(policy.model, MODEL);
   assert.deepEqual({ hours: policy.hours, leadCount: policy.leadCount, freshnessHours: policy.freshnessHours,
     minimumForecastLeaseHours: policy.minimumForecastLeaseHours, nativeCadenceSeconds: policy.nativeCadenceSeconds },
@@ -328,6 +441,41 @@ export function gate(env, policy = readPolicy(), digest = controllerDigest(), au
     assert.equal(env.CATALOG_PROMOTION_KEY, 'unused-promote-zero');
   }
   return { model: MODEL, sourceSha: policy.sourceSha, invocation: `${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}` };
+}
+
+export function recurringGate(env, policy = readPolicy(), digest = controllerDigest(), authority = 'none') {
+  assert.equal(env.GITHUB_ACTIONS, 'true'); assert.equal(env.RUNNER_ENVIRONMENT, 'github-hosted');
+  assert.equal(env.GITHUB_REPOSITORY, REPOSITORY); assert.ok(['schedule', 'workflow_dispatch'].includes(env.GITHUB_EVENT_NAME));
+  assert.equal(env.GITHUB_REF, 'refs/heads/main'); assert.equal(env.GITHUB_WORKFLOW_REF, BAKE_WORKFLOW);
+  assert.equal(env.STAGING_DATA_ISOLATION_APPROVED, 'true'); assert.equal(env.STAGING_WIND100_ENABLED, 'true');
+  assert.equal(env.STAGING_R2_ACCOUNT_ID, ACCOUNT); assert.equal(env.ATMOS_SHA, policy.sourceSha);
+  assert.equal(env.CORE_ATMOS_SHA, policy.coreSourceSha); assert.equal(env.STAGING_WIND100_CONTROLLER_SHA256, digest);
+  assert.equal(env.MODEL_ID, MODEL); assert.match(env.GITHUB_RUN_ID ?? '', /^[1-9]\d{0,19}$/);
+  assert.match(env.GITHUB_RUN_ATTEMPT ?? '', /^[1-9]\d{0,5}$/);
+  assert.ok(['none', 'components', 'metadata'].includes(authority));
+  for (const name of FORBIDDEN) {
+    if (authority !== 'none' && (name === 'STAGING_R2_WRITE_ACCESS_KEY_ID' || name === 'STAGING_R2_WRITE_SECRET_ACCESS_KEY')) continue;
+    if (authority === 'components' &&
+        (name === 'RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID' || name === 'RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY')) continue;
+    if (authority === 'components' && (name === 'CATALOG_ENDPOINT' || name === 'CATALOG_PROMOTION_KEY')) continue;
+    assert.ok(!env[name], `recurring staging wind100 refuses ${name}`);
+  }
+  if (authority !== 'none') assert.ok(env.STAGING_R2_WRITE_ACCESS_KEY_ID && env.STAGING_R2_WRITE_SECRET_ACCESS_KEY);
+  if (authority === 'components') {
+    assert.equal(env.RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID, env.STAGING_R2_WRITE_ACCESS_KEY_ID);
+    assert.equal(env.RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY, env.STAGING_R2_WRITE_SECRET_ACCESS_KEY);
+    assert.equal(env.RCLONE_CONFIG_WEATHERX_ENDPOINT, `https://${ACCOUNT}.r2.cloudflarestorage.com`);
+    assert.equal(env.COMPONENT_R2_REMOTE, `weatherx:${COMPONENTS}`);
+  }
+  if (authority === 'components') {
+    assert.equal(env.PROMOTE, '0'); assert.equal(env.CATALOG_ENDPOINT, 'https://invalid.invalid');
+    assert.equal(env.CATALOG_PROMOTION_KEY, 'unused-promote-zero');
+  }
+  const request = { model: MODEL, sourceSha: policy.sourceSha,
+    invocation: `${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}`,
+    publicationMode: policy.recurringPublicationMode };
+  if (env.WIND100_INPUT_SHA256) { assert.match(env.WIND100_INPUT_SHA256, SHA); request.inputSha256 = env.WIND100_INPUT_SHA256; }
+  return request;
 }
 
 function sourceBytes(sourceRoot, policy) {
@@ -686,6 +834,54 @@ function validateSeal(manifest, stageInventory, request, descriptor) {
   return { files: rows.length, manifestSha256: hash(JSON.stringify(manifest)) };
 }
 
+function validateAugmentedInput(augmentation, handoff, inputManifest, stageInventory, request, descriptor, policy) {
+  exactKeys(handoff, ['schemaVersion', 'kind', 'status', 'publicationAuthorized', 'model',
+    'componentKind', 'origin', 'pack'], 'core artifact handoff');
+  assert.equal(handoff.schemaVersion, 1); assert.equal(handoff.kind, 'weatherx-current-model-artifact-handoff');
+  assert.equal(handoff.status, 'ready'); assert.equal(handoff.publicationAuthorized, false);
+  assert.equal(handoff.model, MODEL); assert.equal(handoff.componentKind, 'core');
+  assert.equal(handoff.origin?.atmosSourceSha, policy.coreSourceSha);
+  assert.match(handoff.origin?.artifactSha256 ?? '', SHA);
+  assert.equal(handoff.pack?.forecastRun, descriptor.runId);
+  assert.match(handoff.pack?.receiptSha256 ?? '', SHA);
+  assert.equal(hash(Buffer.from(`${JSON.stringify(inputManifest)}\n`)), handoff.pack.receiptSha256,
+    'authenticated core input manifest bytes differ');
+  assert.equal(inputManifest?.schemaVersion, 1); assert.equal(inputManifest.status, 'unqualified-core-inputs');
+  assert.equal(inputManifest.model, MODEL); assert.equal(inputManifest.sourceSha, policy.coreSourceSha);
+  assert.equal(String(inputManifest.runId), String(handoff.origin.runId));
+  assert.equal(inputManifest.forecastRun, descriptor.runId); assert.ok(Array.isArray(inputManifest.files));
+  const contentSha256 = sealedPointInputSha(inputManifest);
+  exactKeys(augmentation, ['schemaVersion', 'kind', 'model', 'runId', 'initializedAt', 'inputSha256',
+    'sourceContract', 'leadHours', 'fetched', 'inputInventorySha256', 'outputInventorySha256',
+    'publicationAuthorized'], 'native wind100 augmentation');
+  assert.equal(augmentation.schemaVersion, 1);
+  assert.equal(augmentation.kind, 'weatherx-ecmwf-native-wind100-augmentation');
+  assert.equal(augmentation.model, MODEL); assert.equal(augmentation.runId, descriptor.runId);
+  assert.equal(finiteTime(augmentation.initializedAt, 'augmentation initialization'),
+    finiteTime(descriptor.initializedAt, 'point initialization'));
+  assert.equal(augmentation.inputSha256, contentSha256);
+  assert.equal(augmentation.sourceContract, policy.native100m.contract);
+  assert.deepEqual(augmentation.leadHours, descriptor.storage.leadHours);
+  assert.equal(typeof augmentation.fetched, 'boolean'); assert.equal(augmentation.publicationAuthorized, false);
+  const sealedRows = sealedPointRows(inputManifest).map(row => ({
+    path: row.path.slice('data/.ecmwf-point/'.length), bytes: row.size, sha256: row.sha256,
+  }));
+  assert.equal(augmentation.inputInventorySha256, pythonInventorySha(sealedRows),
+    'augmentation input inventory differs from authenticated sealed point input');
+  for (const row of sealedRows.filter(value => value.path !== 'meta.json')) {
+    assert.deepEqual(stageInventory.find(value => value.path === row.path), row,
+      `authenticated surface input ${row.path} changed during augmentation`);
+  }
+  assert.equal(augmentation.outputInventorySha256, pythonInventorySha(stageInventory),
+    'augmented source-stage inventory differs from its receipt');
+  assert.equal(request.inputSha256, augmentation.inputSha256);
+  return { kind: 'authenticated-core-plus-native-wind100-augmentation',
+    coreSourceSha: policy.coreSourceSha, wind100SourceSha: request.sourceSha,
+    inputSha256: contentSha256, artifactReceiptSha256: handoff.pack.receiptSha256,
+    artifactSha256: handoff.origin.artifactSha256,
+    outputInventorySha256: augmentation.outputInventorySha256 };
+}
+
 function validateDescriptor(catalog, model, policy) {
   assert.equal(catalog?.schemaVersion, 2);
   assert.deepEqual(Object.keys(catalog.models ?? {}), [model]);
@@ -783,9 +979,11 @@ function fileIdentity(stat) {
 
 export async function qualifyPointPacks({ pointRoot, stageRoot, model, policy = readPolicy(), structuralReport,
   sourceEvidence, mapProof, mapRoot, sealedManifest, request = { sourceSha: policy.sourceSha, invocation: 'fixture-1' },
-  now = Date.now(), trace = null }) {
+  augmentationReceipt = null, inputHandoff = null, inputManifest = null, now = Date.now(), trace = null }) {
   markQualification(trace, 'source-evidence');
   assert.equal(model, MODEL);
+  const recurring = request.publicationMode !== undefined;
+  if (recurring) assert.equal(request.publicationMode, policy.recurringPublicationMode);
   const sourceClosure = validatedSourceEvidence(sourceEvidence, policy);
   markQualification(trace, 'point-catalog');
   const root = realpathSync(pointRoot);
@@ -920,12 +1118,17 @@ export async function qualifyPointPacks({ pointRoot, stageRoot, model, policy = 
     stageInventory.push({ path, bytes: stat.size, sha256: await fileHash(absolute) });
   }
   stageInventory.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
-  markQualification(trace, 'map-proof');
-  const validatedMapProof = validateMapProof(mapProof, descriptor, policy);
-  markQualification(trace, 'map-inventory');
-  const map = { ...validatedMapProof, ...await qualifyMapInventory(mapRoot, validatedMapProof, descriptor, policy) };
   markQualification(trace, 'seal');
-  const seal = validateSeal(sealedManifest, stageInventory, request, descriptor);
+  const seal = recurring
+    ? validateAugmentedInput(augmentationReceipt, inputHandoff, inputManifest, stageInventory, request, descriptor, policy)
+    : validateSeal(sealedManifest, stageInventory, request, descriptor);
+  let map = null;
+  if (!recurring) {
+    markQualification(trace, 'map-proof');
+    const validatedMapProof = validateMapProof(mapProof, descriptor, policy);
+    markQualification(trace, 'map-inventory');
+    map = { ...validatedMapProof, ...await qualifyMapInventory(mapRoot, validatedMapProof, descriptor, policy) };
+  }
   markQualification(trace, 'lease');
   assert.ok(finiteTime(descriptor.freshUntil, 'forecast expiry') - now >= policy.minimumForecastLeaseHours * 3600_000,
     'candidate lacks the minimum forecast lease');
@@ -936,6 +1139,8 @@ export async function qualifyPointPacks({ pointRoot, stageRoot, model, policy = 
     status: 'CREDENTIAL_FREE_POINT_PACK_INTEGRITY_QUALIFIED_NOT_PUBLISHED',
     model,
     sourceSha: policy.sourceSha,
+    ...(recurring ? { publicationMode: policy.recurringPublicationMode } : {}),
+    inputSha256: seal.inputSha256 ?? seal.manifestSha256,
     runId: descriptor.runId,
     initializedAt: descriptor.initializedAt,
     freshUntil: descriptor.freshUntil,
@@ -967,11 +1172,12 @@ export async function qualifyPointPacks({ pointRoot, stageRoot, model, policy = 
       valuesExactlyMatchSourceStage: true,
       valuesRepairedOrFilled: false,
     },
-    map,
+    ...(map == null ? {} : { map }),
     sealedArtifact: seal,
     credentialFreeIntegrityQualification: true,
     decodedProviderSemanticsVerified: true,
-    existingMapAndPointScienceGatesPassed: true,
+    ...(recurring ? { authenticatedCorePointInput: true } : {}),
+    existingMapAndPointScienceGatesPassed: !recurring,
     scientificRangePolicyApproved: false,
     dependencyClosureApproved: true,
     stagingCatalogPrepared: false,
@@ -986,20 +1192,25 @@ function safeKey(key) {
   return key;
 }
 
-function componentManifest(value, id, receipt, qualification, now) {
-  assert.deepEqual(Object.keys(receipt ?? {}).sort(),
-    ['expectedPreviousManifestSha256', 'expectedRollbackEpoch', 'manifestKey', 'manifestSha256'].sort());
-  assert.equal(receipt.expectedPreviousManifestSha256, null);
-  assert.equal(receipt.expectedRollbackEpoch, 0);
+function componentManifest(value, id, receipt, qualification, now, reuseExisting = false) {
+  assert.deepEqual(Object.keys(receipt ?? {}).sort(), (reuseExisting
+    ? ['manifestKey', 'manifestSha256']
+    : ['expectedPreviousManifestSha256', 'expectedRollbackEpoch', 'manifestKey', 'manifestSha256']).sort());
+  if (!reuseExisting) { assert.equal(receipt.expectedPreviousManifestSha256, null); assert.equal(receipt.expectedRollbackEpoch, 0); }
   assert.match(receipt.manifestSha256 ?? '', SHA);
-  const artifact = `stage-wind100-${id}-${qualification.invocation}`;
+  const artifact = reuseExisting ? value?.artifactId
+    : `${qualification.publicationMode === RECURRING_PUBLICATION_MODE ? 'stage-wind100-recurring' : 'stage-wind100'}-${id}-${qualification.invocation}`;
+  assert.match(artifact ?? '', /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/);
   const rootPrefix = `components/${id}/${artifact}/`;
   assert.equal(receipt.manifestKey, `${rootPrefix}component.json`);
   assert.deepEqual(Object.keys(value ?? {}).sort(), [
     'artifactId', 'completedAt', 'componentId', 'generationTime', 'inventorySha256', 'mounts',
     'objectCount', 'quality', 'rootPrefix', 'schemaVersion', ...(id === `point-${MODEL}` ? ['pointSeries'] : []),
+    ...(reuseExisting && value?.objectLayout != null ? ['objectLayout'] : []),
   ].sort());
-  assert.equal(value.schemaVersion, 1); assert.equal(value.componentId, id); assert.equal(value.artifactId, artifact);
+  if (reuseExisting) assert.ok(value.schemaVersion === 1 || value.schemaVersion === 2);
+  else assert.equal(value.schemaVersion, 1);
+  assert.equal(value.componentId, id); assert.equal(value.artifactId, artifact);
   assert.equal(value.rootPrefix, rootPrefix); assert.equal(finiteTime(value.generationTime, 'component generation'), finiteTime(qualification.initializedAt, 'qualification initialization'));
   assert.ok(finiteTime(value.completedAt, 'component completion') >= finiteTime(qualification.initializedAt, 'qualification initialization'));
   assert.ok(finiteTime(value.completedAt, 'component completion') <= now, 'component completion is in the future');
@@ -1031,21 +1242,95 @@ function validateQualification(q, request, policy, now) {
   assert.equal(q?.schemaVersion, 2); assert.equal(q.kind, 'weatherx-staging-native-wind100-point-candidate');
   assert.equal(q.status, 'CREDENTIAL_FREE_POINT_PACK_INTEGRITY_QUALIFIED_NOT_PUBLISHED');
   assert.equal(q.model, MODEL); assert.equal(q.sourceSha, request.sourceSha); assert.equal(q.invocation, request.invocation);
+  const inputSha256 = q.inputSha256 ?? q.sealedArtifact?.manifestSha256;
+  assert.match(inputSha256 ?? '', SHA); if (request.inputSha256) assert.equal(inputSha256, request.inputSha256);
   for (const key of ['credentialFreeIntegrityQualification', 'decodedProviderSemanticsVerified',
-    'existingMapAndPointScienceGatesPassed', 'dependencyClosureApproved']) assert.equal(q[key], true, key);
+    'dependencyClosureApproved']) assert.equal(q[key], true, key);
+  if (request.publicationMode !== undefined) {
+    assert.equal(request.publicationMode, policy.recurringPublicationMode);
+    assert.equal(q.publicationMode, request.publicationMode);
+    assert.equal(q.authenticatedCorePointInput, true);
+    assert.equal(q.existingMapAndPointScienceGatesPassed, false);
+    assert.equal(q.map, undefined);
+  } else {
+    assert.equal(q.publicationMode, undefined);
+    assert.equal(q.authenticatedCorePointInput, undefined);
+    assert.equal(q.existingMapAndPointScienceGatesPassed, true);
+  }
   for (const key of ['scientificRangePolicyApproved', 'stagingCatalogPrepared', 'sharedReadCanaryActivated', 'productionWritten']) assert.equal(q[key], false, key);
   assert.deepEqual(q.pointPacks.descriptor.fieldSemantics,
     expectedSemantics(q.initializedAt, expectedSteps(MODEL, policy), policy));
   assert.ok(finiteTime(q.freshUntil, 'forecast expiry') - now >= policy.minimumForecastLeaseHours * 3600_000,
     'candidate lacks minimum lease at publication boundary');
-  return q;
+  return { ...q, inputSha256 };
 }
 
 function candidateKeys(request) {
-  const catalogId = `stage-wind100-${request.invocation}`;
-  assert.match(catalogId, /^stage-wind100-[1-9]\d{0,19}-[1-9]\d{0,5}$/);
+  const recurring = request.publicationMode === RECURRING_PUBLICATION_MODE;
+  const catalogId = `${recurring ? 'stage-wind100-recurring' : 'stage-wind100'}-${request.invocation}`;
+  assert.match(catalogId, recurring ? RECURRING_CATALOG_ID : MANUAL_CATALOG_ID);
   return { catalogId, catalogKey: `catalogs/snapshots/${catalogId}.json`,
     selectionKey: `staging-candidates/wind100/${catalogId}/selection.json` };
+}
+
+export function recurringPrefixCapacity(existing, qualification, pointRoot, policy = readPolicy()) {
+  assert.ok(Array.isArray(existing));
+  assert.equal(qualification?.publicationMode, policy.recurringPublicationMode);
+  assert.ok(existing.every(path => typeof path === 'string' && path.length > 0 && path.length <= 512
+    && RECURRING_COMPONENT_KEY.test(path)),
+  'recurring component prefix inventory contains an unexpected key');
+  assert.equal(new Set(existing).size, existing.length,
+    'recurring component prefix inventory contains a duplicate key');
+  assert.ok(existing.length <= policy.recurringStorage.maximumComponentPrefixObjects,
+    'recurring component prefix already exceeds its object ceiling');
+  const root = realpathSync(pointRoot);
+  const plannedFiles = filesUnder(root, 10_000, 8);
+  assert.equal(plannedFiles.length, qualification.pointPacks?.objectCount,
+    'planned recurring component object count differs from qualification');
+  const planned = plannedFiles.length + 1; // build-component-manifest adds component.json.
+  assert.ok(existing.length + planned <= policy.recurringStorage.maximumComponentPrefixObjects,
+    'recurring component prefix lacks capacity for this candidate');
+  return { existingObjects: existing.length, plannedObjects: planned,
+    maximumObjects: policy.recurringStorage.maximumComponentPrefixObjects };
+}
+
+export async function listRecurringPrefixS3(env, injectedClient, injectedSdk) {
+  assert.equal(env.STAGING_R2_ACCOUNT_ID, ACCOUNT);
+  assert.ok(env.STAGING_R2_WRITE_ACCESS_KEY_ID && env.STAGING_R2_WRITE_SECRET_ACCESS_KEY);
+  const sdk = injectedSdk ?? await import('../staging-controller/node_modules/@aws-sdk/client-s3/dist-cjs/index.js');
+  const client = injectedClient ?? new sdk.S3Client({ region: 'auto', endpoint: `https://${ACCOUNT}.r2.cloudflarestorage.com`,
+    forcePathStyle: true, maxAttempts: 1, requestChecksumCalculation: 'WHEN_REQUIRED', responseChecksumValidation: 'WHEN_REQUIRED',
+    credentials: { accessKeyId: env.STAGING_R2_WRITE_ACCESS_KEY_ID, secretAccessKey: env.STAGING_R2_WRITE_SECRET_ACCESS_KEY } });
+  const keys = [], tokens = new Set();
+  let token;
+  try {
+    for (let pageNumber = 0; pageNumber <= 50; pageNumber++) {
+      let page;
+      try {
+        page = await client.send(new sdk.ListObjectsV2Command({ Bucket: COMPONENTS,
+          Prefix: RECURRING_COMPONENT_PREFIX, MaxKeys: 1000, ...(token ? { ContinuationToken: token } : {}) }),
+        { abortSignal: AbortSignal.timeout(120_000) });
+      } catch { throw Error('recurring component prefix inventory failed'); }
+      assert.ok(Array.isArray(page.Contents ?? []), 'recurring component prefix inventory is invalid');
+      assert.ok((page.Contents ?? []).length <= 1000, 'recurring component prefix page is oversized');
+      assert.ok(page.IsTruncated === true || page.IsTruncated === false,
+        'recurring component prefix pagination is invalid');
+      for (const object of page.Contents ?? []) {
+        assert.ok(typeof object?.Key === 'string' && object.Key.length <= 512
+          && RECURRING_COMPONENT_KEY.test(object.Key),
+          'recurring component prefix inventory escaped its prefix');
+        keys.push(object.Key);
+        assert.ok(keys.length <= MAX_RECURRING_PREFIX_OBJECTS,
+          'recurring component prefix already exceeds its object ceiling');
+      }
+      if (page.IsTruncated !== true) return keys;
+      assert.ok(typeof page.NextContinuationToken === 'string' && page.NextContinuationToken.length > 0
+        && page.NextContinuationToken.length <= 4096 && !tokens.has(page.NextContinuationToken),
+      'recurring component prefix pagination is invalid');
+      token = page.NextContinuationToken; tokens.add(token);
+    }
+    throw Error('recurring component prefix pagination exceeded its page ceiling');
+  } finally { if (!injectedClient) client.destroy?.(); }
 }
 
 function validateComponentObjectMetadata(metadata) {
@@ -1064,8 +1349,11 @@ export async function prepareCandidate({ request, qualification, mapReceipt, poi
   policy = readPolicy(), now = Date.now, catalogValidator = () => true, trace = null }) {
   markPublication(trace, 'qualification');
   const firstNow = now(), q = validateQualification(qualification, request, policy, firstNow);
+  const pointOnly = request.publicationMode !== undefined
+    && request.publicationMode === policy.recurringPublicationMode;
   const manifests = {};
-  for (const [id, receipt] of [[MODEL, mapReceipt], [`point-${MODEL}`, pointReceipt]]) {
+  const components = pointOnly ? [[`point-${MODEL}`, pointReceipt]] : [[MODEL, mapReceipt], [`point-${MODEL}`, pointReceipt]];
+  for (const [id, receipt] of components) {
     markPublication(trace, id === MODEL ? 'map-component' : 'point-component');
     const object = await io.get(COMPONENTS, receipt.manifestKey, MAX_JSON_BYTES);
     assert.ok(object, `missing ${id} component manifest`); assert.equal(object.sha256, receipt.manifestSha256);
@@ -1074,8 +1362,10 @@ export async function prepareCandidate({ request, qualification, mapReceipt, poi
     assert.ok(object.httpMetadata.cacheControl == null || object.httpMetadata.cacheControl === CACHE);
     manifests[id] = componentManifest(JSON.parse(object.body), id, receipt, q, now());
   }
-  markPublication(trace, 'pair');
-  assert.equal(manifests[MODEL].generationTime, manifests[`point-${MODEL}`].generationTime);
+  if (!pointOnly) {
+    markPublication(trace, 'pair');
+    assert.equal(manifests[MODEL].generationTime, manifests[`point-${MODEL}`].generationTime);
+  }
   markPublication(trace, 'lease');
   assert.ok(finiteTime(q.freshUntil, 'forecast expiry') - now() >= policy.minimumForecastLeaseHours * 3600_000,
     'candidate lease expired during component readback');
@@ -1085,6 +1375,8 @@ export async function prepareCandidate({ request, qualification, mapReceipt, poi
     components: manifests, rollbackEpoch: 0 };
   markPublication(trace, 'catalog-validation');
   assert.equal(catalogValidator(catalog), true, 'pinned data reader rejected isolated catalog');
+  if (pointOnly) assert.deepEqual(Object.keys(catalog.components), [`point-${MODEL}`],
+    'recurring catalog must contain only the point component');
   const catalogBody = Buffer.from(`${JSON.stringify(catalog)}\n`), catalogSha256 = hash(catalogBody);
   markPublication(trace, 'catalog-write');
   await io.immutable(DATA, catalogKey, catalogBody, { sha256: catalogSha256 });
@@ -1093,15 +1385,41 @@ export async function prepareCandidate({ request, qualification, mapReceipt, poi
     'candidate lease expired before isolated selection write');
   const selection = { schemaVersion: 1, kind: 'weatherx-staging-native-wind100-selection',
     status: 'DATA_QUALIFIED_NOT_ACTIVATED', targetOrigin: 'https://staging.weatherx.org', model: MODEL,
-    catalogId, catalogSha256, sourceSha: request.sourceSha, invocation: request.invocation,
+    runId: q.runId, catalogId, catalogSha256, sourceSha: request.sourceSha,
+    inputSha256: q.inputSha256, invocation: request.invocation,
+    ...(pointOnly ? { publicationMode: policy.recurringPublicationMode } : {}),
     qualificationCanonicalSha256: hash(JSON.stringify(q)), initializedAt: q.initializedAt,
     freshUntil: q.freshUntil, createdAt: completedAt, isolatedStagingCandidate: true,
     sharedReadPinChanged: false, productionWritten: false, activated: false };
+  assert.match(selection.inputSha256, SHA, 'candidate sealed input SHA-256 is invalid');
   const selectionBody = Buffer.from(`${JSON.stringify(selection)}\n`);
   markPublication(trace, 'selection-write');
   await io.immutable(DATA, selectionKey, selectionBody, { sha256: hash(selectionBody) });
   markPublication(trace, 'receipt');
   return selection;
+}
+
+function validateSelectedCatalog(selection, catalog, catalogValidator) {
+  assert.equal(catalogValidator(catalog), true, 'selected catalog is not reader-qualified');
+  if (selection.publicationMode === RECURRING_PUBLICATION_MODE) {
+    assert.deepEqual(Object.keys(catalog.components ?? {}), [`point-${MODEL}`],
+      'recurring selection is not bound to an exact point-only catalog');
+    const point = catalog.components[`point-${MODEL}`];
+    assert.equal(point.componentId, `point-${MODEL}`);
+    assert.deepEqual(point.mounts, [`point-series/v2/${MODEL}/`]);
+    assert.equal(finiteTime(point.generationTime, 'point component generation'),
+      finiteTime(selection.initializedAt, 'selection initialization'));
+    assert.equal(point.pointSeries?.schemaVersion, 1);
+    assert.equal(point.pointSeries?.modelId, MODEL);
+    const descriptor = point.pointSeries.descriptor;
+    assert.equal(descriptor.runId, selection.runId);
+    assert.equal(descriptor.initializedAt, selection.initializedAt);
+    assert.equal(descriptor.freshUntil, selection.freshUntil);
+    assert.equal(descriptor.source, POINT_SOURCE);
+    assert.deepEqual(descriptor.variables?.wind_speed, { kind: 'instantaneous', units: 'm/s' });
+    assert.deepEqual(descriptor.variables?.wind_speed_100m, { kind: 'instantaneous', units: 'm/s' });
+  }
+  return true;
 }
 
 export async function loadCatalogValidator(sourceRoot) {
@@ -1133,7 +1451,12 @@ export async function createCandidateS3(env, request, injectedClient, injectedSd
   const client = injectedClient ?? new sdk.S3Client({ region: 'auto', endpoint: `https://${ACCOUNT}.r2.cloudflarestorage.com`,
     forcePathStyle: true, maxAttempts: 1, requestChecksumCalculation: 'WHEN_REQUIRED', responseChecksumValidation: 'WHEN_REQUIRED',
     credentials: { accessKeyId: env.STAGING_R2_WRITE_ACCESS_KEY_ID, secretAccessKey: env.STAGING_R2_WRITE_SECRET_ACCESS_KEY } });
-  const allowedComponent = key => [MODEL, `point-${MODEL}`].some(id => key === `components/${id}/stage-wind100-${id}-${request.invocation}/component.json`);
+  const pointManifest = request.publicationMode === RECURRING_PUBLICATION_MODE
+    ? `${RECURRING_COMPONENT_PREFIX}${request.invocation}/component.json`
+    : `components/point-${MODEL}/stage-wind100-point-${MODEL}-${request.invocation}/component.json`;
+  const mapManifest = `components/${MODEL}/stage-wind100-${MODEL}-${request.invocation}/component.json`;
+  const allowedComponent = key => key === pointManifest
+    || (request.publicationMode === undefined && key === mapManifest);
   const keys = candidateKeys(request);
   function target(bucket, key, write = false) {
     safeKey(key); assert.ok(bucket === DATA || bucket === COMPONENTS, 'staging buckets only');
@@ -1178,6 +1501,116 @@ export async function createCandidateS3(env, request, injectedClient, injectedSd
   return { get, immutable, close: () => client.destroy?.() };
 }
 
+export async function createPointerS3(env, injectedClient, injectedSdk) {
+  assert.equal(env.STAGING_R2_ACCOUNT_ID, ACCOUNT);
+  const sdk = injectedSdk ?? await import('../staging-controller/node_modules/@aws-sdk/client-s3/dist-cjs/index.js');
+  const client = injectedClient ?? new sdk.S3Client({ region: 'auto', endpoint: `https://${ACCOUNT}.r2.cloudflarestorage.com`,
+    forcePathStyle: true, maxAttempts: 1, requestChecksumCalculation: 'WHEN_REQUIRED', responseChecksumValidation: 'WHEN_REQUIRED',
+    credentials: { accessKeyId: env.STAGING_R2_WRITE_ACCESS_KEY_ID, secretAccessKey: env.STAGING_R2_WRITE_SECRET_ACCESS_KEY } });
+  function admitted(key, write = false) {
+    safeKey(key);
+    if (write) assert.equal(key, POINTER_KEY, 'only the Wind100 serving pointer is mutable');
+    else assert.ok(key === POINTER_KEY
+      || /^catalogs\/snapshots\/stage-wind100(?:-recurring)?-[1-9]\d{0,19}-[1-9]\d{0,5}\.json$/.test(key)
+      || /^staging-candidates\/wind100\/stage-wind100(?:-recurring)?-[1-9]\d{0,19}-[1-9]\d{0,5}\/selection\.json$/.test(key),
+    'pointer controller read escaped its namespace');
+    return { Bucket: DATA, Key: key };
+  }
+  async function get(key, maximum = MAX_POINTER_BYTES) {
+    assert.ok(Number.isSafeInteger(maximum) && maximum > 0 && maximum <= MAX_JSON_BYTES);
+    let object;
+    try { object = await client.send(new sdk.GetObjectCommand(admitted(key)), { abortSignal: AbortSignal.timeout(120_000) }); }
+    catch (error) { if (error?.$metadata?.httpStatusCode === 404) return null; throw Error('staging pointer read failed'); }
+    const chunks = []; let bytes = 0;
+    try {
+      assert.ok(Number.isSafeInteger(object.ContentLength) && object.ContentLength > 0 && object.ContentLength <= maximum);
+      for await (const chunk of object.Body) { bytes += chunk.length; assert.ok(bytes <= maximum); chunks.push(Buffer.from(chunk)); }
+      assert.equal(bytes, object.ContentLength);
+      return { body: Buffer.concat(chunks), etag: object.ETag };
+    } finally { object.Body?.destroy?.(); }
+  }
+  async function put(body, etag) {
+    assert.ok(Buffer.isBuffer(body) && body.length > 0 && body.length <= MAX_POINTER_BYTES);
+    const conditional = etag == null ? { IfNoneMatch: '*' } : { IfMatch: etag };
+    try {
+      await client.send(new sdk.PutObjectCommand({ ...admitted(POINTER_KEY, true), Body: body,
+        ContentLength: body.length, ContentType: 'application/json', CacheControl: 'public, max-age=30, must-revalidate',
+        Metadata: { sha256: hash(body) }, ...conditional }), { abortSignal: AbortSignal.timeout(120_000) });
+      return true;
+    } catch (error) {
+      if (error?.$metadata?.httpStatusCode === 412) return false;
+      throw Error('staging pointer write failed');
+    }
+  }
+  return { get, put, close: () => client.destroy?.() };
+}
+
+export async function activateCandidate({ selection, selectionSha256, io, now = Date.now, policy = readPolicy(),
+  catalogValidator = () => true }) {
+  const entry = pointerEntry(selection, selectionSha256);
+  assert.ok(finiteTime(entry.freshUntil, 'forecast expiry') - now() >= policy.minimumForecastLeaseHours * 3600_000,
+    'candidate lacks minimum lease before pointer rotation');
+  const savedSelection = await io.get(entry.selectionKey, MAX_JSON_BYTES);
+  assert.ok(savedSelection && hash(savedSelection.body) === entry.selectionSha256);
+  assert.deepEqual(JSON.parse(savedSelection.body), selection, 'immutable selection differs before activation');
+  assert.equal(selection.publicationMode, policy.recurringPublicationMode,
+    'dynamic pointer accepts only recurring point-only selections');
+  const catalogKey = `catalogs/snapshots/${entry.catalogId}.json`;
+  const savedCatalog = await io.get(catalogKey, MAX_JSON_BYTES);
+  assert.ok(savedCatalog && hash(savedCatalog.body) === entry.catalogSha256);
+  validateSelectedCatalog(selection, JSON.parse(savedCatalog.body), catalogValidator);
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const observed = await io.get(POINTER_KEY, MAX_POINTER_BYTES);
+    const current = observed == null ? null : validateWind100Pointer(JSON.parse(observed.body));
+    const same = current?.entries.find(row => row.runId === entry.runId && row.inputSha256 === entry.inputSha256
+      && row.sourceSha === entry.sourceSha);
+    if (same && JSON.stringify(same) === JSON.stringify(entry)) return current;
+    if (same) {
+      const priorObject = await io.get(same.selectionKey, MAX_JSON_BYTES);
+      assert.ok(priorObject && hash(priorObject.body) === same.selectionSha256,
+        'prior same-input selection is unavailable');
+      const prior = JSON.parse(priorObject.body);
+      assert.deepEqual(pointerEntry(prior, same.selectionSha256), same,
+        'prior same-input selection differs from its pointer entry');
+      assert.notEqual(prior.publicationMode, policy.recurringPublicationMode,
+        'same reviewed point-only input has a different immutable candidate');
+    }
+    const updatedAt = new Date(now()).toISOString();
+    const next = nextWind100Pointer(current, entry, updatedAt);
+    const body = Buffer.from(`${JSON.stringify(next)}\n`);
+    if (!await io.put(body, observed?.etag ?? null)) continue;
+    const readback = await io.get(POINTER_KEY, MAX_POINTER_BYTES);
+    assert.ok(readback); assert.deepEqual(readback.body, body, 'Wind100 pointer readback differs');
+    return next;
+  }
+  throw Error('Wind100 pointer changed during all bounded CAS attempts');
+}
+
+export async function findQualifiedInput({ runId, inputSha256, sourceSha, io, policy = readPolicy(),
+  catalogValidator = () => true }) {
+  sourceSha ??= policy.sourceSha;
+  assert.match(runId ?? '', RUN); assert.match(inputSha256 ?? '', SHA); assert.match(sourceSha ?? '', COMMIT);
+  const saved = await io.get(POINTER_KEY, MAX_POINTER_BYTES);
+  if (!saved) return { status: 'new-input', runId, inputSha256 };
+  const pointer = validateWind100Pointer(JSON.parse(saved.body));
+  const entry = pointer.entries.find(row => row.runId === runId && row.inputSha256 === inputSha256
+    && row.sourceSha === sourceSha);
+  if (!entry) return { status: 'new-input', runId, inputSha256 };
+  const selectionObject = await io.get(entry.selectionKey, MAX_JSON_BYTES);
+  assert.ok(selectionObject && hash(selectionObject.body) === entry.selectionSha256);
+  const selection = JSON.parse(selectionObject.body);
+  assert.deepEqual(pointerEntry(selection, entry.selectionSha256), entry,
+    'selected immutable candidate differs from the serving pointer');
+  if (selection.publicationMode !== policy.recurringPublicationMode) {
+    return { status: 'new-input', runId, inputSha256 };
+  }
+  const catalogObject = await io.get(`catalogs/snapshots/${entry.catalogId}.json`, MAX_JSON_BYTES);
+  assert.ok(catalogObject && hash(catalogObject.body) === entry.catalogSha256);
+  validateSelectedCatalog(selection, JSON.parse(catalogObject.body), catalogValidator);
+  return { status: 'unchanged', runId, inputSha256, freshUntil: entry.freshUntil,
+    catalogId: entry.catalogId, selectionSha256: entry.selectionSha256 };
+}
+
 function saveReceipt(env, receipt) {
   const root = resolve(env.RUNNER_TEMP, 'staging-wind100');
   mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -1198,54 +1631,89 @@ export async function main(command, env = process.env, argv = process.argv.slice
   if (command === 'gate') return gate(env, policy);
   if (command === 'hydrate-gate') return gate(env, policy, controllerDigest(), 'hydrate');
   if (command === 'component-gate') return gate(env, policy, controllerDigest(), 'components');
+  if (command === 'recurring-gate') return recurringGate(env, policy);
+  if (command === 'recurring-component-gate') return recurringGate(env, policy, controllerDigest(), 'components');
+  if (command === 'recurring-retention-gate') {
+    recurringGate(env, policy, controllerDigest(), 'components');
+    const existing = await listRecurringPrefixS3(env);
+    return recurringPrefixCapacity(existing, privateJson(env.RUNNER_TEMP, argv[0]), argv[1], policy);
+  }
   if (command === 'source') return verifySource(argv[0], policy);
-  if (command === 'qualify') {
+  if (command === 'preflight') {
+    recurringGate(env, policy, controllerDigest(), 'metadata');
+    assert.match(env.WIND100_RUN_ID ?? '', RUN); assert.match(env.WIND100_INPUT_SHA256 ?? '', SHA);
+    const validator = await loadCatalogValidator(argv[0]);
+    const io = await createPointerS3(env);
+    try { return await findQualifiedInput({ runId: env.WIND100_RUN_ID, inputSha256: env.WIND100_INPUT_SHA256,
+      sourceSha: policy.sourceSha,
+      io, policy, catalogValidator: validator.validate }); }
+    finally { validator.close(); io.close(); }
+  }
+  if (command === 'qualify' || command === 'qualify-recurring') {
     markQualification(trace, 'gate');
     const digest = controllerDigest();
-    const request = gate(env, policy, digest);
+    const recurring = command === 'qualify-recurring';
+    const request = recurring ? recurringGate(env, policy, digest) : gate(env, policy, digest);
     if (trace) trace.controllerSha256 = digest;
     markQualification(trace, 'evidence');
     const sourceEvidence = privateJson(env.RUNNER_TEMP, argv[1]);
     assert.deepEqual(sourceBytes(argv[0], policy), sourceEvidence,
       'reviewed source bytes changed after pre-collection verification');
     const structuralReport = privateJson(env.RUNNER_TEMP, argv[4]);
-    const mapProof = privateJson(env.RUNNER_TEMP, argv[5]);
-    const sealedManifest = JSON.parse(boundedRead(regularFile(realpathSync(argv[6]), 'manifest.json'), 8 * 1024 * 1024, 'sealed manifest'));
+    const mapProof = recurring ? null : privateJson(env.RUNNER_TEMP, argv[5]);
+    const sealedManifest = recurring ? null
+      : JSON.parse(boundedRead(regularFile(realpathSync(argv[6]), 'manifest.json'), 8 * 1024 * 1024, 'sealed manifest'));
+    const augmentationReceipt = recurring ? privateJson(env.RUNNER_TEMP, argv[5]) : null;
+    const inputHandoff = recurring ? privateJson(env.RUNNER_TEMP, argv[6]) : null;
+    const inputManifest = recurring ? privateJson(env.RUNNER_TEMP, argv[7]) : null;
     const receipt = await qualifyPointPacks({
       stageRoot: argv[2], pointRoot: argv[3], model: request.model, policy, structuralReport, sourceEvidence,
-      mapProof, mapRoot: resolve(argv[0], 'app/public/data/ecmwf'), sealedManifest, request, trace,
+      mapProof, mapRoot: resolve(argv[0], 'app/public/data/ecmwf'), sealedManifest,
+      augmentationReceipt, inputHandoff, inputManifest, request, trace,
     });
     receipt.invocation = request.invocation;
     saveReceipt(env, receipt);
     return receipt;
   }
-  if (command === 'publish') {
+  if (command === 'publish' || command === 'publish-recurring') {
     markPublication(trace, 'gate');
     const digest = controllerDigest();
-    const request = gate(env, policy, digest, 'metadata');
+    const recurring = command === 'publish-recurring';
+    const request = recurring ? recurringGate(env, policy, digest, 'metadata') : gate(env, policy, digest, 'metadata');
     if (trace) trace.controllerSha256 = digest;
     markPublication(trace, 'evidence');
     const qualification = privateJson(env.RUNNER_TEMP, argv[0]);
-    const mapReceipt = privateJson(env.RUNNER_TEMP, argv[1]);
-    const pointReceipt = privateJson(env.RUNNER_TEMP, argv[2]);
+    const mapReceipt = recurring ? null : privateJson(env.RUNNER_TEMP, argv[1]);
+    const pointReceipt = privateJson(env.RUNNER_TEMP, argv[recurring ? 1 : 2]);
+    const sourceRoot = argv[recurring ? 2 : 3];
     markPublication(trace, 'source-evidence');
-    assert.deepEqual(sourceBytes(argv[3], policy), privateJson(env.RUNNER_TEMP, 'weatherx-wind100-source.json'),
+    assert.deepEqual(sourceBytes(sourceRoot, policy), privateJson(env.RUNNER_TEMP, 'weatherx-wind100-source.json'),
       'validator source closure changed before isolated publication');
     markPublication(trace, 'reader');
-    const validator = await loadCatalogValidator(argv[3]);
+    const validator = await loadCatalogValidator(sourceRoot);
     markPublication(trace, 'transport');
     const io = await createCandidateS3(env, request);
     try { return await prepareCandidate({ request, qualification, mapReceipt, pointReceipt, io, policy,
       catalogValidator: validator.validate, trace }); }
     finally { validator.close(); io.close(); }
   }
-  throw Error('usage: staging-wind100.mjs digest | gate | source SOURCE | qualify SOURCE SOURCE_EVIDENCE_REL STAGE_ROOT POINT_ROOT STRUCTURAL_REPORT_REL MAP_PROOF_REL SEALED_MODEL_ROOT | publish QUALIFICATION_REL MAP_RECEIPT_REL POINT_RECEIPT_REL');
+  if (command === 'activate') {
+    const digest = controllerDigest(); recurringGate(env, policy, digest, 'metadata');
+    const selection = privateJson(env.RUNNER_TEMP, argv[0]);
+    const selectionBody = Buffer.from(`${JSON.stringify(selection)}\n`);
+    const validator = await loadCatalogValidator(argv[1]);
+    const io = await createPointerS3(env);
+    try { return await activateCandidate({ selection, selectionSha256: hash(selectionBody), io, policy,
+      catalogValidator: validator.validate }); }
+    finally { validator.close(); io.close(); }
+  }
+  throw Error('usage: staging-wind100.mjs digest | gate | recurring-gate | recurring-retention-gate QUALIFICATION POINT_ROOT | source SOURCE | qualify[...] | publish[...] | activate SELECTION_REL SOURCE');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const command = process.argv[2];
-  const trace = command === 'qualify' ? createQualificationTrace()
-    : command === 'publish' ? createPublicationTrace() : null;
+  const trace = command === 'qualify' || command === 'qualify-recurring' ? createQualificationTrace()
+    : command === 'publish' || command === 'publish-recurring' ? createPublicationTrace() : null;
   main(command, process.env, process.argv.slice(3), trace).then(value => console.log(JSON.stringify(value)))
     .catch(error => {
       if (trace) {

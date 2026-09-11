@@ -19,15 +19,18 @@ export const EXCLUSIVE = 'EXCLUSIVE-STAGING-WORKER-CODE-ONLY';
 export const WIND100_BINDING_NAMES = Object.freeze([
   'STAGING_WIND100_CATALOG_ID', 'STAGING_WIND100_RUN_ID', 'STAGING_WIND100_SELECTION_SHA256',
 ]);
+const WIND100_DYNAMIC_BINDING = 'STAGING_WIND100_DYNAMIC_ENABLED';
+const WIND100_ALL_BINDING_NAMES = [...WIND100_BINDING_NAMES, WIND100_DYNAMIC_BINDING];
 export const WIND100_PROBE_TIMEOUT_MS = 15_000;
 const WIND100_APPROVAL_NAMES = Object.freeze([
   'STAGING_WIND100_READER_ENABLED', 'STAGING_WIND100_READER_CATALOG_ID',
   'STAGING_WIND100_READER_RUN_ID', 'STAGING_WIND100_READER_SELECTION_SHA256',
+  'STAGING_WIND100_READER_DYNAMIC',
 ]);
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const SHA = /^[a-f0-9]{40}$/;
 const HASH = /^[a-f0-9]{64}$/;
-const WIND100_CATALOG = /^stage-wind100-[1-9]\d{0,19}-[1-9]\d{0,5}$/;
+const WIND100_CATALOG = /^stage-wind100-(?:recurring-)?[1-9]\d{0,19}-[1-9]\d{0,5}$/;
 const WIND100_SOURCE = 'ECMWF IFS 0.25 degree direct open-data GRIB';
 const REVIEWED_WORKER_EXPORTS = Object.freeze(['AircraftUpstreamBudget', 'StagingAiAdmission', 'default']);
 export const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -44,8 +47,9 @@ export const WIND100_FRESHNESS_MS = wind100Policy.freshnessHours * 60 * 60_000;
 export const WIND100_MINIMUM_FORECAST_LEASE_MS = wind100Policy.minimumForecastLeaseHours * 60 * 60_000;
 
 function validateWind100(value) {
-  validKeys(value, ['catalogId', 'runId', 'selectionSha256'], 'invalid staging Wind100 selector');
-  assert.ok(Object.keys(value).length === 3, 'incomplete staging Wind100 selector');
+  validKeys(value, ['catalogId', 'runId', 'selectionSha256', 'dynamic'], 'invalid staging Wind100 selector');
+  assert.ok(Object.keys(value).length === (value.dynamic === true ? 4 : 3)
+    && (!Object.hasOwn(value, 'dynamic') || value.dynamic === true), 'incomplete staging Wind100 selector');
   assert.match(value.catalogId ?? '', WIND100_CATALOG, 'invalid staging Wind100 catalog identity');
   assert.match(value.runId ?? '', /^\d{10}$/, 'invalid staging Wind100 run identity');
   const runIso = `${value.runId.slice(0, 4)}-${value.runId.slice(4, 6)}-${value.runId.slice(6, 8)}T${value.runId.slice(8)}:00:00.000Z`;
@@ -105,40 +109,60 @@ export function qualifyWind100Response(result, value, now = Date.now()) {
   return payload;
 }
 
+export function qualifyWind100Discovery(result, value, now = Date.now()) {
+  const selected = validateWind100(value);
+  assert.ok(selected.dynamic === true && result?.status === 200 && result.body instanceof Uint8Array
+    && result.body.byteLength <= 4096 && result.headers?.get('Cache-Control') === 'no-store',
+  'staging Wind100 discovery refused');
+  const payload = JSON.parse(Buffer.from(result.body).toString('utf8'));
+  assert.ok(payload?.schemaVersion === 1 && payload.kind === 'staging-native-wind100-selector'
+    && payload.catalogId === selected.catalogId && payload.runId === selected.runId
+    && payload.selectionSha256 === selected.selectionSha256, 'staging Wind100 discovery identity differs');
+  const initializedAt = Date.parse(wind100RunIso(selected.runId));
+  assert.ok(Date.parse(payload.initializedAt) === initializedAt
+    && Date.parse(payload.freshUntil) === initializedAt + WIND100_FRESHNESS_MS
+    && Date.parse(payload.freshUntil) - now >= WIND100_MINIMUM_FORECAST_LEASE_MS,
+  'staging Wind100 discovery lease differs');
+  return payload;
+}
+
 export function wind100Approval(env) {
   for (const key of Object.keys(env)) {
     if (key.startsWith('STAGING_WIND100_READER_')) assert.ok(WIND100_APPROVAL_NAMES.includes(key), 'unknown staging Wind100 approval');
   }
   const enabled = env.STAGING_WIND100_READER_ENABLED ?? '';
+  const dynamic = env.STAGING_WIND100_READER_DYNAMIC ?? '';
+  assert.ok(dynamic === '' || dynamic === 'true', 'staging Wind100 dynamic approval must be true or empty');
   assert.ok(typeof enabled === 'string', 'invalid staging Wind100 approval');
   const values = [env.STAGING_WIND100_READER_CATALOG_ID ?? '', env.STAGING_WIND100_READER_RUN_ID ?? '',
     env.STAGING_WIND100_READER_SELECTION_SHA256 ?? ''];
   if (enabled === '') {
-    assert.ok(values.every(value => value === ''), 'staging Wind100 approval must be empty while disabled');
+    assert.ok(dynamic === '' && values.every(value => value === ''), 'staging Wind100 approval must be empty while disabled');
     return null;
   }
   assert.ok(enabled === 'true', 'staging Wind100 reader approval must be exactly true');
-  return validateWind100({ catalogId: values[0], runId: values[1], selectionSha256: values[2] });
+  return validateWind100({ catalogId: values[0], runId: values[1], selectionSha256: values[2], ...(dynamic === 'true' ? { dynamic: true } : {}) });
 }
 
 const wind100BindingRows = value => {
   const selected = validateWind100(value);
-  return WIND100_BINDING_NAMES.map(name => ({ name, type: 'plain_text', text: {
+  return [...WIND100_BINDING_NAMES.map(name => ({ name, type: 'plain_text', text: {
     STAGING_WIND100_CATALOG_ID: selected.catalogId,
     STAGING_WIND100_RUN_ID: selected.runId,
     STAGING_WIND100_SELECTION_SHA256: selected.selectionSha256,
-  }[name] }));
+  }[name] })), ...(selected.dynamic ? [{ name: WIND100_DYNAMIC_BINDING, type: 'plain_text', text: '1' }] : [])];
 };
 
 function validateLiveWind100(bindings) {
   const rows = bindings.filter(binding => binding.name.startsWith('STAGING_WIND100_'));
-  assert.ok(rows.every(binding => WIND100_BINDING_NAMES.includes(binding.name)), 'unknown staging Wind100 binding');
+  assert.ok(rows.every(binding => WIND100_ALL_BINDING_NAMES.includes(binding.name)), 'unknown staging Wind100 binding');
   if (rows.length === 0) return null;
-  assert.ok(rows.length === WIND100_BINDING_NAMES.length && rows.every(binding => binding.type === 'plain_text'),
+  const dynamic = rows.find(binding => binding.name === WIND100_DYNAMIC_BINDING);
+  assert.ok((!dynamic || dynamic.text === '1') && rows.length === WIND100_BINDING_NAMES.length + (dynamic ? 1 : 0) && rows.every(binding => binding.type === 'plain_text'),
     'staging Wind100 binding tuple is incomplete');
   const values = Object.fromEntries(rows.map(binding => [binding.name, binding.text]));
   return validateWind100({ catalogId: values.STAGING_WIND100_CATALOG_ID, runId: values.STAGING_WIND100_RUN_ID,
-    selectionSha256: values.STAGING_WIND100_SELECTION_SHA256 });
+    selectionSha256: values.STAGING_WIND100_SELECTION_SHA256, ...(dynamic ? { dynamic: true } : {}) });
 }
 
 export function readerGate(env, action) {
@@ -190,12 +214,12 @@ export function annotations(receipt) {
 }
 export function candidateBindings(receipt) {
   if (!receipt.wind100) return receipt.before.settings.bindings;
-  const kept = receipt.before.settings.bindings.filter(binding => !WIND100_BINDING_NAMES.includes(binding.name));
+  const kept = receipt.before.settings.bindings.filter(binding => !WIND100_ALL_BINDING_NAMES.includes(binding.name));
   return normalizedBindings([...kept, ...wind100BindingRows(receipt.wind100)]);
 }
 export function uploadMetadata(receipt) {
   const before = receipt.before.settings;
-  const replacements = new Set(receipt.wind100 ? WIND100_BINDING_NAMES : []);
+  const replacements = new Set(receipt.wind100 ? WIND100_ALL_BINDING_NAMES : []);
   const metadata = { main_module: 'stagingReader.mjs', compatibility_date: before.compatibility_date,
     compatibility_flags: before.compatibility_flags,
     bindings: [
@@ -339,6 +363,12 @@ export function transport(token, fetchImpl = fetch, wind100TimeoutMs = WIND100_P
       assert.ok(['/api/platform/health', '/api/platform/data-health', '/api/platform/auth/me', '/data/ecmwf/index.json'].includes(path), 'public probe path refused');
       return request(ORIGIN + path, { headers: { Origin: ORIGIN } });
     },
+    wind100Discovery(value) {
+      const selected = validateWind100(value);
+      assert.ok(selected.dynamic === true, 'dynamic discovery approval required');
+      return request(ORIGIN + `/api/platform/staging-wind100/current?run=${selected.runId}`,
+        { headers: { Accept: 'application/json', Origin: ORIGIN } }, wind100TimeoutMs);
+    },
     wind100Get(value) {
       return request(ORIGIN + wind100ProbePath(value), { headers: { Accept: 'application/json', Origin: ORIGIN } }, wind100TimeoutMs);
     },
@@ -372,7 +402,10 @@ export function operations(io) {
       assert.ok(me.authenticated === false && me.user === null && me.billingMode === 'enabled', 'anonymous account policy changed');
       const weather = await read('/data/ecmwf/index.json'); assert.ok(weather && typeof weather === 'object' && Object.keys(weather).length > 0, 'weather index missing');
     },
-    async probeWind100(value) { qualifyWind100Response(await io.wind100Get(value), value); },
+    async probeWind100(value) {
+      if (value.dynamic === true) qualifyWind100Discovery(await io.wind100Discovery(value), value);
+      qualifyWind100Response(await io.wind100Get(value), value);
+    },
     pause: ms => new Promise(done => setTimeout(done, ms)),
   };
 }

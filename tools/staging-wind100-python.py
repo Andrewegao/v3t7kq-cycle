@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 ALLOWED = {
+    "data/augment_ecmwf_wind100.py",
     "data/fetch.py",
     "data/fetch_ecmwf.py",
     "data/build_point_series.py",
@@ -19,6 +20,7 @@ LOCAL_MODULES = {
     "bake_model_inputs",
     "build_bricks",
     "build_point_series",
+    "fetch_ecmwf",
     "health_snapshot",
     "hrrr_point",
     "native_wind100",

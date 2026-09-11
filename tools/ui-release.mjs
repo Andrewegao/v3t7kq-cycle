@@ -283,6 +283,7 @@ export function receiptVerificationEnvironment(profile,env=process.env){
     ATMOS_STAGING_RELEASE_ROSTER:core?'1':'0',ATMOS_STAGING_ACCOUNT_PROFILE:profile.account?'staging-account-v1':'',
     VITE_PRODUCT:'lab',VITE_APP:'lab',VITE_PLATFORM_ACCOUNT:profile.account?'1':'0',
     VITE_PLATFORM_DATA_AUTH:profile.account?'public':'',VITE_STAGING_WIND100:wind100?'1':'',
+    VITE_STAGING_WIND100_DYNAMIC:wind100?.dynamic===true?'1':'',
     VITE_STAGING_WIND100_CATALOG_ID:wind100?.catalogId??'',VITE_STAGING_WIND100_RUN_ID:wind100?.runId??'',
     VITE_STAGING_WIND100_SELECTION_SHA256:wind100?.selectionSha256??''};
 }
@@ -303,7 +304,7 @@ export function publicBuildEnvironment(profile,selection,env=process.env) {
     ...(profile.account?{VITE_PLATFORM_DATA_AUTH:'public'}:{}),
     ATMOS_STAGING_RELEASE_ROSTER:core?'1':'0',VITE_MODEL_EXPANSION_QUALIFICATION:profile.stagingOnly?'1':'0',VITE_MODEL_LOCAL_BASE:'',
     VITE_STAGING_MODEL_ADMISSION:selected?'1':'0',VITE_STAGING_MODEL_SELECTION_SHA256:profile.modelSelectionSha256??''};
-  for(const key of ['STAGING_WIND100_UI_ENABLED','STAGING_WIND100_UI_CATALOG_ID','STAGING_WIND100_UI_RUN_ID','STAGING_WIND100_UI_SELECTION_SHA256'])delete result[key];
+  for(const key of ['STAGING_WIND100_UI_ENABLED','STAGING_WIND100_UI_CATALOG_ID','STAGING_WIND100_UI_RUN_ID','STAGING_WIND100_UI_SELECTION_SHA256','STAGING_WIND100_UI_DYNAMIC'])delete result[key];
   return result;
 }
 export function validateWind100BuildReceipt(profile,receipt,env=process.env){

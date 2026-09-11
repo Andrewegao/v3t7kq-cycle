@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createHash, createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
-import {BASELINE_PROFILE,validateProfile,validateCandidateSelection,validateCandidateTcSelection,requireProductionProfile,staticCompressionProfile,tcGuidanceProfile,validateWind100Pin} from './ui-staging-models.mjs';
+import {BASELINE_PROFILE,validateProfile,validateCandidateSelection,validateCandidateTcSelection,requireProductionProfile,staticCompressionProfile,tcGuidanceProfile,validateWind100BuildProfile} from './ui-staging-models.mjs';
 import {validateCompressionFiles} from './ui-static-compression.mjs';
 
 export const CONTROL_SHA = '25c402db5149daa018e349a34a4beeba1f2dca45';
@@ -165,7 +165,7 @@ export function validateCandidate(candidate) {
   const receipt = JSON.parse(Buffer.from(candidate.files.find(f => f.path === 'health/release.json').base64, 'base64'));
   if(candidate.profile.account){
     const expected={product:'lab',platformAccount:'1',platformDataAuth:'public'};
-    if(Object.hasOwn(receipt.buildProfile??{},'wind100'))expected.wind100=validateWind100Pin(receipt.buildProfile.wind100);
+    if(Object.hasOwn(receipt.buildProfile??{},'wind100'))expected.wind100=validateWind100BuildProfile(receipt.buildProfile.wind100);
     assert.deepEqual(receipt.buildProfile,expected,'account staging build receipt differs from approved profile');
   }else if(receipt.buildProfile!==undefined){
     assert.equal(receipt.buildProfile?.wind100,undefined,'staging Wind100 receipt cannot enter another profile');

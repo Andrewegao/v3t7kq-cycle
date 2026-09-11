@@ -1,6 +1,14 @@
 {
   "schemaVersion": 3,
-  "sourceSha": "14f79bad3e2c9b78a34c2486563ffff18d06eb31",
+  "sourceSha": "9174329db6ca8527569e67f14ef70406dedefb69",
+  "coreSourceSha": "d8cd45d123f60c30c413c14d46f68113e37468b7",
+  "recurringPublicationMode": "point-only-recurring-v1",
+  "recurringStorage": {
+    "componentObjectPrefix": "components/point-ecmwf/stage-wind100-recurring-point-ecmwf-",
+    "catalogObjectPrefix": "catalogs/snapshots/stage-wind100-recurring-",
+    "selectionObjectPrefix": "staging-candidates/wind100/stage-wind100-recurring-",
+    "maximumComponentPrefixObjects": 50000
+  },
   "model": "ecmwf",
   "hours": 336,
   "leadCount": 81,
@@ -44,6 +52,7 @@
     "sha256": "ada202170d4e893a643c51e1a29398155b6447db4c438c22132f0e7074df0596"
   },
   "sourceClosure": {
+    "data/augment_ecmwf_wind100.py": "fd3c776ceaeb1db671b34a4b2589ecd1185c7919e3d76fa106a554e8e5346e64",
     "data/bake_model_inputs.py": "08b175d170dd0b13a78086dd06f931b64572a009ea4729249570b497675d0849",
     "data/build_bricks.py": "731254c04ccee40fd96021360686c64bcf56e5fcf5a415647a539f38b9214432",
     "data/build_native_wind_bundles.py": "a23b7385cad9d2c4da2b64fd2b8955cf7fc0f02adf493f7fb128d4ed771e7a07",
