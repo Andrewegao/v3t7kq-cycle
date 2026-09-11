@@ -34,6 +34,13 @@ export const digest = value => hash(canonical(value));
 const same = (a, b, message) => assert.ok(canonical(a) === canonical(b), message);
 const sorted = rows => [...rows].sort((a, b) => canonical(a).localeCompare(canonical(b)));
 const validKeys = (value, names, message) => assert.ok(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(k => names.includes(k)), message);
+const wind100Policy = JSON.parse(readFileSync(new URL('./staging-wind100-policy.json', import.meta.url), 'utf8'));
+assert.deepEqual({ schemaVersion: wind100Policy.schemaVersion, model: wind100Policy.model,
+  freshnessHours: wind100Policy.freshnessHours, minimumForecastLeaseHours: wind100Policy.minimumForecastLeaseHours },
+{ schemaVersion: 3, model: 'ecmwf', freshnessHours: 30, minimumForecastLeaseHours: 6 },
+'staging Wind100 freshness policy differs');
+export const WIND100_FRESHNESS_MS = wind100Policy.freshnessHours * 60 * 60_000;
+export const WIND100_MINIMUM_FORECAST_LEASE_MS = wind100Policy.minimumForecastLeaseHours * 60 * 60_000;
 
 function validateWind100(value) {
   validKeys(value, ['catalogId', 'runId', 'selectionSha256'], 'invalid staging Wind100 selector');
@@ -73,7 +80,8 @@ export function qualifyWind100Response(result, value, now = Date.now()) {
     payload.releaseId === selected.catalogId && [initializedAt, initializedAt.replace('.000Z', 'Z')].includes(payload.initializedAt) &&
     payload.source === WIND100_SOURCE && payload.runSelection === undefined, 'staging Wind100 identity differs');
   const freshUntil = Date.parse(payload.freshUntil);
-  assert.ok(Number.isFinite(freshUntil) && freshUntil > now, 'staging Wind100 candidate is not fresh');
+  assert.ok(Number.isFinite(freshUntil) && freshUntil === Date.parse(initializedAt) + WIND100_FRESHNESS_MS &&
+    freshUntil - now >= WIND100_MINIMUM_FORECAST_LEASE_MS, 'staging Wind100 freshness contract differs');
   assert.ok(payload.quality === 'complete' && Array.isArray(payload.missingFields) && payload.missingFields.length === 0 &&
     Array.isArray(payload.optionalMissingFields) && payload.optionalMissingFields.length === 0,
   'staging Wind100 response is incomplete');

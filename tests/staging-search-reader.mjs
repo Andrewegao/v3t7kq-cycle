@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 import { readerGate, settings, runtime, uploadMetadata, assertVersion, assertBoundary, allowedApi, transport,
   preflight, rollout, recover, digest, annotations, wind100Approval, candidateBindings, assertStagingRoutes,
   wind100ProbePath, qualifyWind100Response, ACCOUNT, WORKER, SCRIPT, ROUTES, EXCLUSIVE,
-  WIND100_BINDING_NAMES, WIND100_PROBE_TIMEOUT_MS } from '../tools/staging-search-reader.mjs';
+  WIND100_BINDING_NAMES, WIND100_PROBE_TIMEOUT_MS, WIND100_FRESHNESS_MS,
+  WIND100_MINIMUM_FORECAST_LEASE_MS } from '../tools/staging-search-reader.mjs';
 const OLD = '11111111-1111-1111-1111-111111111111', NEW = '22222222-2222-2222-2222-222222222222', FOREIGN = '33333333-3333-3333-3333-333333333333';
 const sha = 'a'.repeat(40), source = { sha, sha256: 'c'.repeat(64), bytes: Buffer.from('source') };
 const WIND100 = { catalogId: 'stage-wind100-34547542747-1', runId: '2026091100', selectionSha256: 'd'.repeat(64) };
@@ -66,7 +67,7 @@ function memory({ existingWind100 = null } = {}) {
 function wind100Payload(delta = {}) {
   return { schemaVersion: 1, model: 'ecmwf', runId: WIND100.runId, releaseId: WIND100.catalogId,
     initializedAt: '2026-09-11T00:00:00Z', generatedAt: '2026-09-11T00:10:00Z',
-    freshUntil: '2026-09-12T00:00:00.000Z', source: WIND100_SOURCE, nativeCadenceSeconds: 10_800,
+    freshUntil: '2026-09-12T06:00:00.000Z', source: WIND100_SOURCE, nativeCadenceSeconds: 10_800,
     resolutionDegrees: 0.25, quality: 'complete', missingFields: [], optionalMissingFields: [],
     requestedPoint: { latitude: 32.06, longitude: 118.8 },
     window: { start: '2026-09-11T00:00:00.000Z', end: '2026-09-11T06:00:00.000Z' },
@@ -168,6 +169,10 @@ test('candidate qualification uses one exact bounded staging point request and v
   assert.doesNotThrow(() => qualifyWind100Response(wind100Result(), WIND100, WIND100_NOW));
   assert.doesNotThrow(() => qualifyWind100Response(wind100Result({ ...wind100Payload(),
     initializedAt: '2026-09-11T00:00:00.000Z' }), WIND100, WIND100_NOW));
+  assert.doesNotThrow(() => qualifyWind100Response(wind100Result(), WIND100,
+    Date.parse(wind100Payload().freshUntil) - WIND100_MINIMUM_FORECAST_LEASE_MS));
+  assert.equal(WIND100_FRESHNESS_MS, 30 * 60 * 60_000);
+  assert.equal(WIND100_MINIMUM_FORECAST_LEASE_MS, 6 * 60 * 60_000);
   let observed;
   const io = transport('PRIVATE_TOKEN', async (url, init) => {
     observed = { url, init };
@@ -193,6 +198,7 @@ test('candidate qualification rejects HTTP, provenance, identity, freshness, com
     wind100Result({ ...wind100Payload(), source: 'NOAA GFS direct public-data GRIB' }),
     wind100Result({ ...wind100Payload(), freshUntil: 'not-a-time' }),
     wind100Result({ ...wind100Payload(), freshUntil: new Date(WIND100_NOW).toISOString() }),
+    wind100Result({ ...wind100Payload(), freshUntil: '2026-09-12T06:00:00.001Z' }),
     wind100Result({ ...wind100Payload(), quality: 'partial' }),
     wind100Result({ ...wind100Payload(), missingFields: ['wind_speed'] }),
     wind100Result({ ...wind100Payload(), optionalMissingFields: ['wind_speed_100m'] }),
@@ -210,6 +216,8 @@ test('candidate qualification rejects HTTP, provenance, identity, freshness, com
         samples: [{ validTime: '2026-09-11T00:00:00.000Z', value: 8 }, { validTime: '2026-09-11T03:00:00.000Z', value: -1 }] } } }),
   ];
   for (const result of invalid) assert.throws(() => qualifyWind100Response(result, WIND100, WIND100_NOW));
+  assert.throws(() => qualifyWind100Response(wind100Result(), WIND100,
+    Date.parse(wind100Payload().freshUntil) - WIND100_MINIMUM_FORECAST_LEASE_MS + 1));
 });
 test('candidate endpoint failure rolls back exact prior version and recovery probes only ordinary health', async () => {
   for (const [failure, existingWind100] of [['response', null], ['series', null], ['response', OLD_WIND100], ['series', OLD_WIND100]]) {
