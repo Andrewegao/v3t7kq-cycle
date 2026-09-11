@@ -1,0 +1,167 @@
+name: WeatherX isolated staging native 100m wind
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type native-wind100-staging-only
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-staging-native-wind100
+  cancel-in-progress: false
+jobs:
+  wind100:
+    environment:
+      name: data-staging
+      url: https://staging.weatherx.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 210
+    env:
+      ATMOS_SHA: ${{ vars.STAGING_WIND100_ATMOS_SHA }}
+      MODEL_ID: ecmwf
+      WIND100_CONFIRMATION: ${{ inputs.confirmation }}
+      STAGING_DATA_ISOLATION_APPROVED: ${{ vars.STAGING_DATA_ISOLATION_APPROVED }}
+      STAGING_WIND100_ENABLED: ${{ vars.STAGING_WIND100_ENABLED }}
+      STAGING_WIND100_CONTROLLER_SHA256: ${{ vars.STAGING_WIND100_CONTROLLER_SHA256 }}
+      STAGING_R2_ACCOUNT_ID: ${{ vars.STAGING_R2_ACCOUNT_ID }}
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with: { python-version: '3.12' }
+      - name: Refuse an unapproved event, source, controller, or environment
+        run: node cycle/tools/staging-wind100.mjs gate
+      - name: Checkout the exact reviewed native 100m producer
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: ${{ env.ATMOS_SHA }}
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: atmos-source
+          persist-credentials: false
+      - name: Checkout an independent clean validator and publisher copy
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: ${{ env.ATMOS_SHA }}
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: atmos
+          persist-credentials: false
+      - name: Verify source closure and provision only hash-locked dependencies
+        run: |
+          set -euo pipefail
+          node cycle/tools/staging-wind100.mjs source "$GITHUB_WORKSPACE/atmos-source" > "$RUNNER_TEMP/weatherx-wind100-source.json"
+          test "$(git -C atmos rev-parse HEAD)" = "$ATMOS_SHA"
+          git -C atmos diff --exit-code HEAD
+          python -m venv atmos/data/.venv
+          atmos/data/.venv/bin/pip install --disable-pip-version-check --require-hashes --only-binary=:all: \
+            -r cycle/tools/staging-wind100-requirements.txt
+          npm ci --ignore-scripts --prefix cycle/staging-controller
+          archive="$RUNNER_TEMP/rclone-v1.75.0-linux-amd64.zip"
+          curl --fail --silent --show-error --location \
+            https://github.com/rclone/rclone/releases/download/v1.75.0/rclone-v1.75.0-linux-amd64.zip --output "$archive"
+          printf '%s  %s\n' aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa "$archive" | sha256sum --check --status
+          unzip -q "$archive" -d "$RUNNER_TEMP"
+          sudo install -m 0755 "$RUNNER_TEMP/rclone-v1.75.0-linux-amd64/rclone" /usr/local/bin/rclone
+          rclone version | head -1 | grep -Fx 'rclone v1.75.0'
+      - name: Hydrate only the isolated staging ECMWF baseline
+        working-directory: atmos-source
+        env:
+          COMPONENT_ID: ecmwf
+          CATALOG_R2_REMOTE: weatherx:weatherx-data-staging
+          COMPONENT_R2_REMOTE: weatherx:weatherx-components-staging
+          ALLOW_EMPTY_CATALOG: '0'
+          ALLOW_MISSING_COMPONENT: '0'
+          HYDRATE_MISSING_FROM_RELEASE: '0'
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
+          STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
+          STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://${{ env.STAGING_R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+        run: |
+          set -euo pipefail
+          node "$GITHUB_WORKSPACE/cycle/tools/staging-wind100.mjs" hydrate-gate
+          GITHUB_ENV="$RUNNER_TEMP/wind100-baseline.env" bash ops/platform/hydrate-r2-component.sh
+      - name: Collect and seal exact ECMWF core inputs without storage credentials
+        working-directory: atmos-source
+        run: |
+          set -euo pipefail
+          "$GITHUB_WORKSPACE/atmos/data/.venv/bin/python" -I "$GITHUB_WORKSPACE/cycle/tools/staging-wind100-python.py" \
+            "$GITHUB_WORKSPACE/atmos-source" data/fetch_ecmwf.py --hours 336 --keep 2 \
+            --float-out "$GITHUB_WORKSPACE/atmos-source/data/.ecmwf-float" \
+            --point-out "$GITHUB_WORKSPACE/atmos-source/data/.ecmwf-point" > "$RUNNER_TEMP/weatherx-wind100-provider.log" 2>&1
+          "$GITHUB_WORKSPACE/atmos/data/.venv/bin/python" -I "$GITHUB_WORKSPACE/atmos/ops/core_model_artifact.py" \
+            seal --model ecmwf --source-sha "$ATMOS_SHA" --root "$GITHUB_WORKSPACE/atmos-source" \
+            --output "$RUNNER_TEMP/weatherx-wind100-core" \
+            --run-id "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          sha256sum "$RUNNER_TEMP/weatherx-wind100-core/ecmwf/manifest.json" | awk '{print $1}' > "$RUNNER_TEMP/weatherx-wind100-core.sha256"
+      - name: Reinstall sealed inputs and run the existing map and point gates
+        working-directory: atmos
+        env: { MODEL: ecmwf, PUBLISH: '0', LIVE: https://staging.weatherx.org }
+        run: |
+          set -euo pipefail
+          CORE_MODEL_PACKS_DIR="$RUNNER_TEMP/weatherx-wind100-core" \
+          CORE_INPUT_SOURCE_SHA="$ATMOS_SHA" CORE_INPUT_RUN_ID="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+          CORE_INPUT_MANIFEST_SHA256="$(cat "$RUNNER_TEMP/weatherx-wind100-core.sha256")" bash ops/bake-model-component.sh
+          data/.venv/bin/python -I ops/platform/validate-model-component.py ecmwf app/public/data/ecmwf \
+            --live https://staging.weatherx.org > "$RUNNER_TEMP/weatherx-wind100-map-proof.json"
+          data/.venv/bin/python -I "$GITHUB_WORKSPACE/cycle/tools/staging-wind100-python.py" \
+            "$GITHUB_WORKSPACE/atmos" data/build_point_series.py --input ecmwf=data/.ecmwf-point \
+            --out "$RUNNER_TEMP/weatherx-wind100-point-series"
+          node ops/platform/validate-point-series.mjs "$RUNNER_TEMP/weatherx-wind100-point-series" \
+            > "$RUNNER_TEMP/weatherx-wind100-point-proof.json"
+      - name: Qualify every map identity and native 100m point byte without credentials
+        run: |
+          node cycle/tools/staging-wind100.mjs qualify "$GITHUB_WORKSPACE/atmos" \
+            weatherx-wind100-source.json "$GITHUB_WORKSPACE/atmos/data/.ecmwf-point" \
+            "$RUNNER_TEMP/weatherx-wind100-point-series" weatherx-wind100-point-proof.json \
+            weatherx-wind100-map-proof.json "$RUNNER_TEMP/weatherx-wind100-core/ecmwf" \
+            > "$RUNNER_TEMP/weatherx-wind100-qualification-output.json"
+      - name: Upload immutable staging components without catalog promotion
+        working-directory: atmos
+        env:
+          STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
+          STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://${{ env.STAGING_R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+          COMPONENT_R2_REMOTE: weatherx:weatherx-components-staging
+          CATALOG_ENDPOINT: https://invalid.invalid
+          CATALOG_PROMOTION_KEY: unused-promote-zero
+          PROMOTE: '0'
+        run: |
+          set -euo pipefail
+          node "$GITHUB_WORKSPACE/cycle/tools/staging-wind100.mjs" component-gate
+          initialized="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1])).initializedAt)' "$RUNNER_TEMP/staging-wind100/qualification.json")"
+          SOURCE_DIR=app/public/data/ecmwf COMPONENT_ID=ecmwf ARTIFACT_ID="stage-wind100-ecmwf-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            GENERATION_TIME="$initialized" MOUNT=data/ecmwf/ \
+            COMPONENT_QUALITY_CHECKS=coverage,freshness,live_superset,horizon,cadence,grid,referenced_bytes,native_viewport \
+            COMPONENT_RECEIPT_FILE="$RUNNER_TEMP/weatherx-wind100-map-component.json" bash ops/platform/publish-r2-component.sh
+          node -e 'const fs=require("node:fs"),r=JSON.parse(fs.readFileSync(process.argv[1]));fs.writeFileSync(process.argv[3],JSON.stringify({schemaVersion:1,modelId:process.argv[2],descriptor:r.models[process.argv[2]]})+"\n")' \
+            "$RUNNER_TEMP/weatherx-wind100-point-proof.json" ecmwf "$RUNNER_TEMP/weatherx-wind100-point-descriptor.json"
+          SOURCE_DIR="$RUNNER_TEMP/weatherx-wind100-point-series/v2/ecmwf" COMPONENT_ID=point-ecmwf \
+            ARTIFACT_ID="stage-wind100-point-ecmwf-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" GENERATION_TIME="$initialized" \
+            MOUNT=point-series/v2/ecmwf/ COMPONENT_QUALITY_CHECKS=point_series \
+            POINT_SERIES_COMPONENT_DESCRIPTOR_FILE="$RUNNER_TEMP/weatherx-wind100-point-descriptor.json" \
+            COMPONENT_RECEIPT_FILE="$RUNNER_TEMP/weatherx-wind100-point-component.json" bash ops/platform/publish-r2-component.sh
+      - name: Prepare only an isolated non-serving staging snapshot and selection
+        env:
+          STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
+          STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
+        run: |
+          node cycle/tools/staging-wind100.mjs publish staging-wind100/qualification.json \
+            weatherx-wind100-map-component.json weatherx-wind100-point-component.json "$GITHUB_WORKSPACE/atmos"
+# Raw provider logs, stages, packs and qualifications never leave the protected runner.
+# No step addresses a production bucket, serving pointer, shared-read pin, deployment API or general catalog mutation.
