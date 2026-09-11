@@ -38,7 +38,9 @@ jobs:
     needs: core-ecmwf
     if: ${{ needs.core-ecmwf.result == 'success' && (inputs.staging_wind100_only != true || (github.event_name == 'workflow_dispatch' && inputs.model == 'ecmwf' && inputs.recovery_run_id == '')) }}
     uses: ./.github/workflows/staging-wind100-recurring.yml
-    secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
+    secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}",
+      STAGING_R2_WRITE_ACCESS_KEY_ID: "${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}",
+      STAGING_R2_WRITE_SECRET_ACCESS_KEY: "${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}" }
   core-gfs:
     name: core (gfs)
     uses: ./.github/workflows/collect-core-model.yml

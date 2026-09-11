@@ -12,4 +12,6 @@ jobs:
     if: ${{ github.ref == 'refs/heads/main' }}
     uses: ./.github/workflows/staging-wind100-recurring.yml
     with: { check_only: true }
-    secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
+    secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}",
+      STAGING_R2_WRITE_ACCESS_KEY_ID: "${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}",
+      STAGING_R2_WRITE_SECRET_ACCESS_KEY: "${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}" }
