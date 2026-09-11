@@ -196,6 +196,18 @@ test('recurring workflow consumes a core artifact, augments two fields, and uplo
   assert.match(source, /STAGING_R2_WRITE_SECRET_ACCESS_KEY:\n\s+required: false/);
   assert.ok(code.indexOf('Check the protected staging opt-in') < code.indexOf('actions/checkout@'));
   assert.match(code, /current-model-artifact\.py/); assert.match(code, /augment_ecmwf_wind100\.py/);
+  const setupPython = code.indexOf('actions/setup-python@');
+  const authenticate = code.indexOf("Authenticate this bake's ordinary sealed ECMWF artifact");
+  const provision = code.indexOf('Provision only hash-locked qualification and staging transport dependencies');
+  assert.ok(setupPython >= 0 && setupPython < authenticate,
+    'artifact authentication must run after the standard-library Python runtime is selected');
+  assert.ok(authenticate < provision,
+    'artifact authentication must precede dependency installs that dirty the controller checkout');
+  assert.ok(authenticate < code.indexOf('pip install') && authenticate < code.indexOf('npm ci --ignore-scripts'),
+    'no third-party Python or Node dependency may be required before artifact authentication');
+  assert.match(source,
+    /Provision only hash-locked qualification and staging transport dependencies\n\s+if: \$\{\{ steps\.handoff\.outputs\.status == 'ready' \}\}/,
+    'withheld artifacts must skip every third-party dependency install');
   assert.match(code, /WIND100_INPUT_SHA256/); assert.match(code, /staging-wind100\.mjs preflight/);
   assert.ok(code.indexOf('staging-wind100.mjs preflight') < code.indexOf('augment_ecmwf_wind100.py'));
   assert.match(code, /SOURCE_DIR=.*weatherx-wind100-point-series/);
