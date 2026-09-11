@@ -35,6 +35,7 @@ const CONTROLLER_FILES = [
   'tools/staging-wind100.mjs',
   'tools/staging-wind100-python.py',
   'tools/staging-wind100-requirements.txt',
+  'tests/staging-wind100-core-flow.py',
 ];
 const FORBIDDEN = [
   'R2_PRODUCTION_ACCESS_KEY_ID', 'R2_PRODUCTION_SECRET_ACCESS_KEY',

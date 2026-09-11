@@ -565,6 +565,20 @@ test('workflow is manual ECMWF-only, sealed, hash-locked and cannot promote or d
   assert.match(code, /--require-hashes --only-binary=:all:/);
   assert.match(code, /core_model_artifact\.py/); assert.match(code, /seal --model ecmwf/);
   assert.match(code, /CORE_MODEL_PACKS_DIR/);
+  assert.match(code, /staging-wind100-core-flow\.py/);
+  const hydrate = source.split('- name: Hydrate only the isolated staging ECMWF baseline')[1]
+    .split('- name: Collect and seal exact ECMWF core inputs')[0];
+  const collect = source.split('- name: Collect and seal exact ECMWF core inputs')[1]
+    .split('- name: Reinstall sealed inputs')[0];
+  const reinstall = source.split('- name: Reinstall sealed inputs')[1]
+    .split('- name: Qualify every map identity')[0];
+  assert.match(hydrate, /working-directory: atmos\b/);
+  assert.doesNotMatch(hydrate, /working-directory: atmos-source\b/);
+  assert.match(collect, /working-directory: atmos-source\b/);
+  assert.match(collect, /--root "\$GITHUB_WORKSPACE\/atmos-source"/);
+  assert.match(reinstall, /working-directory: atmos\b/);
+  assert.match(reinstall, /CORE_MODEL_PACKS_DIR/);
+  assert.doesNotMatch(code, /rm\s+-r|find\s+[^\n]*-delete/);
   assert.match(code, /build_point_series\.py/);
   assert.match(code, /staging-wind100-python\.py/);
   assert.doesNotMatch(code, /python -I data\/(?:fetch|build_point_series)/);
