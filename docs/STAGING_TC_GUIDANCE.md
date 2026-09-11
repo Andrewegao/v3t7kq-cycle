@@ -50,14 +50,12 @@ is older than the 18-hour TC window. A later selection requires new reviewed byt
 a new content digest, and a Cycle commit rather than a mutable workflow input.
 
 The workflow checks out controller commit
-`0b5ccc8335b1147b13f4c525a126b82bf026ed88`, the reviewed TC build guard and
+`f23664837274fc06a4a94b9bb0fc8d7fa1ee8c58`, the merged, CI-qualified TC build guard and
 browser-harness lineage. The candidate source remains an explicit 40-character
 input and must equal both its checkout HEAD and `origin/master`; the controller
-pin must also be its ancestor. Atmos master `4ec0b8baa1d33ca56d50e5e9797eca74293bd19b`
-did not contain this lineage when the profile was prepared, so it is correctly
-ineligible. Local integration `d1ad27cbb268247aef369b0eb806ab5e94ada263`
-contains the TC lineage and current master changes but is not called an
-Actions-qualified artifact while it remains unmerged.
+pin must also be its ancestor. The same exact merged commit is the first eligible
+current-master source; a later master must retain this ancestry and still match
+the explicit workflow input before any build begins.
 
 A local build-only check of `d1ad27cbb268247aef369b0eb806ab5e94ada263`
 emitted exactly 5,008 candidate files, which correctly exceeds the unchanged

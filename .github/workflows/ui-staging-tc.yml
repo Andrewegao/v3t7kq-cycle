@@ -46,7 +46,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          ref: 0b5ccc8335b1147b13f4c525a126b82bf026ed88
+          ref: f23664837274fc06a4a94b9bb0fc8d7fa1ee8c58
           ssh-key: ${{ secrets.ATMOS_READONLY_KEY }}
           persist-credentials: false
           path: control
@@ -68,7 +68,7 @@ jobs:
           [[ "$ATMOS_SHA" =~ ^[a-f0-9]{40}$ ]]
           test "$(git -C atmos rev-parse HEAD)" = "$ATMOS_SHA"
           test "$ATMOS_SHA" = "$(git -C atmos rev-parse origin/master)"
-          git -C atmos merge-base --is-ancestor 0b5ccc8335b1147b13f4c525a126b82bf026ed88 HEAD
+          git -C atmos merge-base --is-ancestor f23664837274fc06a4a94b9bb0fc8d7fa1ee8c58 HEAD
           node cycle/tools/ui-release.mjs build-gate
       - name: install locked build and browser dependencies
         run: |
@@ -97,7 +97,7 @@ jobs:
           UI_TC_FIXTURE_ROOT: ${{ github.workspace }}/cycle/staging-tc-selections/4f39b84b86bcf3e90bb5e54f8296f7231ddfc74363c5e2830a7324a5327a21c7
           UI_TC_PROOF_OUTPUT: ${{ runner.temp }}/ui-tc-proof.json
           UI_TC_SELECTION_SHA256: 4f39b84b86bcf3e90bb5e54f8296f7231ddfc74363c5e2830a7324a5327a21c7
-          UI_TC_CONTROL_SHA: 0b5ccc8335b1147b13f4c525a126b82bf026ed88
+          UI_TC_CONTROL_SHA: f23664837274fc06a4a94b9bb0fc8d7fa1ee8c58
           UI_EXPECTED_SOURCE_SHA: ${{ inputs.atmos_sha }}
         run: |
           export WEATHERX_EXPECTED_RELEASE_ID="git-${ATMOS_SHA:0:12}-run-${GITHUB_RUN_ID}"
