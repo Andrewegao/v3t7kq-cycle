@@ -3,11 +3,14 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { readerGate, settings, runtime, uploadMetadata, assertVersion, assertBoundary, allowedApi, transport,
   preflight, rollout, recover, digest, annotations, wind100Approval, candidateBindings, assertStagingRoutes,
-  ACCOUNT, WORKER, SCRIPT, ROUTES, EXCLUSIVE, WIND100_BINDING_NAMES } from '../tools/staging-search-reader.mjs';
+  wind100ProbePath, qualifyWind100Response, ACCOUNT, WORKER, SCRIPT, ROUTES, EXCLUSIVE,
+  WIND100_BINDING_NAMES, WIND100_PROBE_TIMEOUT_MS } from '../tools/staging-search-reader.mjs';
 const OLD = '11111111-1111-1111-1111-111111111111', NEW = '22222222-2222-2222-2222-222222222222', FOREIGN = '33333333-3333-3333-3333-333333333333';
 const sha = 'a'.repeat(40), source = { sha, sha256: 'c'.repeat(64), bytes: Buffer.from('source') };
 const WIND100 = { catalogId: 'stage-wind100-34547542747-1', runId: '2026091100', selectionSha256: 'd'.repeat(64) };
 const OLD_WIND100 = { catalogId: 'stage-wind100-34540000000-1', runId: '2026091012', selectionSha256: 'e'.repeat(64) };
+const WIND100_NOW = Date.parse('2026-09-11T01:00:00.000Z');
+const WIND100_SOURCE = 'ECMWF IFS 0.25 degree direct open-data GRIB';
 const env = { GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', GITHUB_REPOSITORY: 'Andrewegao/v3t7kq-cycle',
   GITHUB_REF: 'refs/heads/main', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_JOB: 'reader',
   GITHUB_WORKFLOW_REF: 'Andrewegao/v3t7kq-cycle/.github/workflows/staging-search-reader.yml@refs/heads/main',
@@ -41,6 +44,7 @@ function memory({ existingWind100 = null } = {}) {
   const calls = [], ops = {
     active: async () => active, boundary: async () => structuredClone(state), history: async () => structuredClone(history),
     version: async id => structuredClone(versions.get(id)), pause: async () => {}, probe: async () => { calls.push('probe'); },
+    probeWind100: async target => { calls.push(`wind100:${target.catalogId}`); },
     upload: async (bytes, metadata) => {
       calls.push('upload'); assert.ok(Buffer.isBuffer(bytes));
       const inherited = new Map(state.settings.bindings.map(binding => [binding.name, binding]));
@@ -58,6 +62,25 @@ function memory({ existingWind100 = null } = {}) {
     }, deploy: async id => { calls.push(`deploy:${id}`); active = id; },
   };
   return { ops, calls, versions, mutate: fn => fn({ state, history, versions }), foreign: () => { active = FOREIGN; } };
+}
+function wind100Payload(delta = {}) {
+  return { schemaVersion: 1, model: 'ecmwf', runId: WIND100.runId, releaseId: WIND100.catalogId,
+    initializedAt: '2026-09-11T00:00:00Z', generatedAt: '2026-09-11T00:10:00Z',
+    freshUntil: '2026-09-12T00:00:00.000Z', source: WIND100_SOURCE, nativeCadenceSeconds: 10_800,
+    resolutionDegrees: 0.25, quality: 'complete', missingFields: [], optionalMissingFields: [],
+    requestedPoint: { latitude: 32.06, longitude: 118.8 },
+    window: { start: '2026-09-11T00:00:00.000Z', end: '2026-09-11T06:00:00.000Z' },
+    series: {
+      wind_speed: { kind: 'instantaneous', units: 'm/s', samples: [
+        { validTime: '2026-09-11T00:00:00.000Z', value: 5 }, { validTime: '2026-09-11T03:00:00.000Z', value: 6 }] },
+      wind_speed_100m: { kind: 'instantaneous', units: 'm/s', samples: [
+        { validTime: '2026-09-11T00:00:00.000Z', value: 8 }, { validTime: '2026-09-11T03:00:00.000Z', value: 9 }] },
+    }, ...delta };
+}
+function wind100Result(payload = wind100Payload(), status = 200, headers = {}) {
+  return { status, body: Buffer.from(JSON.stringify(payload)), headers: new Headers({
+    'X-WeatherX-Data-Source': 'own', 'X-WeatherX-Catalog': WIND100.catalogId, ...headers,
+  }) };
 }
 async function ready(m, wind100 = null) {
   const r = await preflight(m.ops, source, { run: '123' }, Date.now(), wind100);
@@ -136,7 +159,81 @@ test('approved Wind100 upload replaces only the exact public tuple while inherit
     const unrelatedBefore = before.filter(binding => !WIND100_BINDING_NAMES.includes(binding.name));
     const unrelatedAfter = candidate.resources.bindings.filter(binding => !WIND100_BINDING_NAMES.includes(binding.name));
     same(unrelatedAfter, unrelatedBefore);
+    assert.equal(m.calls.filter(call => call.startsWith('wind100:')).length, 1);
   }
+});
+test('candidate qualification uses one exact bounded staging point request and validates native evidence', async () => {
+  const path = wind100ProbePath(WIND100);
+  assert.equal(path, `/api/v1/point-series/ecmwf?lat=32.06&lon=118.8&variables=wind_speed&optionalVariables=wind_speed_100m&start=2026-09-11T00%3A00%3A00.000Z&end=2026-09-11T06%3A00%3A00.000Z&run=${WIND100.runId}&catalog=${WIND100.catalogId}&selection=${WIND100.selectionSha256}`);
+  assert.doesNotThrow(() => qualifyWind100Response(wind100Result(), WIND100, WIND100_NOW));
+  assert.doesNotThrow(() => qualifyWind100Response(wind100Result({ ...wind100Payload(),
+    initializedAt: '2026-09-11T00:00:00.000Z' }), WIND100, WIND100_NOW));
+  let observed;
+  const io = transport('PRIVATE_TOKEN', async (url, init) => {
+    observed = { url, init };
+    return new Response(JSON.stringify(wind100Payload()), { status: 200, headers: {
+      'X-WeatherX-Data-Source': 'own', 'X-WeatherX-Catalog': WIND100.catalogId,
+    } });
+  });
+  const result = await io.wind100Get(WIND100);
+  qualifyWind100Response(result, WIND100, WIND100_NOW);
+  assert.equal(observed.url, `https://staging.weatherx.org${path}`);
+  assert.equal(observed.init.redirect, 'error'); assert.ok(observed.init.signal);
+  assert.equal(WIND100_PROBE_TIMEOUT_MS, 15_000);
+  assert.throws(() => io.publicGet(path));
+});
+test('candidate qualification rejects HTTP, provenance, identity, freshness, completeness and native-series failures', () => {
+  const invalid = [
+    wind100Result(wind100Payload(), 503),
+    wind100Result(wind100Payload(), 200, { 'X-WeatherX-Data-Source': 'shared' }),
+    wind100Result({ ...wind100Payload(), releaseId: OLD_WIND100.catalogId }),
+    wind100Result({ ...wind100Payload(), runId: OLD_WIND100.runId }),
+    wind100Result({ ...wind100Payload(), initializedAt: '2026-09-11T01:00:00.000Z' }),
+    wind100Result({ ...wind100Payload(), initializedAt: '2026-09-11T00:00:00+00:00' }),
+    wind100Result({ ...wind100Payload(), source: 'NOAA GFS direct public-data GRIB' }),
+    wind100Result({ ...wind100Payload(), freshUntil: 'not-a-time' }),
+    wind100Result({ ...wind100Payload(), freshUntil: new Date(WIND100_NOW).toISOString() }),
+    wind100Result({ ...wind100Payload(), quality: 'partial' }),
+    wind100Result({ ...wind100Payload(), missingFields: ['wind_speed'] }),
+    wind100Result({ ...wind100Payload(), optionalMissingFields: ['wind_speed_100m'] }),
+    wind100Result({ ...wind100Payload(), nativeCadenceSeconds: 3600 }),
+    wind100Result({ ...wind100Payload(), window: { ...wind100Payload().window, end: '2026-09-11T07:00:00.000Z' } }),
+    wind100Result({ ...wind100Payload(), requestedPoint: { latitude: 32.06, longitude: -118.8 } }),
+    wind100Result({ ...wind100Payload(), series: { wind_speed: wind100Payload().series.wind_speed } }),
+    wind100Result({ ...wind100Payload(), series: { ...wind100Payload().series,
+      wind_speed_100m: { kind: 'instantaneous', units: 'm/s', samples: [{ validTime: '2026-09-11T00:00:00.000Z', value: null }] } } }),
+    wind100Result({ ...wind100Payload(), series: { ...wind100Payload().series,
+      wind_speed_100m: { ...wind100Payload().series.wind_speed_100m,
+        samples: [{ validTime: '2026-09-11T00:00:00.000Z', value: 8 }, { validTime: '2026-09-11T00:00:00.000Z', value: 9 }] } } }),
+    wind100Result({ ...wind100Payload(), series: { ...wind100Payload().series,
+      wind_speed_100m: { ...wind100Payload().series.wind_speed_100m,
+        samples: [{ validTime: '2026-09-11T00:00:00.000Z', value: 8 }, { validTime: '2026-09-11T03:00:00.000Z', value: -1 }] } } }),
+  ];
+  for (const result of invalid) assert.throws(() => qualifyWind100Response(result, WIND100, WIND100_NOW));
+});
+test('candidate endpoint failure rolls back exact prior version and recovery probes only ordinary health', async () => {
+  for (const [failure, existingWind100] of [['response', null], ['series', null], ['response', OLD_WIND100], ['series', OLD_WIND100]]) {
+    const m = memory({ existingWind100 }), [r, approved] = await ready(m, WIND100); let candidateProbes = 0;
+    m.ops.probeWind100 = async target => {
+      candidateProbes++;
+      if (failure === 'response') throw Error('candidate unavailable');
+      qualifyWind100Response(wind100Result({ ...wind100Payload(), optionalMissingFields: ['wind_speed_100m'] }), target, WIND100_NOW);
+    };
+    await assert.rejects(rollout(m.ops, source, r, approved));
+    assert.equal(candidateProbes, 1);
+    assert.deepEqual(m.calls.filter(call => call.startsWith('deploy:')), [`deploy:${NEW}`, `deploy:${OLD}`]);
+    assert.equal(m.calls.filter(call => call === 'probe').length, 3);
+    assert.equal(await m.ops.active(), OLD); same((await m.ops.version(OLD)).resources.bindings, r.before.settings.bindings);
+  }
+});
+test('candidate point request has its own hard latency cap', async () => {
+  const started = Date.now();
+  const io = transport('PRIVATE_TOKEN', (_url, init) => new Promise((_resolve, reject) => {
+    const keepAlive = setTimeout(() => reject(Error('timeout did not abort')), 1_000);
+    init.signal.addEventListener('abort', () => { clearTimeout(keepAlive); reject(init.signal.reason); }, { once: true });
+  }), 10);
+  await assert.rejects(io.wind100Get(WIND100), error => error.message === 'bounded staging request failed');
+  assert.ok(Date.now() - started < 1_000);
 });
 test('disabled rollout remains inherit-only and preserves an already active exact Wind100 tuple byte-for-policy', async () => {
   const m = memory({ existingWind100: OLD_WIND100 }), [r, approved] = await ready(m);

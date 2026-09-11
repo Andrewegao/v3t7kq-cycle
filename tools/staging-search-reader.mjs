@@ -19,6 +19,7 @@ export const EXCLUSIVE = 'EXCLUSIVE-STAGING-WORKER-CODE-ONLY';
 export const WIND100_BINDING_NAMES = Object.freeze([
   'STAGING_WIND100_CATALOG_ID', 'STAGING_WIND100_RUN_ID', 'STAGING_WIND100_SELECTION_SHA256',
 ]);
+export const WIND100_PROBE_TIMEOUT_MS = 15_000;
 const WIND100_APPROVAL_NAMES = Object.freeze([
   'STAGING_WIND100_READER_ENABLED', 'STAGING_WIND100_READER_CATALOG_ID',
   'STAGING_WIND100_READER_RUN_ID', 'STAGING_WIND100_READER_SELECTION_SHA256',
@@ -27,6 +28,7 @@ const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const SHA = /^[a-f0-9]{40}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const WIND100_CATALOG = /^stage-wind100-[1-9]\d{0,19}-[1-9]\d{0,5}$/;
+const WIND100_SOURCE = 'ECMWF IFS 0.25 degree direct open-data GRIB';
 export const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 export const digest = value => hash(canonical(value));
 const same = (a, b, message) => assert.ok(canonical(a) === canonical(b), message);
@@ -43,6 +45,55 @@ function validateWind100(value) {
   assert.ok(Number.isFinite(runTime) && new Date(runTime).toISOString() === runIso, 'invalid staging Wind100 run time');
   assert.match(value.selectionSha256 ?? '', HASH, 'invalid staging Wind100 selection digest');
   return JSON.parse(canonical(value));
+}
+
+const wind100RunIso = runId => `${runId.slice(0, 4)}-${runId.slice(4, 6)}-${runId.slice(6, 8)}T${runId.slice(8)}:00:00.000Z`;
+export function wind100ProbePath(value) {
+  const selected = validateWind100(value), start = wind100RunIso(selected.runId);
+  const query = new URLSearchParams({ lat: '32.06', lon: '118.8', variables: 'wind_speed',
+    optionalVariables: 'wind_speed_100m', start, end: new Date(Date.parse(start) + 6 * 60 * 60_000).toISOString(),
+    run: selected.runId, catalog: selected.catalogId, selection: selected.selectionSha256 });
+  return `/api/v1/point-series/ecmwf?${query}`;
+}
+
+export function qualifyWind100Response(result, value, now = Date.now()) {
+  const selected = validateWind100(value);
+  const initializedAt = wind100RunIso(selected.runId), expectedTimes = [initializedAt,
+    new Date(Date.parse(initializedAt) + 3 * 60 * 60_000).toISOString()];
+  assert.ok(Number.isFinite(now), 'invalid staging Wind100 qualification time');
+  assert.ok(result?.status === 200 && result.body instanceof Uint8Array && result.body.byteLength <= 2 * 1024 * 1024,
+    'staging Wind100 response refused');
+  assert.ok(result.headers?.get('X-WeatherX-Data-Source') === 'own' &&
+    result.headers.get('X-WeatherX-Catalog') === selected.catalogId, 'staging Wind100 provenance differs');
+  let payload;
+  try { payload = JSON.parse(Buffer.from(result.body).toString('utf8')); }
+  catch { throw Error('staging Wind100 response invalid'); }
+  assert.ok(payload && typeof payload === 'object' && !Array.isArray(payload), 'staging Wind100 response invalid');
+  assert.ok(payload.schemaVersion === 1 && payload.model === 'ecmwf' && payload.runId === selected.runId &&
+    payload.releaseId === selected.catalogId && [initializedAt, initializedAt.replace('.000Z', 'Z')].includes(payload.initializedAt) &&
+    payload.source === WIND100_SOURCE && payload.runSelection === undefined, 'staging Wind100 identity differs');
+  const freshUntil = Date.parse(payload.freshUntil);
+  assert.ok(Number.isFinite(freshUntil) && freshUntil > now, 'staging Wind100 candidate is not fresh');
+  assert.ok(payload.quality === 'complete' && Array.isArray(payload.missingFields) && payload.missingFields.length === 0 &&
+    Array.isArray(payload.optionalMissingFields) && payload.optionalMissingFields.length === 0,
+  'staging Wind100 response is incomplete');
+  assert.ok(payload.nativeCadenceSeconds === 3 * 60 * 60 && payload.resolutionDegrees === 0.25 &&
+    canonical(payload.window) === canonical({ start: initializedAt, end: new Date(Date.parse(initializedAt) + 6 * 60 * 60_000).toISOString() }) &&
+    canonical(payload.requestedPoint) === canonical({ latitude: 32.06, longitude: 118.8 }),
+  'staging Wind100 sampling contract differs');
+  assert.ok(payload.series && typeof payload.series === 'object' && !Array.isArray(payload.series) &&
+    canonical(Object.keys(payload.series).sort()) === canonical(['wind_speed', 'wind_speed_100m']),
+  'staging Wind100 series differs');
+  for (const name of ['wind_speed', 'wind_speed_100m']) {
+    const series = payload.series[name];
+    assert.ok(series && series.kind === 'instantaneous' && series.units === 'm/s' && Array.isArray(series.samples) &&
+      series.samples.length === expectedTimes.length &&
+      canonical(series.samples.map(sample => sample?.validTime)) === canonical(expectedTimes),
+    'staging Wind100 series invalid');
+    assert.ok(series.samples.every(sample => sample && typeof sample === 'object' && Number.isFinite(sample.value) && sample.value >= 0),
+    'staging Wind100 samples invalid');
+  }
+  return payload;
 }
 
 export function wind100Approval(env) {
@@ -230,7 +281,9 @@ export async function rollout(ops, source, receipt, approved, persist = () => {}
     try { await ops.deploy(receipt.uploaded); } catch { /* Inspect actual active version below. */ }
     for (let round = 0; round < 3; round++) {
       if (round) await ops.pause(2000);
-      await guard(ops, receipt, receipt.uploaded); await ops.probe(); await guard(ops, receipt, receipt.uploaded);
+      await guard(ops, receipt, receipt.uploaded); await ops.probe();
+      if (round === 0 && receipt.wind100) await ops.probeWind100(receipt.wind100);
+      await guard(ops, receipt, receipt.uploaded);
     }
     receipt.status = 'passed'; persist(); return receipt;
   } catch {
@@ -248,13 +301,15 @@ export function assertStagingRoutes(routes) {
   const owned = routes.filter(route => route.script === WORKER);
   assert.ok(owned.length > 0 && owned.every(route => route.pattern.startsWith('staging.weatherx.org/')), 'foreign route binding');
 }
-export function transport(token, fetchImpl = fetch) {
+export function transport(token, fetchImpl = fetch, wind100TimeoutMs = WIND100_PROBE_TIMEOUT_MS) {
   assert.ok(typeof token === 'string' && token.length > 0, 'staging Worker credential missing');
+  assert.ok(Number.isInteger(wind100TimeoutMs) && wind100TimeoutMs > 0 && wind100TimeoutMs <= WIND100_PROBE_TIMEOUT_MS,
+    'invalid staging Wind100 probe timeout');
   let deadline = Date.now() + 8 * 60_000;
-  async function request(url, init = {}) {
+  async function request(url, init = {}, maximumMs = 20_000) {
     try {
       assert.ok(deadline > Date.now(), 'deadline');
-      const response = await fetchImpl(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.min(20_000, deadline - Date.now())) });
+      const response = await fetchImpl(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.min(maximumMs, deadline - Date.now())) });
       const chunks = []; let size = 0;
       try { for await (const chunk of response.body ?? []) { size += chunk.length; assert.ok(size <= 2 * 1024 * 1024); chunks.push(Buffer.from(chunk)); } }
       finally { await response.body?.cancel().catch(() => {}); }
@@ -274,6 +329,9 @@ export function transport(token, fetchImpl = fetch) {
     publicGet(path) {
       assert.ok(['/api/platform/health', '/api/platform/data-health', '/api/platform/auth/me', '/data/ecmwf/index.json'].includes(path), 'public probe path refused');
       return request(ORIGIN + path, { headers: { Origin: ORIGIN } });
+    },
+    wind100Get(value) {
+      return request(ORIGIN + wind100ProbePath(value), { headers: { Accept: 'application/json', Origin: ORIGIN } }, wind100TimeoutMs);
     },
   };
 }
@@ -304,7 +362,9 @@ export function operations(io) {
       const me = await read('/api/platform/auth/me');
       assert.ok(me.authenticated === false && me.user === null && me.billingMode === 'enabled', 'anonymous account policy changed');
       const weather = await read('/data/ecmwf/index.json'); assert.ok(weather && typeof weather === 'object' && Object.keys(weather).length > 0, 'weather index missing');
-    }, pause: ms => new Promise(done => setTimeout(done, ms)),
+    },
+    async probeWind100(value) { qualifyWind100Response(await io.wind100Get(value), value); },
+    pause: ms => new Promise(done => setTimeout(done, ms)),
   };
 }
 export async function buildSource(atmos, sha) {
