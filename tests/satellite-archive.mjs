@@ -308,3 +308,15 @@ test('workflow and controller syntax are valid', { skip: process.platform !== 'd
   execFileSync('python3', ['-c', 'import sys; compile(sys.stdin.read(), "<workflow>", "exec")'], { input: controller, stdio: ['pipe', 'pipe', 'pipe'] });
   execFileSync('/opt/homebrew/bin/actionlint', ['-shellcheck=', '-pyflakes=', workflowPath.pathname], { stdio: 'pipe' });
 });
+
+
+test('rclone installer metadata cannot collide with rclone runtime options', () => {
+  const names = [...workflow.matchAll(/^\s+(RCLONE_[A-Z0-9_]+):/gm)].map(match => match[1]);
+  assert.deepEqual([...new Set(names)].sort(), [
+    'RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID', 'RCLONE_CONFIG_WEATHERX_ENDPOINT',
+    'RCLONE_CONFIG_WEATHERX_PROVIDER', 'RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY',
+    'RCLONE_CONFIG_WEATHERX_TYPE',
+  ]);
+  assert.match(workflow, /SATELLITE_RCLONE_RELEASE: v1\.75\.0/);
+  assert.doesNotMatch(workflow, /RCLONE_VERSION|RCLONE_SHA256/);
+});
