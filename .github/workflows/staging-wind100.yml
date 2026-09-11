@@ -94,7 +94,19 @@ jobs:
         run: |
           set -euo pipefail
           node "$GITHUB_WORKSPACE/cycle/tools/staging-wind100.mjs" hydrate-gate
-          GITHUB_ENV="$RUNNER_TEMP/wind100-baseline.env" bash ops/platform/hydrate-r2-component.sh
+          GITHUB_ENV='' HYDRATED_COMPONENT_PROOF_DIR="$RUNNER_TEMP/wind100-component-baseline-proof" \
+            bash ops/platform/hydrate-r2-component.sh
+      - name: Authenticate the hydrated baseline before provider collection
+        working-directory: atmos
+        run: |
+          set -euo pipefail
+          data/.venv/bin/python -I ops/core_model_artifact.py verify-component-baseline \
+            --model ecmwf --source-sha "$ATMOS_SHA" --root "$GITHUB_WORKSPACE/atmos" \
+            --run-id "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --baseline-catalog-pointer "$RUNNER_TEMP/wind100-component-baseline-proof/pointer.json" \
+            --baseline-catalog-snapshot "$RUNNER_TEMP/wind100-component-baseline-proof/catalog.json" \
+            --baseline-component-manifest "$RUNNER_TEMP/wind100-component-baseline-proof/component.json" \
+            > "$RUNNER_TEMP/weatherx-wind100-baseline-proof.json"
       - name: Collect and seal exact ECMWF core inputs without storage credentials
         working-directory: atmos-source
         run: |
@@ -115,7 +127,11 @@ jobs:
           set -euo pipefail
           CORE_MODEL_PACKS_DIR="$RUNNER_TEMP/weatherx-wind100-core" \
           CORE_INPUT_SOURCE_SHA="$ATMOS_SHA" CORE_INPUT_RUN_ID="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
-          CORE_INPUT_MANIFEST_SHA256="$(cat "$RUNNER_TEMP/weatherx-wind100-core.sha256")" bash ops/bake-model-component.sh
+          CORE_INPUT_MANIFEST_SHA256="$(cat "$RUNNER_TEMP/weatherx-wind100-core.sha256")" \
+          CORE_BASELINE_CATALOG_POINTER="$RUNNER_TEMP/wind100-component-baseline-proof/pointer.json" \
+          CORE_BASELINE_CATALOG_SNAPSHOT="$RUNNER_TEMP/wind100-component-baseline-proof/catalog.json" \
+          CORE_BASELINE_COMPONENT_MANIFEST="$RUNNER_TEMP/wind100-component-baseline-proof/component.json" \
+            bash ops/bake-model-component.sh
           data/.venv/bin/python -I ops/platform/validate-model-component.py ecmwf app/public/data/ecmwf \
             --live https://staging.weatherx.org > "$RUNNER_TEMP/weatherx-wind100-map-proof.json"
           data/.venv/bin/python -I "$GITHUB_WORKSPACE/cycle/tools/staging-wind100-python.py" \

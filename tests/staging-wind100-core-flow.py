@@ -105,6 +105,65 @@ def add_raw_stages(artifact, root):
         np.save(floats / f"{field}.npy", np.ones((2, 2, 2), dtype=np.float32))
 
 
+def populate_partial_upperair(artifact, model, init):
+    instant = datetime.fromisoformat(init.replace("Z", "+00:00"))
+    run = model / f"runs/{instant.strftime('%Y%m%d%H')}"
+    manifest = artifact.read_json(run / "manifest.json")
+    manifest["frames"] = [
+        {"i": i, "valid_time": (instant + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        for i in range(81)
+    ]
+    artifact.write_json(run / "manifest.json", manifest)
+    png = (run / "temp/000.png").read_bytes()
+    for i in range(2, 81):
+        (run / f"temp/{i:03d}.png").write_bytes(png)
+    for field in ("gh925", "gh850", "gh500", "wind925", "wind850", "wind500"):
+        (run / field).mkdir()
+        for i in range(69):
+            (run / field / f"{i:03d}.png").write_bytes(png)
+    return run
+
+
+def attest_component_baseline(artifact, root, proof_root):
+    model = root / "app/public/data/ecmwf"
+    rows = artifact.inventory(model)
+    generation = artifact.read_json(model / "index.json")["runs"][0]["init_time"]
+    generated = datetime.fromisoformat(generation.replace("Z", "+00:00"))
+    artifact_id = f"ecmwf-{generated.strftime('%Y%m%d%H')}-component"
+    root_prefix = f"components/ecmwf/{artifact_id}/"
+    component = proof_root / "component.json"
+    artifact.write_json(component, {
+        "schemaVersion": 1, "componentId": "ecmwf", "artifactId": artifact_id,
+        "generationTime": generation,
+        "completedAt": (generated + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "rootPrefix": root_prefix, "mounts": ["data/ecmwf/"],
+        "objectCount": len(rows),
+        "inventorySha256": hashlib.sha256(json.dumps(rows, separators=(",", ":")).encode()).hexdigest(),
+        "quality": {"status": "passed", "checks": [
+            "manifest", "inventory", "remote_bytes", "coverage", "freshness",
+            "live_superset", "horizon", "cadence", "grid", "referenced_bytes",
+        ]},
+    })
+    component_entry = {
+        **artifact.read_json(component),
+        "manifestKey": f"{root_prefix}component.json",
+        "manifestSha256": artifact.digest(component),
+    }
+    catalog = proof_root / "catalog.json"
+    published = (generated + timedelta(minutes=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    artifact.write_json(catalog, {
+        "schemaVersion": 2, "sequence": 7, "parentCatalogId": "6-previous",
+        "createdAt": published, "components": {"ecmwf": component_entry},
+    })
+    pointer = proof_root / "pointer.json"
+    artifact.write_json(pointer, {
+        "schemaVersion": 2, "catalogId": "7-component-baseline", "sequence": 7,
+        "publishedAt": published, "catalogSha256": artifact.digest(catalog),
+        "previousCatalogId": "6-previous",
+    })
+    return pointer, catalog, component
+
+
 def main():
     require(len(sys.argv) == 2, "usage: staging-wind100-core-flow.py ATMOS_SOURCE")
     source_argument = Path(sys.argv[1]).absolute()
@@ -121,52 +180,69 @@ def main():
         producer, validator, packs = root / "producer", root / "validator", root / "packs"
         producer.mkdir(); validator.mkdir()
 
-        # Reproduce the failed topology: a previously enriched same-cycle tree is
-        # refreshed with a surface-only manifest while enrichment files remain.
-        baseline, current = write_map(artifact, validator, INIT, enriched=True)
-        enriched_manifest = artifact.read_json(current / "manifest.json")
-        artifact.map_tree(baseline, "ecmwf")
-        refreshed_manifest = {**enriched_manifest,
-                              "variables": {"temp": enriched_manifest["variables"]["temp"]}}
-        artifact.write_json(current / "manifest.json", refreshed_manifest)
+        # Mirror the populated staging baseline that failed after collection:
+        # referenced map history plus 414 unadvertised partial upper-air frames.
+        baseline, _ = write_map(artifact, validator, OLDER)
+        retained = populate_partial_upperair(artifact, baseline, OLDER)
         try:
             artifact.map_tree(baseline, "ecmwf")
         except ValueError as error:
-            require("missing or unreferenced files" in str(error), "wrong same-cycle refusal")
+            require("missing or unreferenced files" in str(error), "wrong populated-baseline refusal")
         else:
-            raise AssertionError("same-cycle enrichment surplus unexpectedly passed map closure")
+            raise AssertionError("partial upper-air baseline unexpectedly passed strict map closure")
 
-        # The repaired topology keeps provider output clean, seals that one run,
-        # and lets the existing transactional installer merge only older exact history.
-        artifact.write_json(current / "manifest.json", enriched_manifest)
+        proof_root = root / "baseline-proof"
+        proof_root.mkdir()
+        pointer, catalog, component = attest_component_baseline(artifact, validator, proof_root)
+        proof = artifact.verify_component_baseline("ecmwf", validator, pointer, catalog, component)
+        require(proof["normalizableExtraCount"] == 414, "preflight did not identify exact partial baseline")
+        require(proof["publicationAuthorized"] is False, "baseline preflight authorized publication")
+
+        # Provider output remains clean and sealed. Without the three authenticated
+        # catalog proofs the installer still refuses the populated baseline.
         fresh_map, _ = write_map(artifact, producer, INIT)
         add_raw_stages(artifact, producer)
         artifact.seal("ecmwf", source_sha, producer, packs, INVOCATION)
-        older_model, _ = write_map(artifact, validator, OLDER)
-        old_row = artifact.read_json(older_model / "index.json")["runs"][0]
-        artifact.write_json(baseline / "index.json", {
-            "schemaVersion": 1, "model": "ecmwf",
-            "runs": [{"init_time": INIT, "path": "runs/2026090412/"}, old_row],
-        })
-        artifact.map_tree(baseline, "ecmwf")
         manifest_hash = artifact.digest(packs / "ecmwf/manifest.json")
         with patch.object(artifact, "assert_checkout_source"):
+            try:
+                artifact.install_component(
+                    "ecmwf", source_sha, validator, packs, INVOCATION, manifest_hash,
+                    clock=lambda: datetime(2026, 9, 4, 13, tzinfo=timezone.utc),
+                )
+            except ValueError as error:
+                require("missing or unreferenced files" in str(error), "no-proof refusal changed")
+            else:
+                raise AssertionError("populated baseline installed without authentication")
+            before = {p.relative_to(retained).as_posix(): p.read_bytes()
+                      for p in retained.rglob("*") if p.is_file()}
+            receipt = root / "normalization.json"
             artifact.install_component(
                 "ecmwf", source_sha, validator, packs, INVOCATION, manifest_hash,
                 clock=lambda: datetime(2026, 9, 4, 13, tzinfo=timezone.utc),
+                baseline_catalog_pointer=pointer,
+                baseline_catalog_snapshot=catalog,
+                baseline_component_manifest=component,
+                normalization_receipt=receipt,
             )
         result, _ = artifact.map_tree(validator / "app/public/data/ecmwf", "ecmwf")
         require([row["path"] for row in result["runs"]] ==
                 ["runs/2026090412/", "runs/2026090400/"], "installer did not retain two exact runs")
-        require(not (validator / "app/public/data/ecmwf/runs/2026090412/gh925").exists(),
-                "same-run hydrated enrichment leaked into the fresh manifest")
+        after = {p.relative_to(retained).as_posix(): p.read_bytes()
+                 for p in retained.rglob("*") if p.is_file()}
+        require(after == {name: value for name, value in before.items()
+                          if name == "manifest.json" or name.startswith("temp/")},
+                "normalization changed referenced history or retained partial extras")
+        normalization = artifact.read_json(receipt)
+        require(normalization["omittedCount"] == 414 and normalization["publicationAuthorized"] is False,
+                "normalization receipt did not bind exact omitted inventory")
         require((validator / "app/public/data/ecmwf/runs/2026090400/temp/000.png").is_file(),
                 "older referenced history was not retained")
         require(artifact.inventory(fresh_map / "runs/2026090412") == artifact.inventory(
             validator / "app/public/data/ecmwf/runs/2026090412"
         ), "fresh same-run bytes changed during install")
 
-    print("staging Wind100 core checkout split: same-run surplus refused; clean seal/install exact")
+    print("staging Wind100 core checkout split: populated baseline authenticated; clean seal/install exact")
 
 
 if __name__ == "__main__":
