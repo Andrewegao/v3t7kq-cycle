@@ -320,3 +320,16 @@ test('rclone installer metadata cannot collide with rclone runtime options', () 
   assert.match(workflow, /SATELLITE_RCLONE_RELEASE: v1\.75\.0/);
   assert.doesNotMatch(workflow, /RCLONE_VERSION|RCLONE_SHA256/);
 });
+
+
+test('hourly and backfill shell helpers inherit the installed Python environment', () => {
+  const jobs = jobBlocks(workflow);
+  for (const name of ['hourly', 'backfill']) {
+    const setup = jobs[name].split('name: venv + python deps')[1].split('name: install rclone')[0];
+    assert.match(setup, /echo "\$PWD\/data\/\.venv\/bin" >> "\$GITHUB_PATH"/);
+    assert.match(setup, /export PATH="\$PWD\/data\/\.venv\/bin:\$PATH"/);
+    assert.match(setup, /PYTHONPATH=data python3 -c/);
+    assert.match(setup, /assert sys\.prefix != sys\.base_prefix/);
+    assert.ok(setup.indexOf('pip install') < setup.indexOf('PYTHONPATH=data'));
+  }
+});
