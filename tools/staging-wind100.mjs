@@ -48,9 +48,82 @@ const FORBIDDEN = [
   'CATALOG_ENDPOINT_PRODUCTION', 'CATALOG_PROMOTION_KEY_PRODUCTION',
   'RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID', 'RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY',
 ];
+const QUALIFICATION_PHASES = new Set([
+  'gate', 'evidence', 'source-evidence', 'point-catalog', 'source-stage', 'pack-inventory', 'pack-scan',
+  'coverage', 'structural-report', 'source-stage-inventory', 'map-proof', 'map-inventory', 'seal', 'lease', 'receipt',
+]);
+const CONTROLLER_LABEL = 'tools/staging-wind100.mjs';
+const CONTROLLER_URL = import.meta.url;
+const MAX_DIAGNOSTIC_NUMBER = 10_000;
+const MAX_STACK_TAIL_CHARS = 64 * 1024;
 
 export function hash(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
+}
+
+export function createQualificationTrace() {
+  return { phase: 'gate', pointPackRowsChecked: 0, pointPacksChecked: 0 };
+}
+
+function markQualification(trace, phase, progress = {}) {
+  if (!trace || !QUALIFICATION_PHASES.has(phase)) return;
+  trace.phase = phase;
+  for (const name of ['pointPackRowsChecked', 'pointPacksChecked']) {
+    if (Number.isSafeInteger(progress[name]) && progress[name] >= 0 && progress[name] <= MAX_DIAGNOSTIC_NUMBER) {
+      trace[name] = progress[name];
+    }
+  }
+}
+
+function safeProperty(value, name) {
+  try { return value?.[name]; } catch { return undefined; }
+}
+
+function qualificationCategory(error) {
+  const code = safeProperty(error, 'code');
+  if (code === 'ERR_ASSERTION') return 'contract';
+  try { if (error instanceof SyntaxError) return 'parse'; } catch { /* fixed fallback below */ }
+  if (new Set(['ENOENT', 'EACCES', 'EISDIR', 'ELOOP', 'EMFILE', 'ENFILE']).has(code)) return 'filesystem';
+  if (new Set(['Z_DATA_ERROR', 'Z_BUF_ERROR', 'Z_MEM_ERROR']).has(code)) return 'decode';
+  return 'unexpected';
+}
+
+function controllerCoordinate(error) {
+  const stack = safeProperty(error, 'stack');
+  if (typeof stack !== 'string') {
+    return { controllerLine: null, controllerColumn: null };
+  }
+  const tail = stack.slice(-MAX_STACK_TAIL_CHARS);
+  const escapedUrl = CONTROLLER_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const frame = new RegExp(`^\\s*at (?:[^()]* \\()?${escapedUrl}:(\\d+):(\\d+)\\)?\\s*$`, 'm');
+  const match = frame.exec(tail);
+  if (match) {
+    const controllerLine = Number(match[1]), controllerColumn = Number(match[2]);
+    if (Number.isSafeInteger(controllerLine) && controllerLine > 0 && controllerLine <= MAX_DIAGNOSTIC_NUMBER
+      && Number.isSafeInteger(controllerColumn) && controllerColumn > 0 && controllerColumn <= MAX_DIAGNOSTIC_NUMBER) {
+      return { controllerLine, controllerColumn };
+    }
+  }
+  return { controllerLine: null, controllerColumn: null };
+}
+
+function diagnosticNumber(value) {
+  return Number.isSafeInteger(value) && value >= 0 && value <= MAX_DIAGNOSTIC_NUMBER ? value : 0;
+}
+
+export function qualificationFailureDiagnostic(error, trace, controllerSha256 = null) {
+  const phase = safeProperty(trace, 'phase');
+  return {
+    schemaVersion: 1,
+    operation: 'qualify',
+    phase: QUALIFICATION_PHASES.has(phase) ? phase : 'unknown',
+    category: qualificationCategory(error),
+    controller: CONTROLLER_LABEL,
+    controllerSha256: typeof controllerSha256 === 'string' && SHA.test(controllerSha256) ? controllerSha256 : null,
+    ...controllerCoordinate(error),
+    pointPackRowsChecked: diagnosticNumber(safeProperty(trace, 'pointPackRowsChecked')),
+    pointPacksChecked: diagnosticNumber(safeProperty(trace, 'pointPacksChecked')),
+  };
 }
 
 function policyPath() {
@@ -460,14 +533,18 @@ function fileIdentity(stat) {
 }
 
 export async function qualifyPointPacks({ pointRoot, stageRoot, model, policy = readPolicy(), structuralReport,
-  sourceEvidence, mapProof, mapRoot, sealedManifest, request = { sourceSha: policy.sourceSha, invocation: 'fixture-1' }, now = Date.now() }) {
+  sourceEvidence, mapProof, mapRoot, sealedManifest, request = { sourceSha: policy.sourceSha, invocation: 'fixture-1' },
+  now = Date.now(), trace = null }) {
+  markQualification(trace, 'source-evidence');
   assert.equal(model, MODEL);
   const sourceClosure = validatedSourceEvidence(sourceEvidence, policy);
+  markQualification(trace, 'point-catalog');
   const root = realpathSync(pointRoot);
   const catalogPath = regularFile(root, 'v2/catalog.json');
   const catalogBytes = boundedRead(catalogPath, 512 * 1024, 'point catalog');
   const catalog = JSON.parse(catalogBytes);
   const descriptor = validateDescriptor(catalog, model, policy);
+  markQualification(trace, 'source-stage');
   const stage = loadStage(stageRoot, model, descriptor);
   const chunksX = Math.ceil(descriptor.grid.width / descriptor.chunk.width);
   const chunksY = Math.ceil(descriptor.grid.height / descriptor.chunk.height);
@@ -477,6 +554,7 @@ export async function qualifyPointPacks({ pointRoot, stageRoot, model, policy = 
       expectedPacks.push(`v2/${model}/${descriptor.runId}/chunks/${chunkY}/${chunkX}.bin.gz`);
     }
   }
+  markQualification(trace, 'pack-inventory');
   const pointEntryBudget = expectedPacks.length + chunksY + 5;
   assert.deepEqual(filesUnder(root, pointEntryBudget, 5), ['v2/catalog.json', ...expectedPacks].sort(),
     'point pack inventory is incomplete or contains extras');
@@ -498,6 +576,7 @@ export async function qualifyPointPacks({ pointRoot, stageRoot, model, policy = 
     uMinRaw: null, uMaxRaw: null, vMinRaw: null, vMaxRaw: null,
   }));
   const packInventory = [];
+  markQualification(trace, 'pack-scan');
   try {
     for (const sourceField of stageFields) {
       sourceField.fd = openSync(sourceField.path, 'r');
@@ -544,7 +623,9 @@ export async function qualifyPointPacks({ pointRoot, stageRoot, model, policy = 
             }
           }
         }
+        markQualification(trace, 'pack-scan', { pointPacksChecked: packInventory.length });
       }
+      markQualification(trace, 'pack-scan', { pointPackRowsChecked: chunkY + 1 });
     }
   } finally {
     for (const sourceField of stageFields) {
@@ -557,6 +638,7 @@ export async function qualifyPointPacks({ pointRoot, stageRoot, model, policy = 
   }
   assert.equal(await fileHash(uPath), uBeforeSha256, 'wind100_u source stage changed during comparison');
   assert.equal(await fileHash(vPath), vBeforeSha256, 'wind100_v source stage changed during comparison');
+  markQualification(trace, 'coverage');
   for (const row of perLead) {
     assert.equal(row.jointPresentCells + row.missingPairCells + row.oneSidedMissingCells, totalCells,
       `lead ${row.leadHour} native 100m accounting differs from the full grid`);
@@ -572,6 +654,7 @@ export async function qualifyPointPacks({ pointRoot, stageRoot, model, policy = 
     { path: 'point-series/v2/catalog.json', bytes: catalogBytes.length, sha256: hash(catalogBytes) },
     ...packInventory.map(row => ({ ...row, path: `point-series/${row.path}` })),
   ].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  markQualification(trace, 'structural-report');
   assert.deepEqual(structuralReport?.models, { [model]: descriptor });
   assert.equal(structuralReport.schemaVersion, 2);
   assert.equal(structuralReport.objectCount, validatorObjects.length);
@@ -580,6 +663,7 @@ export async function qualifyPointPacks({ pointRoot, stageRoot, model, policy = 
   assert.equal(structuralReport.manifestSha256, hash(JSON.stringify(validatorObjects)),
     'reviewed structural validator digest differs from actual point bytes');
 
+  markQualification(trace, 'source-stage-inventory');
   const stageInventory = [];
   for (const path of filesUnder(stage.stage, fieldIds.length + 1, 1)) {
     const absolute = regularFile(stage.stage, path);
@@ -587,10 +671,16 @@ export async function qualifyPointPacks({ pointRoot, stageRoot, model, policy = 
     stageInventory.push({ path, bytes: stat.size, sha256: await fileHash(absolute) });
   }
   stageInventory.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
-  const map = { ...validateMapProof(mapProof, descriptor, policy), ...await directoryInventory(mapRoot) };
+  markQualification(trace, 'map-proof');
+  const validatedMapProof = validateMapProof(mapProof, descriptor, policy);
+  markQualification(trace, 'map-inventory');
+  const map = { ...validatedMapProof, ...await directoryInventory(mapRoot) };
+  markQualification(trace, 'seal');
   const seal = validateSeal(sealedManifest, stageInventory, request, descriptor);
+  markQualification(trace, 'lease');
   assert.ok(finiteTime(descriptor.freshUntil, 'forecast expiry') - now >= policy.minimumForecastLeaseHours * 3600_000,
     'candidate lacks the minimum forecast lease');
+  markQualification(trace, 'receipt');
   return {
     schemaVersion: 2,
     kind: 'weatherx-staging-native-wind100-point-candidate',
@@ -831,7 +921,7 @@ function privateJson(tempRoot, relativePath, maximum = 8 * 1024 * 1024) {
   return JSON.parse(bytes);
 }
 
-export async function main(command, env = process.env, argv = process.argv.slice(3)) {
+export async function main(command, env = process.env, argv = process.argv.slice(3), trace = null) {
   if (command === 'digest') return { sha256: controllerDigest() };
   const policy = readPolicy();
   if (command === 'gate') return gate(env, policy);
@@ -839,7 +929,11 @@ export async function main(command, env = process.env, argv = process.argv.slice
   if (command === 'component-gate') return gate(env, policy, controllerDigest(), 'components');
   if (command === 'source') return verifySource(argv[0], policy);
   if (command === 'qualify') {
-    const request = gate(env, policy);
+    markQualification(trace, 'gate');
+    const digest = controllerDigest();
+    const request = gate(env, policy, digest);
+    if (trace) trace.controllerSha256 = digest;
+    markQualification(trace, 'evidence');
     const sourceEvidence = privateJson(env.RUNNER_TEMP, argv[1]);
     assert.deepEqual(sourceBytes(argv[0], policy), sourceEvidence,
       'reviewed source bytes changed after pre-collection verification');
@@ -848,7 +942,7 @@ export async function main(command, env = process.env, argv = process.argv.slice
     const sealedManifest = JSON.parse(boundedRead(regularFile(realpathSync(argv[6]), 'manifest.json'), 8 * 1024 * 1024, 'sealed manifest'));
     const receipt = await qualifyPointPacks({
       stageRoot: argv[2], pointRoot: argv[3], model: request.model, policy, structuralReport, sourceEvidence,
-      mapProof, mapRoot: resolve(argv[0], 'app/public/data/ecmwf'), sealedManifest, request,
+      mapProof, mapRoot: resolve(argv[0], 'app/public/data/ecmwf'), sealedManifest, request, trace,
     });
     receipt.invocation = request.invocation;
     saveReceipt(env, receipt);
@@ -871,6 +965,15 @@ export async function main(command, env = process.env, argv = process.argv.slice
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  main(process.argv[2]).then(value => console.log(JSON.stringify(value)))
-    .catch(() => { console.error('Staging wind100 refused; no serving pointer or production object changed.'); process.exitCode = 1; });
+  const command = process.argv[2];
+  const trace = command === 'qualify' ? createQualificationTrace() : null;
+  main(command, process.env, process.argv.slice(3), trace).then(value => console.log(JSON.stringify(value)))
+    .catch(error => {
+      if (trace) {
+        console.error(`Staging wind100 diagnostic ${JSON.stringify(qualificationFailureDiagnostic(
+          error, trace, safeProperty(trace, 'controllerSha256')))}`);
+      }
+      console.error('Staging wind100 refused; no serving pointer or production object changed.');
+      process.exitCode = 1;
+    });
 }
