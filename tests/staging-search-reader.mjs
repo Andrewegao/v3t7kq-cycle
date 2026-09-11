@@ -5,7 +5,7 @@ import { readerGate, settings, runtime, uploadMetadata, assertVersion, assertBou
   preflight, rollout, recover, digest, annotations, wind100Approval, candidateBindings, assertStagingRoutes,
   wind100ProbePath, qualifyWind100Response, ACCOUNT, WORKER, SCRIPT, ROUTES, EXCLUSIVE,
   WIND100_BINDING_NAMES, WIND100_PROBE_TIMEOUT_MS, WIND100_FRESHNESS_MS,
-  WIND100_MINIMUM_FORECAST_LEASE_MS } from '../tools/staging-search-reader.mjs';
+  WIND100_MINIMUM_FORECAST_LEASE_MS, assertReviewedWorkerExports } from '../tools/staging-search-reader.mjs';
 const OLD = '11111111-1111-1111-1111-111111111111', NEW = '22222222-2222-2222-2222-222222222222', FOREIGN = '33333333-3333-3333-3333-333333333333';
 const sha = 'a'.repeat(40), source = { sha, sha256: 'c'.repeat(64), bytes: Buffer.from('source') };
 const WIND100 = { catalogId: 'stage-wind100-34547542747-1', runId: '2026091100', selectionSha256: 'd'.repeat(64) };
@@ -96,6 +96,15 @@ test('exact main/manual workflow and source/gates required; execution needs revi
   assert.throws(() => readerGate(env, 'rollout'));
   readerGate({ ...env, EXCLUSIVE_WINDOW_CONFIRMATION: EXCLUSIVE, STAGING_SEARCH_READER_APPROVED_VERSION: OLD,
     STAGING_SEARCH_READER_APPROVED_BOUNDARY_SHA256: 'a'.repeat(64) }, 'rollout');
+});
+test('Worker build admits exactly the default, account AI, and aircraft budget entrypoints', () => {
+  assert.doesNotThrow(() => assertReviewedWorkerExports(['default', 'StagingAiAdmission', 'AircraftUpstreamBudget']));
+  for (const exports of [
+    ['default', 'AircraftUpstreamBudget'],
+    ['StagingAiAdmission', 'AircraftUpstreamBudget'],
+    ['default', 'StagingAiAdmission'],
+    ['default', 'StagingAiAdmission', 'AircraftUpstreamBudget', 'UnknownEntrypoint'],
+  ]) assert.throws(() => assertReviewedWorkerExports(exports), /reviewed Worker entrypoints differ/);
 });
 test('Wind100 Worker intent is a distinct exact data-staging approval and refuses partial, malformed, or unknown approval state', () => {
   assert.equal(wind100Approval(env), null);
