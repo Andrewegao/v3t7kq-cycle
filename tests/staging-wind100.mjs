@@ -195,15 +195,18 @@ test('recurring workflow consumes a core artifact, augments two fields, and uplo
   const callInterface = source.slice(0, source.indexOf('\npermissions:'));
   assert.match(callInterface, /check_only:\n\s+description: Check only the isolated staging writer credential boundary\n\s+type: boolean\n\s+required: false\n\s+default: false/);
   assert.match(callInterface, /credentials_ready:\n\s+description: Boolean-only confirmation that both isolated staging credentials are present\n\s+value: \$\{\{ jobs\.wind100\.outputs\.credentials_ready \}\}/);
-  assert.doesNotMatch(callInterface, /STAGING_R2_WRITE_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY)/,
-    'environment-only staging credentials must not be caller-supplied workflow secrets');
+  assert.match(callInterface, /STAGING_R2_WRITE_ACCESS_KEY_ID:\n\s+required: false/);
+  assert.match(callInterface, /STAGING_R2_WRITE_SECRET_ACCESS_KEY:\n\s+required: false/);
+  assert.deepEqual([...callInterface.matchAll(/^      ([A-Z0-9_]+):\n        required: (?:true|false)$/gm)].map(match => match[1]),
+    ['ATMOS_DEPLOY_KEY', 'STAGING_R2_WRITE_ACCESS_KEY_ID', 'STAGING_R2_WRITE_SECRET_ACCESS_KEY']);
+  assert.doesNotMatch(source, /secrets\[|format\(/, 'credential names must be literal across the reusable boundary');
   assert.match(source, /outputs:\n\s+credentials_ready: \$\{\{ steps\.staging_credentials\.outputs\.ready \}\}/);
   const credentialCheck = source.indexOf('Check both isolated staging writer credentials without exposing values');
   assert.ok(credentialCheck >= 0 && credentialCheck < source.indexOf('actions/checkout@'));
   const credentialTail = source.slice(credentialCheck, source.indexOf('\n      - ', credentialCheck + 1));
   assert.match(credentialTail, /if: \$\{\{ inputs\.check_only == true \|\| steps\.opt_in\.outputs\.enabled == 'true' \}\}/);
-  assert.match(credentialTail, /STAGING_R2_WRITE_ACCESS_KEY_ID: \$\{\{ secrets\[format\('STAGING_R2_WRITE_\{0\}', 'ACCESS_KEY_ID'\)\] \}\}/);
-  assert.match(credentialTail, /STAGING_R2_WRITE_SECRET_ACCESS_KEY: \$\{\{ secrets\[format\('STAGING_R2_WRITE_\{0\}', 'SECRET_ACCESS_KEY'\)\] \}\}/);
+  assert.match(credentialTail, /STAGING_R2_WRITE_ACCESS_KEY_ID: \$\{\{ secrets\.STAGING_R2_WRITE_ACCESS_KEY_ID \}\}/);
+  assert.match(credentialTail, /STAGING_R2_WRITE_SECRET_ACCESS_KEY: \$\{\{ secrets\.STAGING_R2_WRITE_SECRET_ACCESS_KEY \}\}/);
   assert.match(credentialTail, /test -n "\$STAGING_R2_WRITE_ACCESS_KEY_ID"/);
   assert.match(credentialTail, /test -n "\$STAGING_R2_WRITE_SECRET_ACCESS_KEY"/);
   assert.match(credentialTail, /echo 'ready=true' >> "\$GITHUB_OUTPUT"/);
@@ -241,7 +244,7 @@ test('recurring workflow consumes a core artifact, augments two fields, and uplo
   assert.match(code, /staging-candidates\/wind100\/current-v1\.json|staging-wind100\.mjs activate/);
 });
 
-test('manual main-only Wind100 preflight calls the exact environment-only credential interface', () => {
+test('manual main-only Wind100 preflight maps only the three named reusable-workflow secrets', () => {
   const source = readFileSync(new URL('../.github/workflows/staging-wind100-preflight.yml', import.meta.url), 'utf8');
   const code = source.split('\n').filter(line => !/^\s*#/.test(line)).join('\n');
   assert.match(code, /workflow_dispatch:/);
@@ -249,8 +252,8 @@ test('manual main-only Wind100 preflight calls the exact environment-only creden
   assert.match(code, /if: \$\{\{ github\.ref == 'refs\/heads\/main' \}\}/);
   assert.match(code, /uses: \.\/\.github\/workflows\/staging-wind100-recurring\.yml/);
   assert.match(code, /with: \{ check_only: true \}/);
-  assert.match(code, /secrets: \{ ATMOS_DEPLOY_KEY: "\$\{\{ secrets\.ATMOS_DEPLOY_KEY \}\}" \}/);
-  assert.doesNotMatch(code, /STAGING_R2_WRITE_|secrets: inherit|runs-on:|steps:|rclone|wrangler|deploy|publish/);
+  assert.match(code, /secrets: \{ ATMOS_DEPLOY_KEY: "\$\{\{ secrets\.ATMOS_DEPLOY_KEY \}\}",\n\s+STAGING_R2_WRITE_ACCESS_KEY_ID: "\$\{\{ secrets\.STAGING_R2_WRITE_ACCESS_KEY_ID \}\}",\n\s+STAGING_R2_WRITE_SECRET_ACCESS_KEY: "\$\{\{ secrets\.STAGING_R2_WRITE_SECRET_ACCESS_KEY \}\}" \}/);
+  assert.doesNotMatch(code, /secrets: inherit|runs-on:|steps:|rclone|wrangler|deploy|publish/);
 });
 
 test('bake staging-only pilot can start only the fresh ECMWF collector and recurring publisher', () => {
@@ -276,6 +279,8 @@ test('bake staging-only pilot can start only the fresh ECMWF collector and recur
   assert.match(jobs['core-ecmwf'], /inputs\.staging_wind100_only != true && \(inputs\.model == '' \|\| inputs\.model == 'all' \|\| inputs\.model == 'ecmwf'\)/);
   assert.match(jobs['staging-wind100'], /needs\.core-ecmwf\.result == 'success'/);
   assert.match(jobs['staging-wind100'], /inputs\.staging_wind100_only != true \|\| \(github\.event_name == 'workflow_dispatch' && inputs\.model == 'ecmwf' && inputs\.recovery_run_id == ''\)/);
+  assert.match(jobs['staging-wind100'], /secrets: \{ ATMOS_DEPLOY_KEY: "\$\{\{ secrets\.ATMOS_DEPLOY_KEY \}\}",\n\s+STAGING_R2_WRITE_ACCESS_KEY_ID: "\$\{\{ secrets\.STAGING_R2_WRITE_ACCESS_KEY_ID \}\}",\n\s+STAGING_R2_WRITE_SECRET_ACCESS_KEY: "\$\{\{ secrets\.STAGING_R2_WRITE_SECRET_ACCESS_KEY \}\}" \}/);
+  assert.doesNotMatch(jobs['staging-wind100'], /secrets: inherit/);
   assert.doesNotMatch(jobs['staging-wind100'], /R2_PRODUCTION|CATALOG_ENDPOINT_PRODUCTION|CATALOG_PROMOTION_KEY_PRODUCTION/);
   for (const [name, block] of Object.entries(jobs)) {
     if (name === 'core-ecmwf' || name === 'staging-wind100') continue;
