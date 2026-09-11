@@ -394,7 +394,7 @@ jobs:
           ARCHIVE_POLICY: ${{ inputs.policy }}
         run: |
           set -euo pipefail
-          args=(--policy "$ARCHIVE_POLICY" --max-inclusive-days 3 --github-output "$GITHUB_OUTPUT")
+          args=(--policy "$ARCHIVE_POLICY" --max-inclusive-days 2 --github-output "$GITHUB_OUTPUT")
           [ -z "$FROM_DATE" ] || args+=(--from "$FROM_DATE")
           [ -z "$TO_DATE" ] || args+=(--to "$TO_DATE")
           python3 data/satellite_archive_backfill_plan.py "${args[@]}"
@@ -407,8 +407,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 340
     env:
-      # Three complete UTC days, all three GMGSI channels hourly, and US radar
-      # every 10 minutes. These are producer and publication hard ceilings.
+      # Two complete UTC days allow 288 fine radar frames at 15 MB each while
+      # preserving the existing producer and publication hard ceilings below.
       SAT_MAX_HTTP_REQUESTS: '432'
       SAT_MAX_SOURCE_BYTES: '2376000000'
       SAT_MAX_OUTPUT_BYTES: '216000000'
@@ -419,7 +419,7 @@ jobs:
       PUBLISH_VERIFY_MAX_BYTES: '648000000'
     strategy:
       fail-fast: false
-      # Each job owns one month and runs that month's three-day transactions in order.
+      # Each job owns one month and runs that month's two-day transactions in order.
       # Different months have disjoint mutable catalogs, so four shards may proceed.
       max-parallel: 4
       matrix:

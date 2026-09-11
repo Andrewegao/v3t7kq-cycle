@@ -239,7 +239,7 @@ test('hourly and backfill failure retention remain protected and secret-free', (
   assert.match(satelliteJobs.backfill, /max-parallel: 4/);
   assert.match(satelliteJobs.backfill, /fromJson\(needs.backfill-plan.outputs.month_shards\)/);
   assert.match(satelliteJobs.backfill, /PUBLISH_LATEST: '0'/);
-  assert.match(workflow, /--max-inclusive-days 3/);
+  assert.match(workflow, /--max-inclusive-days 2 --github-output/);
   assert.match(workflow, /data\/run_satellite_archive_month_shard.py/);
   assert.match(workflow, /SAT_MAX_HTTP_REQUESTS: '432'/);
   assert.match(workflow, /SAT_MAX_SOURCE_BYTES: '2376000000'/);
