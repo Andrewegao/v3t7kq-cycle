@@ -45,6 +45,21 @@ test('staging workflow leaves release-mode activation to the exact-profile contr
   assert.doesNotMatch(prod,/ref: a58eff158b56ef2ba25189d2b859315b00893a14/);
   assert.doesNotMatch(prod,/STAGING_CONTROL_SHA|stagingOnly/);
 });
+test('staging Wind100 pin comes only from protected profile outputs and production has no flags',()=>{
+  const profile=staging.slice(staging.indexOf('\n  profile:\n'),staging.indexOf('\n  build:\n'));
+  const build=staging.slice(staging.indexOf('\n  build:\n'),staging.indexOf('\n  qualify:\n'));
+  const qualify=staging.slice(staging.indexOf('\n  qualify:\n'));
+  for(const suffix of ['ENABLED','CATALOG_ID','RUN_ID','SELECTION_SHA256']){
+    assert.match(profile,new RegExp(`STAGING_WIND100_UI_${suffix}: \\\$\\{\\{ vars\\.STAGING_WIND100_UI_${suffix} \\}\\}`));
+    assert.match(build,new RegExp(`STAGING_WIND100_UI_${suffix}: \\\$\\{\\{ needs\\.profile\\.outputs\\.wind100_${suffix.toLowerCase()} \\}\\}`));
+    assert.match(qualify,new RegExp(`STAGING_WIND100_UI_${suffix}: \\\$\\{\\{ vars\\.STAGING_WIND100_UI_${suffix} \\}\\}`));
+  }
+  assert.match(source,/validateWind100BuildReceipt\(c\.profile,JSON\.parse\(bytes\),process\.env\)/,
+    'the deployed live release receipt must be compared with the current protected tuple');
+  assert.match(source,/if\(wind100\)Object\.assign\(c\.qualification,\{wind100\}\)/);
+  assert.match(source,/assert\.deepEqual\(c\.qualification\?\.wind100,wind100\?\?undefined/);
+  assert.doesNotMatch(prod,/WIND100|wind100/);
+});
 test('guard upload adapter preserves args and disables rebundling without invoking a real CLI',()=>{
   const temp=mkdtempSync(resolve(tmpdir(),'wx-ui-adapter-test-'));
   const bin=resolve(temp,'fake-cli');writeFileSync(bin,'#!/usr/bin/env node\nconsole.log(JSON.stringify(process.argv.slice(2)))\n',{mode:0o700});

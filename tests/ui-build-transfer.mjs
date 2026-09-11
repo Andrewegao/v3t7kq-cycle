@@ -45,6 +45,17 @@ test('account profile and build receipt survive encrypted transfer without promo
   eligibleBuild(decoded,r.run,r.jobs,r.artifacts,{...context,profile});
   assert.throws(()=>eligibleBuild(decoded,r.run,r.jobs,r.artifacts,{...context,profile:PROFILE}),/differs from requested profile/);
 });
+test('account profile authenticates only the exact optional Wind100 receipt shape',()=>{
+  const wind100={catalogId:'stage-wind100-34547542747-1',runId:'2026091000',selectionSha256:'e'.repeat(64)};
+  const buildProfile={product:'lab',platformAccount:'1',platformDataAuth:'public',wind100};
+  const c=candidate(ACCOUNT_CORE_PROFILE,buildProfile),decoded=unpackBuild(packBuild(c,keys.publicKey),keys.privateKey);
+  assert.deepEqual(validateCandidate(decoded).buildProfile.wind100,wind100);
+  for(const mutate of [p=>p.wind100.extra=true,p=>p.wind100.catalogId='stage-wind100-other',p=>p.wind100.runId='2026093124',
+    p=>p.wind100.selectionSha256='E'.repeat(64),p=>p.wind100=null]){
+    const bad=structuredClone(buildProfile);mutate(bad);assert.throws(()=>packBuild(candidate(ACCOUNT_CORE_PROFILE,bad),keys.publicKey));
+  }
+  assert.throws(()=>packBuild(candidate(PROFILE,{product:'lab',platformAccount:'0',platformDataAuth:'public',wind100}),keys.publicKey),/cannot enter another profile/);
+});
 test('build ciphertext, header, length, recipient and fake qualification fail closed',()=>{
   const c=candidate(), bytes=packBuild(c,keys.publicKey);
   for(const offset of [0,6,8,391,392,404,430,bytes.length-1]){

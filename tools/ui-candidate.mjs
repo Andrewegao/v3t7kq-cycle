@@ -4,11 +4,11 @@ import assert from 'node:assert/strict';
 import { createHash, createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
-import {BASELINE_PROFILE,validateProfile,validateCandidateSelection,validateCandidateTcSelection,requireProductionProfile,staticCompressionProfile,tcGuidanceProfile} from './ui-staging-models.mjs';
+import {BASELINE_PROFILE,validateProfile,validateCandidateSelection,validateCandidateTcSelection,requireProductionProfile,staticCompressionProfile,tcGuidanceProfile,validateWind100Pin} from './ui-staging-models.mjs';
 import {validateCompressionFiles} from './ui-static-compression.mjs';
 
 export const CONTROL_SHA = '25c402db5149daa018e349a34a4beeba1f2dca45';
-export const STAGING_CONTROL_SHA = '04146c3f67891ed714e1d5bbd27b6998ba0e96ad';
+export const STAGING_CONTROL_SHA = '1d6a787c0cfd5ada47fd3af9ce2a9e2b9b6227bb';
 // Exact reviewed Atmos controller containing the TC release guard and browser harness.
 // Candidate source must both descend from this commit and equal origin/master.
 export const TC_CONTROL_SHA = 'f23664837274fc06a4a94b9bb0fc8d7fa1ee8c58';
@@ -163,10 +163,15 @@ export function validateCandidate(candidate) {
   validateCandidateTcSelection(candidate);
   validateCompressionFiles(candidate.files,staticCompressionProfile(candidate.profile));
   const receipt = JSON.parse(Buffer.from(candidate.files.find(f => f.path === 'health/release.json').base64, 'base64'));
-  if(candidate.profile.account)assert.deepEqual(receipt.buildProfile,
-    {product:'lab',platformAccount:'1',platformDataAuth:'public'},'account staging build receipt differs from approved profile');
-  else if(receipt.buildProfile!==undefined)assert.ok(['0','unspecified'].includes(receipt.buildProfile?.platformAccount),
-    'account-enabled receipt cannot be relabeled as an account-off candidate');
+  if(candidate.profile.account){
+    const expected={product:'lab',platformAccount:'1',platformDataAuth:'public'};
+    if(Object.hasOwn(receipt.buildProfile??{},'wind100'))expected.wind100=validateWind100Pin(receipt.buildProfile.wind100);
+    assert.deepEqual(receipt.buildProfile,expected,'account staging build receipt differs from approved profile');
+  }else if(receipt.buildProfile!==undefined){
+    assert.equal(receipt.buildProfile?.wind100,undefined,'staging Wind100 receipt cannot enter another profile');
+    assert.ok(['0','unspecified'].includes(receipt.buildProfile?.platformAccount),
+      'account-enabled receipt cannot be relabeled as an account-off candidate');
+  }
   assert.equal(receipt.gitSha, candidate.sourceSha);
   assert.equal(receipt.workflowRunId, candidate.runId);
   assert.equal(receipt.releaseId, `git-${candidate.sourceSha.slice(0,12)}-run-${candidate.runId}`);

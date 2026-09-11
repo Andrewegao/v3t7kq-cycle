@@ -32,6 +32,35 @@ export function selectionProfile(profile){validateProfile(profile);return rawSel
 export function coreReleaseProfile(profile){validateProfile(profile);return profile.releaseRosterCore===CORE_RELEASE_REQUEST;}
 export function staticCompressionProfile(profile){validateProfile(profile);return profile.staticCompression==='static-br11-v1';}
 export function tcGuidanceProfile(profile){validateProfile(profile);return profile.tcGuidance===TC_APPROVAL;}
+const WIND100_CATALOG=/^stage-wind100-[1-9]\d{0,19}-[1-9]\d{0,5}$/;
+const WIND100_RUN=/^\d{10}$/;
+const WIND100_HASH=/^[a-f0-9]{64}$/;
+const WIND100_APPROVAL_KEYS=Object.freeze(['STAGING_WIND100_UI_CATALOG_ID','STAGING_WIND100_UI_RUN_ID','STAGING_WIND100_UI_SELECTION_SHA256']);
+export function validateWind100Pin(value){
+  assert.ok(value&&typeof value==='object'&&!Array.isArray(value),'staging Wind100 pin is missing');
+  assert.deepEqual(Object.keys(value).sort(),['catalogId','runId','selectionSha256']);
+  const {catalogId,runId,selectionSha256}=value;
+  assert.match(catalogId??'',WIND100_CATALOG,'invalid staging Wind100 catalog identity');
+  assert.match(runId??'',WIND100_RUN,'invalid staging Wind100 forecast run identity');
+  const runIso=`${runId.slice(0,4)}-${runId.slice(4,6)}-${runId.slice(6,8)}T${runId.slice(8)}:00:00.000Z`,runTime=Date.parse(runIso);
+  assert.ok(Number.isFinite(runTime)&&new Date(runTime).toISOString()===runIso,
+    'invalid staging Wind100 forecast run time');
+  assert.match(selectionSha256??'',WIND100_HASH,'invalid staging Wind100 selection digest');
+  return Object.freeze({catalogId,runId,selectionSha256});
+}
+export function resolveWind100BuildPin(profile,env={}){
+  validateProfile(profile);
+  const enabled=env.STAGING_WIND100_UI_ENABLED??'';
+  assert.equal(typeof enabled,'string','invalid staging Wind100 UI enable approval');
+  if(enabled===''){
+    for(const key of WIND100_APPROVAL_KEYS)assert.equal(env[key]??'','',`staging Wind100 ${key} must be empty while disabled`);
+    return null;
+  }
+  assert.equal(enabled,'true','protected staging Wind100 UI approval must be exactly true');
+  assert.deepEqual(profile,ACCOUNT_CORE_PROFILE,'Wind100 UI is approved only for the account-standard staging profile');
+  return validateWind100Pin({catalogId:env.STAGING_WIND100_UI_CATALOG_ID??'',runId:env.STAGING_WIND100_UI_RUN_ID??'',
+    selectionSha256:env.STAGING_WIND100_UI_SELECTION_SHA256??''});
+}
 export function resolveSelectionRequest(requested='approved',approved,approvedCore,approvedStaticCompression,approvedAccount,approvedTc){
   assert.ok(requested==='approved'||requested==='none'||requested===CORE_RELEASE_REQUEST||requested===STATIC_COMPRESSION_REQUEST||requested===ACCOUNT_CORE_REQUEST||requested===TC_RELEASE_REQUEST||HASH.test(requested??''),'invalid staging selection request');
   if(requested==='none')return 'none';

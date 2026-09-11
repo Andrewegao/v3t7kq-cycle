@@ -4,16 +4,60 @@ import {mkdtempSync,mkdirSync,writeFileSync,realpathSync,readFileSync} from 'nod
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
-import {BASELINE_PROFILE,CORE_RELEASE_PROFILE,CORE_RELEASE_REQUEST,MODELS,GRIDS,variables,displayPaths,digest,canonical,cycleTime,resolveSelectionRequest,profileFor,validateProfile,requireProductionProfile,validateSelection,readSelection,validateCandidateSelection,requireStagingApproval,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt} from '../tools/ui-staging-models.mjs';
+import {ACCOUNT_CORE_PROFILE,BASELINE_PROFILE,CORE_RELEASE_PROFILE,CORE_RELEASE_REQUEST,MODELS,GRIDS,variables,displayPaths,digest,canonical,cycleTime,resolveSelectionRequest,resolveWind100BuildPin,profileFor,validateProfile,requireProductionProfile,validateSelection,readSelection,validateCandidateSelection,requireStagingApproval,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt} from '../tools/ui-staging-models.mjs';
 import {browserCandidateReady,discardedResponseBody,layerActivationNeeded,matrixProofPlan,pixelDifference,responseBodyOrFallback,responseCaptureNeeded,validateFetchedObject,validateIndependentPointSource} from '../tools/ui-staging-model-browser.mjs';
 import {browserErrorDetail,catalogAdmissionProof,coreCycle,deckSurfaceProof,hiddenDeckSurfaceProof,protocol as coreBrowserProtocol,releaseRosterProof,validateCoreIndex,validateOutsideDomain} from '../tools/ui-staging-core-browser.mjs';
 import {createCandidate,hash,eligibleRun,REPOSITORY,CONTROL_SHA,STAGING_CONTROL_SHA,controlShaFor} from '../tools/ui-candidate.mjs';
 import {eligibleBuild} from '../tools/ui-build-transfer.mjs';
-import {publicBuildEnvironment,requiredSourceGuard,standaloneWeatherFeedVerificationRequired} from '../tools/ui-release.mjs';
+import {publicBuildEnvironment,receiptVerificationEnvironment,requiredSourceGuard,standaloneWeatherFeedVerificationRequired,validateWind100BuildReceipt} from '../tools/ui-release.mjs';
 import {requireSelectionMargin} from '../tools/ui-staging-preflight.mjs';
 import {STATIC_COMPRESSION_REQUEST,STATIC_COMPRESSION_PROFILE,staticCompressionProfile,coreReleaseProfile} from '../tools/ui-staging-models.mjs';
 
 const NOW=Date.parse('2026-08-31T20:00:00Z'),INIT='2026083112',SHA='a'.repeat(40),DIGEST='b'.repeat(64);
+const WIND100={catalogId:'stage-wind100-34547542747-1',runId:'2026091000',selectionSha256:'e'.repeat(64)};
+const wind100Env=(change={})=>({STAGING_WIND100_UI_ENABLED:'true',STAGING_WIND100_UI_CATALOG_ID:WIND100.catalogId,
+  STAGING_WIND100_UI_RUN_ID:WIND100.runId,STAGING_WIND100_UI_SELECTION_SHA256:WIND100.selectionSha256,...change});
+test('Wind100 pin is optional, exact, and restricted to the account-standard staging profile',()=>{
+  assert.equal(resolveWind100BuildPin(ACCOUNT_CORE_PROFILE,{}),null);
+  assert.deepEqual(resolveWind100BuildPin(ACCOUNT_CORE_PROFILE,wind100Env()),WIND100);
+  for(const profile of [BASELINE_PROFILE,CORE_RELEASE_PROFILE,profileFor(DIGEST)])
+    assert.throws(()=>resolveWind100BuildPin(profile,wind100Env()),/account-standard/);
+  for(const env of [
+    wind100Env({STAGING_WIND100_UI_ENABLED:''}),
+    wind100Env({STAGING_WIND100_UI_ENABLED:'false'}),
+    wind100Env({STAGING_WIND100_UI_CATALOG_ID:''}),
+    wind100Env({STAGING_WIND100_UI_CATALOG_ID:'stage-wind100-other'}),
+    wind100Env({STAGING_WIND100_UI_RUN_ID:'202609100'}),
+    wind100Env({STAGING_WIND100_UI_RUN_ID:'2026093124'}),
+    wind100Env({STAGING_WIND100_UI_SELECTION_SHA256:'E'.repeat(64)}),
+  ]) assert.throws(()=>resolveWind100BuildPin(ACCOUNT_CORE_PROFILE,env));
+  for(const key of ['STAGING_WIND100_UI_CATALOG_ID','STAGING_WIND100_UI_RUN_ID','STAGING_WIND100_UI_SELECTION_SHA256'])
+    assert.throws(()=>resolveWind100BuildPin(ACCOUNT_CORE_PROFILE,{[key]:wind100Env()[key]}),/disabled/);
+});
+test('Wind100 build flags and receipt are exact while every disabled profile clears ambient values',()=>{
+  const inherited={VITE_STAGING_WIND100:'1',VITE_STAGING_WIND100_CATALOG_ID:'malicious',VITE_STAGING_WIND100_RUN_ID:'malicious',
+    VITE_STAGING_WIND100_SELECTION_SHA256:'malicious'};
+  const enabled=publicBuildEnvironment(ACCOUNT_CORE_PROFILE,null,{...inherited,...wind100Env()});
+  assert.equal(enabled.VITE_STAGING_WIND100,'1');assert.equal(enabled.VITE_STAGING_WIND100_CATALOG_ID,WIND100.catalogId);
+  assert.equal(enabled.VITE_STAGING_WIND100_RUN_ID,WIND100.runId);assert.equal(enabled.VITE_STAGING_WIND100_SELECTION_SHA256,WIND100.selectionSha256);
+  for(const key of Object.keys(wind100Env()))assert.equal(enabled[key],undefined,'protected approval metadata must not reach candidate subprocesses');
+  const receipt={buildProfile:{product:'lab',platformAccount:'1',platformDataAuth:'public',wind100:WIND100}};
+  const verifyEnv=receiptVerificationEnvironment(ACCOUNT_CORE_PROFILE,wind100Env());
+  assert.equal(verifyEnv.ATMOS_PUBLIC_RELEASE,'0');assert.equal(verifyEnv.ATMOS_STAGING_EXPERIMENT_RELEASE,'1');
+  assert.equal(verifyEnv.ATMOS_STAGING_RELEASE_ROSTER,'1');assert.equal(verifyEnv.ATMOS_STAGING_ACCOUNT_PROFILE,'staging-account-v1');
+  assert.deepEqual({product:verifyEnv.VITE_PRODUCT,platformAccount:verifyEnv.VITE_PLATFORM_ACCOUNT,platformDataAuth:verifyEnv.VITE_PLATFORM_DATA_AUTH,
+    wind100:{catalogId:verifyEnv.VITE_STAGING_WIND100_CATALOG_ID,runId:verifyEnv.VITE_STAGING_WIND100_RUN_ID,selectionSha256:verifyEnv.VITE_STAGING_WIND100_SELECTION_SHA256}},receipt.buildProfile);
+  assert.deepEqual(validateWind100BuildReceipt(ACCOUNT_CORE_PROFILE,receipt,wind100Env()),WIND100);
+  for(const mutate of [r=>delete r.buildProfile.wind100,r=>r.buildProfile.wind100.runId='2026091012',r=>r.buildProfile.wind100.extra=true]){
+    const changed=structuredClone(receipt);mutate(changed);assert.throws(()=>validateWind100BuildReceipt(ACCOUNT_CORE_PROFILE,changed,wind100Env()));
+  }
+  for(const profile of [BASELINE_PROFILE,CORE_RELEASE_PROFILE]){
+    const off=publicBuildEnvironment(profile,null,inherited);
+    for(const key of ['VITE_STAGING_WIND100','VITE_STAGING_WIND100_CATALOG_ID','VITE_STAGING_WIND100_RUN_ID','VITE_STAGING_WIND100_SELECTION_SHA256'])assert.equal(off[key],'');
+    assert.equal(validateWind100BuildReceipt(profile,{buildProfile:{}},{}),null);
+    assert.throws(()=>validateWind100BuildReceipt(profile,receipt,{}),/disabled/);
+  }
+});
 test('compressed core profile is exact, staging-only, and remains core rather than a selection',()=>{
   assert.equal(STATIC_COMPRESSION_REQUEST,'release-roster-core-br11-v1');
   assert.deepEqual(STATIC_COMPRESSION_PROFILE,{...CORE_RELEASE_PROFILE,staticCompression:'static-br11-v1'});

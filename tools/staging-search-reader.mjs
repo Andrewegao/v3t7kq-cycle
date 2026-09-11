@@ -1,4 +1,5 @@
-// Staging code-only rollout. No settings, routes, schedules, secrets, assets or data writes.
+// Staging code rollout with one optional, exact public Wind100 selector tuple. No routes,
+// schedules, secrets, assets or data writes; every unrelated binding is inherited unchanged.
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -15,14 +16,129 @@ export const SCRIPT = `/accounts/${ACCOUNT}/workers/scripts/${WORKER}`;
 export const ROUTES = '/zones/9dc4df7c3c094ab9a11dd00d378adc26/workers/routes';
 export const ORIGIN = 'https://staging.weatherx.org';
 export const EXCLUSIVE = 'EXCLUSIVE-STAGING-WORKER-CODE-ONLY';
+export const WIND100_BINDING_NAMES = Object.freeze([
+  'STAGING_WIND100_CATALOG_ID', 'STAGING_WIND100_RUN_ID', 'STAGING_WIND100_SELECTION_SHA256',
+]);
+export const WIND100_PROBE_TIMEOUT_MS = 15_000;
+const WIND100_APPROVAL_NAMES = Object.freeze([
+  'STAGING_WIND100_READER_ENABLED', 'STAGING_WIND100_READER_CATALOG_ID',
+  'STAGING_WIND100_READER_RUN_ID', 'STAGING_WIND100_READER_SELECTION_SHA256',
+]);
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const SHA = /^[a-f0-9]{40}$/;
 const HASH = /^[a-f0-9]{64}$/;
+const WIND100_CATALOG = /^stage-wind100-[1-9]\d{0,19}-[1-9]\d{0,5}$/;
+const WIND100_SOURCE = 'ECMWF IFS 0.25 degree direct open-data GRIB';
 export const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 export const digest = value => hash(canonical(value));
 const same = (a, b, message) => assert.ok(canonical(a) === canonical(b), message);
 const sorted = rows => [...rows].sort((a, b) => canonical(a).localeCompare(canonical(b)));
 const validKeys = (value, names, message) => assert.ok(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(k => names.includes(k)), message);
+const wind100Policy = JSON.parse(readFileSync(new URL('./staging-wind100-policy.json', import.meta.url), 'utf8'));
+assert.deepEqual({ schemaVersion: wind100Policy.schemaVersion, model: wind100Policy.model,
+  freshnessHours: wind100Policy.freshnessHours, minimumForecastLeaseHours: wind100Policy.minimumForecastLeaseHours },
+{ schemaVersion: 3, model: 'ecmwf', freshnessHours: 30, minimumForecastLeaseHours: 6 },
+'staging Wind100 freshness policy differs');
+export const WIND100_FRESHNESS_MS = wind100Policy.freshnessHours * 60 * 60_000;
+export const WIND100_MINIMUM_FORECAST_LEASE_MS = wind100Policy.minimumForecastLeaseHours * 60 * 60_000;
+
+function validateWind100(value) {
+  validKeys(value, ['catalogId', 'runId', 'selectionSha256'], 'invalid staging Wind100 selector');
+  assert.ok(Object.keys(value).length === 3, 'incomplete staging Wind100 selector');
+  assert.match(value.catalogId ?? '', WIND100_CATALOG, 'invalid staging Wind100 catalog identity');
+  assert.match(value.runId ?? '', /^\d{10}$/, 'invalid staging Wind100 run identity');
+  const runIso = `${value.runId.slice(0, 4)}-${value.runId.slice(4, 6)}-${value.runId.slice(6, 8)}T${value.runId.slice(8)}:00:00.000Z`;
+  const runTime = Date.parse(runIso);
+  assert.ok(Number.isFinite(runTime) && new Date(runTime).toISOString() === runIso, 'invalid staging Wind100 run time');
+  assert.match(value.selectionSha256 ?? '', HASH, 'invalid staging Wind100 selection digest');
+  return JSON.parse(canonical(value));
+}
+
+const wind100RunIso = runId => `${runId.slice(0, 4)}-${runId.slice(4, 6)}-${runId.slice(6, 8)}T${runId.slice(8)}:00:00.000Z`;
+export function wind100ProbePath(value) {
+  const selected = validateWind100(value), start = wind100RunIso(selected.runId);
+  const query = new URLSearchParams({ lat: '32.06', lon: '118.8', variables: 'wind_speed',
+    optionalVariables: 'wind_speed_100m', start, end: new Date(Date.parse(start) + 6 * 60 * 60_000).toISOString(),
+    run: selected.runId, catalog: selected.catalogId, selection: selected.selectionSha256 });
+  return `/api/v1/point-series/ecmwf?${query}`;
+}
+
+export function qualifyWind100Response(result, value, now = Date.now()) {
+  const selected = validateWind100(value);
+  const initializedAt = wind100RunIso(selected.runId), expectedTimes = [initializedAt,
+    new Date(Date.parse(initializedAt) + 3 * 60 * 60_000).toISOString()];
+  assert.ok(Number.isFinite(now), 'invalid staging Wind100 qualification time');
+  assert.ok(result?.status === 200 && result.body instanceof Uint8Array && result.body.byteLength <= 2 * 1024 * 1024,
+    'staging Wind100 response refused');
+  assert.ok(result.headers?.get('X-WeatherX-Data-Source') === 'own' &&
+    result.headers.get('X-WeatherX-Catalog') === selected.catalogId, 'staging Wind100 provenance differs');
+  let payload;
+  try { payload = JSON.parse(Buffer.from(result.body).toString('utf8')); }
+  catch { throw Error('staging Wind100 response invalid'); }
+  assert.ok(payload && typeof payload === 'object' && !Array.isArray(payload), 'staging Wind100 response invalid');
+  assert.ok(payload.schemaVersion === 1 && payload.model === 'ecmwf' && payload.runId === selected.runId &&
+    payload.releaseId === selected.catalogId && [initializedAt, initializedAt.replace('.000Z', 'Z')].includes(payload.initializedAt) &&
+    payload.source === WIND100_SOURCE && payload.runSelection === undefined, 'staging Wind100 identity differs');
+  const freshUntil = Date.parse(payload.freshUntil);
+  assert.ok(Number.isFinite(freshUntil) && freshUntil === Date.parse(initializedAt) + WIND100_FRESHNESS_MS &&
+    freshUntil - now >= WIND100_MINIMUM_FORECAST_LEASE_MS, 'staging Wind100 freshness contract differs');
+  assert.ok(payload.quality === 'complete' && Array.isArray(payload.missingFields) && payload.missingFields.length === 0 &&
+    Array.isArray(payload.optionalMissingFields) && payload.optionalMissingFields.length === 0,
+  'staging Wind100 response is incomplete');
+  assert.ok(payload.nativeCadenceSeconds === 3 * 60 * 60 && payload.resolutionDegrees === 0.25 &&
+    canonical(payload.window) === canonical({ start: initializedAt, end: new Date(Date.parse(initializedAt) + 6 * 60 * 60_000).toISOString() }) &&
+    canonical(payload.requestedPoint) === canonical({ latitude: 32.06, longitude: 118.8 }),
+  'staging Wind100 sampling contract differs');
+  assert.ok(payload.series && typeof payload.series === 'object' && !Array.isArray(payload.series) &&
+    canonical(Object.keys(payload.series).sort()) === canonical(['wind_speed', 'wind_speed_100m']),
+  'staging Wind100 series differs');
+  for (const name of ['wind_speed', 'wind_speed_100m']) {
+    const series = payload.series[name];
+    assert.ok(series && series.kind === 'instantaneous' && series.units === 'm/s' && Array.isArray(series.samples) &&
+      series.samples.length === expectedTimes.length &&
+      canonical(series.samples.map(sample => sample?.validTime)) === canonical(expectedTimes),
+    'staging Wind100 series invalid');
+    assert.ok(series.samples.every(sample => sample && typeof sample === 'object' && Number.isFinite(sample.value) && sample.value >= 0),
+    'staging Wind100 samples invalid');
+  }
+  return payload;
+}
+
+export function wind100Approval(env) {
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('STAGING_WIND100_READER_')) assert.ok(WIND100_APPROVAL_NAMES.includes(key), 'unknown staging Wind100 approval');
+  }
+  const enabled = env.STAGING_WIND100_READER_ENABLED ?? '';
+  assert.ok(typeof enabled === 'string', 'invalid staging Wind100 approval');
+  const values = [env.STAGING_WIND100_READER_CATALOG_ID ?? '', env.STAGING_WIND100_READER_RUN_ID ?? '',
+    env.STAGING_WIND100_READER_SELECTION_SHA256 ?? ''];
+  if (enabled === '') {
+    assert.ok(values.every(value => value === ''), 'staging Wind100 approval must be empty while disabled');
+    return null;
+  }
+  assert.ok(enabled === 'true', 'staging Wind100 reader approval must be exactly true');
+  return validateWind100({ catalogId: values[0], runId: values[1], selectionSha256: values[2] });
+}
+
+const wind100BindingRows = value => {
+  const selected = validateWind100(value);
+  return WIND100_BINDING_NAMES.map(name => ({ name, type: 'plain_text', text: {
+    STAGING_WIND100_CATALOG_ID: selected.catalogId,
+    STAGING_WIND100_RUN_ID: selected.runId,
+    STAGING_WIND100_SELECTION_SHA256: selected.selectionSha256,
+  }[name] }));
+};
+
+function validateLiveWind100(bindings) {
+  const rows = bindings.filter(binding => binding.name.startsWith('STAGING_WIND100_'));
+  assert.ok(rows.every(binding => WIND100_BINDING_NAMES.includes(binding.name)), 'unknown staging Wind100 binding');
+  if (rows.length === 0) return null;
+  assert.ok(rows.length === WIND100_BINDING_NAMES.length && rows.every(binding => binding.type === 'plain_text'),
+    'staging Wind100 binding tuple is incomplete');
+  const values = Object.fromEntries(rows.map(binding => [binding.name, binding.text]));
+  return validateWind100({ catalogId: values.STAGING_WIND100_CATALOG_ID, runId: values.STAGING_WIND100_RUN_ID,
+    selectionSha256: values.STAGING_WIND100_SELECTION_SHA256 });
+}
 
 export function readerGate(env, action) {
   assert.ok(['inspect', 'rollout', 'recover'].includes(action), 'unsupported reader action');
@@ -39,6 +155,7 @@ export function readerGate(env, action) {
     assert.match(env.STAGING_SEARCH_READER_APPROVED_VERSION ?? '', UUID);
     assert.match(env.STAGING_SEARCH_READER_APPROVED_BOUNDARY_SHA256 ?? '', HASH);
   }
+  return wind100Approval(env);
 }
 
 export function settings(value) {
@@ -47,6 +164,7 @@ export function settings(value) {
   const result = JSON.parse(canonical({ ...value, bindings: normalizedBindings(value.bindings),
     compatibility_flags: sorted(value.compatibility_flags ?? []) }));
   assert.ok(new Set(result.bindings.map(b => b.name)).size === result.bindings.length, 'duplicate binding');
+  validateLiveWind100(result.bindings);
   const vars = Object.fromEntries(result.bindings.filter(b => b.type === 'plain_text').map(b => [b.name, b.text]));
   for (const [name, expected] of Object.entries({ APP_ORIGIN: ORIGIN, AUTH_MODE: 'public', BILLING_MODE: 'enabled',
     STRIPE_ENVIRONMENT: 'test', AI_AUTH_POLICY: 'staging-account-v1', DATA_SOURCE_MODE: 'shared', DATA_CATALOG_MODE: 'serve' })) {
@@ -65,13 +183,25 @@ export function runtime(value) {
 const userAnnotations = value => Object.fromEntries(Object.entries(value ?? {}).filter(([key]) => key !== 'workers/triggered_by'));
 export function annotations(receipt) {
   return { ...userAnnotations(receipt.before.settings.annotations), 'workers/tag': receipt.tag,
-    'workers/commit_sha': receipt.sha, 'workers/message': 'Staging search reader code-only qualification' };
+    'workers/commit_sha': receipt.sha, 'workers/message': receipt.wind100
+      ? 'Staging search reader and exact Wind100 selector qualification'
+      : 'Staging search reader code-only qualification' };
+}
+export function candidateBindings(receipt) {
+  if (!receipt.wind100) return receipt.before.settings.bindings;
+  const kept = receipt.before.settings.bindings.filter(binding => !WIND100_BINDING_NAMES.includes(binding.name));
+  return normalizedBindings([...kept, ...wind100BindingRows(receipt.wind100)]);
 }
 export function uploadMetadata(receipt) {
   const before = receipt.before.settings;
+  const replacements = new Set(receipt.wind100 ? WIND100_BINDING_NAMES : []);
   const metadata = { main_module: 'stagingReader.mjs', compatibility_date: before.compatibility_date,
     compatibility_flags: before.compatibility_flags,
-    bindings: before.bindings.map(b => ({ name: b.name, type: 'inherit', version_id: 'latest' })), annotations: annotations(receipt) };
+    bindings: [
+      ...before.bindings.filter(binding => !replacements.has(binding.name))
+        .map(binding => ({ name: binding.name, type: 'inherit', version_id: 'latest' })),
+      ...(receipt.wind100 ? wind100BindingRows(receipt.wind100) : []),
+    ], annotations: annotations(receipt) };
   for (const key of ['placement', 'limits', 'cache_options', 'usage_model']) if (Object.hasOwn(before, key)) metadata[key] = before[key];
   if (metadata.placement && Object.keys(metadata.placement).length === 0) delete metadata.placement;
   for (const key of ['limits', 'usage_model']) if (Object.hasOwn(receipt.before.runtime, key)) metadata[key] = receipt.before.runtime[key];
@@ -80,7 +210,8 @@ export function uploadMetadata(receipt) {
 export function assertVersion(version, receipt, owned = true) {
   assert.match(version?.id ?? '', UUID, 'version identity missing');
   validKeys(version.resources, ['bindings', 'script', 'script_runtime'], 'unsupported version resources (including assets); refuse rather than discard');
-  same(normalizedBindings(version.resources.bindings), receipt.before.settings.bindings, 'version bindings changed');
+  same(normalizedBindings(version.resources.bindings), owned ? candidateBindings(receipt) : receipt.before.settings.bindings,
+    'version bindings changed');
   same(runtime(version.resources.script_runtime), receipt.before.runtime, 'version runtime changed');
   assert.match(version.resources.script?.etag ?? '', HASH, 'version content identity absent');
   if (owned) {
@@ -93,6 +224,10 @@ export function assertBoundary(current, receipt) {
   const observed = structuredClone(current);
   if (observed.settings.annotations?.['workers/tag'] === receipt.tag) {
     same(userAnnotations(observed.settings.annotations), annotations(receipt), 'owned annotation drift');
+    if (receipt.wind100) {
+      same(observed.settings.bindings, candidateBindings(receipt), 'owned Wind100 binding drift');
+      observed.settings.bindings = receipt.before.settings.bindings;
+    }
     if (Object.hasOwn(receipt.before.settings, 'annotations')) observed.settings.annotations = receipt.before.settings.annotations;
     else delete observed.settings.annotations;
   }
@@ -108,11 +243,12 @@ async function guard(ops, receipt, active) {
   assert.ok(await ops.active() === active, 'foreign deployment active');
   if (receipt.uploaded) assertVersion(await ops.version(receipt.uploaded), receipt);
 }
-export async function preflight(ops, source, identity, now = Date.now()) {
+export async function preflight(ops, source, identity, now = Date.now(), wind100 = null) {
   const beforeVersion = await ops.active(), history = await ops.history(), before = await ops.boundary();
   assert.ok(history[0].id === beforeVersion, 'latest version is not active; secret inheritance unsafe');
   const receipt = { schemaVersion: 1, worker: WORKER, sha: source.sha, bundleSha256: source.sha256,
     identity, beforeVersion, history, before, createdAt: new Date(now).toISOString(), tag: `wx-search-${randomUUID()}`, status: 'preflight-passed' };
+  if (wind100) receipt.wind100 = validateWind100(wind100);
   assertVersion(await ops.version(beforeVersion), receipt, false);
   await ops.probe(); await guard(ops, receipt, beforeVersion);
   receipt.boundarySha256 = digest({ beforeVersion, before });
@@ -139,6 +275,7 @@ export async function rollout(ops, source, receipt, approved, persist = () => {}
   assert.ok(receipt.status === 'preflight-passed' && now >= Date.parse(receipt.createdAt) && now - Date.parse(receipt.createdAt) < 15 * 60_000, 'preflight expired');
   assert.ok(receipt.sha === source.sha && receipt.bundleSha256 === source.sha256, 'source changed after preflight');
   assert.ok(receipt.beforeVersion === approved.version && receipt.boundarySha256 === approved.digest, 'live boundary not approved');
+  same(receipt.wind100 ?? null, approved.wind100 ?? null, 'staging Wind100 operator intent changed');
   assert.ok(receipt.boundarySha256 === digest({ beforeVersion: receipt.beforeVersion, before: receipt.before }), 'receipt boundary changed');
   try {
     await guard(ops, receipt, receipt.beforeVersion);
@@ -152,7 +289,9 @@ export async function rollout(ops, source, receipt, approved, persist = () => {}
     try { await ops.deploy(receipt.uploaded); } catch { /* Inspect actual active version below. */ }
     for (let round = 0; round < 3; round++) {
       if (round) await ops.pause(2000);
-      await guard(ops, receipt, receipt.uploaded); await ops.probe(); await guard(ops, receipt, receipt.uploaded);
+      await guard(ops, receipt, receipt.uploaded); await ops.probe();
+      if (round === 0 && receipt.wind100) await ops.probeWind100(receipt.wind100);
+      await guard(ops, receipt, receipt.uploaded);
     }
     receipt.status = 'passed'; persist(); return receipt;
   } catch {
@@ -166,13 +305,19 @@ export function allowedApi(path, method) {
   assert.ok(method === 'GET' ? reads.includes(path) || new RegExp(`^${SCRIPT}/versions/[a-f0-9-]{36}$`).test(path) :
     method === 'POST' && [ `${SCRIPT}/versions?bindings_inherit=strict`, `${SCRIPT}/deployments` ].includes(path), 'API target/method outside staging code-only allowlist');
 }
-export function transport(token, fetchImpl = fetch) {
+export function assertStagingRoutes(routes) {
+  const owned = routes.filter(route => route.script === WORKER);
+  assert.ok(owned.length > 0 && owned.every(route => route.pattern.startsWith('staging.weatherx.org/')), 'foreign route binding');
+}
+export function transport(token, fetchImpl = fetch, wind100TimeoutMs = WIND100_PROBE_TIMEOUT_MS) {
   assert.ok(typeof token === 'string' && token.length > 0, 'staging Worker credential missing');
+  assert.ok(Number.isInteger(wind100TimeoutMs) && wind100TimeoutMs > 0 && wind100TimeoutMs <= WIND100_PROBE_TIMEOUT_MS,
+    'invalid staging Wind100 probe timeout');
   let deadline = Date.now() + 8 * 60_000;
-  async function request(url, init = {}) {
+  async function request(url, init = {}, maximumMs = 20_000) {
     try {
       assert.ok(deadline > Date.now(), 'deadline');
-      const response = await fetchImpl(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.min(20_000, deadline - Date.now())) });
+      const response = await fetchImpl(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.min(maximumMs, deadline - Date.now())) });
       const chunks = []; let size = 0;
       try { for await (const chunk of response.body ?? []) { size += chunk.length; assert.ok(size <= 2 * 1024 * 1024); chunks.push(Buffer.from(chunk)); } }
       finally { await response.body?.cancel().catch(() => {}); }
@@ -193,6 +338,9 @@ export function transport(token, fetchImpl = fetch) {
       assert.ok(['/api/platform/health', '/api/platform/data-health', '/api/platform/auth/me', '/data/ecmwf/index.json'].includes(path), 'public probe path refused');
       return request(ORIGIN + path, { headers: { Origin: ORIGIN } });
     },
+    wind100Get(value) {
+      return request(ORIGIN + wind100ProbePath(value), { headers: { Accept: 'application/json', Origin: ORIGIN } }, wind100TimeoutMs);
+    },
   };
 }
 export function operations(io) {
@@ -204,7 +352,7 @@ export function operations(io) {
       const configured = settings(raw), detail = await version(await active());
       validKeys(detail.resources, ['bindings', 'script', 'script_runtime'], 'assets or unknown resources require separate reviewed preservation');
       assert.ok(subdomain.enabled === false && subdomain.previews_enabled === false, 'development URL policy differs');
-      assert.ok(routes.filter(r => r.script === WORKER).every(r => r.pattern.startsWith('staging.weatherx.org/')), 'foreign route binding');
+      assertStagingRoutes(routes);
       return { settings: configured, runtime: runtime(detail.resources.script_runtime), schedules, subdomain, routes: sorted(routes) };
     },
     async upload(bytes, metadata) {
@@ -222,7 +370,9 @@ export function operations(io) {
       const me = await read('/api/platform/auth/me');
       assert.ok(me.authenticated === false && me.user === null && me.billingMode === 'enabled', 'anonymous account policy changed');
       const weather = await read('/data/ecmwf/index.json'); assert.ok(weather && typeof weather === 'object' && Object.keys(weather).length > 0, 'weather index missing');
-    }, pause: ms => new Promise(done => setTimeout(done, ms)),
+    },
+    async probeWind100(value) { qualifyWind100Response(await io.wind100Get(value), value); },
+    pause: ms => new Promise(done => setTimeout(done, ms)),
   };
 }
 export async function buildSource(atmos, sha) {
@@ -255,7 +405,7 @@ export async function buildSource(atmos, sha) {
 }
 async function main() {
   const action = process.env.READER_ACTION;
-  readerGate(process.env, action);
+  const wind100 = readerGate(process.env, action);
   if (process.argv[2] === 'gate') return;
   const file = resolve(process.env.RUNNER_TEMP, 'staging-search-reader', 'receipt.json');
   const identity = { controller: process.env.GITHUB_SHA, run: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT };
@@ -264,16 +414,18 @@ async function main() {
     const receipt = JSON.parse(readFileSync(file)); same(receipt.identity, identity, 'receipt belongs to another run');
     assert.ok(receipt.worker === WORKER && receipt.sha === process.env.READER_SOURCE_SHA &&
       receipt.boundarySha256 === digest({ beforeVersion: receipt.beforeVersion, before: receipt.before }), 'recovery receipt identity differs');
+    same(receipt.wind100 ?? null, wind100, 'recovery Wind100 operator intent changed');
     await recover(ops, receipt, () => saveReceipt(file, receipt)); return;
   }
   const source = await buildSource(resolve(process.env.GITHUB_WORKSPACE, 'control'), process.env.READER_SOURCE_SHA);
-  const receipt = await preflight(ops, source, identity);
+  const receipt = await preflight(ops, source, identity, Date.now(), wind100);
   saveReceipt(file, receipt);
   console.log(JSON.stringify({ worker: WORKER, sourceSha: source.sha, bundleSha256: source.sha256,
     version: receipt.beforeVersion, boundarySha256: receipt.boundarySha256, bindingNames: receipt.before.settings.bindings.map(b => b.name), deployed: false }));
   if (action === 'rollout') {
     await rollout(ops, source, receipt, { version: process.env.STAGING_SEARCH_READER_APPROVED_VERSION,
-      digest: process.env.STAGING_SEARCH_READER_APPROVED_BOUNDARY_SHA256 }, () => saveReceipt(file, receipt));
+      digest: process.env.STAGING_SEARCH_READER_APPROVED_BOUNDARY_SHA256, ...(wind100 ? { wind100 } : {}) },
+    () => saveReceipt(file, receipt));
     console.log(JSON.stringify({ worker: WORKER, status: receipt.status, version: receipt.uploaded }));
   }
 }
