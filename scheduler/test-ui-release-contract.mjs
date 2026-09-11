@@ -2,12 +2,11 @@ import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 
 const readWorkflow = (name) => readFile(new URL(`../.github/workflows/${name}`, import.meta.url), 'utf8');
-const [bake, ui, staging, backfill, satellite] = await Promise.all([
+const [bake, ui, staging, backfill] = await Promise.all([
   readWorkflow('bake.yml'),
   readWorkflow('ui-release.yml'),
   readWorkflow('ui-staging.yml'),
   readWorkflow('verify-backfill.yml'),
-  readWorkflow('satellite-archive.yml'),
 ]);
 const workflowDirectory = new URL('../.github/workflows/', import.meta.url);
 const workflowNames = (await readdir(workflowDirectory)).filter((name) => name.endsWith('.yml'));
@@ -24,16 +23,6 @@ function validateUse(line, workflowName) {
   assert.match(line, /@[a-f0-9]{40}(?:\s+#.*)?$/,
     `${workflowName} must pin every external action to a full commit SHA: ${line.trim()}`);
   assert.doesNotMatch(line, /uses:\s+\.\//, 'local reusable calls must be exact reviewed data lanes');
-}
-
-function jobBlocks(workflow) {
-  const jobs = workflow.split('\njobs:\n')[1];
-  assert.ok(jobs, 'workflow must declare jobs');
-  const starts = [...jobs.matchAll(/^  ([a-z0-9-]+):\n/gm)];
-  return Object.fromEntries(starts.map((match, index) => [
-    match[1],
-    jobs.slice(match.index, starts[index + 1]?.index),
-  ]));
 }
 for (const bad of ['    uses: ./.github/workflows/unknown.yml', '    uses: ./.github/workflows/collect-core-model.yml@main',
   '    uses: ./.github/workflows/collect-core-model.yml@' + 'a'.repeat(40), '    uses: actions/checkout@main']) {
@@ -61,28 +50,6 @@ for (const workflowName of workflowNames) {
     assert.match(workflow, /\n\s{4}environment:\s*(?:production|staging|\n)/,
       `${workflowName} must place secret-bearing jobs behind a protected environment`);
   }
-}
-
-const satelliteJobs = jobBlocks(satellite);
-const satelliteSecretJobs = Object.entries(satelliteJobs)
-  .filter(([, block]) => /secrets\./.test(block))
-  .map(([name]) => name)
-  .sort();
-assert.deepEqual(satelliteSecretJobs, ['backfill', 'backfill-plan', 'hourly']);
-for (const name of satelliteSecretJobs) {
-  const block = satelliteJobs[name];
-  const event = name === 'hourly' ? 'schedule' : 'workflow_dispatch';
-  assert.match(block, /\n    environment:\n      name: satellite-archive\n/,
-    `${name} must use the dedicated protected satellite environment`);
-  const approval = name === 'hourly'
-    ? "vars.SATELLITE_ARCHIVE_ENABLED == '1'"
-    : "inputs.policy == 'storm-window-3d-v1' && vars.SATELLITE_ARCHIVE_STORM_PILOT_ENABLED == '1'";
-  assert.ok(block.includes(
-    `\n    if: \${{ github.event_name == '${event}' && github.ref == 'refs/heads/main' && ${approval} }}\n`,
-  ), `${name} must reject the wrong event, ref or independent approval before secrets are available`);
-  assert.equal((block.match(/ssh-key: \$\{\{ secrets\.ATMOS_DEPLOY_KEY \}\}/g) || []).length, 1);
-  assert.equal((block.match(/persist-credentials: false/g) || []).length, 1,
-    `${name} private checkout must not persist its deploy key`);
 }
 
 assert.match(bake, /group: weatherx-data-maintenance/,

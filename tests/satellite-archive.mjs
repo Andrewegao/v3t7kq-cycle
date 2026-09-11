@@ -22,6 +22,16 @@ function literal(name) {
   return body.join('\n');
 }
 
+function jobBlocks(source) {
+  const jobs = source.split('\njobs:\n')[1];
+  assert.ok(jobs, 'workflow must declare jobs');
+  const starts = [...jobs.matchAll(/^  ([a-z0-9-]+):\n/gm)];
+  return Object.fromEntries(starts.map((match, index) => [
+    match[1],
+    jobs.slice(match.index, starts[index + 1]?.index),
+  ]));
+}
+
 const controller = literal('SATELLITE_FAILURE_EVIDENCE_SCRIPT');
 
 function canonical(value) {
@@ -194,6 +204,27 @@ test('digest, count and byte limit violations fail closed without an artifact', 
 });
 
 test('hourly and backfill failure retention remain protected and secret-free', () => {
+  const satelliteJobs = jobBlocks(workflow);
+  const satelliteSecretJobs = Object.entries(satelliteJobs)
+    .filter(([, block]) => /secrets\./.test(block))
+    .map(([name]) => name)
+    .sort();
+  assert.deepEqual(satelliteSecretJobs, ['backfill', 'backfill-plan', 'hourly']);
+  for (const name of satelliteSecretJobs) {
+    const block = satelliteJobs[name];
+    const event = name === 'hourly' ? 'schedule' : 'workflow_dispatch';
+    assert.match(block, /\n    environment:\n      name: satellite-archive\n/,
+      `${name} must use the dedicated protected satellite environment`);
+    const approval = name === 'hourly'
+      ? "vars.SATELLITE_ARCHIVE_ENABLED == '1'"
+      : "inputs.policy == 'storm-window-3d-v1' && vars.SATELLITE_ARCHIVE_STORM_PILOT_ENABLED == '1'";
+    assert.ok(block.includes(
+      `\n    if: \${{ github.event_name == '${event}' && github.ref == 'refs/heads/main' && ${approval} }}\n`,
+    ), `${name} must reject the wrong event, ref or independent approval before secrets are available`);
+    assert.equal((block.match(/ssh-key: \$\{\{ secrets\.ATMOS_DEPLOY_KEY \}\}/g) || []).length, 1);
+    assert.equal((block.match(/persist-credentials: false/g) || []).length, 1,
+      `${name} private checkout must not persist its deploy key`);
+  }
   assert.equal((workflow.match(/stage bounded acquisition evidence after failure/g) ?? []).length, 2);
   assert.equal((workflow.match(/retain bounded acquisition evidence after failure/g) ?? []).length, 2);
   assert.equal((workflow.match(/actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/g) ?? []).length, 2);
