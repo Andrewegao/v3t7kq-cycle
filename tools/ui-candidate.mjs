@@ -11,7 +11,7 @@ export const CONTROL_SHA = '25c402db5149daa018e349a34a4beeba1f2dca45';
 export const STAGING_CONTROL_SHA = '04146c3f67891ed714e1d5bbd27b6998ba0e96ad';
 // Exact reviewed Atmos controller containing the TC release guard and browser harness.
 // Candidate source must both descend from this commit and equal origin/master.
-export const TC_CONTROL_SHA = '0b5ccc8335b1147b13f4c525a126b82bf026ed88';
+export const TC_CONTROL_SHA = 'f23664837274fc06a4a94b9bb0fc8d7fa1ee8c58';
 export const REPOSITORY = 'Andrewegao/v3t7kq-cycle';
 export const FREEZE_UNTIL = '2026-08-31T11:00:00Z';
 export const MAX_BYTES = 96 * 1024 * 1024;
