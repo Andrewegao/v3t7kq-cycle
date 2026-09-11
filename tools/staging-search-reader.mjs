@@ -29,6 +29,7 @@ const SHA = /^[a-f0-9]{40}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const WIND100_CATALOG = /^stage-wind100-[1-9]\d{0,19}-[1-9]\d{0,5}$/;
 const WIND100_SOURCE = 'ECMWF IFS 0.25 degree direct open-data GRIB';
+const REVIEWED_WORKER_EXPORTS = Object.freeze(['AircraftUpstreamBudget', 'StagingAiAdmission', 'default']);
 export const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 export const digest = value => hash(canonical(value));
 const same = (a, b, message) => assert.ok(canonical(a) === canonical(b), message);
@@ -375,6 +376,10 @@ export function operations(io) {
     pause: ms => new Promise(done => setTimeout(done, ms)),
   };
 }
+export function assertReviewedWorkerExports(value) {
+  assert.ok(Array.isArray(value) && value.every(name => typeof name === 'string'), 'reviewed Worker entrypoints differ');
+  same([...value].sort(), REVIEWED_WORKER_EXPORTS, 'reviewed Worker entrypoints differ');
+}
 export async function buildSource(atmos, sha) {
   assert.match(sha, SHA);
   const git = args => execFileSync('git', args, { cwd: atmos, encoding: 'utf8', timeout: 30_000 });
@@ -398,7 +403,7 @@ export async function buildSource(atmos, sha) {
     assert.ok(!path.startsWith('../') && files.has(path), 'uncommitted or dependency source in bundle');
   }
   const output = Object.values(out.metafile.outputs)[0];
-  same(output.exports.sort(), ['StagingAiAdmission', 'default'], 'account AI entrypoint must survive');
+  assertReviewedWorkerExports(output.exports);
   assert.ok(output.imports.every(i => i.external && i.path === 'cloudflare:workers'), 'unsupported external import');
   clean(); const bytes = Buffer.from(out.outputFiles[0].contents);
   return { sha, bytes, sha256: hash(bytes) };
