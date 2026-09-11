@@ -70,8 +70,12 @@ jobs:
           unzip -q "$archive" -d "$RUNNER_TEMP"
           sudo install -m 0755 "$RUNNER_TEMP/rclone-v1.75.0-linux-amd64/rclone" /usr/local/bin/rclone
           rclone version | head -1 | grep -Fx 'rclone v1.75.0'
+          atmos/data/.venv/bin/python -I cycle/tests/staging-wind100-core-flow.py "$GITHUB_WORKSPACE/atmos-source"
       - name: Hydrate only the isolated staging ECMWF baseline
-        working-directory: atmos-source
+        # Keep retained map history in the validator. The producer checkout must
+        # stay empty so a same-cycle surface refresh cannot strand old enrichment
+        # bytes behind its newly written surface-only manifest.
+        working-directory: atmos
         env:
           COMPONENT_ID: ecmwf
           CATALOG_R2_REMOTE: weatherx:weatherx-data-staging
