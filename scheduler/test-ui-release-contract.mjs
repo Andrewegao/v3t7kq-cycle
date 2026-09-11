@@ -45,15 +45,18 @@ for (const workflowName of workflowNames) {
   }
   if (/secrets\./.test(workflow)) {
     if (workflowName === 'staging-wind100-preflight.yml') {
-      // The caller has no executable steps or writer credentials; only the
-      // exact check-only callee may access its protected staging environment.
+      // The caller has no executable steps. Only these named slots may reach
+      // the exact check-only callee and its protected staging environment.
       assert.deepEqual(workflow.split('jobs:\n')[1].match(/^  [a-z-]+:/gm), ['  preflight:']);
       assert.doesNotMatch(workflow, /^\s+(?:steps|run):/m);
       assert.equal((workflow.match(/^    uses:/gm)||[]).length, 1);
       assert.match(workflow, /^    uses: \.\/\.github\/workflows\/staging-wind100-recurring.yml$/m);
       assert.match(workflow, /^    with: \{ check_only: true \}$/m);
       assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
-      assert.match(workflow, /^    secrets: \{ ATMOS_DEPLOY_KEY: "\$\{\{ secrets\.ATMOS_DEPLOY_KEY \}\}" \}$/m);
+      assert.match(workflow, /^    secrets: \{ ATMOS_DEPLOY_KEY: "\$\{\{ secrets\.ATMOS_DEPLOY_KEY \}\}",\n      STAGING_R2_WRITE_ACCESS_KEY_ID: "\$\{\{ secrets\.STAGING_R2_WRITE_ACCESS_KEY_ID \}\}",\n      STAGING_R2_WRITE_SECRET_ACCESS_KEY: "\$\{\{ secrets\.STAGING_R2_WRITE_SECRET_ACCESS_KEY \}\}" \}$/m);
+      assert.deepEqual([...workflow.matchAll(/secrets\.([A-Z0-9_]+)/g)].map(match => match[1]).sort(),
+        ['ATMOS_DEPLOY_KEY', 'STAGING_R2_WRITE_ACCESS_KEY_ID', 'STAGING_R2_WRITE_SECRET_ACCESS_KEY']);
+      assert.doesNotMatch(workflow, /secrets:\s*inherit/);
       assert.match(await readWorkflow('staging-wind100-recurring.yml'), /\n    environment:\n      name: data-staging\n/);
       continue;
     }
