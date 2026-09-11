@@ -12,9 +12,10 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import {
-  ACCOUNT, COMPONENTS, CONFIRMATION, DATA, MODEL, SOURCE_SHA, controllerDigest,
-  createCandidateS3, createPublicationTrace, createQualificationTrace, gate, hash, loadCatalogValidator, prepareCandidate,
-  publicationFailureDiagnostic, qualificationFailureDiagnostic, qualifyMapInventory, qualifyPointPacks, readPolicy, verifySource,
+  ACCOUNT, COMPONENTS, CONFIRMATION, DATA, MODEL, SOURCE_SHA, activateCandidate, controllerDigest,
+  createCandidateS3, createPublicationTrace, createQualificationTrace, findQualifiedInput, gate, hash, loadCatalogValidator, prepareCandidate,
+  nextWind100Pointer, pointerEntry, publicationFailureDiagnostic, qualificationFailureDiagnostic,
+  qualifyMapInventory, qualifyPointPacks, readPolicy, sealedPointInputSha, validateWind100Pointer, verifySource,
 } from '../tools/staging-wind100.mjs';
 
 const MISSING = -32768;
@@ -29,6 +30,116 @@ const FIELDS = [
   { id: 'wind100_u', scaleInv: 20 },
   { id: 'wind100_v', scaleInv: 20 },
 ];
+
+test('dynamic pointer retains at most two distinct model runs and binds immutable inputs', () => {
+  const selection = runId => ({ schemaVersion: 1, kind: 'weatherx-staging-native-wind100-selection',
+    status: 'DATA_QUALIFIED_NOT_ACTIVATED', targetOrigin: 'https://staging.weatherx.org', model: MODEL,
+    runId, catalogId: `stage-wind100-${Number(runId)}-1`, catalogSha256: 'a'.repeat(64),
+    sourceSha: SOURCE_SHA, inputSha256: runId[9].repeat(64), invocation: `${Number(runId)}-1`,
+    qualificationCanonicalSha256: 'b'.repeat(64), initializedAt: mapRunTime(runId),
+    freshUntil: new Date(Date.parse(mapRunTime(runId)) + 30 * 3600_000).toISOString(),
+    createdAt: '2026-09-11T12:00:00.000Z', isolatedStagingCandidate: true,
+    sharedReadPinChanged: false, productionWritten: false, activated: false });
+  const first = pointerEntry(selection('2026091100'), 'c'.repeat(64));
+  const p1 = nextWind100Pointer(null, first, '2026-09-11T12:00:00.000Z');
+  const second = pointerEntry(selection('2026091112'), 'd'.repeat(64));
+  const p2 = nextWind100Pointer(p1, second, '2026-09-11T20:00:00.000Z');
+  const third = pointerEntry(selection('2026091200'), 'e'.repeat(64));
+  const p3 = nextWind100Pointer(p2, third, '2026-09-12T08:00:00.000Z');
+  assert.deepEqual(p3.entries.map(row => row.runId), ['2026091200', '2026091112']);
+  assert.equal(p3.entries[0].inputSha256, '0'.repeat(64));
+  assert.equal(validateWind100Pointer(p3), p3);
+});
+
+test('dynamic pointer refuses duplicate, reordered, expired-identity and extra fields', () => {
+  const entry = { runId: '2026091112', catalogId: 'stage-wind100-1234-1', catalogSha256: 'a'.repeat(64),
+    selectionKey: 'staging-candidates/wind100/stage-wind100-1234-1/selection.json',
+    selectionSha256: 'b'.repeat(64), sourceSha: SOURCE_SHA, inputSha256: 'c'.repeat(64),
+    initializedAt: '2026-09-11T12:00:00Z', freshUntil: '2026-09-12T18:00:00Z' };
+  const pointer = { schemaVersion: 1, kind: 'weatherx-staging-native-wind100-pointer',
+    targetOrigin: 'https://staging.weatherx.org', updatedAt: '2026-09-11T20:00:00Z', entries: [entry] };
+  assert.equal(validateWind100Pointer(pointer), pointer);
+  for (const mutate of [
+    value => value.entries.push({ ...entry }),
+    value => { value.entries = [{ ...entry, runId: '2026091100', initializedAt: '2026-09-11T00:00:00Z' }, entry]; },
+    value => { value.entries[0].selectionKey = 'catalogs/current.json'; },
+    value => { value.entries[0].sourceSha = 'f'.repeat(39); },
+    value => { value.unbounded = true; },
+  ]) {
+    const changed = structuredClone(pointer); mutate(changed);
+    assert.throws(() => validateWind100Pointer(changed));
+  }
+});
+
+test('pointer source upgrades retain one immutable prior source and refuse a backwards run', () => {
+  const previousEntry = { runId: '2026091100', catalogId: 'stage-wind100-100-1', catalogSha256: 'a'.repeat(64),
+    selectionKey: 'staging-candidates/wind100/stage-wind100-100-1/selection.json',
+    selectionSha256: 'b'.repeat(64), sourceSha: '1'.repeat(40), inputSha256: '2'.repeat(64),
+    initializedAt: '2026-09-11T00:00:00Z', freshUntil: '2026-09-12T06:00:00Z' };
+  const current = { schemaVersion: 1, kind: 'weatherx-staging-native-wind100-pointer',
+    targetOrigin: 'https://staging.weatherx.org', updatedAt: '2026-09-11T08:00:00Z', entries: [previousEntry] };
+  const nextEntry = { ...previousEntry, runId: '2026091112', catalogId: 'stage-wind100-200-1',
+    selectionKey: 'staging-candidates/wind100/stage-wind100-200-1/selection.json', sourceSha: SOURCE_SHA,
+    inputSha256: '3'.repeat(64), initializedAt: '2026-09-11T12:00:00Z', freshUntil: '2026-09-12T18:00:00Z' };
+  const rotated = nextWind100Pointer(current, nextEntry, '2026-09-11T20:00:00Z');
+  assert.deepEqual(rotated.entries.map(row => row.sourceSha), [SOURCE_SHA, '1'.repeat(40)]);
+  assert.throws(() => nextWind100Pointer(rotated, { ...previousEntry, runId: '2026091012',
+    initializedAt: '2026-09-10T12:00:00Z' }, '2026-09-11T21:00:00Z'), /regressed/);
+});
+
+test('input identity covers only authenticated point-stage bytes and ignores regenerated maps', () => {
+  const point = { path: 'data/.ecmwf-point/meta.json', size: 10, sha256: 'a'.repeat(64) };
+  const fields = ['temperature', 'wind_u', 'wind_v', 'precipitation'].map((name, index) =>
+    ({ path: `data/.ecmwf-point/${name}.i16.npy`, size: index + 1, sha256: String(index + 1).repeat(64) }));
+  const first = { files: [{ path: 'app/public/data/ecmwf/index.json', size: 9, sha256: 'b'.repeat(64) }, point, ...fields] };
+  const second = structuredClone(first); second.files[0].sha256 = 'c'.repeat(64);
+  assert.equal(sealedPointInputSha(first), sealedPointInputSha(second));
+  second.files[2].sha256 = 'd'.repeat(64);
+  assert.notEqual(sealedPointInputSha(first), sealedPointInputSha(second));
+});
+
+test('pointer activation verifies immutable selection/catalog and retries one CAS conflict', async () => {
+  const selection = { schemaVersion: 1, kind: 'weatherx-staging-native-wind100-selection',
+    status: 'DATA_QUALIFIED_NOT_ACTIVATED', targetOrigin: 'https://staging.weatherx.org', model: MODEL,
+    runId: '2026091112', catalogId: 'stage-wind100-1234-1', catalogSha256: '', sourceSha: SOURCE_SHA,
+    inputSha256: '4'.repeat(64), invocation: '1234-1', qualificationCanonicalSha256: '5'.repeat(64),
+    initializedAt: '2026-09-11T12:00:00Z', freshUntil: '2026-09-12T18:00:00Z',
+    createdAt: '2026-09-11T20:00:00.000Z', isolatedStagingCandidate: true,
+    sharedReadPinChanged: false, productionWritten: false, activated: false };
+  const catalog = { schemaVersion: 2, sequence: 1, parentCatalogId: null,
+    createdAt: selection.createdAt, components: { ecmwf: {} }, rollbackEpoch: 0 };
+  const catalogBody = encode(catalog); selection.catalogSha256 = hash(catalogBody);
+  const selectionBody = encode(selection), selectionSha256 = hash(selectionBody);
+  let pointerBody = null, conflicts = 1;
+  const io = {
+    async get(key) {
+      if (key.endsWith('/selection.json')) return { body: selectionBody };
+      if (key.startsWith('catalogs/snapshots/')) return { body: catalogBody };
+      return pointerBody == null ? null : { body: pointerBody, etag: 'etag-1' };
+    },
+    async put(body) { if (conflicts-- > 0) return false; pointerBody = body; return true; },
+  };
+  const pointer = await activateCandidate({ selection, selectionSha256, io, now: () => Date.parse('2026-09-11T20:00:00Z'),
+    catalogValidator: value => JSON.stringify(value) === JSON.stringify(catalog) });
+  assert.equal(conflicts, -1); assert.equal(pointer.entries[0].inputSha256, selection.inputSha256);
+  const unchanged = await findQualifiedInput({ runId: selection.runId, inputSha256: selection.inputSha256,
+    io, catalogValidator: value => JSON.stringify(value) === JSON.stringify(catalog) });
+  assert.equal(unchanged.status, 'unchanged'); assert.equal(unchanged.catalogId, selection.catalogId);
+});
+
+test('recurring workflow consumes a core artifact, augments two fields, and uploads no map component', () => {
+  const source = readFileSync(new URL('../.github/workflows/staging-wind100-recurring.yml', import.meta.url), 'utf8');
+  const code = source.split('\n').filter(line => !/^\s*#/.test(line)).join('\n');
+  assert.match(code, /workflow_call:/); assert.doesNotMatch(code, /\n  (?:schedule|push|pull_request|workflow_run):/);
+  assert.match(code, /current-model-artifact\.py/); assert.match(code, /augment_ecmwf_wind100\.py/);
+  assert.match(code, /WIND100_INPUT_SHA256/); assert.match(code, /staging-wind100\.mjs preflight/);
+  assert.ok(code.indexOf('staging-wind100.mjs preflight') < code.indexOf('augment_ecmwf_wind100.py'));
+  assert.match(code, /SOURCE_DIR=.*weatherx-wind100-point-series/);
+  assert.doesNotMatch(code, /SOURCE_DIR=app\/public\/data\/ecmwf|stage-wind100-ecmwf-\$GITHUB_RUN_ID/);
+  assert.doesNotMatch(code, /fetch_ecmwf\.py --hours|bake-model-component\.sh|weatherx-(?:data|components)-production/);
+  assert.doesNotMatch(code, /wrangler|pages|deploy|catalogs\/current\.json|shared-read\/pin\.json/);
+  assert.match(code, /staging-candidates\/wind100\/current-v1\.json|staging-wind100\.mjs activate/);
+});
 
 function semantics(initializedAt, leads) {
   return { schemaVersion: 1, contract: 'weatherx-native-wind100-grib-v1', model: 'ecmwf',
