@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: Inspect only, or upload and qualify the approved code with existing settings unchanged
+        description: Inspect, or qualify approved code plus an optional exact staging Wind100 public selector
         type: choice
         options: [inspect, rollout]
         default: inspect
@@ -36,6 +36,10 @@ jobs:
       STAGING_SEARCH_READER_APPROVED_SOURCE_SHA: ${{ vars.STAGING_SEARCH_READER_APPROVED_SOURCE_SHA }}
       STAGING_SEARCH_READER_APPROVED_VERSION: ${{ vars.STAGING_SEARCH_READER_APPROVED_VERSION }}
       STAGING_SEARCH_READER_APPROVED_BOUNDARY_SHA256: ${{ vars.STAGING_SEARCH_READER_APPROVED_BOUNDARY_SHA256 }}
+      STAGING_WIND100_READER_ENABLED: ${{ vars.STAGING_WIND100_READER_ENABLED }}
+      STAGING_WIND100_READER_CATALOG_ID: ${{ vars.STAGING_WIND100_READER_CATALOG_ID }}
+      STAGING_WIND100_READER_RUN_ID: ${{ vars.STAGING_WIND100_READER_RUN_ID }}
+      STAGING_WIND100_READER_SELECTION_SHA256: ${{ vars.STAGING_WIND100_READER_SELECTION_SHA256 }}
       STAGING_R2_ACCOUNT_ID: ${{ vars.STAGING_R2_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
