@@ -3,6 +3,12 @@
   "sourceSha": "9174329db6ca8527569e67f14ef70406dedefb69",
   "coreSourceSha": "d8cd45d123f60c30c413c14d46f68113e37468b7",
   "recurringPublicationMode": "point-only-recurring-v1",
+  "recurringStorage": {
+    "componentObjectPrefix": "components/point-ecmwf/stage-wind100-recurring-point-ecmwf-",
+    "catalogObjectPrefix": "catalogs/snapshots/stage-wind100-recurring-",
+    "selectionObjectPrefix": "staging-candidates/wind100/stage-wind100-recurring-",
+    "maximumComponentPrefixObjects": 50000
+  },
   "model": "ecmwf",
   "hours": 336,
   "leadCount": 81,

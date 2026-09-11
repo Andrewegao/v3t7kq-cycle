@@ -14,8 +14,9 @@ import { gunzipSync, gzipSync } from 'node:zlib';
 import {
   ACCOUNT, COMPONENTS, CONFIRMATION, DATA, MODEL, SOURCE_SHA, activateCandidate, controllerDigest,
   createCandidateS3, createPublicationTrace, createQualificationTrace, findQualifiedInput, gate, hash, loadCatalogValidator, prepareCandidate,
-  nextWind100Pointer, pointerEntry, publicationFailureDiagnostic, qualificationFailureDiagnostic,
-  qualifyMapInventory, qualifyPointPacks, readPolicy, sealedPointInputSha, validateWind100Pointer, verifySource,
+  listRecurringPrefixS3, nextWind100Pointer, pointerEntry, publicationFailureDiagnostic, qualificationFailureDiagnostic,
+  qualifyMapInventory, qualifyPointPacks, readPolicy, recurringPrefixCapacity, sealedPointInputSha,
+  validateWind100Pointer, verifySource,
 } from '../tools/staging-wind100.mjs';
 
 const MISSING = -32768;
@@ -101,7 +102,7 @@ test('input identity covers only authenticated point-stage bytes and ignores reg
 test('pointer activation verifies immutable selection/catalog and retries one CAS conflict', async () => {
   const selection = { schemaVersion: 1, kind: 'weatherx-staging-native-wind100-selection',
     status: 'DATA_QUALIFIED_NOT_ACTIVATED', targetOrigin: 'https://staging.weatherx.org', model: MODEL,
-    runId: '2026091112', catalogId: 'stage-wind100-1234-1', catalogSha256: '', sourceSha: SOURCE_SHA,
+    runId: '2026091112', catalogId: 'stage-wind100-recurring-1234-1', catalogSha256: '', sourceSha: SOURCE_SHA,
     inputSha256: '4'.repeat(64), invocation: '1234-1', qualificationCanonicalSha256: '5'.repeat(64),
     publicationMode: 'point-only-recurring-v1',
     initializedAt: '2026-09-11T12:00:00Z', freshUntil: '2026-09-12T18:00:00Z',
@@ -120,6 +121,7 @@ test('pointer activation verifies immutable selection/catalog and retries one CA
     } }, rollbackEpoch: 0 };
   const catalogBody = encode(catalog); selection.catalogSha256 = hash(catalogBody);
   const selectionBody = encode(selection), selectionSha256 = hash(selectionBody);
+  assert.throws(() => pointerEntry({ ...selection, catalogId: 'stage-wind100-1234-1' }, selectionSha256));
   let pointerBody = null, conflicts = 1;
   const io = {
     async get(key) {
@@ -154,6 +156,7 @@ test('recurring preflight never treats a legacy paired selection as unchanged', 
     freshUntil: '2026-09-12T18:00:00Z', createdAt: '2026-09-11T20:00:00Z',
     isolatedStagingCandidate: true, sharedReadPinChanged: false, productionWritten: false, activated: false };
   const selectionBody = encode(selection), selectionSha256 = hash(selectionBody);
+  assert.throws(() => pointerEntry({ ...selection, catalogId: 'stage-wind100-recurring-77-1' }, selectionSha256));
   const entry = pointerEntry(selection, selectionSha256);
   const pointerBody = encode({ schemaVersion: 1, kind: 'weatherx-staging-native-wind100-pointer',
     targetOrigin: 'https://staging.weatherx.org', updatedAt: selection.createdAt, entries: [entry] });
@@ -162,7 +165,7 @@ test('recurring preflight never treats a legacy paired selection as unchanged', 
   const result = await findQualifiedInput({ runId: selection.runId, inputSha256: selection.inputSha256,
     sourceSha: selection.sourceSha, io, catalogValidator: () => true });
   assert.equal(result.status, 'new-input');
-  const candidate = { ...selection, catalogId: 'stage-wind100-78-1', catalogSha256: '', invocation: '78-1',
+  const candidate = { ...selection, catalogId: 'stage-wind100-recurring-78-1', catalogSha256: '', invocation: '78-1',
     publicationMode: 'point-only-recurring-v1', createdAt: '2026-09-11T20:00:01Z' };
   const descriptor = { runId: candidate.runId, initializedAt: candidate.initializedAt, freshUntil: candidate.freshUntil,
     source: 'ECMWF IFS 0.25 degree direct open-data GRIB', variables: {
@@ -198,6 +201,8 @@ test('recurring workflow consumes a core artifact, augments two fields, and uplo
   assert.match(code, /SOURCE_DIR=.*weatherx-wind100-point-series/);
   assert.doesNotMatch(code, /SOURCE_DIR=app\/public\/data\/ecmwf|stage-wind100-ecmwf-\$GITHUB_RUN_ID/);
   assert.doesNotMatch(code, /hydrate-r2-component|validate-model-component|weatherx-wind100-map-component/);
+  assert.match(code, /recurring-retention-gate/);
+  assert.match(code, /ARTIFACT_ID="stage-wind100-recurring-point-ecmwf-\$GITHUB_RUN_ID-\$GITHUB_RUN_ATTEMPT"/);
   assert.match(code, /publish-recurring staging-wind100\/qualification\.json \\\n\s+weatherx-wind100-point-component\.json/);
   assert.doesNotMatch(code, /fetch_ecmwf\.py --hours|bake-model-component\.sh|weatherx-(?:data|components)-production/);
   assert.doesNotMatch(code, /wrangler|pages|deploy|catalogs\/current\.json|shared-read\/pin\.json/);
@@ -373,6 +378,12 @@ function fixture(t, mutate = ({ value }) => value) {
   const grid = { lon0: -180, lat0: 90, lonStep: 1, latStep: -1, width: 3, height: 2, wrapLongitude: true };
   const policy = {
     sourceSha: 'a'.repeat(40), coreSourceSha: 'd'.repeat(40), recurringPublicationMode: 'point-only-recurring-v1',
+    recurringStorage: {
+      componentObjectPrefix: 'components/point-ecmwf/stage-wind100-recurring-point-ecmwf-',
+      catalogObjectPrefix: 'catalogs/snapshots/stage-wind100-recurring-',
+      selectionObjectPrefix: 'staging-candidates/wind100/stage-wind100-recurring-',
+      maximumComponentPrefixObjects: 50_000,
+    },
     model: 'ecmwf', hours: 3, leadCount: 2, freshnessHours: 30,
     minimumForecastLeaseHours: 6, nativeCadenceSeconds: 10800, storageFields: FIELDS.map(field => ({ ...field })),
     grid,
@@ -536,6 +547,12 @@ test('policy fixes one reviewed ECMWF source, exact semantics and dependency clo
   const policy = readPolicy();
   assert.equal(policy.sourceSha, SOURCE_SHA);
   assert.equal(policy.recurringPublicationMode, 'point-only-recurring-v1');
+  assert.deepEqual(policy.recurringStorage, {
+    componentObjectPrefix: 'components/point-ecmwf/stage-wind100-recurring-point-ecmwf-',
+    catalogObjectPrefix: 'catalogs/snapshots/stage-wind100-recurring-',
+    selectionObjectPrefix: 'staging-candidates/wind100/stage-wind100-recurring-',
+    maximumComponentPrefixObjects: 50_000,
+  });
   assert.deepEqual({ model: policy.model, hours: policy.hours, leadCount: policy.leadCount,
     freshnessHours: policy.freshnessHours, minimumForecastLeaseHours: policy.minimumForecastLeaseHours,
     nativeCadenceSeconds: policy.nativeCadenceSeconds },
@@ -1072,10 +1089,15 @@ test('recurring publication writes an exact point-only catalog and hash-bound pu
   const descriptor = f.qualification.pointPacks.descriptor;
   descriptor.source = 'ECMWF IFS 0.25 degree direct open-data GRIB';
   const point = JSON.parse(f.rows[`point-${MODEL}`].body);
+  const oldManifestKey = f.rows[`point-${MODEL}`].receipt.manifestKey;
+  point.artifactId = 'stage-wind100-recurring-point-ecmwf-1234-1';
+  point.rootPrefix = `components/point-${MODEL}/${point.artifactId}/`;
   point.pointSeries.descriptor = descriptor;
   const pointBody = encode(point);
   f.rows[`point-${MODEL}`].body = pointBody;
+  f.rows[`point-${MODEL}`].receipt.manifestKey = `${point.rootPrefix}component.json`;
   f.rows[`point-${MODEL}`].receipt.manifestSha256 = hash(pointBody);
+  f.saved.delete(oldManifestKey);
   f.saved.set(f.rows[`point-${MODEL}`].receipt.manifestKey, { body: pointBody, sha256: hash(pointBody), metadata: {},
     httpMetadata: { contentType: 'application/json', cacheControl: 'public, max-age=31536000, immutable', contentEncoding: undefined } });
   const selection = await prepareCandidate({ request: f.request, qualification: f.qualification,
@@ -1084,9 +1106,69 @@ test('recurring publication writes an exact point-only catalog and hash-bound pu
   assert.equal(selection.publicationMode, 'point-only-recurring-v1');
   assert.deepEqual(Object.keys(JSON.parse(f.writes[0].body).components), [`point-${MODEL}`]);
   assert.deepEqual(f.writes.map(row => row.key), [
-    'catalogs/snapshots/stage-wind100-1234-1.json',
-    'staging-candidates/wind100/stage-wind100-1234-1/selection.json',
+    'catalogs/snapshots/stage-wind100-recurring-1234-1.json',
+    'staging-candidates/wind100/stage-wind100-recurring-1234-1/selection.json',
   ]);
+});
+
+test('recurring prefix capacity counts existing and planned immutable component objects', async t => {
+  const f = recurringFixture(t);
+  const qualification = await qualifyPointPacks(f);
+  const pointRoot = resolve(f.pointRoot, 'v2/ecmwf');
+  const inventory = count => Array.from({ length: count }, (_, index) =>
+    `components/point-ecmwf/stage-wind100-recurring-point-ecmwf-${index + 1}-1/run/file-${index}.bin`);
+  assert.deepEqual(recurringPrefixCapacity([], qualification, pointRoot, f.policy),
+    { existingObjects: 0, plannedObjects: 5, maximumObjects: 50_000 });
+  assert.equal(recurringPrefixCapacity(inventory(49_995), qualification, pointRoot, f.policy).existingObjects, 49_995);
+  assert.throws(() => recurringPrefixCapacity(inventory(49_996), qualification, pointRoot, f.policy),
+    /lacks capacity/);
+  assert.throws(() => recurringPrefixCapacity(['components/point-ecmwf/stage-wind100-point-ecmwf-1-1/file'],
+    qualification, pointRoot, f.policy), /unexpected key/);
+});
+
+test('recurring prefix inventory is exact, paginated, bounded and staging-only', async () => {
+  class ListObjectsV2Command { constructor(input) { this.input = input; } }
+  const commands = [];
+  let injectedDestroyed = 0;
+  const client = { destroy: () => { injectedDestroyed++; }, send: async command => {
+    commands.push(command.input);
+    if (!command.input.ContinuationToken) return { IsTruncated: true, NextContinuationToken: 'page-2',
+      Contents: [{ Key: 'components/point-ecmwf/stage-wind100-recurring-point-ecmwf-1-1/a.bin' }] };
+    return { IsTruncated: false,
+      Contents: [{ Key: 'components/point-ecmwf/stage-wind100-recurring-point-ecmwf-2-1/b.bin' }] };
+  } };
+  const env = { STAGING_R2_ACCOUNT_ID: ACCOUNT, STAGING_R2_WRITE_ACCESS_KEY_ID: 'fixture-id',
+    STAGING_R2_WRITE_SECRET_ACCESS_KEY: 'fixture-secret' };
+  const keys = await listRecurringPrefixS3(env, client, { ListObjectsV2Command });
+  assert.equal(keys.length, 2);
+  assert.equal(injectedDestroyed, 0);
+  assert.deepEqual(commands, [
+    { Bucket: COMPONENTS, Prefix: 'components/point-ecmwf/stage-wind100-recurring-point-ecmwf-', MaxKeys: 1000 },
+    { Bucket: COMPONENTS, Prefix: 'components/point-ecmwf/stage-wind100-recurring-point-ecmwf-',
+      MaxKeys: 1000, ContinuationToken: 'page-2' },
+  ]);
+  const escaped = { send: async () => ({ IsTruncated: false,
+    Contents: [{ Key: 'components/point-ecmwf/stage-wind100-point-ecmwf-1-1/a.bin' }] }) };
+  await assert.rejects(listRecurringPrefixS3(env, escaped, { ListObjectsV2Command }), /escaped its prefix/);
+  const missingToken = { send: async () => ({ IsTruncated: true, Contents: [] }) };
+  await assert.rejects(listRecurringPrefixS3(env, missingToken, { ListObjectsV2Command }), /pagination is invalid/);
+  const repeatedToken = { send: async () => ({ IsTruncated: true, NextContinuationToken: 'same', Contents: [] }) };
+  await assert.rejects(listRecurringPrefixS3(env, repeatedToken, { ListObjectsV2Command }), /pagination is invalid/);
+  let page = 0;
+  const oversized = { send: async () => ({ IsTruncated: true, NextContinuationToken: `page-${++page}`,
+    Contents: Array.from({ length: 1000 }, (_, index) => ({
+      Key: `components/point-ecmwf/stage-wind100-recurring-point-ecmwf-${page}-1/file-${index}.bin`,
+    })) }) };
+  await assert.rejects(listRecurringPrefixS3(env, oversized, { ListObjectsV2Command }), /already exceeds/);
+  let ownedDestroyed = 0;
+  class S3Client {
+    send() { return { IsTruncated: false, Contents: [] }; }
+    destroy() { ownedDestroyed++; }
+  }
+  assert.deepEqual(await listRecurringPrefixS3(env, undefined, { ListObjectsV2Command, S3Client }), []);
+  assert.equal(ownedDestroyed, 1);
+  await assert.rejects(listRecurringPrefixS3({ ...env, STAGING_R2_ACCOUNT_ID: 'wrong' }, client,
+    { ListObjectsV2Command }));
 });
 
 test('component manifests admit only the exact bounded rclone mtime metadata shape', async t => {
@@ -1286,6 +1368,12 @@ test('S3 adapter is confined to two staging manifests and two immutable metadata
   await assert.rejects(io.immutable('weatherx-data-production', 'catalogs/snapshots/stage-wind100-1234-1.json', body, metadata));
   await assert.rejects(io.immutable(DATA, 'catalogs/current.json', body, metadata));
   await assert.rejects(io.get(COMPONENTS, 'components/gfs/x/component.json', 10));
+  const recurringRequest = { ...request, publicationMode: 'point-only-recurring-v1' };
+  const recurringIo = await createCandidateS3(env, recurringRequest, client, { GetObjectCommand, PutObjectCommand });
+  assert.equal(await recurringIo.get(COMPONENTS,
+    'components/point-ecmwf/stage-wind100-recurring-point-ecmwf-1234-1/component.json', 10), null);
+  await assert.rejects(recurringIo.get(COMPONENTS,
+    'components/point-ecmwf/stage-wind100-point-ecmwf-1234-1/component.json', 10));
 });
 
 test('version check drains output under pipefail and still rejects the wrong version', () => {

@@ -19,16 +19,23 @@ export const COMPONENTS = 'weatherx-components-staging';
 export const MODEL = 'ecmwf';
 export const ACCOUNT = 'a89f9a1af485021fbc60a68b163c7c6e';
 export const RECURRING_PUBLICATION_MODE = 'point-only-recurring-v1';
+export const RECURRING_COMPONENT_PREFIX = 'components/point-ecmwf/stage-wind100-recurring-point-ecmwf-';
+export const RECURRING_CATALOG_PREFIX = 'catalogs/snapshots/stage-wind100-recurring-';
+export const RECURRING_SELECTION_PREFIX = 'staging-candidates/wind100/stage-wind100-recurring-';
 const REPOSITORY = 'Andrewegao/v3t7kq-cycle';
 const WORKFLOW = `${REPOSITORY}/.github/workflows/staging-wind100.yml@refs/heads/main`;
 const BAKE_WORKFLOW = `${REPOSITORY}/.github/workflows/bake.yml@refs/heads/main`;
 const SHA = /^[a-f0-9]{64}$/;
 const COMMIT = /^[a-f0-9]{40}$/;
 const RUN = /^\d{10}$/;
+const MANUAL_CATALOG_ID = /^stage-wind100-[1-9]\d{0,19}-[1-9]\d{0,5}$/;
+const RECURRING_CATALOG_ID = /^stage-wind100-recurring-[1-9]\d{0,19}-[1-9]\d{0,5}$/;
+const RECURRING_COMPONENT_KEY = /^components\/point-ecmwf\/stage-wind100-recurring-point-ecmwf-[1-9]\d{0,19}-[1-9]\d{0,5}\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+$/;
 const MISSING = -32768;
 const MAX_PACK_BYTES = 512 * 1024;
 const MAX_UNPACKED_BYTES = 1024 * 1024;
 const MAX_JSON_BYTES = 512 * 1024;
+const MAX_RECURRING_PREFIX_OBJECTS = 50_000;
 export const POINTER_KEY = 'staging-candidates/wind100/current-v1.json';
 export const MAX_POINTER_BYTES = 16 * 1024;
 const POINTER_KIND = 'weatherx-staging-native-wind100-pointer';
@@ -122,7 +129,8 @@ export function validateWind100Pointer(value) {
     exactKeys(entry, ['runId', 'catalogId', 'catalogSha256', 'selectionKey', 'selectionSha256',
       'sourceSha', 'inputSha256', 'initializedAt', 'freshUntil'], 'wind100 pointer entry');
     assert.match(entry.runId ?? '', RUN);
-    assert.match(entry.catalogId ?? '', /^stage-wind100-[1-9]\d{0,19}-[1-9]\d{0,5}$/);
+    assert.ok(MANUAL_CATALOG_ID.test(entry.catalogId ?? '') || RECURRING_CATALOG_ID.test(entry.catalogId ?? ''),
+      'wind100 pointer catalog ID is invalid');
     assert.equal(entry.selectionKey, `staging-candidates/wind100/${entry.catalogId}/selection.json`);
     assert.match(entry.catalogSha256 ?? '', SHA); assert.match(entry.selectionSha256 ?? '', SHA);
     assert.match(entry.sourceSha ?? '', COMMIT);
@@ -149,7 +157,10 @@ export function pointerEntry(selection, selectionSha256) {
   assert.equal(selection.kind, 'weatherx-staging-native-wind100-selection');
   assert.equal(selection.status, 'DATA_QUALIFIED_NOT_ACTIVATED');
   assert.equal(selection.targetOrigin, TARGET_ORIGIN); assert.equal(selection.model, MODEL);
-  if (selection.publicationMode !== undefined) assert.equal(selection.publicationMode, RECURRING_PUBLICATION_MODE);
+  if (selection.publicationMode !== undefined) {
+    assert.equal(selection.publicationMode, RECURRING_PUBLICATION_MODE);
+    assert.match(selection.catalogId ?? '', RECURRING_CATALOG_ID);
+  } else assert.match(selection.catalogId ?? '', MANUAL_CATALOG_ID);
   assert.match(selectionSha256 ?? '', SHA);
   return {
     runId: selection.runId, catalogId: selection.catalogId, catalogSha256: selection.catalogSha256,
@@ -282,6 +293,12 @@ export function readPolicy(path = policyPath()) {
   assert.equal(policy.sourceSha, SOURCE_SHA);
   assert.equal(policy.coreSourceSha, 'd8cd45d123f60c30c413c14d46f68113e37468b7');
   assert.equal(policy.recurringPublicationMode, RECURRING_PUBLICATION_MODE);
+  assert.deepEqual(policy.recurringStorage, {
+    componentObjectPrefix: RECURRING_COMPONENT_PREFIX,
+    catalogObjectPrefix: RECURRING_CATALOG_PREFIX,
+    selectionObjectPrefix: RECURRING_SELECTION_PREFIX,
+    maximumComponentPrefixObjects: MAX_RECURRING_PREFIX_OBJECTS,
+  });
   assert.equal(policy.model, MODEL);
   assert.deepEqual({ hours: policy.hours, leadCount: policy.leadCount, freshnessHours: policy.freshnessHours,
     minimumForecastLeaseHours: policy.minimumForecastLeaseHours, nativeCadenceSeconds: policy.nativeCadenceSeconds },
@@ -1181,7 +1198,8 @@ function componentManifest(value, id, receipt, qualification, now, reuseExisting
     : ['expectedPreviousManifestSha256', 'expectedRollbackEpoch', 'manifestKey', 'manifestSha256']).sort());
   if (!reuseExisting) { assert.equal(receipt.expectedPreviousManifestSha256, null); assert.equal(receipt.expectedRollbackEpoch, 0); }
   assert.match(receipt.manifestSha256 ?? '', SHA);
-  const artifact = reuseExisting ? value?.artifactId : `stage-wind100-${id}-${qualification.invocation}`;
+  const artifact = reuseExisting ? value?.artifactId
+    : `${qualification.publicationMode === RECURRING_PUBLICATION_MODE ? 'stage-wind100-recurring' : 'stage-wind100'}-${id}-${qualification.invocation}`;
   assert.match(artifact ?? '', /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/);
   const rootPrefix = `components/${id}/${artifact}/`;
   assert.equal(receipt.manifestKey, `${rootPrefix}component.json`);
@@ -1248,10 +1266,71 @@ function validateQualification(q, request, policy, now) {
 }
 
 function candidateKeys(request) {
-  const catalogId = `stage-wind100-${request.invocation}`;
-  assert.match(catalogId, /^stage-wind100-[1-9]\d{0,19}-[1-9]\d{0,5}$/);
+  const recurring = request.publicationMode === RECURRING_PUBLICATION_MODE;
+  const catalogId = `${recurring ? 'stage-wind100-recurring' : 'stage-wind100'}-${request.invocation}`;
+  assert.match(catalogId, recurring ? RECURRING_CATALOG_ID : MANUAL_CATALOG_ID);
   return { catalogId, catalogKey: `catalogs/snapshots/${catalogId}.json`,
     selectionKey: `staging-candidates/wind100/${catalogId}/selection.json` };
+}
+
+export function recurringPrefixCapacity(existing, qualification, pointRoot, policy = readPolicy()) {
+  assert.ok(Array.isArray(existing));
+  assert.equal(qualification?.publicationMode, policy.recurringPublicationMode);
+  assert.ok(existing.every(path => typeof path === 'string' && path.length > 0 && path.length <= 512
+    && RECURRING_COMPONENT_KEY.test(path)),
+  'recurring component prefix inventory contains an unexpected key');
+  assert.equal(new Set(existing).size, existing.length,
+    'recurring component prefix inventory contains a duplicate key');
+  assert.ok(existing.length <= policy.recurringStorage.maximumComponentPrefixObjects,
+    'recurring component prefix already exceeds its object ceiling');
+  const root = realpathSync(pointRoot);
+  const plannedFiles = filesUnder(root, 10_000, 8);
+  assert.equal(plannedFiles.length, qualification.pointPacks?.objectCount,
+    'planned recurring component object count differs from qualification');
+  const planned = plannedFiles.length + 1; // build-component-manifest adds component.json.
+  assert.ok(existing.length + planned <= policy.recurringStorage.maximumComponentPrefixObjects,
+    'recurring component prefix lacks capacity for this candidate');
+  return { existingObjects: existing.length, plannedObjects: planned,
+    maximumObjects: policy.recurringStorage.maximumComponentPrefixObjects };
+}
+
+export async function listRecurringPrefixS3(env, injectedClient, injectedSdk) {
+  assert.equal(env.STAGING_R2_ACCOUNT_ID, ACCOUNT);
+  assert.ok(env.STAGING_R2_WRITE_ACCESS_KEY_ID && env.STAGING_R2_WRITE_SECRET_ACCESS_KEY);
+  const sdk = injectedSdk ?? await import('../staging-controller/node_modules/@aws-sdk/client-s3/dist-cjs/index.js');
+  const client = injectedClient ?? new sdk.S3Client({ region: 'auto', endpoint: `https://${ACCOUNT}.r2.cloudflarestorage.com`,
+    forcePathStyle: true, maxAttempts: 1, requestChecksumCalculation: 'WHEN_REQUIRED', responseChecksumValidation: 'WHEN_REQUIRED',
+    credentials: { accessKeyId: env.STAGING_R2_WRITE_ACCESS_KEY_ID, secretAccessKey: env.STAGING_R2_WRITE_SECRET_ACCESS_KEY } });
+  const keys = [], tokens = new Set();
+  let token;
+  try {
+    for (let pageNumber = 0; pageNumber <= 50; pageNumber++) {
+      let page;
+      try {
+        page = await client.send(new sdk.ListObjectsV2Command({ Bucket: COMPONENTS,
+          Prefix: RECURRING_COMPONENT_PREFIX, MaxKeys: 1000, ...(token ? { ContinuationToken: token } : {}) }),
+        { abortSignal: AbortSignal.timeout(120_000) });
+      } catch { throw Error('recurring component prefix inventory failed'); }
+      assert.ok(Array.isArray(page.Contents ?? []), 'recurring component prefix inventory is invalid');
+      assert.ok((page.Contents ?? []).length <= 1000, 'recurring component prefix page is oversized');
+      assert.ok(page.IsTruncated === true || page.IsTruncated === false,
+        'recurring component prefix pagination is invalid');
+      for (const object of page.Contents ?? []) {
+        assert.ok(typeof object?.Key === 'string' && object.Key.length <= 512
+          && RECURRING_COMPONENT_KEY.test(object.Key),
+          'recurring component prefix inventory escaped its prefix');
+        keys.push(object.Key);
+        assert.ok(keys.length <= MAX_RECURRING_PREFIX_OBJECTS,
+          'recurring component prefix already exceeds its object ceiling');
+      }
+      if (page.IsTruncated !== true) return keys;
+      assert.ok(typeof page.NextContinuationToken === 'string' && page.NextContinuationToken.length > 0
+        && page.NextContinuationToken.length <= 4096 && !tokens.has(page.NextContinuationToken),
+      'recurring component prefix pagination is invalid');
+      token = page.NextContinuationToken; tokens.add(token);
+    }
+    throw Error('recurring component prefix pagination exceeded its page ceiling');
+  } finally { if (!injectedClient) client.destroy?.(); }
 }
 
 function validateComponentObjectMetadata(metadata) {
@@ -1372,7 +1451,9 @@ export async function createCandidateS3(env, request, injectedClient, injectedSd
   const client = injectedClient ?? new sdk.S3Client({ region: 'auto', endpoint: `https://${ACCOUNT}.r2.cloudflarestorage.com`,
     forcePathStyle: true, maxAttempts: 1, requestChecksumCalculation: 'WHEN_REQUIRED', responseChecksumValidation: 'WHEN_REQUIRED',
     credentials: { accessKeyId: env.STAGING_R2_WRITE_ACCESS_KEY_ID, secretAccessKey: env.STAGING_R2_WRITE_SECRET_ACCESS_KEY } });
-  const pointManifest = `components/point-${MODEL}/stage-wind100-point-${MODEL}-${request.invocation}/component.json`;
+  const pointManifest = request.publicationMode === RECURRING_PUBLICATION_MODE
+    ? `${RECURRING_COMPONENT_PREFIX}${request.invocation}/component.json`
+    : `components/point-${MODEL}/stage-wind100-point-${MODEL}-${request.invocation}/component.json`;
   const mapManifest = `components/${MODEL}/stage-wind100-${MODEL}-${request.invocation}/component.json`;
   const allowedComponent = key => key === pointManifest
     || (request.publicationMode === undefined && key === mapManifest);
@@ -1429,8 +1510,9 @@ export async function createPointerS3(env, injectedClient, injectedSdk) {
   function admitted(key, write = false) {
     safeKey(key);
     if (write) assert.equal(key, POINTER_KEY, 'only the Wind100 serving pointer is mutable');
-    else assert.ok(key === POINTER_KEY || /^catalogs\/snapshots\/stage-wind100-[1-9]\d{0,19}-[1-9]\d{0,5}\.json$/.test(key)
-      || /^staging-candidates\/wind100\/stage-wind100-[1-9]\d{0,19}-[1-9]\d{0,5}\/selection\.json$/.test(key),
+    else assert.ok(key === POINTER_KEY
+      || /^catalogs\/snapshots\/stage-wind100(?:-recurring)?-[1-9]\d{0,19}-[1-9]\d{0,5}\.json$/.test(key)
+      || /^staging-candidates\/wind100\/stage-wind100(?:-recurring)?-[1-9]\d{0,19}-[1-9]\d{0,5}\/selection\.json$/.test(key),
     'pointer controller read escaped its namespace');
     return { Bucket: DATA, Key: key };
   }
@@ -1551,6 +1633,11 @@ export async function main(command, env = process.env, argv = process.argv.slice
   if (command === 'component-gate') return gate(env, policy, controllerDigest(), 'components');
   if (command === 'recurring-gate') return recurringGate(env, policy);
   if (command === 'recurring-component-gate') return recurringGate(env, policy, controllerDigest(), 'components');
+  if (command === 'recurring-retention-gate') {
+    recurringGate(env, policy, controllerDigest(), 'components');
+    const existing = await listRecurringPrefixS3(env);
+    return recurringPrefixCapacity(existing, privateJson(env.RUNNER_TEMP, argv[0]), argv[1], policy);
+  }
   if (command === 'source') return verifySource(argv[0], policy);
   if (command === 'preflight') {
     recurringGate(env, policy, controllerDigest(), 'metadata');
@@ -1620,7 +1707,7 @@ export async function main(command, env = process.env, argv = process.argv.slice
       catalogValidator: validator.validate }); }
     finally { validator.close(); io.close(); }
   }
-  throw Error('usage: staging-wind100.mjs digest | gate | recurring-gate | source SOURCE | qualify[...] | publish[...] | activate SELECTION_REL SOURCE');
+  throw Error('usage: staging-wind100.mjs digest | gate | recurring-gate | recurring-retention-gate QUALIFICATION POINT_ROOT | source SOURCE | qualify[...] | publish[...] | activate SELECTION_REL SOURCE');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
