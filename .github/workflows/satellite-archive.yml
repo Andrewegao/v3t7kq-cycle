@@ -34,9 +34,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RCLONE_VERSION: v1.75.0
+  SATELLITE_RCLONE_RELEASE: v1.75.0
   # Official v1.75.0 linux-amd64 release digest from downloads.rclone.org/v1.75.0/SHA256SUMS.
-  RCLONE_SHA256: 'aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa'
+  SATELLITE_RCLONE_ZIP_SHA256: 'aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa'
   COST_PROJECTION_MAX_AGE_HOURS: '24'
   SAT_MAX_HTTP_REQUESTS: '5000'
   SAT_MAX_SOURCE_BYTES: '25000000000'
@@ -274,16 +274,16 @@ jobs:
         run: |
           python -m venv data/.venv
           data/.venv/bin/pip install -r data/requirements.txt
-      - name: install rclone ${{ env.RCLONE_VERSION }}
+      - name: install rclone ${{ env.SATELLITE_RCLONE_RELEASE }}
         run: |
           set -euo pipefail
           curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
             --retry-delay 5 --connect-timeout 20 \
-            "https://github.com/rclone/rclone/releases/download/${RCLONE_VERSION}/rclone-${RCLONE_VERSION}-linux-amd64.zip" \
+            "https://github.com/rclone/rclone/releases/download/${SATELLITE_RCLONE_RELEASE}/rclone-${SATELLITE_RCLONE_RELEASE}-linux-amd64.zip" \
             -o rclone.zip
-          echo "$RCLONE_SHA256  rclone.zip" | sha256sum -c -
+          echo "$SATELLITE_RCLONE_ZIP_SHA256  rclone.zip" | sha256sum -c -
           unzip -q rclone.zip
-          sudo install "rclone-${RCLONE_VERSION}-linux-amd64/rclone" /usr/local/bin/rclone
+          sudo install "rclone-${SATELLITE_RCLONE_RELEASE}-linux-amd64/rclone" /usr/local/bin/rclone
           rclone version
       - name: hydrate remote catalogs and resume checkpoints
         env:
@@ -449,16 +449,16 @@ jobs:
         run: |
           python -m venv data/.venv
           data/.venv/bin/pip install -r data/requirements.txt
-      - name: install rclone ${{ env.RCLONE_VERSION }}
+      - name: install rclone ${{ env.SATELLITE_RCLONE_RELEASE }}
         run: |
           set -euo pipefail
           curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
             --retry-delay 5 --connect-timeout 20 \
-            "https://github.com/rclone/rclone/releases/download/${RCLONE_VERSION}/rclone-${RCLONE_VERSION}-linux-amd64.zip" \
+            "https://github.com/rclone/rclone/releases/download/${SATELLITE_RCLONE_RELEASE}/rclone-${SATELLITE_RCLONE_RELEASE}-linux-amd64.zip" \
             -o rclone.zip
-          echo "$RCLONE_SHA256  rclone.zip" | sha256sum -c -
+          echo "$SATELLITE_RCLONE_ZIP_SHA256  rclone.zip" | sha256sum -c -
           unzip -q rclone.zip
-          sudo install "rclone-${RCLONE_VERSION}-linux-amd64/rclone" /usr/local/bin/rclone
+          sudo install "rclone-${SATELLITE_RCLONE_RELEASE}-linux-amd64/rclone" /usr/local/bin/rclone
           rclone version
       - name: run bounded transactions for ${{ matrix.month.month }}
         env:
