@@ -43,7 +43,7 @@ jobs:
       STAGING_SEARCH_ENABLED: ${{ vars.STAGING_SEARCH_ENABLED }}
       STAGING_SEARCH_RENEWAL_ENABLED: ${{ vars.STAGING_SEARCH_RENEWAL_ENABLED }}
       STAGING_SEARCH_APPROVED_CANDIDATE_SHA256: ${{ vars.STAGING_SEARCH_APPROVED_CANDIDATE_SHA256 }}
-      STAGING_SEARCH_V4_APPROVED_SOURCE_SHA: ${{ vars.STAGING_SEARCH_V4_APPROVED_SOURCE_SHA }}
+      STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA: ${{ vars.STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA }}
       STAGING_SEARCH_V4_APPROVED_RELEASE_ID: ${{ vars.STAGING_SEARCH_V4_APPROVED_RELEASE_ID }}
       STAGING_DATA_ISOLATION_APPROVED: ${{ vars.STAGING_DATA_ISOLATION_APPROVED }}
       STAGING_R2_ACCOUNT_ID: ${{ vars.STAGING_R2_ACCOUNT_ID }}
@@ -60,15 +60,18 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund --prefix cycle/staging-controller
       - name: Verify search publication and transport contracts without credentials
         run: node --test cycle/tests/staging-search.mjs cycle/tests/staging-search-s3.mjs cycle/tests/staging-search-build.mjs
-      - name: Checkout the reviewed metadata-only producer
-        if: inputs.action == 'prepare'
+      - name: Checkout the fixed producer or exact reviewed UI source
+        if: inputs.action == 'prepare' || inputs.action == 'activate'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          ref: dfa25e9f473f15d5e2f630fe78c268b73234bd3a
+          ref: ${{ inputs.action == 'prepare' && 'dfa25e9f473f15d5e2f630fe78c268b73234bd3a' || vars.STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: control
           persist-credentials: false
+      - name: Verify the exact reviewed Search V4 reader source
+        if: inputs.action == 'activate'
+        run: node cycle/tools/staging-search.mjs source-compatibility
       - name: Build both indexes from one immutable published directory snapshot
         if: inputs.action == 'prepare'
         run: node cycle/tools/staging-search-build.mjs

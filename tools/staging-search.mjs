@@ -1,12 +1,13 @@
 // Independent staging-only search publication. No weather pointers, model data, Worker/API
 // tokens, arbitrary bucket names or credential-chain fallback are accepted by this lane.
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
-import { lstatSync, readFileSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { ATMOS_SHA, STAGING_ORIGIN } from './staging-search-source.mjs';
+import { ATMOS_SHA, SEARCH_V4_READER_CLOSURE, STAGING_ORIGIN } from './staging-search-source.mjs';
 
 export const ACCOUNT = 'a89f9a1af485021fbc60a68b163c7c6e';
 export const BUCKET = 'weatherx-data-staging';
@@ -19,6 +20,9 @@ const MAX_FILE = 1024 * 1024;
 const MAX_GZIP = 150 * 1024;
 const MAX_ROWS = 200_000;
 const GENERATION = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+const WIND100_CATALOG = /^stage-wind100-[1-9]\d{0,19}-[1-9]\d{0,5}$/;
+const WIND100_RUN = /^\d{10}$/;
+const SOURCE_FILE_MAX = 2 * 1024 * 1024;
 export const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const jsonBytes = value => Buffer.from(`${JSON.stringify(value)}\n`);
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -48,9 +52,8 @@ export function searchGate(env, action) {
   if (action === 'activate') {
     assert.match(env.CANDIDATE_SHA256 ?? '', SHA);
     assert.equal(env.STAGING_SEARCH_APPROVED_CANDIDATE_SHA256, env.CANDIDATE_SHA256, 'candidate has not been reviewed');
-    assert.equal(env.STAGING_SEARCH_V4_APPROVED_SOURCE_SHA, ATMOS_SHA,
-      'the protected V4 source allowlist does not match this publisher');
-    assert.match(env.STAGING_SEARCH_V4_APPROVED_SOURCE_SHA ?? '', SOURCE_SHA);
+    assert.match(env.STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA ?? '', SOURCE_SHA,
+      'an exact protected V4 UI source is required');
     assert.match(env.STAGING_SEARCH_V4_APPROVED_RELEASE_ID ?? '', SAFE_RELEASE,
       'a browser-qualified canonical staging release is required');
   }
@@ -58,6 +61,68 @@ export function searchGate(env, action) {
     assert.equal(env.STAGING_SEARCH_RENEWAL_ENABLED, 'true', 'renewal is separately enabled');
     assert.match(env.STAGING_SEARCH_APPROVED_CANDIDATE_SHA256 ?? '', SHA);
   }
+}
+
+export function validateV4SourceEvidence(env, evidence) {
+  const approved = env.STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA;
+  assert.match(approved ?? '', SOURCE_SHA, 'an exact protected V4 UI source is required');
+  assert.ok(exact(evidence, ['head', 'clean', 'includesSearchV4Base', 'files']),
+    'invalid V4 source evidence');
+  assert.equal(evidence.head, approved, 'checked-out UI source differs from protected approval');
+  assert.equal(evidence.clean, true, 'checked-out UI source is modified');
+  assert.equal(evidence.includesSearchV4Base, true, 'UI source does not descend from the reviewed V4 integration');
+  assert.deepEqual(evidence.files, SEARCH_V4_READER_CLOSURE,
+    'Search V4 reader closure differs from the reviewed integration');
+  return { uiSourceSha: approved, searchV4BaseSha: ATMOS_SHA,
+    files: Object.keys(SEARCH_V4_READER_CLOSURE).length };
+}
+
+export function verifyV4Source(root, env, run = execFileSync) {
+  assert.equal(typeof root, 'string', 'source root missing');
+  const source = resolve(root);
+  assert.equal(realpathSync(source), source, 'source root must not be a symlink');
+  const sourceStat = lstatSync(source);
+  assert.ok(sourceStat.isDirectory() && !sourceStat.isSymbolicLink(), 'source root must be a regular directory');
+  const options = { cwd: source, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: 30_000, maxBuffer: 64 * 1024 };
+  const command = args => run('git', args, options).trim();
+  assert.equal(resolve(command(['rev-parse', '--show-toplevel'])), source, 'source is not the checkout root');
+  const head = command(['rev-parse', 'HEAD']);
+  const clean = command(['status', '--porcelain=v1', '--untracked-files=all']) === '';
+  let includesSearchV4Base = false;
+  try {
+    command(['merge-base', '--is-ancestor', ATMOS_SHA, 'HEAD']);
+    includesSearchV4Base = true;
+  } catch {}
+  const files = {};
+  for (const path of Object.keys(SEARCH_V4_READER_CLOSURE)) {
+    const file = resolve(source, path);
+    assert.ok(file.startsWith(`${source}/`) && realpathSync(file) === file,
+      'reader closure path must remain inside the source checkout without symlinks');
+    const stat = lstatSync(file);
+    assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.size > 0 && stat.size <= SOURCE_FILE_MAX,
+      'reader closure file is not a bounded regular file');
+    files[path] = hash(readFileSync(file));
+  }
+  return validateV4SourceEvidence(env, { head, clean, includesSearchV4Base, files });
+}
+
+function validWind100Run(runId) {
+  if (!WIND100_RUN.test(runId ?? '')) return false;
+  const iso = `${runId.slice(0, 4)}-${runId.slice(4, 6)}-${runId.slice(6, 8)}T${runId.slice(8)}:00:00.000Z`;
+  const time = Date.parse(iso);
+  return Number.isFinite(time) && new Date(time).toISOString() === iso;
+}
+
+function validStagingBuildProfile(value) {
+  const base = ['product', 'platformAccount', 'platformDataAuth'];
+  if (!object(value) || !exact(value, Object.hasOwn(value, 'wind100') ? [...base, 'wind100'] : base) ||
+      value.product !== 'lab' || value.platformAccount !== '1' || value.platformDataAuth !== 'public') return false;
+  if (!Object.hasOwn(value, 'wind100')) return true;
+  const wind100 = value.wind100;
+  return exact(wind100, ['catalogId', 'runId', 'selectionSha256']) &&
+    WIND100_CATALOG.test(wind100.catalogId ?? '') && validWind100Run(wind100.runId) &&
+    SHA.test(wind100.selectionSha256 ?? '');
 }
 
 async function readBounded(response, maxBytes) {
@@ -86,9 +151,8 @@ async function readBounded(response, maxBytes) {
 }
 
 export async function verifyV4Staging(env, fetchImpl = fetch) {
-  assert.equal(env.STAGING_SEARCH_V4_APPROVED_SOURCE_SHA, ATMOS_SHA,
-    'the protected V4 source allowlist does not match this publisher');
-  assert.match(env.STAGING_SEARCH_V4_APPROVED_SOURCE_SHA ?? '', SOURCE_SHA);
+  assert.match(env.STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA ?? '', SOURCE_SHA,
+    'an exact protected V4 UI source is required');
   assert.match(env.STAGING_SEARCH_V4_APPROVED_RELEASE_ID ?? '', SAFE_RELEASE,
     'approved canonical staging release missing');
   const response = await fetchImpl(`${STAGING_ORIGIN}/health/release.json?search_v4_compatibility=1`, {
@@ -100,12 +164,10 @@ export async function verifyV4Staging(env, fetchImpl = fetch) {
     throw new Error('canonical staging release unavailable');
   }
   const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await readBounded(response, 8192)));
-  assert.ok(object(value) && value.gitSha === ATMOS_SHA &&
+  assert.ok(object(value) && value.gitSha === env.STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA &&
     value.releaseId === env.STAGING_SEARCH_V4_APPROVED_RELEASE_ID &&
     SHA.test(value.shellSha256 ?? '') && SHA.test(value.indexSha256 ?? '') &&
-    exact(value.buildProfile, ['product', 'platformAccount', 'platformDataAuth']) &&
-    value.buildProfile.product === 'lab' && value.buildProfile.platformAccount === '1' &&
-    value.buildProfile.platformDataAuth === 'public',
+    validStagingBuildProfile(value.buildProfile),
   'canonical staging release is not the reviewed V4 shell');
   const indexResponse = await fetchImpl(`${STAGING_ORIGIN}/?search_v4_compatibility=1`, {
     redirect: 'error', cache: 'no-store', credentials: 'omit',
@@ -353,6 +415,12 @@ async function main() {
   const action = process.env.SEARCH_ACTION;
   searchGate(process.env, action);
   if (process.argv[2] === 'gate') return;
+  if (process.argv[2] === 'source-compatibility') {
+    assert.equal(action, 'activate', 'source compatibility proof is activation-only');
+    assert.equal(typeof process.env.GITHUB_WORKSPACE, 'string', 'GitHub workspace missing');
+    console.log(JSON.stringify(verifyV4Source(resolve(process.env.GITHUB_WORKSPACE, 'control'), process.env)));
+    return;
+  }
   if (process.argv[2] === 'compatibility') {
     assert.equal(action, 'activate', 'compatibility proof is activation-only');
     console.log(JSON.stringify(await verifyV4Staging(process.env)));
