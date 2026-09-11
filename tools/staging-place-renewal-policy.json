@@ -4,6 +4,7 @@
   "qualifierSha256": "740b495b7649d377d62e4d821ddd58928389326649ec229c6b450cc12be617cd",
   "surfSchedule": "37 1,7,13,19 * * *",
   "directoryTideSchedule": "47 5,17 * * *",
+  "tideRequestsPerSecond": 2,
   "minimumForecastLeaseHours": 6,
   "leaseHours": 24,
   "tidePriorFreshnessCorrection": {

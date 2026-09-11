@@ -25,26 +25,41 @@ Reuse existing bounded streaming publication (eight in-flight payload operations
 ## Implementation status
 
 The scheduled controller, source/closure policy, fresh surf/tide collector, failure
-tests and workflow are implemented locally. Explicit Node 22 qualification passed for
-the retained 11,503-site paragliding snapshot and the fresh
+tests and workflow merged in PR 210, and the staging-only recurring switch is enabled.
+Explicit Node 22 qualification passed for the retained 11,503-site paragliding snapshot and the fresh
 `surf-2026091012-8c8598ee6239` candidate (50 objects, 496,682 bytes, real source expiry
 2026-09-11T06:00:00Z). The local broad staging suite, Python 3.12 collector tests,
 workflow lint and Linux CPython 3.12 dependency hash resolution pass. A local Node 18
 run is unsupported and fails before tests that import Node 22 module hooks; hosted CI
 already pins Node 22.
 
-Automatic renewal remains disabled and no staging or production write has occurred.
-Remaining work is the real tide collection/qualification result, independent review,
-fresh hosted CI, merge, staging-only variable enablement and manual per-family run with
-served identity/freshness checks plus an unchanged-production readback. ADS-B and the
-missing wind-energy tab remain separate follow-on work packages.
+The first enabled hosted run completed surf and paragliding successfully. Its tide job
+failed during collection after 25 minutes 35 seconds, before qualification or publication;
+the public log's former generic diagnostic does not establish the exact cause.
+Production remained unchanged. A scoped follow-up records only bounded allowlisted request
+status/timeout counts, minimum availability counts, resume state and the pinned producer's
+stopped-pacer flag. It also avoids a known-futile second bake when that stopped flag proves
+an overlong provider cooldown, without resetting the pacer, retrying early, changing the
+one eligible resume, or lowering the availability gate. A subsequent diagnostic tide-only
+run reached 1,172 stations on its first pass and 1,245 after its one eligible resume, still
+below the unchanged 1,251 minimum. It recorded 2,506 HTTP successes and 498 HTTP 403s, with
+no 429, 5xx, timeout, overlong Retry-After or stopped pacer. That receipt rules out the
+stopped-pacer path for this run but does not establish why NOAA returned 403s.
+
+[NOAA CO-OPS API guidance](https://api.tidesandcurrents.noaa.gov/api/prod/) recommends
+spacing successive calls and determining a suitable interval by trial and error under load.
+The next tide-only run is therefore one bounded mitigation experiment:
+tighten only the existing pinned producer pacer's spacing from four to at most two requests
+per second before any request. The experiment does not replace or reset that pacer, change
+its cooldown, add retries, lower the 1,251 minimum or extend the 45-minute collector deadline.
+ADS-B and the missing wind-energy tab remain separate follow-on work packages.
 
 Independent review closed three defects before activation: tide expiry now uses the
 earliest event/sample coverage end across every station; all qualification Python
 executes with isolated module imports; and the minimum six-hour freshness horizon is
 rechecked immediately before conditional activation after remote readback. Fresh Node
-22 verification has 253 passing tests, zero failures and two existing skips; the Python
-collector has 10 passing tests. No runtime/UI code changed.
+22 verification has 257 passing tests, zero failures and two existing skips; the Python
+collector has 15 passing tests. No runtime/UI code changed.
 
 The first real tide pass retained 2,370 valid products but only 1,169 complete stations,
 below the unchanged 1,251 minimum. One bounded pinned-producer resume reused that exact

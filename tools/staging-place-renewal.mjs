@@ -72,7 +72,7 @@ export function renewalGate(env, policy, digest) {
   assert(/^[a-f0-9]{40}$/.test(policy.sourceSha) && env.ATMOS_SHA === policy.sourceSha, 'unapproved source');
   assert(policy.schemaVersion === 1 && SHA.test(policy.qualifierSha256));
   assert(SHA.test(digest) && env.STAGING_PLACES_RENEWAL_CONTROLLER_SHA256 === digest, 'unapproved controller closure');
-  assert(policy.minimumForecastLeaseHours === 6 && policy.leaseHours === 24);
+  assert(policy.minimumForecastLeaseHours === 6 && policy.leaseHours === 24 && policy.tideRequestsPerSecond === 2);
   validateTidePriorFreshnessCorrection(policy.tidePriorFreshnessCorrection);
   for (const key of Object.keys(env)) if (/^(AWS_|RCLONE_|CLOUDFLARE_|CF_API_|R2_|SHARED_R2_|UI_|STAGING_WORKER_)/.test(key)) assert(!env[key], 'foreign credential refused');
   for (const path of [env.RUNNER_TEMP, env.GITHUB_WORKSPACE]) assert(path && resolve(path) === path);
@@ -146,6 +146,125 @@ function safeExecute(command, args, context, env, timeout) {
   return execFileSync(command, args, { cwd: context.source, env: { PATH: env.PATH, LANG: 'C.UTF-8',
     PYTHONDONTWRITEBYTECODE: '1', TMPDIR: env.RUNNER_TEMP }, encoding: 'utf8', stdio: 'pipe', timeout, maxBuffer: 65536 });
 }
+const COLLECTOR_LIMIT = 20000;
+const COLLECTOR_OUTPUT_BYTES = 4096;
+const COLLECTOR_PHASES = new Set(['setup', 'source', 'roster', 'fetch', 'checkpoint', 'validate', 'finalize', 'session', 'collector']);
+const COLLECTOR_CLASSES = new Set(['contract', 'environment', 'provider', 'provider-cooldown', 'minimum-availability', 'unknown']);
+const REQUEST_COUNT_KEYS = ['http2xx', 'http403', 'http429', 'http5xx', 'httpOther', 'timeouts', 'overlongRetryAfter', 'pacerStopped'];
+const collectorFailures = new WeakMap();
+function exactKeys(value, required, optional = []) {
+  assert(value && typeof value === 'object' && !Array.isArray(value));
+  const keys = Object.keys(value).sort();
+  const allowed = new Set([...required, ...optional]);
+  assert(required.every(key => keys.includes(key)) && keys.every(key => allowed.has(key)), 'invalid collector receipt fields');
+}
+function boundedInteger(value, maximum = COLLECTOR_LIMIT) {
+  assert(Number.isSafeInteger(value) && value >= 0 && value <= maximum, 'invalid collector count');
+  return value;
+}
+function validatedRequestCounts(value) {
+  exactKeys(value, REQUEST_COUNT_KEYS);
+  const result = {};
+  for (const key of REQUEST_COUNT_KEYS.slice(0, -1)) result[key] = boundedInteger(value[key]);
+  assert.equal(typeof value.pacerStopped, 'boolean', 'invalid collector pacer state');
+  result.pacerStopped = value.pacerStopped;
+  return result;
+}
+function collectorDocument(output) {
+  assert(typeof output === 'string' && Buffer.byteLength(output) > 0 && Buffer.byteLength(output) <= COLLECTOR_OUTPUT_BYTES,
+    'invalid collector output');
+  assert(!output.includes('\r') && /^([^\n]+)\n?$/.test(output), 'collector output must be one line');
+  const value = JSON.parse(output.endsWith('\n') ? output.slice(0, -1) : output);
+  assert(value && typeof value === 'object' && !Array.isArray(value));
+  assert.equal(value.schemaVersion, 1); assert.equal(value.kind, 'staging-place-collection');
+  assert(['surf', 'tides'].includes(value.family));
+  return value;
+}
+function validateCollectorBase(value, family, status, required, optional = []) {
+  exactKeys(value, ['schemaVersion', 'kind', 'status', 'family', ...required], optional);
+  assert.equal(value.schemaVersion, 1); assert.equal(value.kind, 'staging-place-collection');
+  assert.equal(value.status, status); assert.equal(value.family, family);
+}
+function validateTideCounts(value, { success, suppressedResume = false }) {
+  assert.equal(boundedInteger(value.rosterStationCount, 5000), 1256);
+  assert.equal(boundedInteger(value.requiredStationCount, 5000), 1251);
+  const available = boundedInteger(value.availableStationCount, 5000);
+  assert(success ? available >= 1251 && available <= 1256 : available > 0 && available < 1251,
+    'invalid tide availability');
+  const resumes = boundedInteger(value.resumeAttempts, 1);
+  if (resumes === 1 || suppressedResume) {
+    const first = boundedInteger(value.firstPassAvailableStationCount, 5000);
+    assert(first > 0 && first < 1251, 'invalid first tide availability');
+    if (suppressedResume) assert.equal(first, available, 'invalid suppressed tide resume counts');
+    value.firstPassRequestCounts = validatedRequestCounts(value.firstPassRequestCounts);
+    assert.equal(value.firstPassRequestCounts.pacerStopped, suppressedResume, 'invalid first-pass pacer state');
+  } else {
+    assert(!Object.hasOwn(value, 'firstPassAvailableStationCount') && !Object.hasOwn(value, 'firstPassRequestCounts'),
+      'unexpected first-pass collector fields');
+  }
+  value.requestCounts = validatedRequestCounts(value.requestCounts);
+  return value;
+}
+export function parseCollectorSuccess(output, family) {
+  const value = collectorDocument(output);
+  if (family === 'surf') {
+    validateCollectorBase(value, family, 'succeeded', ['spotCount', 'leadCount', 'requestCounts']);
+    assert.equal(boundedInteger(value.spotCount, 5000), 49);
+    assert.equal(boundedInteger(value.leadCount, 5000), 73);
+    value.requestCounts = validatedRequestCounts(value.requestCounts);
+    return value;
+  }
+  assert.equal(family, 'tides');
+  validateCollectorBase(value, family, 'succeeded',
+    ['rosterStationCount', 'requiredStationCount', 'availableStationCount', 'resumeAttempts', 'requestCounts'],
+    ['firstPassAvailableStationCount', 'firstPassRequestCounts']);
+  return validateTideCounts(value, { success: true });
+}
+function parseCollectorFailure(output, family) {
+  const value = collectorDocument(output);
+  validateCollectorBase(value, family, 'failed', ['phase', 'class'],
+    ['rosterStationCount', 'availableStationCount', 'requiredStationCount', 'resumeAttempts',
+      'firstPassAvailableStationCount', 'firstPassRequestCounts', 'requestCounts']);
+  assert(COLLECTOR_PHASES.has(value.phase) && COLLECTOR_CLASSES.has(value.class), 'invalid collector failure category');
+  const hasAvailability = ['rosterStationCount', 'availableStationCount', 'requiredStationCount', 'resumeAttempts', 'requestCounts']
+    .every(key => Object.hasOwn(value, key));
+  if (value.class === 'minimum-availability' || value.class === 'provider-cooldown') {
+    assert.equal(family, 'tides'); assert(hasAvailability, 'missing tide failure counts');
+    if (value.class === 'provider-cooldown') {
+      validateTideCounts(value, { success: false, suppressedResume: true });
+      assert.equal(value.resumeAttempts, 0); assert.equal(value.requestCounts.pacerStopped, true);
+      assert(value.requestCounts.overlongRetryAfter > 0, 'missing provider cooldown observation');
+      assert.deepEqual(value.requestCounts, value.firstPassRequestCounts, 'unexpected requests after suppressed resume');
+    } else { validateTideCounts(value, { success: false }); assert.equal(value.resumeAttempts, 1); }
+  } else {
+    for (const key of ['rosterStationCount', 'availableStationCount', 'requiredStationCount', 'resumeAttempts', 'firstPassAvailableStationCount']) {
+      if (Object.hasOwn(value, key)) boundedInteger(value[key], key === 'resumeAttempts' ? 1 : 5000);
+    }
+    for (const key of ['firstPassRequestCounts', 'requestCounts']) {
+      if (Object.hasOwn(value, key)) value[key] = validatedRequestCounts(value[key]);
+    }
+  }
+  return value;
+}
+function processFailure(family, category, returnCode) {
+  const result = { schemaVersion: 1, kind: 'staging-place-collection', status: 'failed', family,
+    phase: 'process', class: category };
+  if (returnCode !== undefined) result.returnCode = returnCode;
+  return result;
+}
+export function collectorProcessFailure(error, family) {
+  assert(['surf', 'tides'].includes(family));
+  let code, status, stdout, stderr, killed, signal;
+  try { code = error?.code; status = error?.status; stdout = error?.stdout; stderr = error?.stderr;
+    killed = error?.killed; signal = error?.signal; } catch { return processFailure(family, 'process-spawn'); }
+  if (code === 'ETIMEDOUT' || (killed === true && signal === 'SIGTERM')) return processFailure(family, 'process-timeout');
+  if (Number.isSafeInteger(status) && status > 0 && status <= 255 && stdout === '' && typeof stderr === 'string') {
+    try { return parseCollectorFailure(stderr, family); } catch { /* fall through to process-only diagnostics */ }
+  }
+  if (Number.isSafeInteger(status) && status > 0 && status <= 255) return processFailure(family, 'process-exit', status);
+  if (status === 0) return processFailure(family, 'process-output');
+  return processFailure(family, 'process-spawn');
+}
 export async function verifyLive(candidate, fetcher = fetch, sleep = delay) {
   const { kind, identity } = candidate.completion;
   const indexPath = kind === 'tides' ? 'catalog.json' : 'index.json';
@@ -191,9 +310,22 @@ async function main(env, action) {
     noPublishCredentials(env); assert(!env.STAGING_PLACES_SEED_KEY && context.kind !== 'paragliding');
     assert.equal(safeExecute('git', ['rev-parse', 'HEAD'], context, env, 10000).trim(), context.sourceSha);
     assert.equal(safeExecute('git', ['status', '--porcelain'], context, env, 10000).trim(), '');
-    safeExecute('python3', isolatedPythonArguments(resolve(CYCLE, 'tools/staging-place-collect.py'),
-      ['--source', context.source, '--root', context.root, '--family', context.kind]), context, env, 45 * 60000);
-    console.log(JSON.stringify({ family: context.kind, collected: true })); return;
+    let output;
+    try {
+      output = safeExecute('python3', isolatedPythonArguments(resolve(CYCLE, 'tools/staging-place-collect.py'),
+        ['--source', context.source, '--root', context.root, '--family', context.kind,
+          '--tide-requests-per-second', String(policy.tideRequestsPerSecond)]), context, env, 45 * 60000);
+    } catch (error) {
+      if (error && typeof error === 'object') collectorFailures.set(error, collectorProcessFailure(error, context.kind));
+      throw error;
+    }
+    try { console.log(JSON.stringify(parseCollectorSuccess(output, context.kind))); }
+    catch (error) {
+      if (error && typeof error === 'object') collectorFailures.set(error,
+        collectorProcessFailure({ status: 0, stdout: output, stderr: '' }, context.kind));
+      throw error;
+    }
+    return;
   }
   if (action === 'download') {
     noPublishCredentials(env); assert(!env.STAGING_PLACES_SEED_KEY && context.kind === 'paragliding');
@@ -233,8 +365,9 @@ async function main(env, action) {
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main(process.env, process.argv[2]).catch(error => {
-    console.error(JSON.stringify(placeFailureDiagnostic(error)));
-    console.error('Staging family renewal stopped. Previous pointer is retained unless the verified conditional activation completed; inspect before retry.');
+    const collector = error && typeof error === 'object' ? collectorFailures.get(error) : undefined;
+    console.error(JSON.stringify(collector ?? placeFailureDiagnostic(error)));
+    if (!collector) console.error('Staging family renewal stopped. Previous pointer is retained unless the verified conditional activation completed; inspect before retry.');
     process.exitCode = 1;
   });
 }

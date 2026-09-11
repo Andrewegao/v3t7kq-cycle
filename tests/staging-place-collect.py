@@ -6,7 +6,9 @@ import json
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -26,6 +28,58 @@ class Session:
 
     def close(self):
         self.closed = True
+
+
+class Response:
+    def __init__(self, status_code, headers=None):
+        self.status_code = status_code
+        self.headers = headers or {}
+
+
+class RetryAfterSession(Session):
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    def get(self, *args, **kwargs):
+        self.calls += 1
+        return Response(429, {"Retry-After": "301"})
+
+
+class TestGlobalPacer:
+    def __init__(self, requests_per_second, *, clock=lambda: 0.0, sleep=lambda _: None):
+        self._gap = 1.0 / requests_per_second
+        self._clock = clock
+        self._sleep = sleep
+        self._lock = threading.Lock()
+        self._next = 0.0
+        self._cooldown = 0.0
+        self._stopped = False
+        self.reservations = []
+
+    def take(self):
+        while True:
+            with self._lock:
+                if self._stopped:
+                    raise RuntimeError("stopped")
+                now = self._clock()
+                at = max(now, self._next, self._cooldown)
+                self._next = at + self._gap
+                self.reservations.append(at)
+            if at > now:
+                self._sleep(at - now)
+            with self._lock:
+                if self._clock() >= self._cooldown:
+                    return
+
+    def defer(self, seconds):
+        with self._lock:
+            self._cooldown = max(self._cooldown, self._clock() + seconds)
+            self._next = max(self._next, self._cooldown)
+
+    def stop(self):
+        with self._lock:
+            self._stopped = True
 
 
 class SurfProducer:
@@ -80,10 +134,13 @@ class TideProducer:
     LOOKBACK_DAYS = 1
     FORECAST_DAYS = 7
     RIGHT_BRACKET_DAYS = 1
+    MAX_REQUESTS_PER_SECOND = 4.0
+    _GlobalPacer = TestGlobalPacer
 
     def __init__(self):
         self.manifest = None
         self.bake_args = None
+        self._GLOBAL_PACER = self._GlobalPacer(self.MAX_REQUESTS_PER_SECOND)
 
     def _session(self):
         return Session()
@@ -201,6 +258,19 @@ class WrongTypeMinimumTideProducer(FailingTideProducer):
         )
 
 
+class PacerStoppedMinimumTideProducer(ResumableTideProducer):
+    MAX_RETRY_AFTER_S = 300.0
+
+    def __init__(self):
+        super().__init__(fail_second=True)
+
+    def bake_v2(self, session, *args, **kwargs):
+        if self.bake_calls == 0:
+            session.get("https://private.invalid/path?token=DO-NOT-PRINT", timeout=30)
+            self._GLOBAL_PACER._stopped = True
+        return super().bake_v2(session, *args, **kwargs)
+
+
 class PlaceCollector(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -210,6 +280,94 @@ class PlaceCollector(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_retry_after_telemetry_matches_pinned_overlong_numeric_contract(self):
+        self.assertTrue(collector._RequestTelemetry._overlong_retry_after("301", 300))
+        self.assertTrue(collector._RequestTelemetry._overlong_retry_after("9" * 129, 300))
+        self.assertFalse(collector._RequestTelemetry._overlong_retry_after("x" * 129, 300))
+
+    def test_tide_rate_tightening_preserves_existing_pacer_identity_and_state(self):
+        producer = TideProducer()
+        pacer = producer._GLOBAL_PACER
+        pacer._next, pacer._cooldown = 7.0, 9.0
+        lock, clock, sleep = pacer._lock, pacer._clock, pacer._sleep
+        collector._configure_tide_pacer(producer, 2.0)
+        self.assertIs(producer._GLOBAL_PACER, pacer)
+        self.assertIs(pacer._lock, lock)
+        self.assertIs(pacer._clock, clock)
+        self.assertIs(pacer._sleep, sleep)
+        self.assertEqual((pacer._next, pacer._cooldown, pacer._stopped), (7.0, 9.0, False))
+        self.assertEqual(pacer._gap, 0.5)
+        pacer._gap = 0.75
+        collector._configure_tide_pacer(producer, 2.0)
+        self.assertEqual(pacer._gap, 0.75)
+
+    def test_tide_rate_tightening_shared_concurrency_and_cooldown_recheck(self):
+        class Clock:
+            value = 0.0
+            lock = threading.Lock()
+
+            def now(self):
+                with self.lock:
+                    return self.value
+
+            def advance(self, seconds):
+                with self.lock:
+                    self.value += seconds
+
+        clock = Clock()
+        producer = TideProducer()
+        producer._GLOBAL_PACER = producer._GlobalPacer(4.0, clock=clock.now, sleep=clock.advance)
+        pacer = producer._GLOBAL_PACER
+        collector._configure_tide_pacer(producer, 2.0)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(lambda _: pacer.take(), range(4)))
+        self.assertEqual(pacer.reservations, [0.0, 0.5, 1.0, 1.5])
+
+        waiting, release = threading.Event(), threading.Event()
+        sleeps = []
+
+        def controlled_sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) == 1:
+                waiting.set()
+                release.wait(timeout=2)
+            clock.advance(seconds)
+
+        clock.value = 0.0
+        producer._GLOBAL_PACER = producer._GlobalPacer(4.0, clock=clock.now, sleep=controlled_sleep)
+        pacer = producer._GLOBAL_PACER
+        collector._configure_tide_pacer(producer, 2.0)
+        pacer.take()
+        worker = threading.Thread(target=pacer.take)
+        worker.start()
+        self.assertTrue(waiting.wait(timeout=2))
+        pacer.defer(2.0)
+        release.set()
+        worker.join(timeout=2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(pacer.reservations, [0.0, 0.5, 2.0])
+        self.assertEqual(sleeps, [0.5, 1.5])
+
+    def test_tide_rate_tightening_refuses_stopped_or_unreviewed_pacer_before_session(self):
+        for index, (producer, rate) in enumerate(((TideProducer(), 2.0), (TideProducer(), 2.0),
+                                                   (TideProducer(), 4.0), (TideProducer(), 2.0))):
+            pacer = producer._GLOBAL_PACER
+            pacer._next, pacer._cooldown = 7.0, 9.0
+            if index == 0:
+                pacer._stopped = True
+            else:
+                if index == 1:
+                    producer.MAX_REQUESTS_PER_SECOND = 3.0
+                elif index == 3:
+                    producer._GlobalPacer = type("ForeignPacer", (), {})
+            before = (pacer._gap, pacer._next, pacer._cooldown, pacer._stopped, id(pacer))
+            session_calls = []
+            with self.subTest(index=index), self.assertRaises(collector.CollectionFailure):
+                collector.collect_tides(self.base / f"rate-{index}", producer, clock=lambda: datetime.now(timezone.utc),
+                    session_factory=lambda: session_calls.append(True), requests_per_second=rate)
+            self.assertEqual(session_calls, [])
+            self.assertEqual((pacer._gap, pacer._next, pacer._cooldown, pacer._stopped, id(pacer)), before)
 
     def test_surf_selects_exact_aged_cycle_and_preserves_stage_values_and_times(self):
         start = datetime(2026, 9, 10, 18, 30, tzinfo=timezone.utc)
@@ -279,11 +437,41 @@ class PlaceCollector(unittest.TestCase):
         now = datetime(2026, 9, 10, 17, 19, 59, tzinfo=timezone.utc)
         producer = ResumableTideProducer(fail_second=True)
         session = Session()
-        with self.assertRaises(Exception):
+        with self.assertRaises(collector.CollectionFailure) as caught:
             collector.collect(self.source, self.base / "run", "tides", env={},
                 clock=lambda: now, modules={"tides": producer}, session_factory=lambda: session)
         self.assertEqual(producer.bake_calls, 2)
         self.assertTrue(session.closed)
+        receipt = collector.failure_receipt("tides", caught.exception)
+        self.assertEqual(receipt["phase"], "fetch")
+        self.assertEqual(receipt["class"], "minimum-availability")
+        self.assertEqual(receipt["rosterStationCount"], 1256)
+        self.assertEqual(receipt["availableStationCount"], 1249)
+        self.assertEqual(receipt["requiredStationCount"], 1251)
+        self.assertEqual(receipt["resumeAttempts"], 1)
+        self.assertEqual(receipt["firstPassAvailableStationCount"], 1169)
+
+    def test_tides_failure_reports_only_aggregate_http_and_stopped_pacer_state(self):
+        now = datetime(2026, 9, 10, 17, 19, 59, tzinfo=timezone.utc)
+        producer = PacerStoppedMinimumTideProducer()
+        session = RetryAfterSession()
+        with self.assertRaises(collector.CollectionFailure) as caught:
+            collector.collect(self.source, self.base / "run", "tides", env={},
+                clock=lambda: now, modules={"tides": producer}, session_factory=lambda: session)
+        receipt = collector.failure_receipt("tides", caught.exception)
+        self.assertEqual(session.calls, 1)
+        self.assertEqual(producer.bake_calls, 1)
+        self.assertEqual(receipt["class"], "provider-cooldown")
+        self.assertEqual(receipt["availableStationCount"], 1169)
+        self.assertEqual(receipt["requiredStationCount"], 1251)
+        self.assertEqual(receipt["resumeAttempts"], 0)
+        self.assertEqual(receipt["requestCounts"], {
+            "http2xx": 0, "http403": 0, "http429": 1, "http5xx": 0, "httpOther": 0,
+            "timeouts": 0, "overlongRetryAfter": 1, "pacerStopped": True,
+        })
+        self.assertEqual(receipt["firstPassRequestCounts"], receipt["requestCounts"])
+        self.assertNotIn("private.invalid", json.dumps(receipt))
+        self.assertNotIn("DO-NOT-PRINT", json.dumps(receipt))
 
     def test_tides_manifest_byte_tamper_blocks_resume(self):
         now = datetime(2026, 9, 10, 17, 19, 59, tzinfo=timezone.utc)
@@ -316,11 +504,14 @@ class PlaceCollector(unittest.TestCase):
 
     def test_cli_failure_is_fixed_and_does_not_echo_private_source_or_environment(self):
         result = subprocess.run([sys.executable, "-I", "-B", str(REPO / "tools/staging-place-collect.py"),
-            "--source", "/private/source-name", "--root", str(self.base / "run"), "--family", "surf"],
+            "--source", "/private/source-name", "--root", str(self.base / "run"), "--family", "surf",
+            "--tide-requests-per-second", "2"],
             env={"PATH": "/usr/bin:/bin", "STAGING_R2_WRITE_SECRET_ACCESS_KEY": "DO-NOT-PRINT"},
             capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(result.stderr, "staging place collection refused\n")
+        receipt = json.loads(result.stderr)
+        self.assertEqual(receipt, {"schemaVersion": 1, "kind": "staging-place-collection", "status": "failed",
+            "family": "surf", "phase": "setup", "class": "environment"})
         self.assertNotIn("private/source-name", result.stdout + result.stderr)
         self.assertNotIn("DO-NOT-PRINT", result.stdout + result.stderr)
 
