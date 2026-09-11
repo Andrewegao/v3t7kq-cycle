@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 3,
+  "sourceSha": "142826414987df4138c293a6147d9414ae30ab76",
+  "model": "ecmwf",
+  "hours": 336,
+  "leadCount": 81,
+  "freshnessHours": 30,
+  "minimumForecastLeaseHours": 6,
+  "nativeCadenceSeconds": 10800,
+  "grid": {
+    "lon0": -180,
+    "lat0": 90,
+    "lonStep": 0.25,
+    "latStep": -0.25,
+    "width": 1440,
+    "height": 721,
+    "wrapLongitude": true
+  },
+  "chunk": { "width": 16, "height": 16 },
+  "storageFields": [
+    { "id": "temperature", "scaleInv": 100 },
+    { "id": "wind_u", "scaleInv": 20 },
+    { "id": "wind_v", "scaleInv": 20 },
+    { "id": "wind_gust", "scaleInv": 20 },
+    { "id": "precipitation", "scaleInv": 50 },
+    { "id": "dewpoint", "scaleInv": 100 },
+    { "id": "solar_radiation", "scaleInv": 1 },
+    { "id": "wind100_u", "scaleInv": 20 },
+    { "id": "wind100_v", "scaleInv": 20 }
+  ],
+  "native100m": {
+    "contract": "weatherx-native-wind100-grib-v1",
+    "requiredJointCoveragePermille": 1000,
+    "sourceParameters": { "wind100_u": "100u", "wind100_v": "100v" },
+    "sourceUnits": "m s**-1",
+    "levelType": "heightAboveGround",
+    "level": 100,
+    "stepType": "instant",
+    "earthRelative": true,
+    "deliveryGrid": "global-regular-ll-0.25-degree-v1"
+  },
+  "dependencyLock": {
+    "path": "tools/staging-wind100-requirements.txt",
+    "sha256": "ada202170d4e893a643c51e1a29398155b6447db4c438c22132f0e7074df0596"
+  },
+  "sourceClosure": {
+    "data/bake_model_inputs.py": "08b175d170dd0b13a78086dd06f931b64572a009ea4729249570b497675d0849",
+    "data/build_bricks.py": "731254c04ccee40fd96021360686c64bcf56e5fcf5a415647a539f38b9214432",
+    "data/build_native_wind_bundles.py": "a23b7385cad9d2c4da2b64fd2b8955cf7fc0f02adf493f7fb128d4ed771e7a07",
+    "data/build_point_series.py": "35c255f49394626c206bfc0f100f5503d749244471dc4bd381f993ea777f4e24",
+    "data/fetch_ecmwf.py": "837721cee2ccfa251433e15fce8bb1a86110328aa15f74d8fb308d91c0cf2c05",
+    "data/fetch_upperair.py": "1ad45f96979baacadf20f765d793d08223a92c618ea2e2f0829fe111bf512902",
+    "data/health_snapshot.py": "f950f636c2203bf3a69fa99a05dfd64b1cad338de09cf3bbb78c0d95370b1172",
+    "data/hrrr_point.py": "573606d57d0ca91fc9a1d124ab661df30ef63f28dc0ace9b3dbff9ddd2f2b6cd",
+    "data/native_wind100.py": "5f3a7775125e6f3ed185362b67a450c273f2d52bad643eec40443d368778ab85",
+    "ops/bake-model-component.sh": "a37702f09cdb6c1227c3fba568ba5f1537bbe519ab673f9fb3c8c760089e8de9",
+    "ops/core_model_artifact.py": "b690a168e55d07b433c18cc4e1430987434d9aafbeb91a4d569c3c5908ac40af",
+    "ops/platform/build-component-manifest.mjs": "5f33ccb12562fa043556491696597a258486e0e750043169618b282b18999b99",
+    "ops/platform/publish-r2-component.sh": "add64955228a620349d7b886fe5a8ef160aa8e4e5f3de9180c15a1305496cfe9",
+    "ops/platform/hydrate-r2-component.sh": "29ae05a52dc124f86bc8afba4e367919f0a413e17c36f59d48c253984ff8487e",
+    "ops/platform/validate-model-component.py": "7ed036b17d37b4930d763432346304cb074136717780332a6f8fa5108b7fdc65",
+    "ops/platform/validate-point-series.mjs": "20c61da5bae531af298efdfe8b29270d3188973aa7860fd5db34ffae917c22c2",
+    "platform/edge/src/catalog.ts": "9b9d900d967a2db947eb3d5bb97dccf02d2e4f5741fefdf92570a5ca59afe4f3",
+    "platform/edge/src/pointSeriesContract.ts": "56b08750f64f1126b2a2219d98a5eb265d3ca32d835baa689082bcafa8fce793",
+    "platform/edge/src/packedComponent.ts": "ded03695f4a674938f850aac851ea56babc199a929e458d5c06e3f5b94aa6e0b"
+  }
+}
