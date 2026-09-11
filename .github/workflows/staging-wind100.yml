@@ -69,7 +69,7 @@ jobs:
           printf '%s  %s\n' aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa "$archive" | sha256sum --check --status
           unzip -q "$archive" -d "$RUNNER_TEMP"
           sudo install -m 0755 "$RUNNER_TEMP/rclone-v1.75.0-linux-amd64/rclone" /usr/local/bin/rclone
-          rclone version | head -1 | grep -Fx 'rclone v1.75.0'
+          rclone version | sed -n '1p' | grep -Fx 'rclone v1.75.0'
           atmos/data/.venv/bin/python -I cycle/tests/staging-wind100-core-flow.py "$GITHUB_WORKSPACE/atmos-source"
       - name: Hydrate only the isolated staging ECMWF baseline
         # Keep retained map history in the validator. The producer checkout must
