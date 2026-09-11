@@ -65,6 +65,11 @@ const QUALIFICATION_PHASES = new Set([
   'gate', 'evidence', 'source-evidence', 'point-catalog', 'source-stage', 'pack-inventory', 'pack-scan',
   'coverage', 'structural-report', 'source-stage-inventory', 'map-proof', 'map-inventory', 'seal', 'lease', 'receipt',
 ]);
+const PUBLICATION_PHASES = new Set([
+  'gate', 'evidence', 'source-evidence', 'reader', 'transport', 'qualification',
+  'map-component', 'point-component', 'pair', 'catalog-validation', 'catalog-write',
+  'lease', 'selection-write', 'receipt',
+]);
 const CONTROLLER_LABEL = 'tools/staging-wind100.mjs';
 const CONTROLLER_URL = import.meta.url;
 const MAX_DIAGNOSTIC_NUMBER = 10_000;
@@ -78,6 +83,10 @@ export function createQualificationTrace() {
   return { phase: 'gate', pointPackRowsChecked: 0, pointPacksChecked: 0 };
 }
 
+export function createPublicationTrace() {
+  return { phase: 'gate' };
+}
+
 function markQualification(trace, phase, progress = {}) {
   if (!trace || !QUALIFICATION_PHASES.has(phase)) return;
   trace.phase = phase;
@@ -86,6 +95,10 @@ function markQualification(trace, phase, progress = {}) {
       trace[name] = progress[name];
     }
   }
+}
+
+function markPublication(trace, phase) {
+  if (trace && PUBLICATION_PHASES.has(phase)) trace.phase = phase;
 }
 
 function safeProperty(value, name) {
@@ -136,6 +149,19 @@ export function qualificationFailureDiagnostic(error, trace, controllerSha256 = 
     ...controllerCoordinate(error),
     pointPackRowsChecked: diagnosticNumber(safeProperty(trace, 'pointPackRowsChecked')),
     pointPacksChecked: diagnosticNumber(safeProperty(trace, 'pointPacksChecked')),
+  };
+}
+
+export function publicationFailureDiagnostic(error, trace, controllerSha256 = null) {
+  const phase = safeProperty(trace, 'phase');
+  return {
+    schemaVersion: 1,
+    operation: 'publish',
+    phase: PUBLICATION_PHASES.has(phase) ? phase : 'unknown',
+    category: qualificationCategory(error),
+    controller: CONTROLLER_LABEL,
+    controllerSha256: typeof controllerSha256 === 'string' && SHA.test(controllerSha256) ? controllerSha256 : null,
+    ...controllerCoordinate(error),
   };
 }
 
@@ -1022,28 +1048,47 @@ function candidateKeys(request) {
     selectionKey: `staging-candidates/wind100/${catalogId}/selection.json` };
 }
 
+function validateComponentObjectMetadata(metadata) {
+  assert.ok(metadata && typeof metadata === 'object' && !Array.isArray(metadata),
+    'component object metadata is invalid');
+  const keys = Object.keys(metadata);
+  if (keys.length === 0) return;
+  // rclone records this transport timestamp by default. It is not weather identity:
+  // the authenticated body hash, receipt and parsed manifest remain authoritative.
+  assert.deepEqual(keys, ['mtime'], 'component object metadata has an unknown field');
+  assert.match(metadata.mtime, /^\d{10}(?:\.\d{1,9})?$/,
+    'component object mtime is not a canonical rclone timestamp');
+}
+
 export async function prepareCandidate({ request, qualification, mapReceipt, pointReceipt, io,
-  policy = readPolicy(), now = Date.now, catalogValidator = () => true }) {
+  policy = readPolicy(), now = Date.now, catalogValidator = () => true, trace = null }) {
+  markPublication(trace, 'qualification');
   const firstNow = now(), q = validateQualification(qualification, request, policy, firstNow);
   const manifests = {};
   for (const [id, receipt] of [[MODEL, mapReceipt], [`point-${MODEL}`, pointReceipt]]) {
+    markPublication(trace, id === MODEL ? 'map-component' : 'point-component');
     const object = await io.get(COMPONENTS, receipt.manifestKey, MAX_JSON_BYTES);
     assert.ok(object, `missing ${id} component manifest`); assert.equal(object.sha256, receipt.manifestSha256);
-    assert.deepEqual(object.metadata, {}); assert.equal(object.httpMetadata.contentEncoding, undefined);
+    validateComponentObjectMetadata(object.metadata); assert.equal(object.httpMetadata.contentEncoding, undefined);
     assert.ok(object.httpMetadata.contentType == null || object.httpMetadata.contentType === 'application/json');
     assert.ok(object.httpMetadata.cacheControl == null || object.httpMetadata.cacheControl === CACHE);
     manifests[id] = componentManifest(JSON.parse(object.body), id, receipt, q, now());
   }
+  markPublication(trace, 'pair');
   assert.equal(manifests[MODEL].generationTime, manifests[`point-${MODEL}`].generationTime);
+  markPublication(trace, 'lease');
   assert.ok(finiteTime(q.freshUntil, 'forecast expiry') - now() >= policy.minimumForecastLeaseHours * 3600_000,
     'candidate lease expired during component readback');
   const { catalogId, catalogKey, selectionKey } = candidateKeys(request);
   const completedAt = new Date(now()).toISOString();
   const catalog = { schemaVersion: 2, sequence: 1, parentCatalogId: null, createdAt: completedAt,
     components: manifests, rollbackEpoch: 0 };
+  markPublication(trace, 'catalog-validation');
   assert.equal(catalogValidator(catalog), true, 'pinned data reader rejected isolated catalog');
   const catalogBody = Buffer.from(`${JSON.stringify(catalog)}\n`), catalogSha256 = hash(catalogBody);
+  markPublication(trace, 'catalog-write');
   await io.immutable(DATA, catalogKey, catalogBody, { sha256: catalogSha256 });
+  markPublication(trace, 'lease');
   assert.ok(finiteTime(q.freshUntil, 'forecast expiry') - now() >= policy.minimumForecastLeaseHours * 3600_000,
     'candidate lease expired before isolated selection write');
   const selection = { schemaVersion: 1, kind: 'weatherx-staging-native-wind100-selection',
@@ -1053,7 +1098,9 @@ export async function prepareCandidate({ request, qualification, mapReceipt, poi
     freshUntil: q.freshUntil, createdAt: completedAt, isolatedStagingCandidate: true,
     sharedReadPinChanged: false, productionWritten: false, activated: false };
   const selectionBody = Buffer.from(`${JSON.stringify(selection)}\n`);
+  markPublication(trace, 'selection-write');
   await io.immutable(DATA, selectionKey, selectionBody, { sha256: hash(selectionBody) });
+  markPublication(trace, 'receipt');
   return selection;
 }
 
@@ -1173,16 +1220,23 @@ export async function main(command, env = process.env, argv = process.argv.slice
     return receipt;
   }
   if (command === 'publish') {
-    const request = gate(env, policy, controllerDigest(), 'metadata');
+    markPublication(trace, 'gate');
+    const digest = controllerDigest();
+    const request = gate(env, policy, digest, 'metadata');
+    if (trace) trace.controllerSha256 = digest;
+    markPublication(trace, 'evidence');
     const qualification = privateJson(env.RUNNER_TEMP, argv[0]);
     const mapReceipt = privateJson(env.RUNNER_TEMP, argv[1]);
     const pointReceipt = privateJson(env.RUNNER_TEMP, argv[2]);
+    markPublication(trace, 'source-evidence');
     assert.deepEqual(sourceBytes(argv[3], policy), privateJson(env.RUNNER_TEMP, 'weatherx-wind100-source.json'),
       'validator source closure changed before isolated publication');
+    markPublication(trace, 'reader');
     const validator = await loadCatalogValidator(argv[3]);
+    markPublication(trace, 'transport');
     const io = await createCandidateS3(env, request);
     try { return await prepareCandidate({ request, qualification, mapReceipt, pointReceipt, io, policy,
-      catalogValidator: validator.validate }); }
+      catalogValidator: validator.validate, trace }); }
     finally { validator.close(); io.close(); }
   }
   throw Error('usage: staging-wind100.mjs digest | gate | source SOURCE | qualify SOURCE SOURCE_EVIDENCE_REL STAGE_ROOT POINT_ROOT STRUCTURAL_REPORT_REL MAP_PROOF_REL SEALED_MODEL_ROOT | publish QUALIFICATION_REL MAP_RECEIPT_REL POINT_RECEIPT_REL');
@@ -1190,11 +1244,13 @@ export async function main(command, env = process.env, argv = process.argv.slice
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const command = process.argv[2];
-  const trace = command === 'qualify' ? createQualificationTrace() : null;
+  const trace = command === 'qualify' ? createQualificationTrace()
+    : command === 'publish' ? createPublicationTrace() : null;
   main(command, process.env, process.argv.slice(3), trace).then(value => console.log(JSON.stringify(value)))
     .catch(error => {
       if (trace) {
-        console.error(`Staging wind100 diagnostic ${JSON.stringify(qualificationFailureDiagnostic(
+        const diagnostic = command === 'qualify' ? qualificationFailureDiagnostic : publicationFailureDiagnostic;
+        console.error(`Staging wind100 diagnostic ${JSON.stringify(diagnostic(
           error, trace, safeProperty(trace, 'controllerSha256')))}`);
       }
       console.error('Staging wind100 refused; no serving pointer or production object changed.');

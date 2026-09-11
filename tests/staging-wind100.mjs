@@ -13,8 +13,8 @@ import { fileURLToPath } from 'node:url';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import {
   ACCOUNT, COMPONENTS, CONFIRMATION, DATA, MODEL, SOURCE_SHA, controllerDigest,
-  createCandidateS3, createQualificationTrace, gate, hash, loadCatalogValidator, prepareCandidate,
-  qualificationFailureDiagnostic, qualifyMapInventory, qualifyPointPacks, readPolicy, verifySource,
+  createCandidateS3, createPublicationTrace, createQualificationTrace, gate, hash, loadCatalogValidator, prepareCandidate,
+  publicationFailureDiagnostic, qualificationFailureDiagnostic, qualifyMapInventory, qualifyPointPacks, readPolicy, verifySource,
 } from '../tools/staging-wind100.mjs';
 
 const MISSING = -32768;
@@ -633,6 +633,42 @@ test('qualify CLI emits one sanitized controller diagnostic before its generic r
   });
 });
 
+test('publish diagnostics expose only an exact bounded phase and controller coordinate', () => {
+  const secret = 'PUBLISH_PRIVATE_TOKEN';
+  let internalError;
+  try { gate({}, readPolicy(), controllerDigest()); } catch (error) { internalError = error; }
+  const diagnostic = publicationFailureDiagnostic(internalError, { phase: 'map-component', secret }, 'a'.repeat(64));
+  assert.deepEqual(Object.keys(diagnostic).sort(), [
+    'category', 'controller', 'controllerColumn', 'controllerLine', 'controllerSha256',
+    'operation', 'phase', 'schemaVersion',
+  ].sort());
+  assert.equal(diagnostic.operation, 'publish'); assert.equal(diagnostic.phase, 'map-component');
+  assert.equal(diagnostic.category, 'contract'); assert.equal(diagnostic.controllerSha256, 'a'.repeat(64));
+  assert.ok(Number.isSafeInteger(diagnostic.controllerLine) && diagnostic.controllerLine > 0);
+  assert.ok(Number.isSafeInteger(diagnostic.controllerColumn) && diagnostic.controllerColumn > 0);
+  assert.ok(!JSON.stringify(diagnostic).includes(secret));
+  assert.equal(publicationFailureDiagnostic({ message: secret, stack: secret }, { phase: secret }, secret).phase, 'unknown');
+});
+
+test('publish CLI emits one sanitized phase diagnostic before its generic refusal', () => {
+  const secret = 'PUBLISH_CLI_PRIVATE_TOKEN';
+  const tool = resolve(dirname(fileURLToPath(import.meta.url)), '../tools/staging-wind100.mjs');
+  assert.throws(() => execFileSync(process.execPath, [tool, 'publish'], {
+    cwd: resolve(dirname(tool), '..'), env: { PATH: process.env.PATH, DIAGNOSTIC_SECRET: secret }, encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }), error => {
+    const stderr = String(error.stderr), lines = stderr.trim().split('\n');
+    assert.equal(lines.length, 2);
+    assert.match(lines[0], /^Staging wind100 diagnostic \{.*\}$/);
+    const diagnostic = JSON.parse(lines[0].slice('Staging wind100 diagnostic '.length));
+    assert.equal(diagnostic.operation, 'publish'); assert.equal(diagnostic.phase, 'gate');
+    assert.equal(diagnostic.category, 'contract'); assert.equal(diagnostic.controllerSha256, null);
+    assert.equal(lines[1], 'Staging wind100 refused; no serving pointer or production object changed.');
+    assert.ok(!stderr.includes(secret)); assert.ok(!stderr.includes('/private/'));
+    return true;
+  });
+});
+
 test('one finite cell cannot satisfy the per-lead native coverage contract', async t => {
   const f = fixture(t, ({ field, chunkX, chunkY, cell, value }) => {
     if ((field === 'wind100_u' || field === 'wind100_v') && !(chunkX === 0 && chunkY === 0 && cell === 0)) return MISSING;
@@ -797,6 +833,120 @@ test('qualified pair prepares only an immutable non-serving staging selection', 
     'staging-candidates/wind100/stage-wind100-1234-1/selection.json',
   ]);
   assert.ok(f.writes.every(row => row.metadata.sha256 === hash(row.body)));
+});
+
+test('component manifests admit only the exact bounded rclone mtime metadata shape', async t => {
+  for (const metadata of [{}, { mtime: '1788177600' }, { mtime: '1788177600.123456789' }]) await t.test(JSON.stringify(metadata), async t => {
+    const f = await publicationFixture(t);
+    for (const row of f.saved.values()) row.metadata = metadata;
+    const selection = await prepareCandidate({ request: f.request, qualification: f.qualification,
+      mapReceipt: f.rows[MODEL].receipt, pointReceipt: f.rows[`point-${MODEL}`].receipt,
+      io: f.io, policy: f.f.policy, now: () => Date.parse('2026-09-10T13:10:00Z') });
+    assert.equal(selection.status, 'DATA_QUALIFIED_NOT_ACTIVATED');
+  });
+  for (const metadata of [
+    null, [], { Mtime: '1788177600' }, { mtime: '1788177600', extra: 'x' }, { mtime: 1788177600 },
+    { mtime: 'abcdefghij' }, { mtime: '788177600' }, { mtime: '11788177600' },
+    { mtime: '-1788177600' }, { mtime: '+1788177600' }, { mtime: '1.7881776e9' },
+    { mtime: ' 1788177600' }, { mtime: '1788177600 ' }, { mtime: '1788177600\n' },
+    { mtime: '1788177600.' }, { mtime: '1788177600.1234567890' },
+  ]) await t.test(`reject ${JSON.stringify(metadata)}`, async t => {
+    const f = await publicationFixture(t);
+    const trace = createPublicationTrace();
+    f.saved.get(f.rows[MODEL].receipt.manifestKey).metadata = metadata;
+    await assert.rejects(prepareCandidate({ request: f.request, qualification: f.qualification,
+      mapReceipt: f.rows[MODEL].receipt, pointReceipt: f.rows[`point-${MODEL}`].receipt,
+      io: f.io, policy: f.f.policy, now: () => Date.parse('2026-09-10T13:10:00Z'), trace }));
+    assert.equal(trace.phase, 'map-component');
+    assert.equal(f.writes.length, 0);
+  });
+  await t.test('reject malformed point-component metadata at its exact phase', async () => {
+    const f = await publicationFixture(t);
+    const trace = createPublicationTrace();
+    f.saved.get(f.rows[`point-${MODEL}`].receipt.manifestKey).metadata = { mtime: '1788177600.1234567890' };
+    await assert.rejects(prepareCandidate({ request: f.request, qualification: f.qualification,
+      mapReceipt: f.rows[MODEL].receipt, pointReceipt: f.rows[`point-${MODEL}`].receipt,
+      io: f.io, policy: f.f.policy, now: () => Date.parse('2026-09-10T13:10:00Z'), trace }));
+    assert.equal(trace.phase, 'point-component');
+    assert.equal(f.writes.length, 0);
+  });
+});
+
+test('S3 component read accepts publisher mtime while candidate metadata remains exact sha256', async t => {
+  const f = await publicationFixture(t);
+  class GetObjectCommand { constructor(input) { this.input = input; } }
+  class PutObjectCommand { constructor(input) { this.input = input; } }
+  const objects = new Map(Object.entries(f.rows).map(([id, row]) => [`${COMPONENTS}/${row.receipt.manifestKey}`, {
+    body: row.body, metadata: { mtime: id === MODEL ? '1788177600.123456789' : '1788177601' },
+    contentType: 'application/json', cacheControl: undefined,
+  }]));
+  const commands = [];
+  const client = { send: async command => {
+    commands.push(command);
+    const key = `${command.input.Bucket}/${command.input.Key}`;
+    if (command instanceof PutObjectCommand) {
+      objects.set(key, { body: Buffer.from(command.input.Body), metadata: command.input.Metadata,
+        contentType: command.input.ContentType, cacheControl: command.input.CacheControl });
+      return {};
+    }
+    const object = objects.get(key);
+    if (!object) throw { $metadata: { httpStatusCode: 404 } };
+    return { ContentLength: object.body.length, Body: Readable.from([object.body]), Metadata: object.metadata,
+      ContentType: object.contentType, CacheControl: object.cacheControl };
+  } };
+  const io = await createCandidateS3({ STAGING_R2_ACCOUNT_ID: ACCOUNT,
+    STAGING_R2_WRITE_ACCESS_KEY_ID: 'fixture-id', STAGING_R2_WRITE_SECRET_ACCESS_KEY: 'fixture-secret' },
+  f.request, client, { GetObjectCommand, PutObjectCommand });
+  try {
+    const trace = createPublicationTrace();
+    const selection = await prepareCandidate({ request: f.request, qualification: f.qualification,
+      mapReceipt: f.rows[MODEL].receipt, pointReceipt: f.rows[`point-${MODEL}`].receipt,
+      io, policy: f.f.policy, now: () => Date.parse('2026-09-10T13:10:00Z'), trace });
+    assert.equal(selection.status, 'DATA_QUALIFIED_NOT_ACTIVATED');
+    assert.equal(trace.phase, 'receipt');
+  } finally { io.close(); }
+  const puts = commands.filter(command => command instanceof PutObjectCommand);
+  assert.equal(puts.length, 2);
+  for (const command of puts) {
+    assert.deepEqual(Object.keys(command.input.Metadata), ['sha256']);
+    assert.equal(command.input.Metadata.sha256, hash(command.input.Body));
+    assert.equal(command.input.IfNoneMatch, '*');
+  }
+});
+
+test('S3 candidate readback rejects inherited rclone metadata before selection write', async t => {
+  const f = await publicationFixture(t);
+  class GetObjectCommand { constructor(input) { this.input = input; } }
+  class PutObjectCommand { constructor(input) { this.input = input; } }
+  const objects = new Map(Object.entries(f.rows).map(([, row]) => [`${COMPONENTS}/${row.receipt.manifestKey}`, {
+    body: row.body, metadata: { mtime: '1788177600' }, contentType: 'application/json', cacheControl: undefined,
+  }]));
+  const puts = [];
+  const client = { send: async command => {
+    const key = `${command.input.Bucket}/${command.input.Key}`;
+    if (command instanceof PutObjectCommand) {
+      puts.push(command);
+      objects.set(key, { body: Buffer.from(command.input.Body),
+        metadata: { ...command.input.Metadata, mtime: '1788177600' },
+        contentType: command.input.ContentType, cacheControl: command.input.CacheControl });
+      return {};
+    }
+    const object = objects.get(key);
+    if (!object) throw { $metadata: { httpStatusCode: 404 } };
+    return { ContentLength: object.body.length, Body: Readable.from([object.body]), Metadata: object.metadata,
+      ContentType: object.contentType, CacheControl: object.cacheControl };
+  } };
+  const io = await createCandidateS3({ STAGING_R2_ACCOUNT_ID: ACCOUNT,
+    STAGING_R2_WRITE_ACCESS_KEY_ID: 'fixture-id', STAGING_R2_WRITE_SECRET_ACCESS_KEY: 'fixture-secret' },
+  f.request, client, { GetObjectCommand, PutObjectCommand });
+  try {
+    await assert.rejects(prepareCandidate({ request: f.request, qualification: f.qualification,
+      mapReceipt: f.rows[MODEL].receipt, pointReceipt: f.rows[`point-${MODEL}`].receipt,
+      io, policy: f.f.policy, now: () => Date.parse('2026-09-10T13:10:00Z') }));
+  } finally { io.close(); }
+  assert.equal(puts.length, 1);
+  assert.match(puts[0].input.Key, /^catalogs\/snapshots\/stage-wind100-[1-9]\d*-[1-9]\d*\.json$/);
+  assert.ok(puts.every(command => !command.input.Key.startsWith('staging-candidates/wind100/')));
 });
 
 test('map component receipt admits the reviewed 20k boundary and rejects one more object', async t => {
