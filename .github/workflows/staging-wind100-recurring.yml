@@ -4,10 +4,12 @@ on:
     secrets:
       ATMOS_DEPLOY_KEY:
         required: true
+      # The caller does not pass these across the production workflow boundary.
+      # The data-staging environment supplies them only inside this job.
       STAGING_R2_WRITE_ACCESS_KEY_ID:
-        required: true
+        required: false
       STAGING_R2_WRITE_SECRET_ACCESS_KEY:
-        required: true
+        required: false
 permissions:
   contents: read
   actions: read
@@ -32,11 +34,23 @@ jobs:
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONUNBUFFERED: '1'
     steps:
+      - name: Check the protected staging opt-in
+        id: opt_in
+        run: |
+          if [ "$STAGING_WIND100_ENABLED" = true ]; then
+            echo 'enabled=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
+            echo 'recurring staging Wind100 is disabled'
+          fi
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        if: ${{ steps.opt_in.outputs.enabled == 'true' }}
         with: { path: cycle, persist-credentials: false }
       - name: Refuse an unapproved caller, controller, source, or environment
+        if: ${{ steps.opt_in.outputs.enabled == 'true' }}
         run: node cycle/tools/staging-wind100.mjs recurring-gate
       - name: Checkout the exact ordinary core producer
+        if: ${{ steps.opt_in.outputs.enabled == 'true' }}
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: weatherx-hq/atmos
@@ -45,6 +59,7 @@ jobs:
           path: atmos-core
           persist-credentials: false
       - name: Checkout the exact reviewed point-only augmenter and publisher
+        if: ${{ steps.opt_in.outputs.enabled == 'true' }}
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: weatherx-hq/atmos
@@ -53,10 +68,13 @@ jobs:
           path: atmos
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        if: ${{ steps.opt_in.outputs.enabled == 'true' }}
         with: { node-version: 22 }
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        if: ${{ steps.opt_in.outputs.enabled == 'true' }}
         with: { python-version: '3.12' }
       - name: Provision only hash-locked qualification and staging transport dependencies
+        if: ${{ steps.opt_in.outputs.enabled == 'true' }}
         run: |
           set -euo pipefail
           test "$(git -C cycle rev-parse HEAD)" = "$GITHUB_SHA"
@@ -78,6 +96,7 @@ jobs:
           rclone version | sed -n '1p' | grep -Fx 'rclone v1.75.0'
       - name: Authenticate this bake's ordinary sealed ECMWF artifact
         id: handoff
+        if: ${{ steps.opt_in.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -110,36 +129,6 @@ jobs:
           status="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).status)' "$result")"
           echo "status=$status" >> "$GITHUB_OUTPUT"
           echo "$result"
-      - name: Hydrate and authenticate only the existing staging ECMWF map component
-        if: ${{ steps.preflight.outputs.status == 'new-input' }}
-        working-directory: atmos
-        env:
-          COMPONENT_ID: ecmwf
-          CATALOG_R2_REMOTE: weatherx:weatherx-data-staging
-          COMPONENT_R2_REMOTE: weatherx:weatherx-components-staging
-          ALLOW_EMPTY_CATALOG: '0'
-          ALLOW_MISSING_COMPONENT: '0'
-          HYDRATE_MISSING_FROM_RELEASE: '0'
-          RCLONE_CONFIG_WEATHERX_TYPE: s3
-          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
-          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
-          STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
-          STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://${{ env.STAGING_R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
-          RCLONE_CONFIG_WEATHERX_REGION: auto
-        run: |
-          set -euo pipefail
-          node "$GITHUB_WORKSPACE/cycle/tools/staging-wind100.mjs" recurring-hydrate-gate
-          GITHUB_ENV='' HYDRATED_COMPONENT_PROOF_DIR="$RUNNER_TEMP/wind100-component-baseline-proof" \
-            bash ops/platform/hydrate-r2-component.sh
-          data/.venv/bin/python -I ops/core_model_artifact.py verify-component-baseline \
-            --model ecmwf --source-sha "$ATMOS_SHA" --root "$GITHUB_WORKSPACE/atmos" \
-            --run-id "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
-            --baseline-catalog-pointer "$RUNNER_TEMP/wind100-component-baseline-proof/pointer.json" \
-            --baseline-catalog-snapshot "$RUNNER_TEMP/wind100-component-baseline-proof/catalog.json" \
-            --baseline-component-manifest "$RUNNER_TEMP/wind100-component-baseline-proof/component.json" \
-            > "$RUNNER_TEMP/weatherx-wind100-baseline-proof.json"
       - name: Add only native 100u and 100v to a copy of the authenticated point stage
         if: ${{ steps.preflight.outputs.status == 'new-input' }}
         run: |
@@ -159,16 +148,14 @@ jobs:
             --out "$RUNNER_TEMP/weatherx-wind100-point-series"
           node ops/platform/validate-point-series.mjs "$RUNNER_TEMP/weatherx-wind100-point-series" \
             > "$RUNNER_TEMP/weatherx-wind100-point-proof.json"
-          data/.venv/bin/python -I ops/platform/validate-model-component.py ecmwf app/public/data/ecmwf \
-            --live https://staging.weatherx.org > "$RUNNER_TEMP/weatherx-wind100-map-proof.json"
-      - name: Qualify every reused map identity and augmented point byte
+      - name: Qualify every augmented point byte against its sealed core input
         if: ${{ steps.preflight.outputs.status == 'new-input' }}
         run: |
           set -euo pipefail
           node cycle/tools/staging-wind100.mjs qualify-recurring "$GITHUB_WORKSPACE/atmos" \
             weatherx-wind100-source.json "$GITHUB_WORKSPACE/atmos/data/.ecmwf-point" \
             "$RUNNER_TEMP/weatherx-wind100-point-series" weatherx-wind100-point-proof.json \
-            weatherx-wind100-map-proof.json weatherx-wind100-augmentation.json \
+            weatherx-wind100-augmentation.json \
             weatherx-wind100-handoff/handoff.json weatherx-wind100-handoff/packs/ecmwf/manifest.json
       - name: Upload one immutable staging point component
         if: ${{ steps.preflight.outputs.status == 'new-input' }}
@@ -190,8 +177,6 @@ jobs:
           set -euo pipefail
           node "$GITHUB_WORKSPACE/cycle/tools/staging-wind100.mjs" recurring-component-gate
           initialized="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1])).initializedAt)' "$RUNNER_TEMP/staging-wind100/qualification.json")"
-          node -e 'const fs=require("node:fs"),m=JSON.parse(fs.readFileSync(process.argv[1]));fs.writeFileSync(process.argv[2],JSON.stringify({manifestKey:m.rootPrefix+"component.json",manifestSha256:require("node:crypto").createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex")})+"\n")' \
-            "$RUNNER_TEMP/wind100-component-baseline-proof/component.json" "$RUNNER_TEMP/weatherx-wind100-map-component.json"
           node -e 'const fs=require("node:fs"),r=JSON.parse(fs.readFileSync(process.argv[1]));fs.writeFileSync(process.argv[3],JSON.stringify({schemaVersion:1,modelId:process.argv[2],descriptor:r.models[process.argv[2]]})+"\n")' \
             "$RUNNER_TEMP/weatherx-wind100-point-proof.json" ecmwf "$RUNNER_TEMP/weatherx-wind100-point-descriptor.json"
           SOURCE_DIR="$RUNNER_TEMP/weatherx-wind100-point-series/v2/ecmwf" COMPONENT_ID=point-ecmwf \
@@ -207,7 +192,7 @@ jobs:
         run: |
           set -euo pipefail
           node cycle/tools/staging-wind100.mjs publish-recurring staging-wind100/qualification.json \
-            weatherx-wind100-map-component.json weatherx-wind100-point-component.json "$GITHUB_WORKSPACE/atmos" \
+            weatherx-wind100-point-component.json "$GITHUB_WORKSPACE/atmos" \
             > "$RUNNER_TEMP/weatherx-wind100-selection.json"
           node cycle/tools/staging-wind100.mjs activate weatherx-wind100-selection.json "$GITHUB_WORKSPACE/atmos"
 # This reusable workflow needs one `needs: core-ecmwf` call from bake.yml. It never

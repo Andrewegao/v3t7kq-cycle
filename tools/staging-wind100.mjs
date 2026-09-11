@@ -18,6 +18,7 @@ export const DATA = 'weatherx-data-staging';
 export const COMPONENTS = 'weatherx-components-staging';
 export const MODEL = 'ecmwf';
 export const ACCOUNT = 'a89f9a1af485021fbc60a68b163c7c6e';
+export const RECURRING_PUBLICATION_MODE = 'point-only-recurring-v1';
 const REPOSITORY = 'Andrewegao/v3t7kq-cycle';
 const WORKFLOW = `${REPOSITORY}/.github/workflows/staging-wind100.yml@refs/heads/main`;
 const BAKE_WORKFLOW = `${REPOSITORY}/.github/workflows/bake.yml@refs/heads/main`;
@@ -32,6 +33,7 @@ export const POINTER_KEY = 'staging-candidates/wind100/current-v1.json';
 export const MAX_POINTER_BYTES = 16 * 1024;
 const POINTER_KIND = 'weatherx-staging-native-wind100-pointer';
 const TARGET_ORIGIN = 'https://staging.weatherx.org';
+const POINT_SOURCE = 'ECMWF IFS 0.25 degree direct open-data GRIB';
 // This is the reviewed ceiling used by the pinned map catalog/reference reader.
 // It bounds files, not traversal entries: every expected ancestor directory is
 // derived below from the two authenticated run manifests.
@@ -85,7 +87,7 @@ export function hash(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-export function sealedPointInputSha(manifest) {
+function sealedPointRows(manifest) {
   assert.ok(Array.isArray(manifest?.files));
   const rows = manifest.files.filter(row => typeof row?.path === 'string'
     && row.path.startsWith('data/.ecmwf-point/'));
@@ -96,7 +98,15 @@ export function sealedPointInputSha(manifest) {
     assert.match(row.sha256 ?? '', SHA); assert.ok(Number.isSafeInteger(row.size) && row.size > 0);
   }
   assert.equal(new Set(rows.map(row => row.path)).size, rows.length);
-  return hash(JSON.stringify(rows));
+  return rows;
+}
+
+export function sealedPointInputSha(manifest) {
+  return hash(JSON.stringify(sealedPointRows(manifest)));
+}
+
+function pythonInventorySha(rows) {
+  return hash(JSON.stringify(rows.map(row => ({ bytes: row.bytes, path: row.path, sha256: row.sha256 }))));
 }
 
 export function validateWind100Pointer(value) {
@@ -129,14 +139,17 @@ export function validateWind100Pointer(value) {
 }
 
 export function pointerEntry(selection, selectionSha256) {
-  exactKeys(selection, ['schemaVersion', 'kind', 'status', 'targetOrigin', 'model', 'runId', 'catalogId',
+  const fields = ['schemaVersion', 'kind', 'status', 'targetOrigin', 'model', 'runId', 'catalogId',
     'catalogSha256', 'sourceSha', 'inputSha256', 'invocation', 'qualificationCanonicalSha256',
     'initializedAt', 'freshUntil', 'createdAt', 'isolatedStagingCandidate', 'sharedReadPinChanged',
-    'productionWritten', 'activated'], 'wind100 selection');
+    'productionWritten', 'activated'];
+  if (selection?.publicationMode !== undefined) fields.push('publicationMode');
+  exactKeys(selection, fields, 'wind100 selection');
   assert.equal(selection.schemaVersion, 1);
   assert.equal(selection.kind, 'weatherx-staging-native-wind100-selection');
   assert.equal(selection.status, 'DATA_QUALIFIED_NOT_ACTIVATED');
   assert.equal(selection.targetOrigin, TARGET_ORIGIN); assert.equal(selection.model, MODEL);
+  if (selection.publicationMode !== undefined) assert.equal(selection.publicationMode, RECURRING_PUBLICATION_MODE);
   assert.match(selectionSha256 ?? '', SHA);
   return {
     runId: selection.runId, catalogId: selection.catalogId, catalogSha256: selection.catalogSha256,
@@ -268,6 +281,7 @@ export function readPolicy(path = policyPath()) {
   assert.match(policy.sourceSha ?? '', COMMIT);
   assert.equal(policy.sourceSha, SOURCE_SHA);
   assert.equal(policy.coreSourceSha, 'd8cd45d123f60c30c413c14d46f68113e37468b7');
+  assert.equal(policy.recurringPublicationMode, RECURRING_PUBLICATION_MODE);
   assert.equal(policy.model, MODEL);
   assert.deepEqual({ hours: policy.hours, leadCount: policy.leadCount, freshnessHours: policy.freshnessHours,
     minimumForecastLeaseHours: policy.minimumForecastLeaseHours, nativeCadenceSeconds: policy.nativeCadenceSeconds },
@@ -421,32 +435,28 @@ export function recurringGate(env, policy = readPolicy(), digest = controllerDig
   assert.equal(env.CORE_ATMOS_SHA, policy.coreSourceSha); assert.equal(env.STAGING_WIND100_CONTROLLER_SHA256, digest);
   assert.equal(env.MODEL_ID, MODEL); assert.match(env.GITHUB_RUN_ID ?? '', /^[1-9]\d{0,19}$/);
   assert.match(env.GITHUB_RUN_ATTEMPT ?? '', /^[1-9]\d{0,5}$/);
-  assert.ok(['none', 'hydrate', 'components', 'metadata'].includes(authority));
+  assert.ok(['none', 'components', 'metadata'].includes(authority));
   for (const name of FORBIDDEN) {
     if (authority !== 'none' && (name === 'STAGING_R2_WRITE_ACCESS_KEY_ID' || name === 'STAGING_R2_WRITE_SECRET_ACCESS_KEY')) continue;
-    if ((authority === 'hydrate' || authority === 'components') &&
+    if (authority === 'components' &&
         (name === 'RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID' || name === 'RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY')) continue;
     if (authority === 'components' && (name === 'CATALOG_ENDPOINT' || name === 'CATALOG_PROMOTION_KEY')) continue;
     assert.ok(!env[name], `recurring staging wind100 refuses ${name}`);
   }
   if (authority !== 'none') assert.ok(env.STAGING_R2_WRITE_ACCESS_KEY_ID && env.STAGING_R2_WRITE_SECRET_ACCESS_KEY);
-  if (authority === 'hydrate' || authority === 'components') {
+  if (authority === 'components') {
     assert.equal(env.RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID, env.STAGING_R2_WRITE_ACCESS_KEY_ID);
     assert.equal(env.RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY, env.STAGING_R2_WRITE_SECRET_ACCESS_KEY);
     assert.equal(env.RCLONE_CONFIG_WEATHERX_ENDPOINT, `https://${ACCOUNT}.r2.cloudflarestorage.com`);
     assert.equal(env.COMPONENT_R2_REMOTE, `weatherx:${COMPONENTS}`);
-  }
-  if (authority === 'hydrate') {
-    assert.equal(env.CATALOG_R2_REMOTE, `weatherx:${DATA}`); assert.equal(env.ALLOW_EMPTY_CATALOG, '0');
-    assert.equal(env.ALLOW_MISSING_COMPONENT, '0'); assert.equal(env.HYDRATE_MISSING_FROM_RELEASE, '0');
-    assert.equal(env.COMPONENT_ID, MODEL);
   }
   if (authority === 'components') {
     assert.equal(env.PROMOTE, '0'); assert.equal(env.CATALOG_ENDPOINT, 'https://invalid.invalid');
     assert.equal(env.CATALOG_PROMOTION_KEY, 'unused-promote-zero');
   }
   const request = { model: MODEL, sourceSha: policy.sourceSha,
-    invocation: `${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}` };
+    invocation: `${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}`,
+    publicationMode: policy.recurringPublicationMode };
   if (env.WIND100_INPUT_SHA256) { assert.match(env.WIND100_INPUT_SHA256, SHA); request.inputSha256 = env.WIND100_INPUT_SHA256; }
   return request;
 }
@@ -836,8 +846,16 @@ function validateAugmentedInput(augmentation, handoff, inputManifest, stageInven
   assert.equal(augmentation.sourceContract, policy.native100m.contract);
   assert.deepEqual(augmentation.leadHours, descriptor.storage.leadHours);
   assert.equal(typeof augmentation.fetched, 'boolean'); assert.equal(augmentation.publicationAuthorized, false);
-  assert.match(augmentation.inputInventorySha256 ?? '', SHA);
-  assert.equal(augmentation.outputInventorySha256, hash(JSON.stringify(stageInventory)),
+  const sealedRows = sealedPointRows(inputManifest).map(row => ({
+    path: row.path.slice('data/.ecmwf-point/'.length), bytes: row.size, sha256: row.sha256,
+  }));
+  assert.equal(augmentation.inputInventorySha256, pythonInventorySha(sealedRows),
+    'augmentation input inventory differs from authenticated sealed point input');
+  for (const row of sealedRows.filter(value => value.path !== 'meta.json')) {
+    assert.deepEqual(stageInventory.find(value => value.path === row.path), row,
+      `authenticated surface input ${row.path} changed during augmentation`);
+  }
+  assert.equal(augmentation.outputInventorySha256, pythonInventorySha(stageInventory),
     'augmented source-stage inventory differs from its receipt');
   assert.equal(request.inputSha256, augmentation.inputSha256);
   return { kind: 'authenticated-core-plus-native-wind100-augmentation',
@@ -947,6 +965,8 @@ export async function qualifyPointPacks({ pointRoot, stageRoot, model, policy = 
   augmentationReceipt = null, inputHandoff = null, inputManifest = null, now = Date.now(), trace = null }) {
   markQualification(trace, 'source-evidence');
   assert.equal(model, MODEL);
+  const recurring = request.publicationMode !== undefined;
+  if (recurring) assert.equal(request.publicationMode, policy.recurringPublicationMode);
   const sourceClosure = validatedSourceEvidence(sourceEvidence, policy);
   markQualification(trace, 'point-catalog');
   const root = realpathSync(pointRoot);
@@ -1081,14 +1101,17 @@ export async function qualifyPointPacks({ pointRoot, stageRoot, model, policy = 
     stageInventory.push({ path, bytes: stat.size, sha256: await fileHash(absolute) });
   }
   stageInventory.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
-  markQualification(trace, 'map-proof');
-  const validatedMapProof = validateMapProof(mapProof, descriptor, policy);
-  markQualification(trace, 'map-inventory');
-  const map = { ...validatedMapProof, ...await qualifyMapInventory(mapRoot, validatedMapProof, descriptor, policy) };
   markQualification(trace, 'seal');
-  const seal = augmentationReceipt == null
-    ? validateSeal(sealedManifest, stageInventory, request, descriptor)
-    : validateAugmentedInput(augmentationReceipt, inputHandoff, inputManifest, stageInventory, request, descriptor, policy);
+  const seal = recurring
+    ? validateAugmentedInput(augmentationReceipt, inputHandoff, inputManifest, stageInventory, request, descriptor, policy)
+    : validateSeal(sealedManifest, stageInventory, request, descriptor);
+  let map = null;
+  if (!recurring) {
+    markQualification(trace, 'map-proof');
+    const validatedMapProof = validateMapProof(mapProof, descriptor, policy);
+    markQualification(trace, 'map-inventory');
+    map = { ...validatedMapProof, ...await qualifyMapInventory(mapRoot, validatedMapProof, descriptor, policy) };
+  }
   markQualification(trace, 'lease');
   assert.ok(finiteTime(descriptor.freshUntil, 'forecast expiry') - now >= policy.minimumForecastLeaseHours * 3600_000,
     'candidate lacks the minimum forecast lease');
@@ -1099,6 +1122,7 @@ export async function qualifyPointPacks({ pointRoot, stageRoot, model, policy = 
     status: 'CREDENTIAL_FREE_POINT_PACK_INTEGRITY_QUALIFIED_NOT_PUBLISHED',
     model,
     sourceSha: policy.sourceSha,
+    ...(recurring ? { publicationMode: policy.recurringPublicationMode } : {}),
     inputSha256: seal.inputSha256 ?? seal.manifestSha256,
     runId: descriptor.runId,
     initializedAt: descriptor.initializedAt,
@@ -1131,11 +1155,12 @@ export async function qualifyPointPacks({ pointRoot, stageRoot, model, policy = 
       valuesExactlyMatchSourceStage: true,
       valuesRepairedOrFilled: false,
     },
-    map,
+    ...(map == null ? {} : { map }),
     sealedArtifact: seal,
     credentialFreeIntegrityQualification: true,
     decodedProviderSemanticsVerified: true,
-    existingMapAndPointScienceGatesPassed: true,
+    ...(recurring ? { authenticatedCorePointInput: true } : {}),
+    existingMapAndPointScienceGatesPassed: !recurring,
     scientificRangePolicyApproved: false,
     dependencyClosureApproved: true,
     stagingCatalogPrepared: false,
@@ -1202,7 +1227,18 @@ function validateQualification(q, request, policy, now) {
   const inputSha256 = q.inputSha256 ?? q.sealedArtifact?.manifestSha256;
   assert.match(inputSha256 ?? '', SHA); if (request.inputSha256) assert.equal(inputSha256, request.inputSha256);
   for (const key of ['credentialFreeIntegrityQualification', 'decodedProviderSemanticsVerified',
-    'existingMapAndPointScienceGatesPassed', 'dependencyClosureApproved']) assert.equal(q[key], true, key);
+    'dependencyClosureApproved']) assert.equal(q[key], true, key);
+  if (request.publicationMode !== undefined) {
+    assert.equal(request.publicationMode, policy.recurringPublicationMode);
+    assert.equal(q.publicationMode, request.publicationMode);
+    assert.equal(q.authenticatedCorePointInput, true);
+    assert.equal(q.existingMapAndPointScienceGatesPassed, false);
+    assert.equal(q.map, undefined);
+  } else {
+    assert.equal(q.publicationMode, undefined);
+    assert.equal(q.authenticatedCorePointInput, undefined);
+    assert.equal(q.existingMapAndPointScienceGatesPassed, true);
+  }
   for (const key of ['scientificRangePolicyApproved', 'stagingCatalogPrepared', 'sharedReadCanaryActivated', 'productionWritten']) assert.equal(q[key], false, key);
   assert.deepEqual(q.pointPacks.descriptor.fieldSemantics,
     expectedSemantics(q.initializedAt, expectedSteps(MODEL, policy), policy));
@@ -1231,21 +1267,26 @@ function validateComponentObjectMetadata(metadata) {
 }
 
 export async function prepareCandidate({ request, qualification, mapReceipt, pointReceipt, io,
-  policy = readPolicy(), now = Date.now, catalogValidator = () => true, trace = null, reuseMap = false }) {
+  policy = readPolicy(), now = Date.now, catalogValidator = () => true, trace = null }) {
   markPublication(trace, 'qualification');
   const firstNow = now(), q = validateQualification(qualification, request, policy, firstNow);
+  const pointOnly = request.publicationMode !== undefined
+    && request.publicationMode === policy.recurringPublicationMode;
   const manifests = {};
-  for (const [id, receipt] of [[MODEL, mapReceipt], [`point-${MODEL}`, pointReceipt]]) {
+  const components = pointOnly ? [[`point-${MODEL}`, pointReceipt]] : [[MODEL, mapReceipt], [`point-${MODEL}`, pointReceipt]];
+  for (const [id, receipt] of components) {
     markPublication(trace, id === MODEL ? 'map-component' : 'point-component');
     const object = await io.get(COMPONENTS, receipt.manifestKey, MAX_JSON_BYTES);
     assert.ok(object, `missing ${id} component manifest`); assert.equal(object.sha256, receipt.manifestSha256);
     validateComponentObjectMetadata(object.metadata); assert.equal(object.httpMetadata.contentEncoding, undefined);
     assert.ok(object.httpMetadata.contentType == null || object.httpMetadata.contentType === 'application/json');
     assert.ok(object.httpMetadata.cacheControl == null || object.httpMetadata.cacheControl === CACHE);
-    manifests[id] = componentManifest(JSON.parse(object.body), id, receipt, q, now(), reuseMap && id === MODEL);
+    manifests[id] = componentManifest(JSON.parse(object.body), id, receipt, q, now());
   }
-  markPublication(trace, 'pair');
-  assert.equal(manifests[MODEL].generationTime, manifests[`point-${MODEL}`].generationTime);
+  if (!pointOnly) {
+    markPublication(trace, 'pair');
+    assert.equal(manifests[MODEL].generationTime, manifests[`point-${MODEL}`].generationTime);
+  }
   markPublication(trace, 'lease');
   assert.ok(finiteTime(q.freshUntil, 'forecast expiry') - now() >= policy.minimumForecastLeaseHours * 3600_000,
     'candidate lease expired during component readback');
@@ -1255,6 +1296,8 @@ export async function prepareCandidate({ request, qualification, mapReceipt, poi
     components: manifests, rollbackEpoch: 0 };
   markPublication(trace, 'catalog-validation');
   assert.equal(catalogValidator(catalog), true, 'pinned data reader rejected isolated catalog');
+  if (pointOnly) assert.deepEqual(Object.keys(catalog.components), [`point-${MODEL}`],
+    'recurring catalog must contain only the point component');
   const catalogBody = Buffer.from(`${JSON.stringify(catalog)}\n`), catalogSha256 = hash(catalogBody);
   markPublication(trace, 'catalog-write');
   await io.immutable(DATA, catalogKey, catalogBody, { sha256: catalogSha256 });
@@ -1265,6 +1308,7 @@ export async function prepareCandidate({ request, qualification, mapReceipt, poi
     status: 'DATA_QUALIFIED_NOT_ACTIVATED', targetOrigin: 'https://staging.weatherx.org', model: MODEL,
     runId: q.runId, catalogId, catalogSha256, sourceSha: request.sourceSha,
     inputSha256: q.inputSha256, invocation: request.invocation,
+    ...(pointOnly ? { publicationMode: policy.recurringPublicationMode } : {}),
     qualificationCanonicalSha256: hash(JSON.stringify(q)), initializedAt: q.initializedAt,
     freshUntil: q.freshUntil, createdAt: completedAt, isolatedStagingCandidate: true,
     sharedReadPinChanged: false, productionWritten: false, activated: false };
@@ -1274,6 +1318,29 @@ export async function prepareCandidate({ request, qualification, mapReceipt, poi
   await io.immutable(DATA, selectionKey, selectionBody, { sha256: hash(selectionBody) });
   markPublication(trace, 'receipt');
   return selection;
+}
+
+function validateSelectedCatalog(selection, catalog, catalogValidator) {
+  assert.equal(catalogValidator(catalog), true, 'selected catalog is not reader-qualified');
+  if (selection.publicationMode === RECURRING_PUBLICATION_MODE) {
+    assert.deepEqual(Object.keys(catalog.components ?? {}), [`point-${MODEL}`],
+      'recurring selection is not bound to an exact point-only catalog');
+    const point = catalog.components[`point-${MODEL}`];
+    assert.equal(point.componentId, `point-${MODEL}`);
+    assert.deepEqual(point.mounts, [`point-series/v2/${MODEL}/`]);
+    assert.equal(finiteTime(point.generationTime, 'point component generation'),
+      finiteTime(selection.initializedAt, 'selection initialization'));
+    assert.equal(point.pointSeries?.schemaVersion, 1);
+    assert.equal(point.pointSeries?.modelId, MODEL);
+    const descriptor = point.pointSeries.descriptor;
+    assert.equal(descriptor.runId, selection.runId);
+    assert.equal(descriptor.initializedAt, selection.initializedAt);
+    assert.equal(descriptor.freshUntil, selection.freshUntil);
+    assert.equal(descriptor.source, POINT_SOURCE);
+    assert.deepEqual(descriptor.variables?.wind_speed, { kind: 'instantaneous', units: 'm/s' });
+    assert.deepEqual(descriptor.variables?.wind_speed_100m, { kind: 'instantaneous', units: 'm/s' });
+  }
+  return true;
 }
 
 export async function loadCatalogValidator(sourceRoot) {
@@ -1305,10 +1372,10 @@ export async function createCandidateS3(env, request, injectedClient, injectedSd
   const client = injectedClient ?? new sdk.S3Client({ region: 'auto', endpoint: `https://${ACCOUNT}.r2.cloudflarestorage.com`,
     forcePathStyle: true, maxAttempts: 1, requestChecksumCalculation: 'WHEN_REQUIRED', responseChecksumValidation: 'WHEN_REQUIRED',
     credentials: { accessKeyId: env.STAGING_R2_WRITE_ACCESS_KEY_ID, secretAccessKey: env.STAGING_R2_WRITE_SECRET_ACCESS_KEY } });
-  const allowedComponent = key => key === `components/point-${MODEL}/stage-wind100-point-${MODEL}-${request.invocation}/component.json`
-    || key === `components/${MODEL}/stage-wind100-${MODEL}-${request.invocation}/component.json`
-    || (request.reusedMapManifestKey && key === request.reusedMapManifestKey
-      && new RegExp(`^components/${MODEL}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}/component\\.json$`).test(key));
+  const pointManifest = `components/point-${MODEL}/stage-wind100-point-${MODEL}-${request.invocation}/component.json`;
+  const mapManifest = `components/${MODEL}/stage-wind100-${MODEL}-${request.invocation}/component.json`;
+  const allowedComponent = key => key === pointManifest
+    || (request.publicationMode === undefined && key === mapManifest);
   const keys = candidateKeys(request);
   function target(bucket, key, write = false) {
     safeKey(key); assert.ok(bucket === DATA || bucket === COMPONENTS, 'staging buckets only');
@@ -1404,15 +1471,28 @@ export async function activateCandidate({ selection, selectionSha256, io, now = 
   const savedSelection = await io.get(entry.selectionKey, MAX_JSON_BYTES);
   assert.ok(savedSelection && hash(savedSelection.body) === entry.selectionSha256);
   assert.deepEqual(JSON.parse(savedSelection.body), selection, 'immutable selection differs before activation');
+  assert.equal(selection.publicationMode, policy.recurringPublicationMode,
+    'dynamic pointer accepts only recurring point-only selections');
   const catalogKey = `catalogs/snapshots/${entry.catalogId}.json`;
   const savedCatalog = await io.get(catalogKey, MAX_JSON_BYTES);
   assert.ok(savedCatalog && hash(savedCatalog.body) === entry.catalogSha256);
-  assert.equal(catalogValidator(JSON.parse(savedCatalog.body)), true, 'dynamic catalog is not reader-qualified');
+  validateSelectedCatalog(selection, JSON.parse(savedCatalog.body), catalogValidator);
   for (let attempt = 0; attempt < 4; attempt++) {
     const observed = await io.get(POINTER_KEY, MAX_POINTER_BYTES);
     const current = observed == null ? null : validateWind100Pointer(JSON.parse(observed.body));
-    const same = current?.entries.find(row => row.runId === entry.runId && row.inputSha256 === entry.inputSha256);
-    if (same) { assert.deepEqual(same, entry, 'same Wind100 input has a different immutable candidate'); return current; }
+    const same = current?.entries.find(row => row.runId === entry.runId && row.inputSha256 === entry.inputSha256
+      && row.sourceSha === entry.sourceSha);
+    if (same && JSON.stringify(same) === JSON.stringify(entry)) return current;
+    if (same) {
+      const priorObject = await io.get(same.selectionKey, MAX_JSON_BYTES);
+      assert.ok(priorObject && hash(priorObject.body) === same.selectionSha256,
+        'prior same-input selection is unavailable');
+      const prior = JSON.parse(priorObject.body);
+      assert.deepEqual(pointerEntry(prior, same.selectionSha256), same,
+        'prior same-input selection differs from its pointer entry');
+      assert.notEqual(prior.publicationMode, policy.recurringPublicationMode,
+        'same reviewed point-only input has a different immutable candidate');
+    }
     const updatedAt = new Date(now()).toISOString();
     const next = nextWind100Pointer(current, entry, updatedAt);
     const body = Buffer.from(`${JSON.stringify(next)}\n`);
@@ -1424,22 +1504,27 @@ export async function activateCandidate({ selection, selectionSha256, io, now = 
   throw Error('Wind100 pointer changed during all bounded CAS attempts');
 }
 
-export async function findQualifiedInput({ runId, inputSha256, io, policy = readPolicy(),
+export async function findQualifiedInput({ runId, inputSha256, sourceSha, io, policy = readPolicy(),
   catalogValidator = () => true }) {
-  assert.match(runId ?? '', RUN); assert.match(inputSha256 ?? '', SHA);
+  sourceSha ??= policy.sourceSha;
+  assert.match(runId ?? '', RUN); assert.match(inputSha256 ?? '', SHA); assert.match(sourceSha ?? '', COMMIT);
   const saved = await io.get(POINTER_KEY, MAX_POINTER_BYTES);
   if (!saved) return { status: 'new-input', runId, inputSha256 };
   const pointer = validateWind100Pointer(JSON.parse(saved.body));
-  const entry = pointer.entries.find(row => row.runId === runId && row.inputSha256 === inputSha256);
+  const entry = pointer.entries.find(row => row.runId === runId && row.inputSha256 === inputSha256
+    && row.sourceSha === sourceSha);
   if (!entry) return { status: 'new-input', runId, inputSha256 };
   const selectionObject = await io.get(entry.selectionKey, MAX_JSON_BYTES);
   assert.ok(selectionObject && hash(selectionObject.body) === entry.selectionSha256);
   const selection = JSON.parse(selectionObject.body);
   assert.deepEqual(pointerEntry(selection, entry.selectionSha256), entry,
     'selected immutable candidate differs from the serving pointer');
+  if (selection.publicationMode !== policy.recurringPublicationMode) {
+    return { status: 'new-input', runId, inputSha256 };
+  }
   const catalogObject = await io.get(`catalogs/snapshots/${entry.catalogId}.json`, MAX_JSON_BYTES);
   assert.ok(catalogObject && hash(catalogObject.body) === entry.catalogSha256);
-  assert.equal(catalogValidator(JSON.parse(catalogObject.body)), true, 'selected catalog is no longer reader-qualified');
+  validateSelectedCatalog(selection, JSON.parse(catalogObject.body), catalogValidator);
   return { status: 'unchanged', runId, inputSha256, freshUntil: entry.freshUntil,
     catalogId: entry.catalogId, selectionSha256: entry.selectionSha256 };
 }
@@ -1465,7 +1550,6 @@ export async function main(command, env = process.env, argv = process.argv.slice
   if (command === 'hydrate-gate') return gate(env, policy, controllerDigest(), 'hydrate');
   if (command === 'component-gate') return gate(env, policy, controllerDigest(), 'components');
   if (command === 'recurring-gate') return recurringGate(env, policy);
-  if (command === 'recurring-hydrate-gate') return recurringGate(env, policy, controllerDigest(), 'hydrate');
   if (command === 'recurring-component-gate') return recurringGate(env, policy, controllerDigest(), 'components');
   if (command === 'source') return verifySource(argv[0], policy);
   if (command === 'preflight') {
@@ -1474,6 +1558,7 @@ export async function main(command, env = process.env, argv = process.argv.slice
     const validator = await loadCatalogValidator(argv[0]);
     const io = await createPointerS3(env);
     try { return await findQualifiedInput({ runId: env.WIND100_RUN_ID, inputSha256: env.WIND100_INPUT_SHA256,
+      sourceSha: policy.sourceSha,
       io, policy, catalogValidator: validator.validate }); }
     finally { validator.close(); io.close(); }
   }
@@ -1488,12 +1573,12 @@ export async function main(command, env = process.env, argv = process.argv.slice
     assert.deepEqual(sourceBytes(argv[0], policy), sourceEvidence,
       'reviewed source bytes changed after pre-collection verification');
     const structuralReport = privateJson(env.RUNNER_TEMP, argv[4]);
-    const mapProof = privateJson(env.RUNNER_TEMP, argv[5]);
+    const mapProof = recurring ? null : privateJson(env.RUNNER_TEMP, argv[5]);
     const sealedManifest = recurring ? null
       : JSON.parse(boundedRead(regularFile(realpathSync(argv[6]), 'manifest.json'), 8 * 1024 * 1024, 'sealed manifest'));
-    const augmentationReceipt = recurring ? privateJson(env.RUNNER_TEMP, argv[6]) : null;
-    const inputHandoff = recurring ? privateJson(env.RUNNER_TEMP, argv[7]) : null;
-    const inputManifest = recurring ? privateJson(env.RUNNER_TEMP, argv[8]) : null;
+    const augmentationReceipt = recurring ? privateJson(env.RUNNER_TEMP, argv[5]) : null;
+    const inputHandoff = recurring ? privateJson(env.RUNNER_TEMP, argv[6]) : null;
+    const inputManifest = recurring ? privateJson(env.RUNNER_TEMP, argv[7]) : null;
     const receipt = await qualifyPointPacks({
       stageRoot: argv[2], pointRoot: argv[3], model: request.model, policy, structuralReport, sourceEvidence,
       mapProof, mapRoot: resolve(argv[0], 'app/public/data/ecmwf'), sealedManifest,
@@ -1511,18 +1596,18 @@ export async function main(command, env = process.env, argv = process.argv.slice
     if (trace) trace.controllerSha256 = digest;
     markPublication(trace, 'evidence');
     const qualification = privateJson(env.RUNNER_TEMP, argv[0]);
-    const mapReceipt = privateJson(env.RUNNER_TEMP, argv[1]);
-    const pointReceipt = privateJson(env.RUNNER_TEMP, argv[2]);
+    const mapReceipt = recurring ? null : privateJson(env.RUNNER_TEMP, argv[1]);
+    const pointReceipt = privateJson(env.RUNNER_TEMP, argv[recurring ? 1 : 2]);
+    const sourceRoot = argv[recurring ? 2 : 3];
     markPublication(trace, 'source-evidence');
-    assert.deepEqual(sourceBytes(argv[3], policy), privateJson(env.RUNNER_TEMP, 'weatherx-wind100-source.json'),
+    assert.deepEqual(sourceBytes(sourceRoot, policy), privateJson(env.RUNNER_TEMP, 'weatherx-wind100-source.json'),
       'validator source closure changed before isolated publication');
     markPublication(trace, 'reader');
-    const validator = await loadCatalogValidator(argv[3]);
+    const validator = await loadCatalogValidator(sourceRoot);
     markPublication(trace, 'transport');
-    if (recurring) request.reusedMapManifestKey = mapReceipt.manifestKey;
     const io = await createCandidateS3(env, request);
     try { return await prepareCandidate({ request, qualification, mapReceipt, pointReceipt, io, policy,
-      catalogValidator: validator.validate, trace, reuseMap: recurring }); }
+      catalogValidator: validator.validate, trace }); }
     finally { validator.close(); io.close(); }
   }
   if (command === 'activate') {

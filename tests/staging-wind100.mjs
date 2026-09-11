@@ -103,11 +103,21 @@ test('pointer activation verifies immutable selection/catalog and retries one CA
     status: 'DATA_QUALIFIED_NOT_ACTIVATED', targetOrigin: 'https://staging.weatherx.org', model: MODEL,
     runId: '2026091112', catalogId: 'stage-wind100-1234-1', catalogSha256: '', sourceSha: SOURCE_SHA,
     inputSha256: '4'.repeat(64), invocation: '1234-1', qualificationCanonicalSha256: '5'.repeat(64),
+    publicationMode: 'point-only-recurring-v1',
     initializedAt: '2026-09-11T12:00:00Z', freshUntil: '2026-09-12T18:00:00Z',
     createdAt: '2026-09-11T20:00:00.000Z', isolatedStagingCandidate: true,
     sharedReadPinChanged: false, productionWritten: false, activated: false };
   const catalog = { schemaVersion: 2, sequence: 1, parentCatalogId: null,
-    createdAt: selection.createdAt, components: { ecmwf: {} }, rollbackEpoch: 0 };
+    createdAt: selection.createdAt, components: { 'point-ecmwf': {
+      componentId: 'point-ecmwf', generationTime: selection.initializedAt,
+      mounts: ['point-series/v2/ecmwf/'], pointSeries: { schemaVersion: 1, modelId: 'ecmwf', descriptor: {
+        runId: selection.runId, initializedAt: selection.initializedAt, freshUntil: selection.freshUntil,
+        source: 'ECMWF IFS 0.25 degree direct open-data GRIB', variables: {
+          wind_speed: { kind: 'instantaneous', units: 'm/s' },
+          wind_speed_100m: { kind: 'instantaneous', units: 'm/s' },
+        },
+      } },
+    } }, rollbackEpoch: 0 };
   const catalogBody = encode(catalog); selection.catalogSha256 = hash(catalogBody);
   const selectionBody = encode(selection), selectionSha256 = hash(selectionBody);
   let pointerBody = null, conflicts = 1;
@@ -125,17 +135,70 @@ test('pointer activation verifies immutable selection/catalog and retries one CA
   const unchanged = await findQualifiedInput({ runId: selection.runId, inputSha256: selection.inputSha256,
     io, catalogValidator: value => JSON.stringify(value) === JSON.stringify(catalog) });
   assert.equal(unchanged.status, 'unchanged'); assert.equal(unchanged.catalogId, selection.catalogId);
+  const upgradedSource = await findQualifiedInput({ runId: selection.runId, inputSha256: selection.inputSha256,
+    sourceSha: '9'.repeat(40), io, catalogValidator: () => true });
+  assert.equal(upgradedSource.status, 'new-input');
+  pointerBody = encode({ ...pointer, entries: [{ ...pointer.entries[0], sourceSha: '9'.repeat(40) }] });
+  const replaced = await activateCandidate({ selection, selectionSha256, io,
+    now: () => Date.parse('2026-09-11T20:00:01Z'), catalogValidator: value => JSON.stringify(value) === JSON.stringify(catalog) });
+  assert.equal(replaced.entries.length, 1);
+  assert.equal(replaced.entries[0].sourceSha, SOURCE_SHA);
+});
+
+test('recurring preflight never treats a legacy paired selection as unchanged', async () => {
+  const selection = { schemaVersion: 1, kind: 'weatherx-staging-native-wind100-selection',
+    status: 'DATA_QUALIFIED_NOT_ACTIVATED', targetOrigin: 'https://staging.weatherx.org', model: MODEL,
+    runId: '2026091112', catalogId: 'stage-wind100-77-1', catalogSha256: 'a'.repeat(64),
+    sourceSha: SOURCE_SHA, inputSha256: 'b'.repeat(64), invocation: '77-1',
+    qualificationCanonicalSha256: 'c'.repeat(64), initializedAt: '2026-09-11T12:00:00Z',
+    freshUntil: '2026-09-12T18:00:00Z', createdAt: '2026-09-11T20:00:00Z',
+    isolatedStagingCandidate: true, sharedReadPinChanged: false, productionWritten: false, activated: false };
+  const selectionBody = encode(selection), selectionSha256 = hash(selectionBody);
+  const entry = pointerEntry(selection, selectionSha256);
+  const pointerBody = encode({ schemaVersion: 1, kind: 'weatherx-staging-native-wind100-pointer',
+    targetOrigin: 'https://staging.weatherx.org', updatedAt: selection.createdAt, entries: [entry] });
+  const io = { get: async key => key === 'staging-candidates/wind100/current-v1.json'
+    ? { body: pointerBody } : key === entry.selectionKey ? { body: selectionBody } : null };
+  const result = await findQualifiedInput({ runId: selection.runId, inputSha256: selection.inputSha256,
+    sourceSha: selection.sourceSha, io, catalogValidator: () => true });
+  assert.equal(result.status, 'new-input');
+  const candidate = { ...selection, catalogId: 'stage-wind100-78-1', catalogSha256: '', invocation: '78-1',
+    publicationMode: 'point-only-recurring-v1', createdAt: '2026-09-11T20:00:01Z' };
+  const descriptor = { runId: candidate.runId, initializedAt: candidate.initializedAt, freshUntil: candidate.freshUntil,
+    source: 'ECMWF IFS 0.25 degree direct open-data GRIB', variables: {
+      wind_speed: { kind: 'instantaneous', units: 'm/s' }, wind_speed_100m: { kind: 'instantaneous', units: 'm/s' },
+    } };
+  const catalog = { schemaVersion: 2, components: { 'point-ecmwf': { componentId: 'point-ecmwf',
+    generationTime: candidate.initializedAt, mounts: ['point-series/v2/ecmwf/'],
+    pointSeries: { schemaVersion: 1, modelId: MODEL, descriptor } } } };
+  const catalogBody = encode(catalog); candidate.catalogSha256 = hash(catalogBody);
+  const candidateBody = encode(candidate), candidateSha = hash(candidateBody);
+  let current = pointerBody;
+  const mutable = { get: async key => key === 'staging-candidates/wind100/current-v1.json' ? { body: current, etag: 'old' }
+    : key === entry.selectionKey ? { body: selectionBody }
+      : key === `staging-candidates/wind100/${candidate.catalogId}/selection.json` ? { body: candidateBody }
+        : key === `catalogs/snapshots/${candidate.catalogId}.json` ? { body: catalogBody } : null,
+  put: async body => { current = body; return true; } };
+  const migrated = await activateCandidate({ selection: candidate, selectionSha256: candidateSha, io: mutable,
+    now: () => Date.parse(candidate.createdAt), catalogValidator: () => true });
+  assert.equal(migrated.entries.length, 1);
+  assert.equal(migrated.entries[0].catalogId, candidate.catalogId);
 });
 
 test('recurring workflow consumes a core artifact, augments two fields, and uploads no map component', () => {
   const source = readFileSync(new URL('../.github/workflows/staging-wind100-recurring.yml', import.meta.url), 'utf8');
   const code = source.split('\n').filter(line => !/^\s*#/.test(line)).join('\n');
   assert.match(code, /workflow_call:/); assert.doesNotMatch(code, /\n  (?:schedule|push|pull_request|workflow_run):/);
+  assert.match(source, /STAGING_R2_WRITE_ACCESS_KEY_ID:\n\s+required: false/);
+  assert.match(source, /STAGING_R2_WRITE_SECRET_ACCESS_KEY:\n\s+required: false/);
+  assert.ok(code.indexOf('Check the protected staging opt-in') < code.indexOf('actions/checkout@'));
   assert.match(code, /current-model-artifact\.py/); assert.match(code, /augment_ecmwf_wind100\.py/);
   assert.match(code, /WIND100_INPUT_SHA256/); assert.match(code, /staging-wind100\.mjs preflight/);
   assert.ok(code.indexOf('staging-wind100.mjs preflight') < code.indexOf('augment_ecmwf_wind100.py'));
   assert.match(code, /SOURCE_DIR=.*weatherx-wind100-point-series/);
   assert.doesNotMatch(code, /SOURCE_DIR=app\/public\/data\/ecmwf|stage-wind100-ecmwf-\$GITHUB_RUN_ID/);
+  assert.doesNotMatch(code, /hydrate-r2-component|validate-model-component|weatherx-wind100-map-component/);
+  assert.match(code, /publish-recurring staging-wind100\/qualification\.json \\\n\s+weatherx-wind100-point-component\.json/);
   assert.doesNotMatch(code, /fetch_ecmwf\.py --hours|bake-model-component\.sh|weatherx-(?:data|components)-production/);
   assert.doesNotMatch(code, /wrangler|pages|deploy|catalogs\/current\.json|shared-read\/pin\.json/);
   assert.match(code, /staging-candidates\/wind100\/current-v1\.json|staging-wind100\.mjs activate/);
@@ -309,7 +372,8 @@ function fixture(t, mutate = ({ value }) => value) {
   const pointRoot = resolve(root, 'point-series');
   const grid = { lon0: -180, lat0: 90, lonStep: 1, latStep: -1, width: 3, height: 2, wrapLongitude: true };
   const policy = {
-    sourceSha: 'a'.repeat(40), model: 'ecmwf', hours: 3, leadCount: 2, freshnessHours: 30,
+    sourceSha: 'a'.repeat(40), coreSourceSha: 'd'.repeat(40), recurringPublicationMode: 'point-only-recurring-v1',
+    model: 'ecmwf', hours: 3, leadCount: 2, freshnessHours: 30,
     minimumForecastLeaseHours: 6, nativeCadenceSeconds: 10800, storageFields: FIELDS.map(field => ({ ...field })),
     grid,
     chunk: { width: 2, height: 1 },
@@ -397,6 +461,42 @@ function fixture(t, mutate = ({ value }) => value) {
     sourceEvidence, sealedManifest, mapProof, mapRoot, now: Date.parse('2026-09-10T13:00:00Z'), model: 'ecmwf' };
 }
 
+function recurringFixture(t) {
+  const f = fixture(t);
+  f.descriptor.source = 'ECMWF IFS 0.25 degree direct open-data GRIB';
+  writeFileSync(f.catalogPath, encode(f.catalog));
+  const catalogObject = f.structuralReport.objects.find(row => row.path === 'point-series/v2/catalog.json');
+  const catalogBytes = readFileSync(f.catalogPath);
+  catalogObject.bytes = catalogBytes.length;
+  catalogObject.sha256 = hash(catalogBytes);
+  f.structuralReport.manifestSha256 = inventoryHash(f.structuralReport.objects);
+  const inputRows = readdirSync(f.stageRoot).sort().map(path => {
+    const bytes = readFileSync(resolve(f.stageRoot, path));
+    return { path: `data/.ecmwf-point/${path}`, size: bytes.length, sha256: hash(bytes) };
+  });
+  const inputManifest = { schemaVersion: 1, status: 'unqualified-core-inputs', model: MODEL,
+    sourceSha: f.policy.coreSourceSha, runId: '777', forecastRun: f.descriptor.runId, files: inputRows };
+  const inputSha256 = sealedPointInputSha(inputManifest);
+  const normalized = inputRows.map(row => ({ path: row.path.slice('data/.ecmwf-point/'.length),
+    bytes: row.size, sha256: row.sha256 }));
+  const inventorySha256 = hash(Buffer.from(JSON.stringify(normalized.map(row => ({
+    bytes: row.bytes, path: row.path, sha256: row.sha256,
+  })))));
+  const request = { model: MODEL, sourceSha: f.policy.sourceSha, invocation: '1234-1', inputSha256,
+    publicationMode: f.policy.recurringPublicationMode };
+  return { ...f, request, mapProof: { generationTime: 'frozen-staging-map' },
+    mapRoot: resolve(f.root, 'missing-frozen-staging-map'), inputManifest,
+    inputHandoff: { schemaVersion: 1, kind: 'weatherx-current-model-artifact-handoff', status: 'ready',
+      publicationAuthorized: false, model: MODEL, componentKind: 'core',
+      origin: { atmosSourceSha: f.policy.coreSourceSha, artifactSha256: 'e'.repeat(64), runId: '777' },
+      pack: { forecastRun: f.descriptor.runId, receiptSha256: hash(encode(inputManifest)) } },
+    augmentationReceipt: { schemaVersion: 1, kind: 'weatherx-ecmwf-native-wind100-augmentation', model: MODEL,
+      runId: f.descriptor.runId, initializedAt: f.descriptor.initializedAt, inputSha256,
+      sourceContract: f.policy.native100m.contract, leadHours: f.descriptor.storage.leadHours,
+      fetched: false, inputInventorySha256: inventorySha256, outputInventorySha256: inventorySha256,
+      publicationAuthorized: false } };
+}
+
 function environment(digest = controllerDigest()) {
   return {
     GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted',
@@ -435,6 +535,7 @@ test('synthetic pack layout matches the pinned producer bytes apart from gzip OS
 test('policy fixes one reviewed ECMWF source, exact semantics and dependency closure', () => {
   const policy = readPolicy();
   assert.equal(policy.sourceSha, SOURCE_SHA);
+  assert.equal(policy.recurringPublicationMode, 'point-only-recurring-v1');
   assert.deepEqual({ model: policy.model, hours: policy.hours, leadCount: policy.leadCount,
     freshnessHours: policy.freshnessHours, minimumForecastLeaseHours: policy.minimumForecastLeaseHours,
     nativeCadenceSeconds: policy.nativeCadenceSeconds },
@@ -554,6 +655,21 @@ test('qualification decodes every actual WXPS byte and binds its complete invent
   assert.equal(receipt.sourceStage.objectCount, FIELDS.length + 1);
   assert.match(receipt.sourceStage.inventorySha256, /^[a-f0-9]{64}$/);
   assert.deepEqual(trace, { phase: 'receipt', pointPackRowsChecked: 2, pointPacksChecked: 4 });
+});
+
+test('recurring qualification uses only the authenticated point input and ignores a frozen staging map', async t => {
+  const f = recurringFixture(t), trace = createQualificationTrace();
+  f.trace = trace;
+  const receipt = await qualifyPointPacks(f);
+  assert.equal(receipt.publicationMode, 'point-only-recurring-v1');
+  assert.equal(receipt.authenticatedCorePointInput, true);
+  assert.equal(receipt.existingMapAndPointScienceGatesPassed, false);
+  assert.equal(receipt.map, undefined);
+  assert.equal(receipt.inputSha256, f.request.inputSha256);
+  assert.equal(receipt.sealedArtifact.outputInventorySha256, f.augmentationReceipt.outputInventorySha256);
+  assert.deepEqual(trace, { phase: 'receipt', pointPackRowsChecked: 2, pointPacksChecked: 4 });
+  f.augmentationReceipt.inputInventorySha256 = '0'.repeat(64);
+  await assert.rejects(qualifyPointPacks(f), /input inventory differs/);
 });
 
 test('map inventory admits the exact two-native-run shape and no unreferenced filesystem entries', async t => {
@@ -944,6 +1060,33 @@ test('qualified pair prepares only an immutable non-serving staging selection', 
     'staging-candidates/wind100/stage-wind100-1234-1/selection.json',
   ]);
   assert.ok(f.writes.every(row => row.metadata.sha256 === hash(row.body)));
+});
+
+test('recurring publication writes an exact point-only catalog and hash-bound publication mode', async t => {
+  const f = await publicationFixture(t);
+  f.request.publicationMode = 'point-only-recurring-v1';
+  f.qualification.publicationMode = 'point-only-recurring-v1';
+  f.qualification.authenticatedCorePointInput = true;
+  f.qualification.existingMapAndPointScienceGatesPassed = false;
+  delete f.qualification.map;
+  const descriptor = f.qualification.pointPacks.descriptor;
+  descriptor.source = 'ECMWF IFS 0.25 degree direct open-data GRIB';
+  const point = JSON.parse(f.rows[`point-${MODEL}`].body);
+  point.pointSeries.descriptor = descriptor;
+  const pointBody = encode(point);
+  f.rows[`point-${MODEL}`].body = pointBody;
+  f.rows[`point-${MODEL}`].receipt.manifestSha256 = hash(pointBody);
+  f.saved.set(f.rows[`point-${MODEL}`].receipt.manifestKey, { body: pointBody, sha256: hash(pointBody), metadata: {},
+    httpMetadata: { contentType: 'application/json', cacheControl: 'public, max-age=31536000, immutable', contentEncoding: undefined } });
+  const selection = await prepareCandidate({ request: f.request, qualification: f.qualification,
+    mapReceipt: null, pointReceipt: f.rows[`point-${MODEL}`].receipt,
+    io: f.io, policy: f.f.policy, now: () => Date.parse('2026-09-10T13:10:00Z') });
+  assert.equal(selection.publicationMode, 'point-only-recurring-v1');
+  assert.deepEqual(Object.keys(JSON.parse(f.writes[0].body).components), [`point-${MODEL}`]);
+  assert.deepEqual(f.writes.map(row => row.key), [
+    'catalogs/snapshots/stage-wind100-1234-1.json',
+    'staging-candidates/wind100/stage-wind100-1234-1/selection.json',
+  ]);
 });
 
 test('component manifests admit only the exact bounded rclone mtime metadata shape', async t => {

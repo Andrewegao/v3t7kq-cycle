@@ -2,6 +2,7 @@
   "schemaVersion": 3,
   "sourceSha": "9174329db6ca8527569e67f14ef70406dedefb69",
   "coreSourceSha": "d8cd45d123f60c30c413c14d46f68113e37468b7",
+  "recurringPublicationMode": "point-only-recurring-v1",
   "model": "ecmwf",
   "hours": 336,
   "leadCount": 81,
