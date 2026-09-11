@@ -308,3 +308,29 @@ test('workflow and controller syntax are valid', { skip: process.platform !== 'd
   execFileSync('python3', ['-c', 'import sys; compile(sys.stdin.read(), "<workflow>", "exec")'], { input: controller, stdio: ['pipe', 'pipe', 'pipe'] });
   execFileSync('/opt/homebrew/bin/actionlint', ['-shellcheck=', '-pyflakes=', workflowPath.pathname], { stdio: 'pipe' });
 });
+
+
+test('rclone installer metadata cannot collide with rclone runtime options', () => {
+  const names = [...workflow.matchAll(/^\s+(RCLONE_[A-Z0-9_]+):/gm)].map(match => match[1]);
+  assert.deepEqual([...new Set(names)].sort(), [
+    'RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID', 'RCLONE_CONFIG_WEATHERX_ENDPOINT',
+    'RCLONE_CONFIG_WEATHERX_PROVIDER', 'RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY',
+    'RCLONE_CONFIG_WEATHERX_TYPE',
+  ]);
+  assert.match(workflow, /SATELLITE_RCLONE_RELEASE: v1\.75\.0/);
+  assert.doesNotMatch(workflow, /RCLONE_VERSION|RCLONE_SHA256/);
+});
+
+
+test('hourly and backfill shell helpers inherit the installed Python environment', () => {
+  const jobs = jobBlocks(workflow);
+  for (const name of ['hourly', 'backfill']) {
+    const setup = jobs[name].split('name: venv + python deps')[1].split('name: install rclone')[0];
+    assert.match(setup, /echo "\$PWD\/data\/\.venv\/bin" >> "\$GITHUB_PATH"/);
+    assert.match(setup, /export PATH="\$PWD\/data\/\.venv\/bin:\$PATH"/);
+    assert.match(setup, /python3 -c/);
+    assert.match(setup, /sys\.path\.insert\(0, "data"\)/);
+    assert.match(setup, /assert sys\.prefix != sys\.base_prefix/);
+    assert.ok(setup.indexOf('pip install') < setup.indexOf('python3 -c'));
+  }
+});

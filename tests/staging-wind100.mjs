@@ -554,6 +554,18 @@ test('S3 adapter is confined to two staging manifests and two immutable metadata
   await assert.rejects(io.get(COMPONENTS, 'components/gfs/x/component.json', 10));
 });
 
+test('version check drains output under pipefail and still rejects the wrong version', () => {
+  const source = readFileSync(new URL('../.github/workflows/staging-wind100.yml', import.meta.url), 'utf8');
+  const command = source.split('\n').find(line => line.trim().startsWith('rclone version |'))?.trim();
+  assert.ok(command, 'workflow version check absent');
+  const run = version => execFileSync('bash', ['-c', `set -euo pipefail
+rclone() { printf '%s\\n' "$1"; printf '%1000000s\\n' ''; }
+rclone_version() { rclone '${version}'; }
+${command.replace('rclone version', 'rclone_version')}`], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.equal(run('rclone v1.75.0').trim(), 'rclone v1.75.0');
+  assert.throws(() => run('rclone v1.74.0'));
+});
+
 test('workflow is manual ECMWF-only, sealed, hash-locked and cannot promote or deploy', () => {
   const source = readFileSync(new URL('../.github/workflows/staging-wind100.yml', import.meta.url), 'utf8');
   const code = source.split('\n').filter(line => !/^\s*#/.test(line)).join('\n');
@@ -565,6 +577,20 @@ test('workflow is manual ECMWF-only, sealed, hash-locked and cannot promote or d
   assert.match(code, /--require-hashes --only-binary=:all:/);
   assert.match(code, /core_model_artifact\.py/); assert.match(code, /seal --model ecmwf/);
   assert.match(code, /CORE_MODEL_PACKS_DIR/);
+  assert.match(code, /staging-wind100-core-flow\.py/);
+  const hydrate = source.split('- name: Hydrate only the isolated staging ECMWF baseline')[1]
+    .split('- name: Collect and seal exact ECMWF core inputs')[0];
+  const collect = source.split('- name: Collect and seal exact ECMWF core inputs')[1]
+    .split('- name: Reinstall sealed inputs')[0];
+  const reinstall = source.split('- name: Reinstall sealed inputs')[1]
+    .split('- name: Qualify every map identity')[0];
+  assert.match(hydrate, /working-directory: atmos\b/);
+  assert.doesNotMatch(hydrate, /working-directory: atmos-source\b/);
+  assert.match(collect, /working-directory: atmos-source\b/);
+  assert.match(collect, /--root "\$GITHUB_WORKSPACE\/atmos-source"/);
+  assert.match(reinstall, /working-directory: atmos\b/);
+  assert.match(reinstall, /CORE_MODEL_PACKS_DIR/);
+  assert.doesNotMatch(code, /rm\s+-r|find\s+[^\n]*-delete/);
   assert.match(code, /build_point_series\.py/);
   assert.match(code, /staging-wind100-python\.py/);
   assert.doesNotMatch(code, /python -I data\/(?:fetch|build_point_series)/);
