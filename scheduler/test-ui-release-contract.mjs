@@ -14,6 +14,7 @@ const localDataWorkflows = new Set(['collect-core-model.yml', 'collect-regional-
 function validateUse(line, workflowName) {
   const local = line.match(/^    uses: \.\/\.github\/workflows\/([a-z0-9-]+\.yml)$/);
   if (local && ((workflowName === 'bake.yml' && localDataWorkflows.has(local[1])) ||
+      (workflowName === 'staging-wind100-preflight.yml' && local[1] === 'staging-wind100-recurring.yml') ||
       (workflowName === 'resume-model-publication.yml' && local[1] === 'publish-current-model-production.yml'))) {
     // Relative reusable workflows resolve at the caller's exact commit. Their
     // own external actions are scanned by this same loop, not exempted.
@@ -29,6 +30,9 @@ for (const bad of ['    uses: ./.github/workflows/unknown.yml', '    uses: ./.gi
   assert.throws(() => validateUse(bad, 'bake.yml'));
 }
 validateUse('    uses: ./.github/workflows/staging-wind100-recurring.yml', 'bake.yml');
+validateUse('    uses: ./.github/workflows/staging-wind100-recurring.yml', 'staging-wind100-preflight.yml');
+assert.throws(() => validateUse('    uses: ./.github/workflows/collect-core-model.yml', 'staging-wind100-preflight.yml'));
+assert.throws(() => validateUse('    uses: ./.github/workflows/staging-wind100-recurring.yml@main', 'staging-wind100-preflight.yml'));
 assert.throws(() => validateUse('    uses: ./.github/workflows/staging-wind100-recurring.yml', 'ui-release.yml'));
 assert.throws(() => validateUse('    uses: ./.github/workflows/staging-wind100-recurring.yml@main', 'bake.yml'));
 assert.throws(() => validateUse('    uses: ./.github/workflows/collect-core-model.yml', 'ui-release.yml'));
@@ -40,6 +44,19 @@ for (const workflowName of workflowNames) {
     validateUse(line, workflowName);
   }
   if (/secrets\./.test(workflow)) {
+    if (workflowName === 'staging-wind100-preflight.yml') {
+      // The caller has no executable steps or writer credentials; only the
+      // exact check-only callee may access its protected staging environment.
+      assert.deepEqual(workflow.split('jobs:\n')[1].match(/^  [a-z-]+:/gm), ['  preflight:']);
+      assert.doesNotMatch(workflow, /^\s+(?:steps|run):/m);
+      assert.equal((workflow.match(/^    uses:/gm)||[]).length, 1);
+      assert.match(workflow, /^    uses: \.\/\.github\/workflows\/staging-wind100-recurring.yml$/m);
+      assert.match(workflow, /^    with: \{ check_only: true \}$/m);
+      assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
+      assert.match(workflow, /^    secrets: \{ ATMOS_DEPLOY_KEY: "\$\{\{ secrets\.ATMOS_DEPLOY_KEY \}\}" \}$/m);
+      assert.match(await readWorkflow('staging-wind100-recurring.yml'), /\n    environment:\n      name: data-staging\n/);
+      continue;
+    }
     if (workflowName === 'resume-model-publication.yml') {
       // A reusable caller cannot declare environment itself. Its ONLY job
       // delegates to the verified production-environment publisher below.

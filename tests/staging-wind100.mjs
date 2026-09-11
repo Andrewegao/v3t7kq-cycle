@@ -192,8 +192,28 @@ test('recurring workflow consumes a core artifact, augments two fields, and uplo
   const source = readFileSync(new URL('../.github/workflows/staging-wind100-recurring.yml', import.meta.url), 'utf8');
   const code = source.split('\n').filter(line => !/^\s*#/.test(line)).join('\n');
   assert.match(code, /workflow_call:/); assert.doesNotMatch(code, /\n  (?:schedule|push|pull_request|workflow_run):/);
-  assert.match(source, /STAGING_R2_WRITE_ACCESS_KEY_ID:\n\s+required: false/);
-  assert.match(source, /STAGING_R2_WRITE_SECRET_ACCESS_KEY:\n\s+required: false/);
+  const callInterface = source.slice(0, source.indexOf('\npermissions:'));
+  assert.match(callInterface, /check_only:\n\s+description: Check only the isolated staging writer credential boundary\n\s+type: boolean\n\s+required: false\n\s+default: false/);
+  assert.match(callInterface, /credentials_ready:\n\s+description: Boolean-only confirmation that both isolated staging credentials are present\n\s+value: \$\{\{ jobs\.wind100\.outputs\.credentials_ready \}\}/);
+  assert.doesNotMatch(callInterface, /STAGING_R2_WRITE_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY)/,
+    'environment-only staging credentials must not be caller-supplied workflow secrets');
+  assert.match(source, /outputs:\n\s+credentials_ready: \$\{\{ steps\.staging_credentials\.outputs\.ready \}\}/);
+  const credentialCheck = source.indexOf('Check both isolated staging writer credentials without exposing values');
+  assert.ok(credentialCheck >= 0 && credentialCheck < source.indexOf('actions/checkout@'));
+  const credentialTail = source.slice(credentialCheck, source.indexOf('\n      - ', credentialCheck + 1));
+  assert.match(credentialTail, /if: \$\{\{ inputs\.check_only == true \|\| steps\.opt_in\.outputs\.enabled == 'true' \}\}/);
+  assert.match(credentialTail, /STAGING_R2_WRITE_ACCESS_KEY_ID: \$\{\{ secrets\[format\('STAGING_R2_WRITE_\{0\}', 'ACCESS_KEY_ID'\)\] \}\}/);
+  assert.match(credentialTail, /STAGING_R2_WRITE_SECRET_ACCESS_KEY: \$\{\{ secrets\[format\('STAGING_R2_WRITE_\{0\}', 'SECRET_ACCESS_KEY'\)\] \}\}/);
+  assert.match(credentialTail, /test -n "\$STAGING_R2_WRITE_ACCESS_KEY_ID"/);
+  assert.match(credentialTail, /test -n "\$STAGING_R2_WRITE_SECRET_ACCESS_KEY"/);
+  assert.match(credentialTail, /echo 'ready=true' >> "\$GITHUB_OUTPUT"/);
+  const stepsSource = source.slice(source.indexOf('    steps:\n'));
+  const starts = [...stepsSource.matchAll(/^      - (?:name:|uses:)/gm)];
+  for (let index = 2; index < starts.length; index++) {
+    const block = stepsSource.slice(starts[index].index, starts[index + 1]?.index);
+    assert.match(block, /if: \$\{\{ (?:[^\n]*inputs\.check_only != true|steps\.(?:handoff|preflight)\.outputs\.)/,
+      `check-only mode could reach step ${block.split('\n')[0]}`);
+  }
   assert.ok(code.indexOf('Check the protected staging opt-in') < code.indexOf('actions/checkout@'));
   assert.match(code, /current-model-artifact\.py/); assert.match(code, /augment_ecmwf_wind100\.py/);
   const setupPython = code.indexOf('actions/setup-python@');
@@ -219,6 +239,18 @@ test('recurring workflow consumes a core artifact, augments two fields, and uplo
   assert.doesNotMatch(code, /fetch_ecmwf\.py --hours|bake-model-component\.sh|weatherx-(?:data|components)-production/);
   assert.doesNotMatch(code, /wrangler|pages|deploy|catalogs\/current\.json|shared-read\/pin\.json/);
   assert.match(code, /staging-candidates\/wind100\/current-v1\.json|staging-wind100\.mjs activate/);
+});
+
+test('manual main-only Wind100 preflight calls the exact environment-only credential interface', () => {
+  const source = readFileSync(new URL('../.github/workflows/staging-wind100-preflight.yml', import.meta.url), 'utf8');
+  const code = source.split('\n').filter(line => !/^\s*#/.test(line)).join('\n');
+  assert.match(code, /workflow_dispatch:/);
+  assert.doesNotMatch(code, /\n  (?:schedule|push|pull_request|workflow_run|workflow_call):/);
+  assert.match(code, /if: \$\{\{ github\.ref == 'refs\/heads\/main' \}\}/);
+  assert.match(code, /uses: \.\/\.github\/workflows\/staging-wind100-recurring\.yml/);
+  assert.match(code, /with: \{ check_only: true \}/);
+  assert.match(code, /secrets: \{ ATMOS_DEPLOY_KEY: "\$\{\{ secrets\.ATMOS_DEPLOY_KEY \}\}" \}/);
+  assert.doesNotMatch(code, /STAGING_R2_WRITE_|secrets: inherit|runs-on:|steps:|rclone|wrangler|deploy|publish/);
 });
 
 test('bake staging-only pilot can start only the fresh ECMWF collector and recurring publisher', () => {
