@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { readerGate, settings, runtime, uploadMetadata, assertVersion, assertBoundary, allowedApi, transport,
   preflight, rollout, recover, digest, annotations, wind100Approval, candidateBindings, assertStagingRoutes,
-  wind100ProbePath, qualifyWind100Response, ACCOUNT, WORKER, SCRIPT, ROUTES, EXCLUSIVE,
+  wind100ProbePath, qualifyWind100Response, qualifyWind100Discovery, ACCOUNT, WORKER, SCRIPT, ROUTES, EXCLUSIVE,
   WIND100_BINDING_NAMES, WIND100_PROBE_TIMEOUT_MS, WIND100_FRESHNESS_MS,
   WIND100_MINIMUM_FORECAST_LEASE_MS, assertReviewedWorkerExports } from '../tools/staging-search-reader.mjs';
 const OLD = '11111111-1111-1111-1111-111111111111', NEW = '22222222-2222-2222-2222-222222222222', FOREIGN = '33333333-3333-3333-3333-333333333333';
@@ -109,6 +109,9 @@ test('Worker build admits exactly the default, account AI, and aircraft budget e
 test('Wind100 Worker intent is a distinct exact data-staging approval and refuses partial, malformed, or unknown approval state', () => {
   assert.equal(wind100Approval(env), null);
   assert.deepEqual(wind100Approval({ ...env, ...wind100Env() }), WIND100);
+  assert.deepEqual(wind100Approval({ ...env, ...wind100Env(), STAGING_WIND100_READER_DYNAMIC: 'true' }), { ...WIND100, dynamic: true });
+  assert.throws(() => wind100Approval({ ...env, STAGING_WIND100_READER_DYNAMIC: 'true' }));
+  assert.throws(() => wind100Approval({ ...env, ...wind100Env(), STAGING_WIND100_READER_DYNAMIC: '1' }));
   for (const delta of [
     { STAGING_WIND100_READER_ENABLED: 'false' },
     { STAGING_WIND100_READER_ENABLED: '', STAGING_WIND100_READER_CATALOG_ID: WIND100.catalogId },
@@ -120,6 +123,17 @@ test('Wind100 Worker intent is a distinct exact data-staging approval and refuse
   for (const key of ['STAGING_WIND100_READER_CATALOG_ID', 'STAGING_WIND100_READER_RUN_ID', 'STAGING_WIND100_READER_SELECTION_SHA256']) {
     assert.throws(() => readerGate({ ...env, [key]: wind100Env()[key] }, 'inspect'));
   }
+});
+test('dynamic Wind100 replaces only its exact optional flag and preserves unrelated settings', async () => {
+  const m = memory({ existingWind100: OLD_WIND100 });
+  const selected = { ...WIND100, dynamic: true };
+  const [receipt, approved] = await ready(m, selected);
+  const direct = uploadMetadata(receipt).bindings.filter(row => row.type !== 'inherit');
+  assert.deepEqual(direct, [...wind100Bindings(WIND100), { name: 'STAGING_WIND100_DYNAMIC_ENABLED', type: 'plain_text', text: '1' }]);
+  await rollout(m.ops, source, receipt, approved);
+  assert.equal(receipt.status, 'passed');
+  same(candidateBindings(receipt).filter(row => !row.name.startsWith('STAGING_WIND100_')),
+    receipt.before.settings.bindings.filter(row => !row.name.startsWith('STAGING_WIND100_')));
 });
 test('preserves every admitted setting; refuses assets, future fields, unknown bindings and foreign resources', () => {
   const b = boundary();
@@ -377,4 +391,26 @@ test('transport bounds response memory and redacts thrown network/timeout errors
   await assert.rejects(oversized.api(`${SCRIPT}/settings`), error => error.message === 'bounded staging request failed');
   const timedOut = transport('PRIVATE_TOKEN', async () => { throw new DOMException('PRIVATE_TOKEN', 'TimeoutError'); });
   await assert.rejects(timedOut.api(`${SCRIPT}/settings`), error => !String(error).includes('PRIVATE'));
+});
+
+test('dynamic discovery binds the approved run, hash and lease without caching', async () => {
+  const selected = { ...WIND100, dynamic: true };
+  const payload = { schemaVersion: 1, kind: 'staging-native-wind100-selector', ...WIND100,
+    initializedAt: '2026-09-11T00:00:00.000Z', freshUntil: '2026-09-12T06:00:00.000Z' };
+  const result = (change = {}, cache = 'no-store') => ({ status: 200,
+    body: Buffer.from(JSON.stringify({ ...payload, ...change })), headers: new Headers({ 'Cache-Control': cache }) });
+  assert.deepEqual(qualifyWind100Discovery(result(), selected, WIND100_NOW), payload);
+  for (const change of [{ selectionSha256: 'f'.repeat(64) }, { runId: '2026091106' },
+    { freshUntil: '2026-09-13T00:00:00.000Z' }, { kind: 'other' }])
+    assert.throws(() => qualifyWind100Discovery(result(change), selected, WIND100_NOW));
+  assert.throws(() => qualifyWind100Discovery(result({}, 'public'), selected, WIND100_NOW));
+  assert.throws(() => qualifyWind100Discovery(result(), WIND100, WIND100_NOW));
+  let seen;
+  const io = transport('PRIVATE_TOKEN', async (url, init) => {
+    seen = { url, init }; return new Response(JSON.stringify(payload), { headers: { 'Cache-Control': 'no-store' } });
+  });
+  qualifyWind100Discovery(await io.wind100Discovery(selected), selected, WIND100_NOW);
+  assert.equal(seen.url, `https://staging.weatherx.org/api/platform/staging-wind100/current?run=${WIND100.runId}`);
+  assert.equal(seen.init.redirect, 'error');
+  assert.equal(seen.init.headers.Authorization, undefined);
 });

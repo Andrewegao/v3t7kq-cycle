@@ -32,7 +32,7 @@ export function selectionProfile(profile){validateProfile(profile);return rawSel
 export function coreReleaseProfile(profile){validateProfile(profile);return profile.releaseRosterCore===CORE_RELEASE_REQUEST;}
 export function staticCompressionProfile(profile){validateProfile(profile);return profile.staticCompression==='static-br11-v1';}
 export function tcGuidanceProfile(profile){validateProfile(profile);return profile.tcGuidance===TC_APPROVAL;}
-const WIND100_CATALOG=/^stage-wind100-[1-9]\d{0,19}-[1-9]\d{0,5}$/;
+const WIND100_CATALOG=/^stage-wind100-(?:recurring-)?[1-9]\d{0,19}-[1-9]\d{0,5}$/;
 const WIND100_RUN=/^\d{10}$/;
 const WIND100_HASH=/^[a-f0-9]{64}$/;
 const WIND100_APPROVAL_KEYS=Object.freeze(['STAGING_WIND100_UI_CATALOG_ID','STAGING_WIND100_UI_RUN_ID','STAGING_WIND100_UI_SELECTION_SHA256','STAGING_WIND100_UI_DYNAMIC']);

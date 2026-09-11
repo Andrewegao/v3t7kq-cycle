@@ -20,7 +20,7 @@ const MAX_FILE = 1024 * 1024;
 const MAX_GZIP = 150 * 1024;
 const MAX_ROWS = 200_000;
 const GENERATION = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
-const WIND100_CATALOG = /^stage-wind100-[1-9]\d{0,19}-[1-9]\d{0,5}$/;
+const WIND100_CATALOG = /^stage-wind100-(?:recurring-)?[1-9]\d{0,19}-[1-9]\d{0,5}$/;
 const WIND100_RUN = /^\d{10}$/;
 const SOURCE_FILE_MAX = 2 * 1024 * 1024;
 export const hash = bytes => createHash('sha256').update(bytes).digest('hex');

@@ -28,6 +28,11 @@ jobs:
     if: ${{ inputs.model == '' || inputs.model == 'all' || inputs.model == 'ecmwf' }}
     with: { model: ecmwf, recovery_run_id: "${{ inputs.recovery_run_id || '' }}" }
     secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
+  staging-wind100:
+    name: staging native 100m wind
+    needs: core-ecmwf
+    uses: ./.github/workflows/staging-wind100-recurring.yml
+    secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
   core-gfs:
     name: core (gfs)
     uses: ./.github/workflows/collect-core-model.yml
