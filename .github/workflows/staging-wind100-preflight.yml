@@ -1,0 +1,15 @@
+name: Check recurring staging Wind100 credentials
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  preflight:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    uses: ./.github/workflows/staging-wind100-recurring.yml
+    with: { check_only: true }
+    secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }

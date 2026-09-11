@@ -1,15 +1,19 @@
 name: publish recurring staging ECMWF native 100m wind
 on:
   workflow_call:
+    inputs:
+      check_only:
+        description: Check only the isolated staging writer credential boundary
+        type: boolean
+        required: false
+        default: false
+    outputs:
+      credentials_ready:
+        description: Boolean-only confirmation that both isolated staging credentials are present
+        value: ${{ jobs.wind100.outputs.credentials_ready }}
     secrets:
       ATMOS_DEPLOY_KEY:
         required: true
-      # The caller does not pass these across the production workflow boundary.
-      # The data-staging environment supplies them only inside this job.
-      STAGING_R2_WRITE_ACCESS_KEY_ID:
-        required: false
-      STAGING_R2_WRITE_SECRET_ACCESS_KEY:
-        required: false
 permissions:
   contents: read
   actions: read
@@ -23,6 +27,8 @@ jobs:
       url: https://staging.weatherx.org
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    outputs:
+      credentials_ready: ${{ steps.staging_credentials.outputs.ready }}
     env:
       ATMOS_SHA: 9174329db6ca8527569e67f14ef70406dedefb69
       CORE_ATMOS_SHA: d8cd45d123f60c30c413c14d46f68113e37468b7
@@ -43,14 +49,25 @@ jobs:
             echo 'enabled=false' >> "$GITHUB_OUTPUT"
             echo 'recurring staging Wind100 is disabled'
           fi
+      - name: Check both isolated staging writer credentials without exposing values
+        id: staging_credentials
+        if: ${{ inputs.check_only == true || steps.opt_in.outputs.enabled == 'true' }}
+        env:
+          STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets[format('STAGING_R2_WRITE_{0}', 'ACCESS_KEY_ID')] }}
+          STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets[format('STAGING_R2_WRITE_{0}', 'SECRET_ACCESS_KEY')] }}
+        run: |
+          set -euo pipefail
+          test -n "$STAGING_R2_WRITE_ACCESS_KEY_ID"
+          test -n "$STAGING_R2_WRITE_SECRET_ACCESS_KEY"
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        if: ${{ steps.opt_in.outputs.enabled == 'true' }}
+        if: ${{ inputs.check_only != true && steps.opt_in.outputs.enabled == 'true' }}
         with: { path: cycle, persist-credentials: false }
       - name: Refuse an unapproved caller, controller, source, or environment
-        if: ${{ steps.opt_in.outputs.enabled == 'true' }}
+        if: ${{ inputs.check_only != true && steps.opt_in.outputs.enabled == 'true' }}
         run: node cycle/tools/staging-wind100.mjs recurring-gate
       - name: Checkout the exact ordinary core producer
-        if: ${{ steps.opt_in.outputs.enabled == 'true' }}
+        if: ${{ inputs.check_only != true && steps.opt_in.outputs.enabled == 'true' }}
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: weatherx-hq/atmos
@@ -59,7 +76,7 @@ jobs:
           path: atmos-core
           persist-credentials: false
       - name: Checkout the exact reviewed point-only augmenter and publisher
-        if: ${{ steps.opt_in.outputs.enabled == 'true' }}
+        if: ${{ inputs.check_only != true && steps.opt_in.outputs.enabled == 'true' }}
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: weatherx-hq/atmos
@@ -68,14 +85,14 @@ jobs:
           path: atmos
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        if: ${{ steps.opt_in.outputs.enabled == 'true' }}
+        if: ${{ inputs.check_only != true && steps.opt_in.outputs.enabled == 'true' }}
         with: { node-version: 22 }
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
-        if: ${{ steps.opt_in.outputs.enabled == 'true' }}
+        if: ${{ inputs.check_only != true && steps.opt_in.outputs.enabled == 'true' }}
         with: { python-version: '3.12' }
       - name: Authenticate this bake's ordinary sealed ECMWF artifact
         id: handoff
-        if: ${{ steps.opt_in.outputs.enabled == 'true' }}
+        if: ${{ inputs.check_only != true && steps.opt_in.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -121,8 +138,8 @@ jobs:
         id: preflight
         if: ${{ steps.handoff.outputs.status == 'ready' }}
         env:
-          STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
-          STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
+          STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets[format('STAGING_R2_WRITE_{0}', 'ACCESS_KEY_ID')] }}
+          STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets[format('STAGING_R2_WRITE_{0}', 'SECRET_ACCESS_KEY')] }}
         run: |
           set -euo pipefail
           result="$(node cycle/tools/staging-wind100.mjs preflight "$GITHUB_WORKSPACE/atmos")"
@@ -161,12 +178,12 @@ jobs:
         if: ${{ steps.preflight.outputs.status == 'new-input' }}
         working-directory: atmos
         env:
-          STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
-          STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
+          STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets[format('STAGING_R2_WRITE_{0}', 'ACCESS_KEY_ID')] }}
+          STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets[format('STAGING_R2_WRITE_{0}', 'SECRET_ACCESS_KEY')] }}
           RCLONE_CONFIG_WEATHERX_TYPE: s3
           RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
-          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets[format('STAGING_R2_WRITE_{0}', 'ACCESS_KEY_ID')] }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets[format('STAGING_R2_WRITE_{0}', 'SECRET_ACCESS_KEY')] }}
           RCLONE_CONFIG_WEATHERX_ENDPOINT: https://${{ env.STAGING_R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
           RCLONE_CONFIG_WEATHERX_REGION: auto
           COMPONENT_R2_REMOTE: weatherx:weatherx-components-staging
@@ -190,8 +207,8 @@ jobs:
       - name: Publish immutable metadata and rotate only the bounded staging selector
         if: ${{ steps.preflight.outputs.status == 'new-input' }}
         env:
-          STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
-          STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
+          STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets[format('STAGING_R2_WRITE_{0}', 'ACCESS_KEY_ID')] }}
+          STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets[format('STAGING_R2_WRITE_{0}', 'SECRET_ACCESS_KEY')] }}
         run: |
           set -euo pipefail
           node cycle/tools/staging-wind100.mjs publish-recurring staging-wind100/qualification.json \
