@@ -1,12 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchInput, sourceURL } from '../tools/staging-search-build.mjs';
+import { fetchInput, sourceURL, INPUTS } from '../tools/staging-search-build.mjs';
 test('metadata downloads use one immutable release on the fixed staging origin', async () => {
+  assert.deepEqual(INPUTS, {
+    airports: 'airports/airports.json', metar: 'stations/metar.json', tides: 'tides/tides.json',
+    sondes: 'radiosondes/stations.json', storms: 'footprints/swath_storms.json',
+  });
   assert.equal(sourceURL('cycle-123', 'airports'), 'https://staging.weatherx.org/data-atmos/_release/cycle-123/airports/airports.json');
   for (const release of ['../../production', 'a?b', '', '/a']) assert.throws(() => sourceURL(release, 'airports'));
   assert.throws(() => sourceURL('cycle-123', 'weather'));
   const bytes = await fetchInput('cycle-123', 'airports', async (url, init) => {
-    assert.equal(init.redirect, 'error'); assert.ok(init.signal);
+    assert.equal(init.redirect, 'error'); assert.equal(init.credentials, 'omit');
+    assert.deepEqual(init.headers, { 'Accept-Encoding': 'identity' }); assert.ok(init.signal);
     return new Response('{}', { headers: { 'x-weatherx-release': 'cycle-123', 'content-length': '2' } });
   });
   assert.equal(bytes.toString(), '{}');

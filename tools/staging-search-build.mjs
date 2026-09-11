@@ -6,8 +6,9 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { candidate, hash } from './staging-search.mjs';
+import { ATMOS_SHA } from './staging-search-source.mjs';
 
-export const ATMOS_SHA = '7db13615f8efef72080f4062e095087c2a8c0ba8';
+export { ATMOS_SHA };
 export const INPUTS = {
   airports: 'airports/airports.json', metar: 'stations/metar.json', tides: 'tides/tides.json',
   sondes: 'radiosondes/stations.json', storms: 'footprints/swath_storms.json',
@@ -19,7 +20,8 @@ export function sourceURL(release, family) {
 }
 export async function fetchInput(release, family, fetchImpl = fetch) {
   const url = sourceURL(release, family);
-  const response = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
+  const response = await fetchImpl(url, { redirect: 'error', credentials: 'omit',
+    headers: { 'Accept-Encoding': 'identity' }, signal: AbortSignal.timeout(30_000) });
   const max = 4 * 1024 * 1024;
   const declared = response.headers.get('content-length');
   if (response.status !== 200 || response.headers.get('x-weatherx-release') !== release ||
@@ -65,7 +67,7 @@ async function main() {
   const files = Object.fromEntries(['core.json', 'more.json'].map(name => [name, readFileSync(resolve(directory, 'candidate', name))]));
   const c = candidate(files);
   console.log(JSON.stringify({ generatorSha: ATMOS_SHA, sourceRelease: process.env.SOURCE_RELEASE,
-    inputReceipts: evidence, candidateId: c.candidateId, files: c.files }));
+    inputReceipts: evidence, candidateId: c.candidateId, generation: c.generation, files: c.files }));
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main().catch(() => { console.error('staging search build withheld; no publication attempted'); process.exitCode = 1; });
