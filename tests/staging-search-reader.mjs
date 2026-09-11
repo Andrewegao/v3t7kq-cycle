@@ -124,16 +124,28 @@ test('Wind100 Worker intent is a distinct exact data-staging approval and refuse
     assert.throws(() => readerGate({ ...env, [key]: wind100Env()[key] }, 'inspect'));
   }
 });
-test('dynamic Wind100 replaces only its exact optional flag and preserves unrelated settings', async () => {
+test('dynamic Wind100 preserves exact legacy admission for open tabs while probing the new selection', async () => {
   const m = memory({ existingWind100: OLD_WIND100 });
   const selected = { ...WIND100, dynamic: true };
   const [receipt, approved] = await ready(m, selected);
   const direct = uploadMetadata(receipt).bindings.filter(row => row.type !== 'inherit');
-  assert.deepEqual(direct, [...wind100Bindings(WIND100), { name: 'STAGING_WIND100_DYNAMIC_ENABLED', type: 'plain_text', text: '1' }]);
+  assert.deepEqual(direct, [...wind100Bindings(OLD_WIND100), { name: 'STAGING_WIND100_DYNAMIC_ENABLED', type: 'plain_text', text: '1' }]);
   await rollout(m.ops, source, receipt, approved);
   assert.equal(receipt.status, 'passed');
+  assert.ok(m.calls.includes(`wind100:${WIND100.catalogId}`));
   same(candidateBindings(receipt).filter(row => !row.name.startsWith('STAGING_WIND100_')),
     receipt.before.settings.bindings.filter(row => !row.name.startsWith('STAGING_WIND100_')));
+});
+test('dynamic Wind100 uses the approved tuple when there is no legacy admission', async () => {
+  for (const existingWind100 of [null, { ...OLD_WIND100, catalogId: 'stage-wind100-recurring-34540000000-1' }]) {
+    const m = memory({ existingWind100 });
+    const selected = { ...WIND100, catalogId: 'stage-wind100-recurring-34547542747-1', dynamic: true };
+    const [receipt, approved] = await ready(m, selected);
+    assert.deepEqual(uploadMetadata(receipt).bindings.filter(row => row.type !== 'inherit'),
+      [...wind100Bindings(selected), { name: 'STAGING_WIND100_DYNAMIC_ENABLED', type: 'plain_text', text: '1' }]);
+    await rollout(m.ops, source, receipt, approved);
+    assert.equal(receipt.status, 'passed');
+  }
 });
 test('preserves every admitted setting; refuses assets, future fields, unknown bindings and foreign resources', () => {
   const b = boundary();

@@ -215,7 +215,16 @@ export function annotations(receipt) {
 export function candidateBindings(receipt) {
   if (!receipt.wind100) return receipt.before.settings.bindings;
   const kept = receipt.before.settings.bindings.filter(binding => !WIND100_ALL_BINDING_NAMES.includes(binding.name));
-  return normalizedBindings([...kept, ...wind100BindingRows(receipt.wind100)]);
+  return normalizedBindings([...kept, ...transitionWind100Bindings(receipt)]);
+}
+function transitionWind100Bindings(receipt) {
+  const previous = validateLiveWind100(receipt.before.settings.bindings);
+  // Keep the exact legacy admission for already-open tabs. New dynamic requests
+  // still qualify against receipt.wind100 and the authenticated current pointer;
+  // the Worker independently rejects the legacy descriptor after native expiry.
+  const preserveLegacy = receipt.wind100.dynamic === true && previous
+    && /^stage-wind100-[1-9]/.test(previous.catalogId);
+  return wind100BindingRows(preserveLegacy ? { ...previous, dynamic: true } : receipt.wind100);
 }
 export function uploadMetadata(receipt) {
   const before = receipt.before.settings;
@@ -225,7 +234,7 @@ export function uploadMetadata(receipt) {
     bindings: [
       ...before.bindings.filter(binding => !replacements.has(binding.name))
         .map(binding => ({ name: binding.name, type: 'inherit', version_id: 'latest' })),
-      ...(receipt.wind100 ? wind100BindingRows(receipt.wind100) : []),
+      ...(receipt.wind100 ? transitionWind100Bindings(receipt) : []),
     ], annotations: annotations(receipt) };
   for (const key of ['placement', 'limits', 'cache_options', 'usage_model']) if (Object.hasOwn(before, key)) metadata[key] = before[key];
   if (metadata.placement && Object.keys(metadata.placement).length === 0) delete metadata.placement;
