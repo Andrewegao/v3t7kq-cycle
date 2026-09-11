@@ -94,9 +94,9 @@ jobs:
           BASE: http://127.0.0.1:4166
           UI_CONTROL_ROOT: ${{ github.workspace }}/control
           UI_TC_DIST: ${{ github.workspace }}/atmos/app/dist
-          UI_TC_FIXTURE_ROOT: ${{ github.workspace }}/cycle/staging-tc-selections/112f801de98c63d2b9017eddecf416e4e83ea673c21ce08001d48a2fca0345c5
+          UI_TC_FIXTURE_ROOT: ${{ github.workspace }}/cycle/staging-tc-selections/4f39b84b86bcf3e90bb5e54f8296f7231ddfc74363c5e2830a7324a5327a21c7
           UI_TC_PROOF_OUTPUT: ${{ runner.temp }}/ui-tc-proof.json
-          UI_TC_SELECTION_SHA256: 112f801de98c63d2b9017eddecf416e4e83ea673c21ce08001d48a2fca0345c5
+          UI_TC_SELECTION_SHA256: 4f39b84b86bcf3e90bb5e54f8296f7231ddfc74363c5e2830a7324a5327a21c7
           UI_TC_CONTROL_SHA: 0b5ccc8335b1147b13f4c525a126b82bf026ed88
           UI_EXPECTED_SOURCE_SHA: ${{ inputs.atmos_sha }}
         run: |

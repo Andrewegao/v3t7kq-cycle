@@ -15,7 +15,7 @@ import {protocol,validateTcFixture,validateTcProofBytes,verifyControllerRoot} fr
 
 const ROOT=resolve(new URL('..',import.meta.url).pathname);
 const FIXTURE=resolve(ROOT,'staging-tc-selections',TC_SELECTION_SHA256);
-const NOW=Date.parse('2026-09-10T03:00:00.000Z');
+const NOW=Date.parse('2026-09-10T16:00:00.000Z');
 const sha=value=>createHash('sha256').update(value).digest('hex');
 
 test('TC profile is exact, account-off, core-roster, independently approved and nonpromotable',()=>{
@@ -34,16 +34,17 @@ test('TC profile is exact, account-off, core-roster, independently approved and 
 
 test('reviewed TC selection and complete fixture inventory match every pinned digest',()=>{
   const read=readTcSelection(ROOT,TC_RELEASE_PROFILE,NOW);assert.equal(sha(read.bytes),TC_SELECTION_SHA256);
-  const fixture=validateTcFixture(FIXTURE,TC_SELECTION_SHA256,NOW);assert.equal(fixture.selection.catalogId,'stage-tc-guidance-2026091014-1');
-  assert.equal(fixture.manifest.storms[0].gdacsId,'1001315');assert.equal(fixture.tracks.size,4);
-  assert.throws(()=>validateTcSelection(read.bytes,TC_SELECTION_SHA256,Date.parse('2026-09-11T00:00:00.000Z')),/stale/);
+  const fixture=validateTcFixture(FIXTURE,TC_SELECTION_SHA256,NOW);assert.equal(fixture.selection.catalogId,'stage-tc-guidance-900007-1');
+  assert.deepEqual(fixture.manifest.storms.map(storm=>storm.gdacsId),['1001315','1001320']);assert.equal(fixture.tracks.size,8);
+  const component=JSON.parse(readFileSync(resolve(FIXTURE,'component.json')));assert.equal(component.objectCount,1+fixture.tracks.size);
+  assert.throws(()=>validateTcSelection(read.bytes,TC_SELECTION_SHA256,Date.parse('2026-09-11T10:00:00.000Z')),/stale/);
   const changed=Buffer.from(read.bytes);changed[changed.length-2]^=1;assert.throws(()=>validateTcSelection(changed,TC_SELECTION_SHA256,NOW),/differ/);
 });
 
 test('candidate admission requires exact TC asset and old profiles reject it',()=>{
   const bytes=readFileSync(resolve(FIXTURE,'selection.json'));
   const candidate={profile:TC_RELEASE_PROFILE,files:[{path:TC_SELECTION_ASSET,base64:bytes.toString('base64')}]};
-  assert.equal(validateCandidateTcSelection(candidate,NOW).catalogId,'stage-tc-guidance-2026091014-1');
+  assert.equal(validateCandidateTcSelection(candidate,NOW).catalogId,'stage-tc-guidance-900007-1');
   for(const mutate of [c=>c.files.splice(0),c=>c.files[0].base64=Buffer.from('wrong').toString('base64'),c=>c.profile=CORE_RELEASE_PROFILE]){
     const changed=structuredClone(candidate);mutate(changed);assert.throws(()=>validateCandidateTcSelection(changed,NOW));
   }

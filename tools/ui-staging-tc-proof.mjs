@@ -36,7 +36,8 @@ export function validateTcFixture(root,expected=TC_SELECTION_SHA256,now=null){
   const manifest=JSON.parse(manifestBytes),component=JSON.parse(componentBytes),catalog=JSON.parse(catalogBytes),tracksDir=resolve(root,'tracks');
   exactKeys(component,'schemaVersion componentId artifactId generationTime completedAt rootPrefix mounts objectCount inventorySha256 quality'.split(' '),'TC component');
   assert.equal(component.schemaVersion,1);assert.equal(component.componentId,'tc-guidance');assert.match(component.artifactId,/^stage-tc-guidance-[A-Za-z0-9-]{1,96}$/);
-  assert.equal(component.rootPrefix,`components/tc-guidance/${component.artifactId}/`);assert.deepEqual(component.mounts,['data-atmos/tc-models/']);assert.equal(component.objectCount,5);assert.equal(component.inventorySha256,selection.inventorySha256);
+  assert.equal(component.rootPrefix,`components/tc-guidance/${component.artifactId}/`);assert.deepEqual(component.mounts,['data-atmos/tc-models/']);
+  assert.ok(Number.isSafeInteger(component.objectCount)&&component.objectCount>=2&&component.objectCount<=513,'TC component object count exceeds bound');assert.equal(component.inventorySha256,selection.inventorySha256);
   exactKeys(catalog,'schemaVersion sequence parentCatalogId createdAt components rollbackEpoch'.split(' '),'TC catalog');assert.equal(catalog.schemaVersion,2);assert.equal(catalog.sequence,1);assert.equal(catalog.parentCatalogId,null);assert.equal(catalog.rollbackEpoch,0);
   const catalogComponent=catalog.components?.['tc-guidance'];assert.ok(catalogComponent&&typeof catalogComponent==='object');assert.equal(catalogComponent.artifactId,component.artifactId);
   assert.equal(catalogComponent.inventorySha256,selection.inventorySha256);assert.equal(catalogComponent.manifestSha256,selection.componentManifestSha256);
@@ -53,6 +54,7 @@ export function validateTcFixture(root,expected=TC_SELECTION_SHA256,now=null){
   const expectedTrackNames=references.map(ref=>{
     assert.match(ref?.sha256??'',SHA256);assert.equal(ref.path,`tracks/${ref.sha256}.json`);return `${ref.sha256}.json`;
   }).sort();
+  assert.equal(component.objectCount,1+expectedTrackNames.length,'TC component object count differs from manifest inventory');
   assert.deepEqual(readdirSync(tracksDir).sort(),expectedTrackNames,'TC fixture tracks differ from manifest');
   const inventory=[{path:'manifest.json',size:manifestBytes.length,sha256:hash(manifestBytes)}];
   const tracks=new Map();let total=selectionBytes.length+manifestBytes.length+componentBytes.length+catalogBytes.length;

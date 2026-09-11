@@ -38,10 +38,11 @@ the Pages deploy controller, receive a Pages or Cloudflare credential, or change
 sanitized local browser receipt.
 
 The reviewed input is
-`staging-tc-selections/112f801de98c63d2b9017eddecf416e4e83ea673c21ce08001d48a2fca0345c5/selection.json`
-(578 bytes, SHA-256
-`112f801de98c63d2b9017eddecf416e4e83ea673c21ce08001d48a2fca0345c5`).
-Its local manifest and four referenced track objects reproduce the selection's
+`staging-tc-selections/4f39b84b86bcf3e90bb5e54f8296f7231ddfc74363c5e2830a7324a5327a21c7/selection.json`
+(570 bytes, SHA-256
+`4f39b84b86bcf3e90bb5e54f8296f7231ddfc74363c5e2830a7324a5327a21c7`).
+Its retained manifest preserves the actual `2026-09-10T15:57:55Z` source time;
+two storms and eight referenced track objects reproduce the selection's
 manifest, component, catalog, object, and inventory digests. They are retained as
 the bounded UI fixture and remain `local-prepared-not-published`; their catalog ID
 is not evidence that R2 contains the objects. The build fails once the selection

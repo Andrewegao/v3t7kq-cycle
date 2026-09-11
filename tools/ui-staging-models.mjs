@@ -14,7 +14,7 @@ export const ACCOUNT_CORE_REQUEST='release-roster-core-account-v1';
 export const TC_RELEASE_REQUEST='release-roster-core-tc-v1';
 export const ACCOUNT_APPROVAL='staging-account-v1';
 export const TC_APPROVAL='staging-tc-guidance-v1';
-export const TC_SELECTION_SHA256='112f801de98c63d2b9017eddecf416e4e83ea673c21ce08001d48a2fca0345c5';
+export const TC_SELECTION_SHA256='4f39b84b86bcf3e90bb5e54f8296f7231ddfc74363c5e2830a7324a5327a21c7';
 export const MAX_SELECTION_BYTES=1024*1024;
 export const MODELS=['icon','hrrr-ak','hrdps','nam','nam-hi','nam-ak','arome-antilles'];
 const HASH=/^[a-f0-9]{64}$/,COMMIT=/^[a-f0-9]{40}$/,RUN=/^[1-9]\d{0,19}$/,ATTEMPT=/^[1-9]\d{0,3}$/;
