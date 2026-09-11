@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync,
+  linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync,
   truncateSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +14,7 @@ import { gunzipSync, gzipSync } from 'node:zlib';
 import {
   ACCOUNT, COMPONENTS, CONFIRMATION, DATA, MODEL, SOURCE_SHA, controllerDigest,
   createCandidateS3, createQualificationTrace, gate, hash, loadCatalogValidator, prepareCandidate,
-  qualificationFailureDiagnostic, qualifyPointPacks, readPolicy, verifySource,
+  qualificationFailureDiagnostic, qualifyMapInventory, qualifyPointPacks, readPolicy, verifySource,
 } from '../tools/staging-wind100.mjs';
 
 const MISSING = -32768;
@@ -45,8 +45,113 @@ function encode(value) {
   return Buffer.from(`${JSON.stringify(value)}\n`);
 }
 
+const MAP_DYNAMIC_VARIABLES = [
+  'wind', 'temp', 'gust', 'mslp', 'precip', 'ptype', 'cloud', 'cape', 'dewpoint',
+  'gh925', 'gh850', 'gh500', 'wind925', 'wind850', 'wind500',
+];
+const MAP_NATIVE_VARIABLES = new Set(['wind', 'temp', 'gust', 'mslp', 'precip', 'cloud', 'dewpoint']);
+
+function mapRunTime(runId) {
+  return `${runId.slice(0, 4)}-${runId.slice(4, 6)}-${runId.slice(6, 8)}T${runId.slice(8, 10)}:00:00Z`;
+}
+
+function writeMapFile(root, path, bytes = Buffer.from([1])) {
+  const target = resolve(root, path);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, bytes);
+}
+
+function nativeFrameIndex(runId, variable, frame) {
+  const objects = Array.from({ length: 12 }, (_, tileX) => ({
+    tileX, offset: tileX * 16, length: 16, encodedSha256: 'a'.repeat(64), decodedSha256: 'b'.repeat(64),
+    width: tileX === 11 ? 37 : 133, height: 133,
+  }));
+  return {
+    schemaVersion: 1, representation: 'native-rgba128-halo-l2-t2-r3-b3-row-v1',
+    source: { model: 'ecmwf', run: mapRunTime(runId), variable, frame,
+      decodedSha256: 'c'.repeat(64), width: 1440, height: 721 },
+    layout: { core: 128, left: 2, top: 2, right: 3, bottom: 3, columns: 12, rows: 6 },
+    rows: Array.from({ length: 6 }, (_, tileY) => ({
+      tileY, file: `row-${String(tileY).padStart(2, '0')}.wxb`, bytes: 192,
+      sha256: hash(Buffer.alloc(192, 1)), objects: objects.map(object => ({
+        ...object, height: tileY === 5 ? 86 : 133,
+      })),
+    })),
+  };
+}
+
+function writeMapTree(mapRoot, { frames = 2, realistic = false } = {}) {
+  rmSync(mapRoot, { recursive: true, force: true });
+  mkdirSync(mapRoot, { recursive: true });
+  const runIds = ['2026091012', '2026091000'];
+  const variableNames = realistic ? MAP_DYNAMIC_VARIABLES : MAP_DYNAMIC_VARIABLES.slice(0, 5);
+  for (const [runIndex, runId] of runIds.entries()) {
+    const runRoot = `runs/${runId}`;
+    const frameRows = Array.from({ length: frames }, (_, i) => ({ i, valid_time: mapRunTime(runId) }));
+    const variables = {};
+    for (const variable of variableNames) {
+      variables[variable] = { file: `${variable}/{i}.png` };
+      for (let frame = 0; frame < frames; frame++) {
+        writeMapFile(mapRoot, `${runRoot}/${variable}/${String(frame).padStart(3, '0')}.png`);
+      }
+    }
+    variables.wind.progressive = { file: 'wind-low/{i}.png', grid: { width: 360, height: 181 } };
+    for (let frame = 0; frame < frames; frame++) {
+      writeMapFile(mapRoot, `${runRoot}/wind-low/${String(frame).padStart(3, '0')}.png`);
+    }
+    variables.orog = { file: 'orog.png', static: true };
+    writeMapFile(mapRoot, `${runRoot}/orog.png`);
+    // A hydrated baseline may retain an older conventional run without native
+    // sidecars. The fresh run is required to be native; the realistic fixture
+    // models the two-native-run tree observed after a second qualification.
+    const nativeVariables = realistic || runIndex === 0 ? [...MAP_NATIVE_VARIABLES].filter(
+      variable => realistic || variable === 'wind') : [];
+    for (const variable of nativeVariables) {
+      const directory = `${variable}-native-${hash(Buffer.from(variable)).slice(0, 16)}`;
+      variables[variable].nativeViewport = {
+        schemaVersion: 1, representation: 'native-rgba128-halo-l2-t2-r3-b3-row-v1',
+        index: `${directory}/{i}/index.json`, rangeRequired: true, fullGridFallback: true,
+      };
+      for (let frame = 0; frame < frames; frame++) {
+        const frameId = String(frame).padStart(3, '0');
+        writeMapFile(mapRoot, `${runRoot}/${directory}/${frameId}/index.json`, encode(nativeFrameIndex(runId, variable, frame)));
+        for (let row = 0; row < 6; row++) {
+          writeMapFile(mapRoot, `${runRoot}/${directory}/${frameId}/row-${String(row).padStart(2, '0')}.wxb`, Buffer.alloc(192, 1));
+        }
+      }
+    }
+    writeMapFile(mapRoot, `${runRoot}/manifest.json`, encode({
+      schemaVersion: 1, model: 'ecmwf', init_time: mapRunTime(runId),
+      grid: { width: 1440, height: 721 }, variables, frames: frameRows,
+    }));
+  }
+  writeMapFile(mapRoot, 'index.json', encode({ schemaVersion: 1, model: 'ecmwf', runs: runIds.map(runId => ({
+    init_time: mapRunTime(runId), path: `runs/${runId}/`,
+  })) }));
+}
+
 function inventoryHash(rows) {
   return createHash('sha256').update(JSON.stringify(rows)).digest('hex');
+}
+
+// Repository-independent copy of the exact frozen publisher traversal contract
+// in ops/platform/build-component-manifest.mjs: depth-first, locale-sorted per
+// directory. The controller receipt must hash this order, not a global path sort.
+function publisherInventory(root) {
+  const files = [];
+  const visit = current => {
+    for (const entry of readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const absolute = resolve(current, entry.name);
+      if (entry.isDirectory()) visit(absolute);
+      else if (entry.isFile()) files.push(absolute);
+      else assert.fail(`unsupported publisher fixture entry ${entry.name}`);
+    }
+  };
+  visit(root);
+  return files.map(absolute => {
+    const bytes = readFileSync(absolute);
+    return { path: relative(root, absolute).replaceAll('\\', '/'), size: lstatSync(absolute).size, sha256: hash(bytes) };
+  });
 }
 
 function writePack(path, { chunkX, chunkY, width, height, leads = 2, mutate = ({ value }) => value }) {
@@ -174,9 +279,9 @@ function fixture(t, mutate = ({ value }) => value) {
     files: [{ path: 'app/public/data/ecmwf/index.json', size: 10, sha256: 'c'.repeat(64) },
       ...stageInventory.map(row => ({ path: `data/.ecmwf-point/${row.path}`, size: row.bytes, sha256: row.sha256 }))] };
   const mapProof = { model: 'ecmwf', generationTime: initializedAt, ageHours: 1,
-    variables: 10, frames: 2, horizonHours: 3, runs: 2 };
-  const mapRoot = resolve(root, 'app/public/data/ecmwf'); mkdirSync(mapRoot, { recursive: true });
-  writeFileSync(resolve(mapRoot, 'index.json'), encode({ schemaVersion: 1, model: 'ecmwf', runs: [] }));
+    variables: 6, frames: 2, horizonHours: 3, runs: 2 };
+  const mapRoot = resolve(root, 'app/public/data/ecmwf');
+  writeMapTree(mapRoot);
   return { root, pointRoot, stageRoot, catalogPath, catalog, descriptor, policy, structuralReport,
     sourceEvidence, sealedManifest, mapProof, mapRoot, now: Date.parse('2026-09-10T13:00:00Z'), model: 'ecmwf' };
 }
@@ -338,6 +443,99 @@ test('qualification decodes every actual WXPS byte and binds its complete invent
   assert.equal(receipt.sourceStage.objectCount, FIELDS.length + 1);
   assert.match(receipt.sourceStage.inventorySha256, /^[a-f0-9]{64}$/);
   assert.deepEqual(trace, { phase: 'receipt', pointPackRowsChecked: 2, pointPacksChecked: 4 });
+});
+
+test('map inventory admits the exact two-native-run shape and no unreferenced filesystem entries', async t => {
+  const preserveParent = process.env.WIND100_PRESERVE_MAP_FIXTURE_PARENT;
+  const parent = preserveParent ? realpathSync(preserveParent) : tmpdir();
+  const root = realpathSync(mkdtempSync(resolve(parent, 'weatherx-wind100-map-realistic-')));
+  if (!preserveParent) t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeMapTree(root, { frames: 81, realistic: true });
+  const result = await qualifyMapInventory(root,
+    { runs: 2, variables: 16, frames: 81 }, { initializedAt: mapRunTime('2026091012') }, { leadCount: 81 });
+  assert.equal(result.objectCount, 10_535);
+  assert.equal(result.directoryCount, 1_183);
+  assert.equal(result.traversalEntryCount, 11_718);
+  assert.equal(result.inventory.length, 10_535);
+  assert.match(result.inventorySha256, /^[a-f0-9]{64}$/);
+  if (preserveParent) {
+    const receiptPath = `${root}-qualification.json`;
+    writeFileSync(receiptPath, encode(result));
+    process.stdout.write(`# preserved-map-fixture ${root}\n# preserved-map-receipt ${receiptPath}\n`);
+  }
+});
+
+test('map inventory accepts an older non-native run and matches publisher depth-first locale order', async t => {
+  const root = realpathSync(mkdtempSync(resolve(tmpdir(), 'weatherx-wind100-map-retained-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeMapTree(root);
+  const result = await qualifyMapInventory(root,
+    { runs: 2, variables: 6, frames: 2 }, { initializedAt: mapRunTime('2026091012') }, { leadCount: 2 });
+  const publisher = publisherInventory(root);
+  assert.deepEqual(result.inventory, publisher);
+  assert.equal(result.inventorySha256, inventoryHash(publisher));
+  assert.equal(new Set(result.inventory.map(row => row.path)).size, result.objectCount);
+  const newestPrefix = 'runs/2026091012/';
+  const olderPrefix = 'runs/2026091000/';
+  assert.ok(result.inventory.some(row => row.path.startsWith(`${newestPrefix}wind-native-`)));
+  assert.ok(!result.inventory.some(row => row.path.startsWith(olderPrefix) && row.path.includes('-native-')));
+  const wind = result.inventory.findIndex(row => row.path === `${newestPrefix}wind/000.png`);
+  const windLow = result.inventory.findIndex(row => row.path === `${newestPrefix}wind-low/000.png`);
+  assert.ok(wind >= 0 && windLow >= 0 && wind < windLow, 'publisher visits wind before wind-low');
+  const globalPaths = result.inventory.map(row => row.path).toSorted();
+  assert.ok(globalPaths.indexOf(`${newestPrefix}wind-low/000.png`) < globalPaths.indexOf(`${newestPrefix}wind/000.png`),
+    'fixture must distinguish publisher order from a global codepoint sort');
+  assert.notEqual(inventoryHash(result.inventory), inventoryHash(result.inventory.toSorted((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)));
+});
+
+test('map inventory rejects orphan files, empty directories, links, deep paths and unsafe references', async t => {
+  const args = [{ runs: 2, variables: 6, frames: 2 }, { initializedAt: mapRunTime('2026091012') }, { leadCount: 2 }];
+  for (const mode of ['missing', 'missing-native', 'file', 'empty-directory', 'symlink', 'hardlink', 'deep-directory',
+    'empty', 'oversized', 'oversized-root-index', 'oversized-manifest', 'oversized-native-index',
+    'traversal-template', 'traversal-run', 'unknown-native']) await t.test(mode, async t => {
+    const root = realpathSync(mkdtempSync(resolve(tmpdir(), `weatherx-wind100-map-${mode}-`)));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    writeMapTree(root);
+    if (mode === 'missing') rmSync(resolve(root, 'runs/2026091012/temp/000.png'));
+    if (mode === 'missing-native') {
+      const manifest = JSON.parse(readFileSync(resolve(root, 'runs/2026091012/manifest.json')));
+      const native = manifest.variables.wind.nativeViewport.index.replace('{i}', '000');
+      rmSync(resolve(root, 'runs/2026091012', dirname(native), 'row-00.wxb'));
+    }
+    if (mode === 'file') writeMapFile(root, 'runs/2026091012/unreferenced.bin');
+    if (mode === 'empty-directory') mkdirSync(resolve(root, 'runs/2026091012/orphan'), { recursive: true });
+    if (mode === 'symlink') symlinkSync('manifest.json', resolve(root, 'runs/2026091012/orphan-link'));
+    if (mode === 'hardlink') linkSync(resolve(root, 'runs/2026091012/manifest.json'), resolve(root, 'runs/2026091012/orphan-hardlink'));
+    if (mode === 'deep-directory') mkdirSync(resolve(root, 'a/b/c/d/e/f/g/h/i'), { recursive: true });
+    if (mode === 'empty') truncateSync(resolve(root, 'runs/2026091012/wind/000.png'), 0);
+    if (mode === 'oversized') truncateSync(resolve(root, 'runs/2026091012/wind/000.png'), 512 * 1024 * 1024 + 1);
+    if (mode === 'oversized-root-index') truncateSync(resolve(root, 'index.json'), 512 * 1024 + 1);
+    if (mode === 'oversized-manifest') truncateSync(resolve(root, 'runs/2026091012/manifest.json'), 512 * 1024 + 1);
+    if (mode === 'oversized-native-index') {
+      const manifest = JSON.parse(readFileSync(resolve(root, 'runs/2026091012/manifest.json')));
+      const native = manifest.variables.wind.nativeViewport.index.replace('{i}', '000');
+      truncateSync(resolve(root, 'runs/2026091012', native), 96 * 1024 + 1);
+    }
+    if (mode === 'traversal-template') {
+      const path = resolve(root, 'runs/2026091012/manifest.json');
+      const manifest = JSON.parse(readFileSync(path));
+      manifest.variables.temp.file = '../escape/{i}.png';
+      writeFileSync(path, encode(manifest));
+    }
+    if (mode === 'traversal-run') {
+      const path = resolve(root, 'index.json');
+      const index = JSON.parse(readFileSync(path));
+      index.runs[0].path = 'runs/../2026091012/';
+      writeFileSync(path, encode(index));
+    }
+    if (mode === 'unknown-native') {
+      const path = resolve(root, 'runs/2026091012/manifest.json');
+      const manifest = JSON.parse(readFileSync(path));
+      manifest.variables.wind.nativeViewport.representation = 'unreviewed-native-v2';
+      writeFileSync(path, encode(manifest));
+    }
+    await assert.rejects(qualifyMapInventory(root, ...args));
+  });
 });
 
 test('qualification failure diagnostics expose only fixed categories, phases and bounded progress', () => {
@@ -573,6 +771,20 @@ async function publicationFixture(t) {
   return { f, qualification, request, rows, io, writes, saved };
 }
 
+function setPublicationMapCount(fixture, objectCount) {
+  const inventorySha256 = hash(Buffer.from(`map-${objectCount}`));
+  fixture.qualification.map.objectCount = objectCount;
+  fixture.qualification.map.inventorySha256 = inventorySha256;
+  const manifest = JSON.parse(fixture.rows[MODEL].body);
+  manifest.objectCount = objectCount;
+  manifest.inventorySha256 = inventorySha256;
+  const body = Buffer.from(`${JSON.stringify(manifest)}\n`);
+  fixture.rows[MODEL].body = body;
+  fixture.rows[MODEL].receipt.manifestSha256 = hash(body);
+  fixture.saved.set(fixture.rows[MODEL].receipt.manifestKey, { body, sha256: hash(body), metadata: {},
+    httpMetadata: { contentType: 'application/json', cacheControl: 'public, max-age=31536000, immutable', contentEncoding: undefined } });
+}
+
 test('qualified pair prepares only an immutable non-serving staging selection', async t => {
   const f = await publicationFixture(t);
   const selection = await prepareCandidate({ request: f.request, qualification: f.qualification,
@@ -585,6 +797,23 @@ test('qualified pair prepares only an immutable non-serving staging selection', 
     'staging-candidates/wind100/stage-wind100-1234-1/selection.json',
   ]);
   assert.ok(f.writes.every(row => row.metadata.sha256 === hash(row.body)));
+});
+
+test('map component receipt admits the reviewed 20k boundary and rejects one more object', async t => {
+  for (const [objectCount, accepted] of [[10_535, true], [20_000, true], [20_001, false]]) await t.test(String(objectCount), async t => {
+    const f = await publicationFixture(t);
+    setPublicationMapCount(f, objectCount);
+    const pending = prepareCandidate({ request: f.request, qualification: f.qualification,
+      mapReceipt: f.rows[MODEL].receipt, pointReceipt: f.rows[`point-${MODEL}`].receipt,
+      io: f.io, policy: f.f.policy, now: () => Date.parse('2026-09-10T13:10:00Z') });
+    if (accepted) {
+      const selection = await pending;
+      assert.equal(selection.status, 'DATA_QUALIFIED_NOT_ACTIVATED');
+    } else {
+      await assert.rejects(pending);
+      assert.equal(f.writes.length, 0);
+    }
+  });
 });
 
 test('the pinned reader must accept the isolated catalog before either metadata write', async t => {

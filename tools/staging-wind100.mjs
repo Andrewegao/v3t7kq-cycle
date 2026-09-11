@@ -27,6 +27,19 @@ const MISSING = -32768;
 const MAX_PACK_BYTES = 512 * 1024;
 const MAX_UNPACKED_BYTES = 1024 * 1024;
 const MAX_JSON_BYTES = 512 * 1024;
+// This is the reviewed ceiling used by the pinned map catalog/reference reader.
+// It bounds files, not traversal entries: every expected ancestor directory is
+// derived below from the two authenticated run manifests.
+const MAX_MAP_OBJECTS = 20_000;
+const MAX_NATIVE_INDEX_BYTES = 96 * 1024;
+const MAX_NATIVE_ROW_BYTES = 2 * 1024 * 1024;
+const MAX_MAP_FILE_BYTES = 512 * 1024 * 1024;
+const MAX_MAP_TOTAL_BYTES = 32 * 1024 * 1024 * 1024;
+const MAX_MAP_DEPTH = 8;
+const NATIVE_REPRESENTATION = 'native-rgba128-halo-l2-t2-r3-b3-row-v1';
+const NATIVE_LAYOUT = { core: 128, left: 2, top: 2, right: 3, bottom: 3, columns: 12, rows: 6 };
+const NATIVE_VARIABLES = new Set(['wind', 'temp', 'gust', 'mslp', 'precip', 'cloud', 'dewpoint']);
+const NATIVE_DIRECTORY = /^[a-z][a-z0-9_]{0,31}-native-[a-f0-9]{16}$/;
 const CACHE = 'public, max-age=31536000, immutable';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONTROLLER_FILES = [
@@ -198,7 +211,7 @@ function boundedRead(path, maximum, label) {
   return bytes;
 }
 
-function filesUnder(root, maximumEntries, maximumDepth) {
+function filesUnder(root, maximumEntries, maximumDepth, directories = null, depthFirstLocale = false) {
   assert.ok(Number.isSafeInteger(maximumEntries) && maximumEntries > 0);
   assert.ok(Number.isSafeInteger(maximumDepth) && maximumDepth >= 0);
   const found = [];
@@ -206,26 +219,33 @@ function filesUnder(root, maximumEntries, maximumDepth) {
   function visit(directory, depth) {
     assert.ok(depth <= maximumDepth, 'candidate directory depth exceeds its fixed budget');
     const handle = opendirSync(directory);
+    const children = [];
     try {
       let entry;
       while ((entry = handle.readSync()) !== null) {
         entries++;
         assert.ok(entries <= maximumEntries, 'candidate traversal exceeds its fixed entry budget');
-        const path = resolve(directory, entry.name);
-        const stat = lstatSync(path);
-        assert.ok(!stat.isSymbolicLink(), 'point candidate must not contain symlinks');
-        if (stat.isDirectory()) visit(path, depth + 1);
-        else {
-          assert.ok(stat.isFile() && stat.nlink === 1, 'point candidate must contain ordinary single-link files');
-          found.push(relative(root, path).replaceAll('\\', '/'));
-        }
+        children.push(entry.name);
       }
     } finally {
       handle.closeSync();
     }
+    if (depthFirstLocale) children.sort((left, right) => left.localeCompare(right));
+    for (const name of children) {
+      const path = resolve(directory, name);
+      const stat = lstatSync(path);
+      assert.ok(!stat.isSymbolicLink(), 'point candidate must not contain symlinks');
+      if (stat.isDirectory()) {
+        directories?.push(relative(root, path).replaceAll('\\', '/'));
+        visit(path, depth + 1);
+      } else {
+        assert.ok(stat.isFile() && stat.nlink === 1, 'point candidate must contain ordinary single-link files');
+        found.push(relative(root, path).replaceAll('\\', '/'));
+      }
+    }
   }
   visit(root, 0);
-  return found.sort();
+  return depthFirstLocale ? found : found.sort();
 }
 
 export function controllerDigest(root = ROOT) {
@@ -368,15 +388,218 @@ async function fileHash(path) {
   return digest.digest('hex');
 }
 
-async function directoryInventory(root, maximumEntries = 10_000) {
-  const directory = realpathSync(root), rows = []; let totalBytes = 0;
-  for (const path of filesUnder(directory, maximumEntries, 8)) {
-    const absolute = regularFile(directory, path), size = lstatSync(absolute).size;
-    assert.ok(size > 0 && size <= 512 * 1024 * 1024, 'component file is empty or oversized');
-    totalBytes += size; assert.ok(totalBytes <= 32 * 1024 * 1024 * 1024, 'component tree is oversized');
-    rows.push({ path, size, sha256: await fileHash(absolute) });
+function codepointSorted(values) {
+  return [...values].sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+}
+
+function exactKeys(value, keys, label) {
+  assert.ok(value && typeof value === 'object' && !Array.isArray(value), `${label} is not an object`);
+  assert.deepEqual(codepointSorted(Object.keys(value)), codepointSorted(keys), `${label} keys differ`);
+  return value;
+}
+
+function safeMapPath(value, label, { directory = false, placeholders = 0 } = {}) {
+  assert.ok(typeof value === 'string' && value.length > 0 && value.length <= 512, `${label} is missing or oversized`);
+  assert.ok(!value.startsWith('/') && !value.includes('\\') && !value.includes('\0'), `${label} is unsafe`);
+  if (directory) assert.ok(value.endsWith('/'), `${label} must end in /`);
+  const path = directory ? value.slice(0, -1) : value;
+  const markerCount = path.split('{i}').length - 1;
+  assert.equal(markerCount, placeholders, `${label} placeholder count differs`);
+  const withoutMarker = path.replaceAll('{i}', '0');
+  assert.match(withoutMarker, /^[A-Za-z0-9._/-]+$/, `${label} has unsafe characters`);
+  const parts = withoutMarker.split('/');
+  assert.ok(parts.length > 0 && parts.length <= MAX_MAP_DEPTH,
+    `${label} exceeds the map path depth budget`);
+  assert.ok(parts.every(part => part && part !== '.' && part !== '..'), `${label} is not normalized`);
+  assert.ok(!path.replaceAll('{i}', '').includes('{') && !path.replaceAll('{i}', '').includes('}'),
+    `${label} has an unknown placeholder`);
+  return value;
+}
+
+function mapTemplate(value, label) {
+  assert.ok(value && typeof value === 'object' && !Array.isArray(value), `${label} definition is invalid`);
+  const file = value.file;
+  assert.ok(typeof file === 'string');
+  const placeholders = file.includes('{i}') ? 1 : 0;
+  return { file: safeMapPath(file, `${label} file`, { placeholders }), placeholders };
+}
+
+function addExpectedMapPath(paths, path, label) {
+  const normalized = safeMapPath(path, label);
+  assert.ok(!paths.has(normalized), `${label} duplicates another map object`);
+  paths.add(normalized);
+}
+
+function expectedMapDirectories(paths) {
+  const directories = new Set();
+  for (const path of paths) {
+    const parts = path.split('/');
+    for (let end = 1; end < parts.length; end++) directories.add(parts.slice(0, end).join('/'));
   }
-  assert.ok(rows.length > 0); return { objectCount: rows.length, inventorySha256: hash(JSON.stringify(rows)), inventory: rows };
+  return directories;
+}
+
+function jsonObject(root, path, maximum, label, metadata = null) {
+  const bytes = boundedRead(regularFile(root, path), maximum, label);
+  if (metadata) {
+    const stat = lstatSync(regularFile(root, path));
+    metadata.set(path, { maximum, label, sha256: hash(bytes),
+      identity: [stat.dev, stat.ino, stat.size, stat.mtimeMs] });
+  }
+  const value = JSON.parse(bytes);
+  assert.ok(value && typeof value === 'object' && !Array.isArray(value), `${label} is not an object`);
+  return value;
+}
+
+function expectedNativeFiles(root, runPath, manifest, variable, definition, frames, expected, metadata) {
+  const descriptor = definition.nativeViewport;
+  if (descriptor === undefined) return;
+  assert.ok(NATIVE_VARIABLES.has(variable), `variable ${variable} has an unsupported native viewport`);
+  exactKeys(descriptor, ['schemaVersion', 'representation', 'index', 'rangeRequired', 'fullGridFallback'],
+    `variable ${variable} native descriptor`);
+  assert.deepEqual({ schemaVersion: descriptor.schemaVersion, representation: descriptor.representation,
+    rangeRequired: descriptor.rangeRequired, fullGridFallback: descriptor.fullGridFallback },
+  { schemaVersion: 1, representation: NATIVE_REPRESENTATION, rangeRequired: true, fullGridFallback: true });
+  const template = safeMapPath(descriptor.index, `variable ${variable} native index`, { placeholders: 1 });
+  const [directory, suffix] = template.split('/{i}/');
+  assert.equal(suffix, 'index.json', `variable ${variable} native index is not canonical`);
+  assert.match(directory ?? '', NATIVE_DIRECTORY, `variable ${variable} native directory is invalid`);
+  assert.ok(directory.startsWith(`${variable}-native-`), `variable ${variable} native directory differs`);
+  for (const frame of frames) {
+    const frameId = String(frame.i).padStart(3, '0');
+    const indexRelative = `${runPath}${template.replace('{i}', frameId)}`;
+    addExpectedMapPath(expected, indexRelative, `variable ${variable} native index`);
+    const index = jsonObject(root, indexRelative, MAX_NATIVE_INDEX_BYTES,
+      `variable ${variable} native frame ${frame.i} index`, metadata);
+    exactKeys(index, ['schemaVersion', 'representation', 'source', 'layout', 'rows'],
+      `variable ${variable} native frame ${frame.i} index`);
+    assert.equal(index.schemaVersion, 1);
+    assert.equal(index.representation, NATIVE_REPRESENTATION);
+    assert.deepEqual(index.layout, NATIVE_LAYOUT);
+    exactKeys(index.source, ['model', 'run', 'variable', 'frame', 'decodedSha256', 'width', 'height'],
+      `variable ${variable} native frame ${frame.i} source`);
+    assert.deepEqual({ model: index.source.model, run: index.source.run, variable: index.source.variable,
+      frame: index.source.frame, width: index.source.width, height: index.source.height },
+    { model: MODEL, run: manifest.init_time, variable, frame: frame.i, width: 1440, height: 721 });
+    assert.match(index.source.decodedSha256 ?? '', SHA);
+    assert.ok(Array.isArray(index.rows) && index.rows.length === NATIVE_LAYOUT.rows,
+      `variable ${variable} native frame ${frame.i} row count differs`);
+    for (const [tileY, row] of index.rows.entries()) {
+      exactKeys(row, ['tileY', 'file', 'bytes', 'sha256', 'objects'],
+        `variable ${variable} native frame ${frame.i} row ${tileY}`);
+      const file = `row-${String(tileY).padStart(2, '0')}.wxb`;
+      assert.equal(row.tileY, tileY);
+      assert.equal(row.file, file);
+      assert.ok(Number.isSafeInteger(row.bytes) && row.bytes > 0 && row.bytes <= MAX_NATIVE_ROW_BYTES);
+      assert.match(row.sha256 ?? '', SHA);
+      assert.ok(Array.isArray(row.objects) && row.objects.length === NATIVE_LAYOUT.columns,
+        `variable ${variable} native frame ${frame.i} row ${tileY} object count differs`);
+      addExpectedMapPath(expected, `${runPath}${directory}/${frameId}/${file}`,
+        `variable ${variable} native frame ${frame.i} row ${tileY}`);
+    }
+  }
+}
+
+function expectedMapFiles(root, proof, descriptor, policy) {
+  const expected = new Set(['index.json']);
+  const metadata = new Map();
+  const index = jsonObject(root, 'index.json', MAX_JSON_BYTES, 'map index', metadata);
+  exactKeys(index, ['schemaVersion', 'model', 'runs'], 'map index');
+  assert.equal(index.schemaVersion, 1); assert.equal(index.model, MODEL);
+  assert.ok(Array.isArray(index.runs) && index.runs.length === proof.runs && index.runs.length === 2,
+    'map run count differs');
+  const seenRuns = new Set(); let previousRun = Infinity;
+  for (const [runIndex, run] of index.runs.entries()) {
+    exactKeys(run, ['init_time', 'path'], `map run ${runIndex}`);
+    const initialized = finiteTime(run.init_time, `map run ${runIndex} initialization`);
+    assert.ok(initialized < previousRun, 'map runs are not newest-first'); previousRun = initialized;
+    const compact = new Date(initialized).toISOString().replace(/[-:T]/g, '').slice(0, 10);
+    const runPath = safeMapPath(run.path, `map run ${runIndex} path`, { directory: true });
+    assert.equal(runPath, `runs/${compact}/`, `map run ${runIndex} path differs from initialization`);
+    assert.ok(!seenRuns.has(runPath), 'map run path is duplicated'); seenRuns.add(runPath);
+    if (runIndex === 0) assert.equal(initialized, finiteTime(descriptor.initializedAt, 'point initialization'));
+    const manifestPath = `${runPath}manifest.json`;
+    addExpectedMapPath(expected, manifestPath, `map run ${runIndex} manifest`);
+    const manifest = jsonObject(root, manifestPath, MAX_JSON_BYTES, `map run ${runIndex} manifest`, metadata);
+    assert.equal(manifest.schemaVersion, 1); assert.equal(manifest.model, MODEL);
+    assert.equal(finiteTime(manifest.init_time, `map run ${runIndex} manifest initialization`), initialized);
+    assert.ok(manifest.variables && typeof manifest.variables === 'object' && !Array.isArray(manifest.variables),
+      `map run ${runIndex} variables are invalid`);
+    const variables = Object.entries(manifest.variables);
+    assert.ok(variables.length > 0 && variables.length <= 32, `map run ${runIndex} variable count is invalid`);
+    assert.ok(Array.isArray(manifest.frames) && manifest.frames.length > 0
+      && manifest.frames.length <= policy.leadCount, `map run ${runIndex} frames are invalid`);
+    for (const [frameIndex, frame] of manifest.frames.entries()) {
+      assert.ok(frame && typeof frame === 'object' && !Array.isArray(frame) && frame.i === frameIndex,
+        `map run ${runIndex} frame indices differ`);
+    }
+    if (runIndex === 0) {
+      assert.equal(variables.length, proof.variables, 'newest map variable count differs from proof');
+      assert.equal(manifest.frames.length, proof.frames, 'newest map frame count differs from proof');
+    }
+    for (const [variable, definition] of variables) {
+      assert.match(variable, /^[a-z][a-z0-9_-]{0,31}$/);
+      const source = mapTemplate(definition, `variable ${variable}`);
+      const sourceFrames = source.placeholders === 1 ? manifest.frames : [{ i: null }];
+      for (const frame of sourceFrames) {
+        const file = source.placeholders === 1 ? source.file.replace('{i}', String(frame.i).padStart(3, '0')) : source.file;
+        addExpectedMapPath(expected, `${runPath}${file}`, `variable ${variable} source`);
+      }
+      if (definition.progressive !== undefined) {
+        const progressive = mapTemplate(definition.progressive, `variable ${variable} progressive`);
+        assert.equal(progressive.placeholders, 1, `variable ${variable} progressive file is not framed`);
+        assert.ok(definition.progressive.grid && typeof definition.progressive.grid === 'object'
+          && !Array.isArray(definition.progressive.grid), `variable ${variable} progressive grid is invalid`);
+        for (const frame of manifest.frames) addExpectedMapPath(expected,
+          `${runPath}${progressive.file.replace('{i}', String(frame.i).padStart(3, '0'))}`,
+          `variable ${variable} progressive source`);
+      }
+      expectedNativeFiles(root, runPath, manifest, variable, definition, manifest.frames, expected, metadata);
+    }
+  }
+  assert.ok(expected.size > 0 && expected.size <= MAX_MAP_OBJECTS, 'map manifest references too many objects');
+  return { expected, metadata };
+}
+
+export async function qualifyMapInventory(root, proof, descriptor, policy) {
+  const directory = realpathSync(root);
+  const { expected, metadata } = expectedMapFiles(directory, proof, descriptor, policy);
+  const expectedFiles = codepointSorted(expected);
+  const expectedDirectories = codepointSorted(expectedMapDirectories(expected));
+  assert.ok(expectedDirectories.length <= MAX_MAP_OBJECTS, 'map manifest references too many directories');
+  const maximumEntries = expectedFiles.length + expectedDirectories.length;
+  const actualDirectories = [];
+  const actualFiles = filesUnder(directory, maximumEntries, MAX_MAP_DEPTH, actualDirectories, true);
+  assert.deepEqual(codepointSorted(actualFiles), expectedFiles, 'map files differ from the manifest-derived inventory');
+  assert.deepEqual(codepointSorted(actualDirectories), expectedDirectories,
+    'map directories differ from the manifest-derived inventory');
+  const rows = []; let totalBytes = 0;
+  for (const path of actualFiles) {
+    const absolute = regularFile(directory, path), size = lstatSync(absolute).size;
+    assert.ok(size > 0 && size <= MAX_MAP_FILE_BYTES, 'component file is empty or oversized');
+    totalBytes += size; assert.ok(totalBytes <= MAX_MAP_TOTAL_BYTES, 'component tree is oversized');
+    const sha256 = await fileHash(absolute);
+    const parsed = metadata.get(path);
+    if (parsed) {
+      assert.equal(size, parsed.identity[2], `${parsed.label} changed after parsing`);
+      assert.equal(sha256, parsed.sha256, `${parsed.label} changed after parsing`);
+    }
+    rows.push({ path, size, sha256 });
+  }
+  const finalDirectories = [];
+  assert.deepEqual(filesUnder(directory, maximumEntries, MAX_MAP_DEPTH, finalDirectories, true), actualFiles,
+    'map files changed while hashing');
+  assert.deepEqual(codepointSorted(finalDirectories), expectedDirectories, 'map directories changed while hashing');
+  for (const [path, parsed] of metadata) {
+    const absolute = regularFile(directory, path);
+    const stat = lstatSync(absolute);
+    assert.deepEqual([stat.dev, stat.ino, stat.size, stat.mtimeMs], parsed.identity,
+      `${parsed.label} identity changed after qualification`);
+    assert.equal(hash(boundedRead(absolute, parsed.maximum, parsed.label)), parsed.sha256,
+      `${parsed.label} changed after qualification`);
+  }
+  return { objectCount: rows.length, directoryCount: expectedDirectories.length,
+    traversalEntryCount: maximumEntries, inventorySha256: hash(JSON.stringify(rows)), inventory: rows };
 }
 
 function validatedSourceEvidence(evidence, policy) {
@@ -674,7 +897,7 @@ export async function qualifyPointPacks({ pointRoot, stageRoot, model, policy = 
   markQualification(trace, 'map-proof');
   const validatedMapProof = validateMapProof(mapProof, descriptor, policy);
   markQualification(trace, 'map-inventory');
-  const map = { ...validatedMapProof, ...await directoryInventory(mapRoot) };
+  const map = { ...validatedMapProof, ...await qualifyMapInventory(mapRoot, validatedMapProof, descriptor, policy) };
   markQualification(trace, 'seal');
   const seal = validateSeal(sealedManifest, stageInventory, request, descriptor);
   markQualification(trace, 'lease');
@@ -754,7 +977,8 @@ function componentManifest(value, id, receipt, qualification, now) {
   assert.equal(value.rootPrefix, rootPrefix); assert.equal(finiteTime(value.generationTime, 'component generation'), finiteTime(qualification.initializedAt, 'qualification initialization'));
   assert.ok(finiteTime(value.completedAt, 'component completion') >= finiteTime(qualification.initializedAt, 'qualification initialization'));
   assert.ok(finiteTime(value.completedAt, 'component completion') <= now, 'component completion is in the future');
-  assert.ok(Number.isSafeInteger(value.objectCount) && value.objectCount > 0 && value.objectCount <= 10_000);
+  const maximumObjects = id === MODEL ? MAX_MAP_OBJECTS : 10_000;
+  assert.ok(Number.isSafeInteger(value.objectCount) && value.objectCount > 0 && value.objectCount <= maximumObjects);
   assert.match(value.inventorySha256 ?? '', SHA); assert.equal(value.quality?.status, 'passed');
   assert.ok(Array.isArray(value.quality.checks) && value.quality.checks.length === new Set(value.quality.checks).size);
   for (const required of id === MODEL
