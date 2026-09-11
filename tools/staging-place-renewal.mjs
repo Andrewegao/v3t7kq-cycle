@@ -72,7 +72,7 @@ export function renewalGate(env, policy, digest) {
   assert(/^[a-f0-9]{40}$/.test(policy.sourceSha) && env.ATMOS_SHA === policy.sourceSha, 'unapproved source');
   assert(policy.schemaVersion === 1 && SHA.test(policy.qualifierSha256));
   assert(SHA.test(digest) && env.STAGING_PLACES_RENEWAL_CONTROLLER_SHA256 === digest, 'unapproved controller closure');
-  assert(policy.minimumForecastLeaseHours === 6 && policy.leaseHours === 24);
+  assert(policy.minimumForecastLeaseHours === 6 && policy.leaseHours === 24 && policy.tideRequestsPerSecond === 2);
   validateTidePriorFreshnessCorrection(policy.tidePriorFreshnessCorrection);
   for (const key of Object.keys(env)) if (/^(AWS_|RCLONE_|CLOUDFLARE_|CF_API_|R2_|SHARED_R2_|UI_|STAGING_WORKER_)/.test(key)) assert(!env[key], 'foreign credential refused');
   for (const path of [env.RUNNER_TEMP, env.GITHUB_WORKSPACE]) assert(path && resolve(path) === path);
@@ -313,7 +313,8 @@ async function main(env, action) {
     let output;
     try {
       output = safeExecute('python3', isolatedPythonArguments(resolve(CYCLE, 'tools/staging-place-collect.py'),
-        ['--source', context.source, '--root', context.root, '--family', context.kind]), context, env, 45 * 60000);
+        ['--source', context.source, '--root', context.root, '--family', context.kind,
+          '--tide-requests-per-second', String(policy.tideRequestsPerSecond)]), context, env, 45 * 60000);
     } catch (error) {
       if (error && typeof error === 'object') collectorFailures.set(error, collectorProcessFailure(error, context.kind));
       throw error;

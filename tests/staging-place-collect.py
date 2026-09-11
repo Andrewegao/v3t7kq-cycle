@@ -6,8 +6,9 @@ import json
 import subprocess
 import sys
 import tempfile
-import types
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -43,6 +44,42 @@ class RetryAfterSession(Session):
     def get(self, *args, **kwargs):
         self.calls += 1
         return Response(429, {"Retry-After": "301"})
+
+
+class TestGlobalPacer:
+    def __init__(self, requests_per_second, *, clock=lambda: 0.0, sleep=lambda _: None):
+        self._gap = 1.0 / requests_per_second
+        self._clock = clock
+        self._sleep = sleep
+        self._lock = threading.Lock()
+        self._next = 0.0
+        self._cooldown = 0.0
+        self._stopped = False
+        self.reservations = []
+
+    def take(self):
+        while True:
+            with self._lock:
+                if self._stopped:
+                    raise RuntimeError("stopped")
+                now = self._clock()
+                at = max(now, self._next, self._cooldown)
+                self._next = at + self._gap
+                self.reservations.append(at)
+            if at > now:
+                self._sleep(at - now)
+            with self._lock:
+                if self._clock() >= self._cooldown:
+                    return
+
+    def defer(self, seconds):
+        with self._lock:
+            self._cooldown = max(self._cooldown, self._clock() + seconds)
+            self._next = max(self._next, self._cooldown)
+
+    def stop(self):
+        with self._lock:
+            self._stopped = True
 
 
 class SurfProducer:
@@ -97,10 +134,13 @@ class TideProducer:
     LOOKBACK_DAYS = 1
     FORECAST_DAYS = 7
     RIGHT_BRACKET_DAYS = 1
+    MAX_REQUESTS_PER_SECOND = 4.0
+    _GlobalPacer = TestGlobalPacer
 
     def __init__(self):
         self.manifest = None
         self.bake_args = None
+        self._GLOBAL_PACER = self._GlobalPacer(self.MAX_REQUESTS_PER_SECOND)
 
     def _session(self):
         return Session()
@@ -223,7 +263,6 @@ class PacerStoppedMinimumTideProducer(ResumableTideProducer):
 
     def __init__(self):
         super().__init__(fail_second=True)
-        self._GLOBAL_PACER = types.SimpleNamespace(_stopped=False)
 
     def bake_v2(self, session, *args, **kwargs):
         if self.bake_calls == 0:
@@ -246,6 +285,89 @@ class PlaceCollector(unittest.TestCase):
         self.assertTrue(collector._RequestTelemetry._overlong_retry_after("301", 300))
         self.assertTrue(collector._RequestTelemetry._overlong_retry_after("9" * 129, 300))
         self.assertFalse(collector._RequestTelemetry._overlong_retry_after("x" * 129, 300))
+
+    def test_tide_rate_tightening_preserves_existing_pacer_identity_and_state(self):
+        producer = TideProducer()
+        pacer = producer._GLOBAL_PACER
+        pacer._next, pacer._cooldown = 7.0, 9.0
+        lock, clock, sleep = pacer._lock, pacer._clock, pacer._sleep
+        collector._configure_tide_pacer(producer, 2.0)
+        self.assertIs(producer._GLOBAL_PACER, pacer)
+        self.assertIs(pacer._lock, lock)
+        self.assertIs(pacer._clock, clock)
+        self.assertIs(pacer._sleep, sleep)
+        self.assertEqual((pacer._next, pacer._cooldown, pacer._stopped), (7.0, 9.0, False))
+        self.assertEqual(pacer._gap, 0.5)
+        pacer._gap = 0.75
+        collector._configure_tide_pacer(producer, 2.0)
+        self.assertEqual(pacer._gap, 0.75)
+
+    def test_tide_rate_tightening_shared_concurrency_and_cooldown_recheck(self):
+        class Clock:
+            value = 0.0
+            lock = threading.Lock()
+
+            def now(self):
+                with self.lock:
+                    return self.value
+
+            def advance(self, seconds):
+                with self.lock:
+                    self.value += seconds
+
+        clock = Clock()
+        producer = TideProducer()
+        producer._GLOBAL_PACER = producer._GlobalPacer(4.0, clock=clock.now, sleep=clock.advance)
+        pacer = producer._GLOBAL_PACER
+        collector._configure_tide_pacer(producer, 2.0)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(lambda _: pacer.take(), range(4)))
+        self.assertEqual(pacer.reservations, [0.0, 0.5, 1.0, 1.5])
+
+        waiting, release = threading.Event(), threading.Event()
+        sleeps = []
+
+        def controlled_sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) == 1:
+                waiting.set()
+                release.wait(timeout=2)
+            clock.advance(seconds)
+
+        clock.value = 0.0
+        producer._GLOBAL_PACER = producer._GlobalPacer(4.0, clock=clock.now, sleep=controlled_sleep)
+        pacer = producer._GLOBAL_PACER
+        collector._configure_tide_pacer(producer, 2.0)
+        pacer.take()
+        worker = threading.Thread(target=pacer.take)
+        worker.start()
+        self.assertTrue(waiting.wait(timeout=2))
+        pacer.defer(2.0)
+        release.set()
+        worker.join(timeout=2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(pacer.reservations, [0.0, 0.5, 2.0])
+        self.assertEqual(sleeps, [0.5, 1.5])
+
+    def test_tide_rate_tightening_refuses_stopped_or_unreviewed_pacer_before_session(self):
+        for index, (producer, rate) in enumerate(((TideProducer(), 2.0), (TideProducer(), 2.0),
+                                                   (TideProducer(), 4.0), (TideProducer(), 2.0))):
+            pacer = producer._GLOBAL_PACER
+            pacer._next, pacer._cooldown = 7.0, 9.0
+            if index == 0:
+                pacer._stopped = True
+            else:
+                if index == 1:
+                    producer.MAX_REQUESTS_PER_SECOND = 3.0
+                elif index == 3:
+                    producer._GlobalPacer = type("ForeignPacer", (), {})
+            before = (pacer._gap, pacer._next, pacer._cooldown, pacer._stopped, id(pacer))
+            session_calls = []
+            with self.subTest(index=index), self.assertRaises(collector.CollectionFailure):
+                collector.collect_tides(self.base / f"rate-{index}", producer, clock=lambda: datetime.now(timezone.utc),
+                    session_factory=lambda: session_calls.append(True), requests_per_second=rate)
+            self.assertEqual(session_calls, [])
+            self.assertEqual((pacer._gap, pacer._next, pacer._cooldown, pacer._stopped, id(pacer)), before)
 
     def test_surf_selects_exact_aged_cycle_and_preserves_stage_values_and_times(self):
         start = datetime(2026, 9, 10, 18, 30, tzinfo=timezone.utc)
@@ -382,7 +504,8 @@ class PlaceCollector(unittest.TestCase):
 
     def test_cli_failure_is_fixed_and_does_not_echo_private_source_or_environment(self):
         result = subprocess.run([sys.executable, "-I", "-B", str(REPO / "tools/staging-place-collect.py"),
-            "--source", "/private/source-name", "--root", str(self.base / "run"), "--family", "surf"],
+            "--source", "/private/source-name", "--root", str(self.base / "run"), "--family", "surf",
+            "--tide-requests-per-second", "2"],
             env={"PATH": "/usr/bin:/bin", "STAGING_R2_WRITE_SECRET_ACCESS_KEY": "DO-NOT-PRINT"},
             capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
