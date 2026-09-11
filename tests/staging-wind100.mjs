@@ -579,6 +579,8 @@ test('workflow is manual ECMWF-only, sealed, hash-locked and cannot promote or d
   assert.match(code, /CORE_MODEL_PACKS_DIR/);
   assert.match(code, /staging-wind100-core-flow\.py/);
   const hydrate = source.split('- name: Hydrate only the isolated staging ECMWF baseline')[1]
+    .split('- name: Authenticate the hydrated baseline before provider collection')[0];
+  const baselineProof = source.split('- name: Authenticate the hydrated baseline before provider collection')[1]
     .split('- name: Collect and seal exact ECMWF core inputs')[0];
   const collect = source.split('- name: Collect and seal exact ECMWF core inputs')[1]
     .split('- name: Reinstall sealed inputs')[0];
@@ -586,10 +588,27 @@ test('workflow is manual ECMWF-only, sealed, hash-locked and cannot promote or d
     .split('- name: Qualify every map identity')[0];
   assert.match(hydrate, /working-directory: atmos\b/);
   assert.doesNotMatch(hydrate, /working-directory: atmos-source\b/);
+  assert.match(hydrate, /GITHUB_ENV=''/);
+  assert.match(hydrate, /HYDRATED_COMPONENT_PROOF_DIR="\$RUNNER_TEMP\/wind100-component-baseline-proof"/);
+  assert.doesNotMatch(hydrate, /source\s+|\.\s+[^\n]*baseline/);
+  assert.match(baselineProof, /working-directory: atmos\b/);
+  assert.match(baselineProof, /verify-component-baseline/);
+  for (const proof of ['pointer.json', 'catalog.json', 'component.json']) {
+    assert.match(baselineProof, new RegExp(`wind100-component-baseline-proof/${proof.replace('.', '\\.')}`));
+    assert.match(reinstall, new RegExp(`wind100-component-baseline-proof/${proof.replace('.', '\\.')}`));
+  }
+  assert.ok(code.indexOf('verify-component-baseline') < code.indexOf('Collect and seal exact ECMWF core inputs'),
+    'authenticated baseline preflight must precede provider collection');
+  assert.match(baselineProof, /> "\$RUNNER_TEMP\/weatherx-wind100-baseline-proof\.json"/);
+  assert.doesNotMatch(baselineProof, /secrets\.|RCLONE_|CATALOG_R2_REMOTE|STAGING_R2/);
   assert.match(collect, /working-directory: atmos-source\b/);
   assert.match(collect, /--root "\$GITHUB_WORKSPACE\/atmos-source"/);
   assert.match(reinstall, /working-directory: atmos\b/);
   assert.match(reinstall, /CORE_MODEL_PACKS_DIR/);
+  assert.match(reinstall, /CORE_BASELINE_CATALOG_POINTER/);
+  assert.match(reinstall, /CORE_BASELINE_CATALOG_SNAPSHOT/);
+  assert.match(reinstall, /CORE_BASELINE_COMPONENT_MANIFEST/);
+  assert.doesNotMatch(reinstall, /source\s+|\.\s+[^\n]*baseline/);
   assert.doesNotMatch(code, /rm\s+-r|find\s+[^\n]*-delete/);
   assert.match(code, /build_point_series\.py/);
   assert.match(code, /staging-wind100-python\.py/);
