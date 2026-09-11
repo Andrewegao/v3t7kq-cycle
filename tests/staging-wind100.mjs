@@ -13,7 +13,8 @@ import { fileURLToPath } from 'node:url';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import {
   ACCOUNT, COMPONENTS, CONFIRMATION, DATA, MODEL, SOURCE_SHA, controllerDigest,
-  createCandidateS3, gate, hash, loadCatalogValidator, prepareCandidate, qualifyPointPacks, readPolicy, verifySource,
+  createCandidateS3, createQualificationTrace, gate, hash, loadCatalogValidator, prepareCandidate,
+  qualificationFailureDiagnostic, qualifyPointPacks, readPolicy, verifySource,
 } from '../tools/staging-wind100.mjs';
 
 const MISSING = -32768;
@@ -309,7 +310,8 @@ test('isolated Python wrapper restores only the reviewed Atmos data import root'
 });
 
 test('qualification decodes every actual WXPS byte and binds its complete inventory', async t => {
-  const f = fixture(t);
+  const f = fixture(t), trace = createQualificationTrace();
+  f.trace = trace;
   const receipt = await qualifyPointPacks(f);
   assert.equal(receipt.status, 'CREDENTIAL_FREE_POINT_PACK_INTEGRITY_QUALIFIED_NOT_PUBLISHED');
   assert.equal(receipt.runId, '2026091012');
@@ -335,6 +337,102 @@ test('qualification decodes every actual WXPS byte and binds its complete invent
   assert.equal(receipt.sourceClosure.files, 1);
   assert.equal(receipt.sourceStage.objectCount, FIELDS.length + 1);
   assert.match(receipt.sourceStage.inventorySha256, /^[a-f0-9]{64}$/);
+  assert.deepEqual(trace, { phase: 'receipt', pointPackRowsChecked: 2, pointPacksChecked: 4 });
+});
+
+test('qualification failure diagnostics expose only fixed categories, phases and bounded progress', () => {
+  const secret = 'PRIVATE_ARRAY_PATH_TOKEN';
+  const controllerSha256 = 'a'.repeat(64);
+  const assertion = new Error(secret); assertion.code = 'ERR_ASSERTION'; assertion.actual = [secret];
+  const filesystem = new Error(secret); filesystem.code = 'ENOENT'; filesystem.path = secret;
+  const decode = new Error(secret); decode.code = 'Z_DATA_ERROR';
+  for (const [error, category] of [
+    [assertion, 'contract'], [new SyntaxError(secret), 'parse'], [filesystem, 'filesystem'],
+    [decode, 'decode'], [{ message: secret, stack: secret }, 'unexpected'],
+  ]) {
+    const diagnostic = qualificationFailureDiagnostic(error,
+      { phase: 'pack-scan', pointPackRowsChecked: 2, pointPacksChecked: 181, secret }, controllerSha256);
+    assert.deepEqual(diagnostic, { schemaVersion: 1, operation: 'qualify', phase: 'pack-scan', category,
+      controller: 'tools/staging-wind100.mjs', controllerSha256, controllerLine: null, controllerColumn: null,
+      pointPackRowsChecked: 2, pointPacksChecked: 181 });
+    assert.deepEqual(Object.keys(diagnostic).sort(),
+      ['category', 'controller', 'controllerColumn', 'controllerLine', 'controllerSha256', 'operation', 'phase',
+        'pointPackRowsChecked', 'pointPacksChecked', 'schemaVersion'].sort());
+    assert.ok(!JSON.stringify(diagnostic).includes(secret));
+  }
+  assert.deepEqual(qualificationFailureDiagnostic(new Error(secret),
+    { phase: secret, pointPackRowsChecked: -1, pointPacksChecked: 10001 }, secret),
+  { schemaVersion: 1, operation: 'qualify', phase: 'unknown', category: 'unexpected',
+    controller: 'tools/staging-wind100.mjs', controllerSha256: null, controllerLine: null, controllerColumn: null,
+    pointPackRowsChecked: 0, pointPacksChecked: 0 });
+
+  let internalError;
+  try { gate({}, readPolicy(), controllerDigest()); } catch (error) { internalError = error; }
+  const internal = qualificationFailureDiagnostic(internalError, createQualificationTrace(), controllerSha256);
+  assert.equal(internal.controller, 'tools/staging-wind100.mjs');
+  assert.equal(internal.controllerSha256, controllerSha256);
+  assert.ok(Number.isSafeInteger(internal.controllerLine) && internal.controllerLine > 0 && internal.controllerLine <= 10_000);
+  assert.ok(Number.isSafeInteger(internal.controllerColumn) && internal.controllerColumn > 0 && internal.controllerColumn <= 10_000);
+
+  const largeAssertion = new Error(secret);
+  largeAssertion.code = 'ERR_ASSERTION';
+  largeAssertion.stack = `AssertionError: ${secret.repeat(10_000)}\n${String(internalError.stack).split('\n').slice(1).join('\n')}`;
+  const largeDiagnostic = qualificationFailureDiagnostic(largeAssertion, createQualificationTrace(), controllerSha256);
+  assert.equal(largeDiagnostic.controllerLine, internal.controllerLine);
+  assert.equal(largeDiagnostic.controllerColumn, internal.controllerColumn);
+  assert.ok(!JSON.stringify(largeDiagnostic).includes(secret));
+
+  const hostile = {};
+  Object.defineProperties(hostile, {
+    code: { get() { throw new Error(secret); } },
+    stack: { get() { throw new Error(secret); } },
+  });
+  const hostileDiagnostic = qualificationFailureDiagnostic(hostile, createQualificationTrace(), controllerSha256);
+  assert.equal(hostileDiagnostic.category, 'unexpected');
+  assert.equal(hostileDiagnostic.controllerLine, null);
+  assert.equal(hostileDiagnostic.controllerColumn, null);
+  assert.ok(!JSON.stringify(hostileDiagnostic).includes(secret));
+
+  const foreign = new Error(secret);
+  foreign.stack = `Error: ${secret}\n    at qualify (file:///private/${secret}/tools/staging-wind100.mjs:123:9)`;
+  const foreignDiagnostic = qualificationFailureDiagnostic(foreign, createQualificationTrace(), controllerSha256);
+  assert.equal(foreignDiagnostic.controllerLine, null);
+  assert.equal(foreignDiagnostic.controllerColumn, null);
+  assert.ok(!JSON.stringify(foreignDiagnostic).includes(secret));
+
+  const oversizedCoordinate = new Error(secret);
+  oversizedCoordinate.stack = `Error: ${secret}\n    at gate (${new URL('../tools/staging-wind100.mjs', import.meta.url).href}:10001:1)`;
+  const oversizedDiagnostic = qualificationFailureDiagnostic(oversizedCoordinate, createQualificationTrace(), controllerSha256);
+  assert.equal(oversizedDiagnostic.controllerLine, null);
+  assert.equal(oversizedDiagnostic.controllerColumn, null);
+});
+
+test('qualify CLI emits one sanitized controller diagnostic before its generic refusal', () => {
+  const secret = 'CLI_PRIVATE_TOKEN';
+  const tool = resolve(dirname(fileURLToPath(import.meta.url)), '../tools/staging-wind100.mjs');
+  assert.throws(() => execFileSync(process.execPath, [tool, 'qualify'], {
+    cwd: resolve(dirname(tool), '..'), env: { PATH: process.env.PATH, DIAGNOSTIC_SECRET: secret }, encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }), error => {
+    const stderr = String(error.stderr);
+    const lines = stderr.trim().split('\n');
+    assert.equal(lines.length, 2);
+    assert.match(lines[0], /^Staging wind100 diagnostic \{.*\}$/);
+    const diagnostic = JSON.parse(lines[0].slice('Staging wind100 diagnostic '.length));
+    assert.equal(diagnostic.operation, 'qualify');
+    assert.equal(diagnostic.phase, 'gate');
+    assert.equal(diagnostic.category, 'contract');
+    assert.equal(diagnostic.controller, 'tools/staging-wind100.mjs');
+    assert.equal(diagnostic.controllerSha256, null);
+    assert.ok(Number.isSafeInteger(diagnostic.controllerLine)
+      && diagnostic.controllerLine > 0 && diagnostic.controllerLine <= 10_000);
+    assert.ok(Number.isSafeInteger(diagnostic.controllerColumn)
+      && diagnostic.controllerColumn > 0 && diagnostic.controllerColumn <= 10_000);
+    assert.equal(lines[1], 'Staging wind100 refused; no serving pointer or production object changed.');
+    assert.ok(!stderr.includes(secret));
+    assert.ok(!stderr.includes('/private/'));
+    return true;
+  });
 });
 
 test('one finite cell cannot satisfy the per-lead native coverage contract', async t => {
@@ -346,9 +444,12 @@ test('one finite cell cannot satisfy the per-lead native coverage contract', asy
 });
 
 test('one-sided U\/V missing values never qualify', async t => {
+  const trace = createQualificationTrace();
   const f = fixture(t, ({ field, chunkX, chunkY, cell, lead, value }) =>
     field === 'wind100_v' && chunkX === 0 && chunkY === 0 && cell === 0 && lead === 1 ? MISSING : value);
+  f.trace = trace;
   await assert.rejects(qualifyPointPacks(f), /one-sided native 100m missing value/);
+  assert.deepEqual(trace, { phase: 'coverage', pointPackRowsChecked: 2, pointPacksChecked: 4 });
 });
 
 test('every expected lead must independently meet coverage', async t => {
