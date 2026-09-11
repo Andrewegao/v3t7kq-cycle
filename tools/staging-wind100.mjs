@@ -12,7 +12,7 @@ import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 
-export const SOURCE_SHA = '9423990ed998fdf37ba10143cad67cb9ab8ac713';
+export const SOURCE_SHA = '142826414987df4138c293a6147d9414ae30ab76';
 export const CONFIRMATION = 'native-wind100-staging-only';
 export const DATA = 'weatherx-data-staging';
 export const COMPONENTS = 'weatherx-components-staging';
