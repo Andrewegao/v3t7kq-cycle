@@ -30,6 +30,7 @@ on:
       - ".github/workflows/staging-tc-guidance.yml"
       - ".github/workflows/staging-place-renewal.yml"
       - ".github/workflows/staging-wind100.yml"
+      - ".github/workflows/staging-wind100-recurring.yml"
       - ".github/workflows/staging-search-reader.yml"
       - ".github/workflows/staging-data-activate.yml"
       - ".github/workflows/verify-backfill.yml"
