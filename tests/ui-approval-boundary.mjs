@@ -26,8 +26,19 @@ function assertDataOnly(source, allowedKeys) {
   assert.doesNotMatch(text, /uses:\s*[^\n]*(?:ui-release|ui-staging)/);
 }
 
+function assertBakeDataOnly(source) {
+  const blocks = [...source.matchAll(/^  staging-wind100:\n[\s\S]*?(?=^  [a-z][a-z0-9-]*:|$(?![\s\S]))/gm)];
+  assert.equal(blocks.length, 1, 'one isolated recurring wind caller is required');
+  const block = blocks[0][0];
+  assert.match(block, /^    uses: \.\/\.github\/workflows\/staging-wind100-recurring.yml$/m);
+  assert.doesNotMatch(block, /^\s+(?:steps|run|env):/m);
+  assertDataOnly(block, ['ATMOS_DEPLOY_KEY', 'STAGING_R2_WRITE_ACCESS_KEY_ID', 'STAGING_R2_WRITE_SECRET_ACCESS_KEY']);
+  // Staging writer slots remain forbidden everywhere else in the legacy bake.
+  assertDataOnly(source.replace(block, ''), maintenanceKeys);
+}
+
 test('both data bakes and legacy backfill have no UI credential or dispatch capability', () => {
-  assertDataOnly(workflows['bake.yml'], maintenanceKeys);
+  assertBakeDataOnly(workflows['bake.yml']);
   assertDataOnly(workflows['catalog-bake.yml'], componentKeys);
   assertDataOnly(workflows['verify-backfill.yml'], ['ATMOS_DEPLOY_KEY']);
   for (const name of ['collect-core-model.yml', 'collect-regional-model.yml'])
@@ -45,8 +56,14 @@ test('boundary contracts reject legacy key, new UI key, dispatch, inherited secr
     'secrets: inherit', 'actions: write', 'run: gh workflow run ui-release.yml',
     'run: curl https://api.github.com/repos/owner/repo/actions/workflows/ui-release.yml/dispatches',
     'run: npx wrangler pages deploy dist', 'run: bash deploy-atmos.sh']) {
-    assert.throws(() => assertDataOnly(`${workflows['bake.yml']}\n${violation}`, maintenanceKeys), violation);
+    assert.throws(() => assertBakeDataOnly(`${workflows['bake.yml']}\n${violation}`), violation);
   }
+});
+
+test('staging writer slots remain confined to the non-executable wind caller', () => {
+  assert.throws(() => assertBakeDataOnly(workflows['bake.yml'] + '\nTOKEN: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}'));
+  assert.throws(() => assertBakeDataOnly(workflows['bake.yml'].replace(
+    'uses: ./.github/workflows/staging-wind100-recurring.yml', 'uses: ./.github/workflows/collect-core-model.yml')));
 });
 
 test('only the protected promotion workflow references the production UI credential', () => {
