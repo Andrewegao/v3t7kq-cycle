@@ -58,6 +58,8 @@ test('manual staging workflow keeps writer secrets out of checkout, build and te
   assert.match(workflow, /ref: \$\{\{ inputs\.action == 'prepare' && '[a-f0-9]{40}' \|\| vars\.STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA \}\}/);
   assert.doesNotMatch(workflow, /ref: \$\{\{ (?:github\.sha|github\.ref)/);
   assert.match(workflow, /node cycle\/tools\/staging-search\.mjs source-compatibility/);
+  assert.match(workflow, /repository: weatherx-hq\/atmos\n\s+fetch-depth: 0\n/,
+    'the ancestry gate needs the reviewed base in the exact UI checkout history');
   const ci = readFileSync(new URL('../.github/workflows/scheduler-ci.yml', import.meta.url), 'utf8');
   assert.ok(ci.includes('.github/workflows/staging-search.yml'));
 });

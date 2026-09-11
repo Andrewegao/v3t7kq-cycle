@@ -65,6 +65,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
+          fetch-depth: 0
           ref: ${{ inputs.action == 'prepare' && 'dfa25e9f473f15d5e2f630fe78c268b73234bd3a' || vars.STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: control
