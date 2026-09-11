@@ -1,6 +1,6 @@
 {
   "schemaVersion": 3,
-  "sourceSha": "46f507a6b145d7c9d65ac7f26de59030d514cf82",
+  "sourceSha": "590c04a720e7255316841be037c593696d4ef0f9",
   "model": "ecmwf",
   "hours": 336,
   "leadCount": 81,
@@ -54,7 +54,7 @@
     "data/hrrr_point.py": "573606d57d0ca91fc9a1d124ab661df30ef63f28dc0ace9b3dbff9ddd2f2b6cd",
     "data/native_wind100.py": "5f3a7775125e6f3ed185362b67a450c273f2d52bad643eec40443d368778ab85",
     "ops/bake-model-component.sh": "22edd3ddb42a094fe1816ef0ed50557e5329ab6e7efddf1393537a8e63486aec",
-    "ops/core_model_artifact.py": "aba053865278379506fbbdba5d211cca7e05856650179c7c31dc1e6db23169f9",
+    "ops/core_model_artifact.py": "3c4ee205685365a4271aaf13a999f0073c3f35757716f80d0a2d3e192d2d93d6",
     "ops/platform/build-component-manifest.mjs": "5f33ccb12562fa043556491696597a258486e0e750043169618b282b18999b99",
     "ops/platform/publish-r2-component.sh": "add64955228a620349d7b886fe5a8ef160aa8e4e5f3de9180c15a1305496cfe9",
     "ops/platform/hydrate-r2-component.sh": "3e6053cebd99f0ba736a3ec55d974cec4298366c7712b96b65fd52ab7f5e9b51",
