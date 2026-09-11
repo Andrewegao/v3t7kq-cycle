@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -26,6 +27,22 @@ class Session:
 
     def close(self):
         self.closed = True
+
+
+class Response:
+    def __init__(self, status_code, headers=None):
+        self.status_code = status_code
+        self.headers = headers or {}
+
+
+class RetryAfterSession(Session):
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    def get(self, *args, **kwargs):
+        self.calls += 1
+        return Response(429, {"Retry-After": "301"})
 
 
 class SurfProducer:
@@ -201,6 +218,20 @@ class WrongTypeMinimumTideProducer(FailingTideProducer):
         )
 
 
+class PacerStoppedMinimumTideProducer(ResumableTideProducer):
+    MAX_RETRY_AFTER_S = 300.0
+
+    def __init__(self):
+        super().__init__(fail_second=True)
+        self._GLOBAL_PACER = types.SimpleNamespace(_stopped=False)
+
+    def bake_v2(self, session, *args, **kwargs):
+        if self.bake_calls == 0:
+            session.get("https://private.invalid/path?token=DO-NOT-PRINT", timeout=30)
+            self._GLOBAL_PACER._stopped = True
+        return super().bake_v2(session, *args, **kwargs)
+
+
 class PlaceCollector(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -210,6 +241,11 @@ class PlaceCollector(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_retry_after_telemetry_matches_pinned_overlong_numeric_contract(self):
+        self.assertTrue(collector._RequestTelemetry._overlong_retry_after("301", 300))
+        self.assertTrue(collector._RequestTelemetry._overlong_retry_after("9" * 129, 300))
+        self.assertFalse(collector._RequestTelemetry._overlong_retry_after("x" * 129, 300))
 
     def test_surf_selects_exact_aged_cycle_and_preserves_stage_values_and_times(self):
         start = datetime(2026, 9, 10, 18, 30, tzinfo=timezone.utc)
@@ -279,11 +315,41 @@ class PlaceCollector(unittest.TestCase):
         now = datetime(2026, 9, 10, 17, 19, 59, tzinfo=timezone.utc)
         producer = ResumableTideProducer(fail_second=True)
         session = Session()
-        with self.assertRaises(Exception):
+        with self.assertRaises(collector.CollectionFailure) as caught:
             collector.collect(self.source, self.base / "run", "tides", env={},
                 clock=lambda: now, modules={"tides": producer}, session_factory=lambda: session)
         self.assertEqual(producer.bake_calls, 2)
         self.assertTrue(session.closed)
+        receipt = collector.failure_receipt("tides", caught.exception)
+        self.assertEqual(receipt["phase"], "fetch")
+        self.assertEqual(receipt["class"], "minimum-availability")
+        self.assertEqual(receipt["rosterStationCount"], 1256)
+        self.assertEqual(receipt["availableStationCount"], 1249)
+        self.assertEqual(receipt["requiredStationCount"], 1251)
+        self.assertEqual(receipt["resumeAttempts"], 1)
+        self.assertEqual(receipt["firstPassAvailableStationCount"], 1169)
+
+    def test_tides_failure_reports_only_aggregate_http_and_stopped_pacer_state(self):
+        now = datetime(2026, 9, 10, 17, 19, 59, tzinfo=timezone.utc)
+        producer = PacerStoppedMinimumTideProducer()
+        session = RetryAfterSession()
+        with self.assertRaises(collector.CollectionFailure) as caught:
+            collector.collect(self.source, self.base / "run", "tides", env={},
+                clock=lambda: now, modules={"tides": producer}, session_factory=lambda: session)
+        receipt = collector.failure_receipt("tides", caught.exception)
+        self.assertEqual(session.calls, 1)
+        self.assertEqual(producer.bake_calls, 1)
+        self.assertEqual(receipt["class"], "provider-cooldown")
+        self.assertEqual(receipt["availableStationCount"], 1169)
+        self.assertEqual(receipt["requiredStationCount"], 1251)
+        self.assertEqual(receipt["resumeAttempts"], 0)
+        self.assertEqual(receipt["requestCounts"], {
+            "http2xx": 0, "http403": 0, "http429": 1, "http5xx": 0, "httpOther": 0,
+            "timeouts": 0, "overlongRetryAfter": 1, "pacerStopped": True,
+        })
+        self.assertEqual(receipt["firstPassRequestCounts"], receipt["requestCounts"])
+        self.assertNotIn("private.invalid", json.dumps(receipt))
+        self.assertNotIn("DO-NOT-PRINT", json.dumps(receipt))
 
     def test_tides_manifest_byte_tamper_blocks_resume(self):
         now = datetime(2026, 9, 10, 17, 19, 59, tzinfo=timezone.utc)
@@ -320,7 +386,9 @@ class PlaceCollector(unittest.TestCase):
             env={"PATH": "/usr/bin:/bin", "STAGING_R2_WRITE_SECRET_ACCESS_KEY": "DO-NOT-PRINT"},
             capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(result.stderr, "staging place collection refused\n")
+        receipt = json.loads(result.stderr)
+        self.assertEqual(receipt, {"schemaVersion": 1, "kind": "staging-place-collection", "status": "failed",
+            "family": "surf", "phase": "setup", "class": "environment"})
         self.assertNotIn("private/source-name", result.stdout + result.stderr)
         self.assertNotIn("DO-NOT-PRINT", result.stdout + result.stderr)
 
