@@ -1,4 +1,4 @@
-# GMGSI satellite frame library: hourly tail + month backfill. Checks out atmos read-only.
+# GMGSI satellite frame library: hourly tail + bounded one-year backfill.
 # The R2 credential must be Object Read & Write scoped only to weatherx-satellite-archive.
 # Current publication reads catalogs and writes objects; remote deletion is disabled in atmos.
 name: satellite-archive
@@ -13,14 +13,15 @@ on:
         required: true
         type: choice
         options:
+          - rolling-year-v1
           - storm-window-3d-v1
       from:
-        description: 'Storm window start (YYYY-MM-DD, UTC, inclusive)'
-        required: true
+        description: 'Optional start within the last year; required for a storm window'
+        required: false
         type: string
       to:
-        description: 'Storm window end (YYYY-MM-DD, UTC, inclusive; at most 3 days)'
-        required: true
+        description: 'End (YYYY-MM-DD, UTC); rolling year defaults to yesterday'
+        required: false
         type: string
 
 permissions:
@@ -252,8 +253,14 @@ jobs:
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 1
           persist-credentials: false
-      - name: require a fresh whole-account 30-day cost projection
+      - name: enforce the approved archive or whole-account budget
         env:
+          ARCHIVE_BUDGET_SCOPE: ${{ vars.SATELLITE_ARCHIVE_BUDGET_SCOPE || 'account' }}
+          ARCHIVE_POLICY: rolling-year-v1
+          ARCHIVE_END_DATE: ${{ vars.SATELLITE_ARCHIVE_BUDGET_END_DATE }}
+          ARCHIVE_EXISTING_BYTES: ${{ vars.SATELLITE_ARCHIVE_EXISTING_BYTES }}
+          ARCHIVE_SCOPED_HORIZON_MONTHS: '12'
+          ARCHIVE_MAX_SCOPED_USD: '10'
           R2_COST_PROJECTION_OBSERVED_AT: ${{ vars.R2_COST_PROJECTION_OBSERVED_AT }}
           R2_PROJECTED_30D_STANDARD_GB_MONTH: ${{ vars.R2_PROJECTED_30D_STANDARD_GB_MONTH }}
           R2_PROJECTED_30D_CLASS_A_MILLION: ${{ vars.R2_PROJECTED_30D_CLASS_A_MILLION }}
@@ -333,7 +340,7 @@ jobs:
 
   backfill-plan:
     # A one-off storm-window approval cannot activate the recurring hourly writer.
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.policy == 'storm-window-3d-v1' && vars.SATELLITE_ARCHIVE_STORM_PILOT_ENABLED == '1' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && ((inputs.policy == 'storm-window-3d-v1' && vars.SATELLITE_ARCHIVE_STORM_PILOT_ENABLED == '1') || (inputs.policy == 'rolling-year-v1' && vars.SATELLITE_ARCHIVE_ROLLING_YEAR_ENABLED == '1')) }}
     environment:
       name: satellite-archive
     runs-on: ubuntu-latest
@@ -359,8 +366,14 @@ jobs:
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 1
           persist-credentials: false
-      - name: require a fresh whole-account 30-day cost projection
+      - name: enforce the approved archive or whole-account budget
         env:
+          ARCHIVE_BUDGET_SCOPE: ${{ vars.SATELLITE_ARCHIVE_BUDGET_SCOPE || 'account' }}
+          ARCHIVE_POLICY: rolling-year-v1
+          ARCHIVE_END_DATE: ${{ vars.SATELLITE_ARCHIVE_BUDGET_END_DATE }}
+          ARCHIVE_EXISTING_BYTES: ${{ vars.SATELLITE_ARCHIVE_EXISTING_BYTES }}
+          ARCHIVE_SCOPED_HORIZON_MONTHS: '12'
+          ARCHIVE_MAX_SCOPED_USD: '10'
           R2_COST_PROJECTION_OBSERVED_AT: ${{ vars.R2_COST_PROJECTION_OBSERVED_AT }}
           R2_PROJECTED_30D_STANDARD_GB_MONTH: ${{ vars.R2_PROJECTED_30D_STANDARD_GB_MONTH }}
           R2_PROJECTED_30D_CLASS_A_MILLION: ${{ vars.R2_PROJECTED_30D_CLASS_A_MILLION }}
@@ -368,21 +381,21 @@ jobs:
           R2_SATELLITE_RESERVED_30D_CLASS_A_MILLION: ${{ vars.R2_SATELLITE_RESERVED_30D_CLASS_A_MILLION }}
           R2_SATELLITE_RESERVED_30D_CLASS_B_MILLION: ${{ vars.R2_SATELLITE_RESERVED_30D_CLASS_B_MILLION }}
         run: bash ops/satellite/check-account-budget.sh
-      - name: validate one bounded historical storm window
+      - name: plan bounded historical batches
         id: plan
         env:
           FROM_DATE: ${{ inputs.from }}
           TO_DATE: ${{ inputs.to }}
+          ARCHIVE_POLICY: ${{ inputs.policy }}
         run: |
           set -euo pipefail
-          python3 data/satellite_archive_backfill_plan.py \
-            --from "$FROM_DATE" \
-            --to "$TO_DATE" \
-            --max-inclusive-days 3 \
-            --github-output "$GITHUB_OUTPUT"
+          args=(--policy "$ARCHIVE_POLICY" --max-inclusive-days 3 --github-output "$GITHUB_OUTPUT")
+          [ -z "$FROM_DATE" ] || args+=(--from "$FROM_DATE")
+          [ -z "$TO_DATE" ] || args+=(--to "$TO_DATE")
+          python3 data/satellite_archive_backfill_plan.py "${args[@]}"
 
   backfill:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.policy == 'storm-window-3d-v1' && vars.SATELLITE_ARCHIVE_STORM_PILOT_ENABLED == '1' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && ((inputs.policy == 'storm-window-3d-v1' && vars.SATELLITE_ARCHIVE_STORM_PILOT_ENABLED == '1') || (inputs.policy == 'rolling-year-v1' && vars.SATELLITE_ARCHIVE_ROLLING_YEAR_ENABLED == '1')) }}
     environment:
       name: satellite-archive
     needs: backfill-plan
@@ -401,7 +414,9 @@ jobs:
       PUBLISH_VERIFY_MAX_BYTES: '648000000'
     strategy:
       fail-fast: false
-      max-parallel: 4
+      # Adjacent three-day batches can share a monthly catalog. Serialize writers
+      # so every batch hydrates the catalog produced by the preceding batch.
+      max-parallel: 1
       matrix:
         month: ${{ fromJson(needs.backfill-plan.outputs.months) }}
     steps:
@@ -412,6 +427,21 @@ jobs:
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 1
           persist-credentials: false
+      - name: enforce the approved archive or whole-account budget
+        env:
+          ARCHIVE_BUDGET_SCOPE: ${{ vars.SATELLITE_ARCHIVE_BUDGET_SCOPE || 'account' }}
+          ARCHIVE_POLICY: rolling-year-v1
+          ARCHIVE_END_DATE: ${{ vars.SATELLITE_ARCHIVE_BUDGET_END_DATE }}
+          ARCHIVE_EXISTING_BYTES: ${{ vars.SATELLITE_ARCHIVE_EXISTING_BYTES }}
+          ARCHIVE_SCOPED_HORIZON_MONTHS: '12'
+          ARCHIVE_MAX_SCOPED_USD: '10'
+          R2_COST_PROJECTION_OBSERVED_AT: ${{ vars.R2_COST_PROJECTION_OBSERVED_AT }}
+          R2_PROJECTED_30D_STANDARD_GB_MONTH: ${{ vars.R2_PROJECTED_30D_STANDARD_GB_MONTH }}
+          R2_PROJECTED_30D_CLASS_A_MILLION: ${{ vars.R2_PROJECTED_30D_CLASS_A_MILLION }}
+          R2_PROJECTED_30D_CLASS_B_MILLION: ${{ vars.R2_PROJECTED_30D_CLASS_B_MILLION }}
+          R2_SATELLITE_RESERVED_30D_CLASS_A_MILLION: ${{ vars.R2_SATELLITE_RESERVED_30D_CLASS_A_MILLION }}
+          R2_SATELLITE_RESERVED_30D_CLASS_B_MILLION: ${{ vars.R2_SATELLITE_RESERVED_30D_CLASS_B_MILLION }}
+        run: bash ops/satellite/check-account-budget.sh
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with: { python-version: '3.12' }
       - name: venv + python deps
@@ -450,13 +480,18 @@ jobs:
           --max-source-bytes "$SAT_MAX_SOURCE_BYTES"
           --max-output-bytes "$SAT_MAX_OUTPUT_BYTES"
       - name: bake ${{ matrix.month.from }} to ${{ matrix.month.to }} US radar
-        run: >-
-          data/.venv/bin/python data/bake_radar_archive.py
-          --range "${{ matrix.month.from }}" "${{ matrix.month.to }}"
-          --fine
-          --max-http-requests "$RADAR_MAX_HTTP_REQUESTS"
-          --max-source-bytes "$RADAR_MAX_SOURCE_BYTES"
-          --max-output-bytes "$RADAR_MAX_OUTPUT_BYTES"
+        env:
+          ARCHIVE_POLICY: ${{ inputs.policy }}
+        run: |
+          set -euo pipefail
+          set --
+          [ "$ARCHIVE_POLICY" != 'storm-window-3d-v1' ] || set -- --fine
+          data/.venv/bin/python data/bake_radar_archive.py \
+            --range "${{ matrix.month.from }}" "${{ matrix.month.to }}" \
+            "$@" \
+            --max-http-requests "$RADAR_MAX_HTTP_REQUESTS" \
+            --max-source-bytes "$RADAR_MAX_SOURCE_BYTES" \
+            --max-output-bytes "$RADAR_MAX_OUTPUT_BYTES"
       - name: publish
         env:
           RCLONE_CONFIG_WEATHERX_TYPE: s3

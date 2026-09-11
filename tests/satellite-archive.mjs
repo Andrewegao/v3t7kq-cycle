@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import test from 'node:test';
@@ -217,7 +217,7 @@ test('hourly and backfill failure retention remain protected and secret-free', (
       `${name} must use the dedicated protected satellite environment`);
     const approval = name === 'hourly'
       ? "vars.SATELLITE_ARCHIVE_ENABLED == '1'"
-      : "inputs.policy == 'storm-window-3d-v1' && vars.SATELLITE_ARCHIVE_STORM_PILOT_ENABLED == '1'";
+      : "((inputs.policy == 'storm-window-3d-v1' && vars.SATELLITE_ARCHIVE_STORM_PILOT_ENABLED == '1') || (inputs.policy == 'rolling-year-v1' && vars.SATELLITE_ARCHIVE_ROLLING_YEAR_ENABLED == '1'))";
     assert.ok(block.includes(
       `\n    if: \${{ github.event_name == '${event}' && github.ref == 'refs/heads/main' && ${approval} }}\n`,
     ), `${name} must reject the wrong event, ref or independent approval before secrets are available`);
@@ -235,6 +235,9 @@ test('hourly and backfill failure retention remain protected and secret-free', (
   assert.equal((workflow.match(/vars\.SATELLITE_ARCHIVE_ENABLED == '1'/g) ?? []).length, 1);
   assert.equal((workflow.match(/vars\.SATELLITE_ARCHIVE_STORM_PILOT_ENABLED == '1'/g) ?? []).length, 2);
   assert.equal((workflow.match(/inputs\.policy == 'storm-window-3d-v1'/g) ?? []).length, 2);
+  assert.equal((workflow.match(/vars\.SATELLITE_ARCHIVE_ROLLING_YEAR_ENABLED == '1'/g) ?? []).length, 2);
+  assert.match(satelliteJobs.backfill, /max-parallel: 1/);
+  assert.match(satelliteJobs.backfill, /PUBLISH_LATEST: '0'/);
   assert.match(workflow, /--max-inclusive-days 3/);
   assert.match(workflow, /--channels vis,ir,wv/);
   assert.match(workflow, /--fine/);
@@ -250,6 +253,16 @@ test('hourly and backfill failure retention remain protected and secret-free', (
   assert.match(workflow, /PUBLISH_MAX_CLASS_B_OPERATIONS: '3300'/);
   assert.equal((workflow.match(/environment:\n      name: satellite-archive/g) ?? []).length, 3);
   assert.equal((workflow.match(/persist-credentials: false/g) ?? []).length, 3);
+  for (const name of ['hourly', 'backfill-plan', 'backfill']) {
+    const block = satelliteJobs[name];
+    assert.match(block, /ARCHIVE_BUDGET_SCOPE: \$\{\{ vars\.SATELLITE_ARCHIVE_BUDGET_SCOPE \|\| 'account' \}\}/);
+    assert.match(block, /ARCHIVE_END_DATE: \$\{\{ vars\.SATELLITE_ARCHIVE_BUDGET_END_DATE \}\}/);
+    assert.match(block, /ARCHIVE_EXISTING_BYTES: \$\{\{ vars\.SATELLITE_ARCHIVE_EXISTING_BYTES \}\}/);
+    assert.match(block, /ARCHIVE_SCOPED_HORIZON_MONTHS: '12'/);
+    assert.match(block, /ARCHIVE_MAX_SCOPED_USD: '10'/);
+    assert.ok(block.indexOf('run: bash ops/satellite/check-account-budget.sh') < block.indexOf('      - uses: actions/setup-python')
+      || name === 'backfill-plan', 'budget must precede downloads and publishing');
+  }
   for (const match of workflow.matchAll(/uses: ([^\s]+)/g)) assert.match(match[1], /^[\w/-]+@[a-f0-9]{40}$/);
   const retentionBlocks = workflow.split('      - name: retain bounded acquisition evidence after failure\n').slice(1)
     .map(block => block.split('\n      - name:')[0]);
@@ -257,6 +270,35 @@ test('hourly and backfill failure retention remain protected and secret-free', (
     assert.doesNotMatch(block, /secrets\.|R2_|ATMOS_DEPLOY_KEY|rclone|curl|\.webp|latest\.json/);
   }
   assert.doesNotMatch(controller, /R2_|SECRET|TOKEN|credential|\.webp['"]|latest\.json|rclone|requests|urlopen/);
+});
+
+test('rolling-year radar uses age-aware sampling while storm replay keeps fine frames', () => {
+  const step = workflow.split('      - name: bake ${{ matrix.month.from }} to ${{ matrix.month.to }} US radar\n')[1]
+    .split('\n      - name: publish')[0];
+  const script = step.split('        run: |\n')[1].split('\n')
+    .map(line => line.startsWith('          ') ? line.slice(10) : line).join('\n')
+    .replaceAll('${{ matrix.month.from }}', '2025-09-11')
+    .replaceAll('${{ matrix.month.to }}', '2025-09-13');
+  const cwd = mkdtempSync(join(tmpdir(), 'satellite-radar-cadence-'));
+  try {
+    const executable = join(cwd, 'data/.venv/bin/python');
+    mkdirSync(dirname(executable), { recursive: true });
+    writeFileSync(executable, '#!/bin/sh\nprintf "%s\\n" "$@" > "$ARGUMENT_LOG"\n');
+    chmodSync(executable, 0o700);
+    for (const policy of ['rolling-year-v1', 'storm-window-3d-v1']) {
+      const log = join(cwd, 'args');
+      execFileSync('bash', ['-c', script], { cwd, env: {
+        ...process.env, ARCHIVE_POLICY: policy, ARGUMENT_LOG: log,
+        RADAR_MAX_HTTP_REQUESTS: '432', RADAR_MAX_SOURCE_BYTES: '4320000000', RADAR_MAX_OUTPUT_BYTES: '432000000',
+      } });
+      const args = readFileSync(log, 'utf8').trim().split('\n');
+      assert.deepEqual(args.slice(0, 4), ['data/bake_radar_archive.py', '--range', '2025-09-11', '2025-09-13']);
+      assert.equal(args.includes('--fine'), policy === 'storm-window-3d-v1');
+      assert.equal(args.at(-1), '432000000');
+    }
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
 test('workflow and controller syntax are valid', { skip: process.platform !== 'darwin' }, () => {

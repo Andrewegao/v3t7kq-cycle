@@ -11,6 +11,14 @@ hydrate current release → fetch ECMWF/GFS/HRRR/AIFS → install regional packs
 GFS add-on layers → air bakes → freshness/variable gate vs live → one immutable R2 data release.
 Any failure keeps the live site untouched; a late regional provider only abstains in the roster.
 
+The separate `satellite-archive` workflow supports `rolling-year-v1`: the latest
+complete calendar year, split into serialized batches of at most three days.
+Hourly collection and manual backfill have independent enable switches. An
+explicit archive-only $10 planning allowance uses a fixed budget end date and
+existing bucket bytes, includes twelve months of growth without deleting data,
+and expires rather than silently renewing. The default whole-account $20 gate
+remains available. Neither mode deploys the application or prunes archive data.
+
 **Secrets**
 - `ATMOS_DEPLOY_KEY` — read-only deploy key on the private app repo (configured).
 - `CLOUDFLARE_API_TOKEN` — Pages edit token; until it is set, cycles run `PUBLISH=0`
