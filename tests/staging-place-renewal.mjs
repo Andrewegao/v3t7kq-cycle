@@ -16,6 +16,7 @@ function environment() { return { GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'g
   STAGING_PLACES_RENEWAL_CONTROLLER_SHA256: 'a'.repeat(64), RUNNER_TEMP: '/tmp', GITHUB_WORKSPACE: '/workspace' }; }
 test('renewal requires exact main hosted job, reviewed closure/source and explicit staging permission', () => {
   const env = environment(); assert.equal(renewalGate(env, policy, 'a'.repeat(64)).run, true);
+  assert.throws(() => renewalGate(env, { ...policy, tideRequestsPerSecond: 4 }, 'a'.repeat(64)), 'tide rate');
   for (const [key, value] of Object.entries({ GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/heads/dev',
     GITHUB_JOB: 'places', GITHUB_REPOSITORY: 'weatherx-hq/atmos', RUNNER_ENVIRONMENT: 'self-hosted',
     GITHUB_WORKFLOW_REF: 'foreign', STAGING_PLACES_RENEWAL_ENABLED: 'false', STAGING_DATA_ISOLATION_APPROVED: 'false',
@@ -292,6 +293,8 @@ test('workflow isolates credentials, disables fail-fast, schedules real collecti
     if (step.includes('STAGING_PLACES_SEED_KEY:')) assert(step.includes('mjs decrypt') && !step.includes('STAGING_R2_WRITE_'));
   }
   assert(text.indexOf('mjs qualify') < text.indexOf('STAGING_R2_WRITE_ACCESS_KEY_ID:'));
+  assert.match(await readFile('tools/staging-place-renewal.mjs', 'utf8'), /45 \* 60000/);
+  assert.equal(policy.tideRequestsPerSecond, 2);
   for (const match of text.matchAll(/uses: ([^\s]+)@([^\s]+)/g)) assert(/^[a-f0-9]{40}$/.test(match[2]));
   assert(!(await readFile('.github/workflows/staging-places.yml', 'utf8')).includes('schedule:'));
 });

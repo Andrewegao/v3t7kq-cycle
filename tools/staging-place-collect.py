@@ -28,6 +28,7 @@ SURF_LEADS = 73
 SURF_MIN_REMAINING = timedelta(hours=6)
 TIDE_REFERENCE_STATIONS = 1256
 TIDE_MIN_AVAILABLE = 1251
+TIDE_REQUESTS_PER_SECOND = 2.0
 TIDE_CHECKPOINT_MANIFEST_MAX_BYTES = 2_097_152
 _CREDENTIAL = re.compile(
     r"^(?:STAGING_R2_WRITE_|STAGING_PLACES_SEED_KEY$|UI_|AWS_|RCLONE_|"
@@ -131,6 +132,43 @@ class _RequestTelemetry:
         pacer = getattr(producer, "_GLOBAL_PACER", None) if producer is not None else None
         result["pacerStopped"] = getattr(pacer, "_stopped", None) is True
         return result
+
+
+def _configure_tide_pacer(producer: ModuleType, requests_per_second: float) -> Any:
+    """Tighten only the existing reviewed pacer's spacing before any request."""
+    try:
+        pacer_class = producer._GlobalPacer
+        pacer = producer._GLOBAL_PACER
+        lock = pacer._lock
+        if (requests_per_second != TIDE_REQUESTS_PER_SECOND
+                or producer.MAX_REQUESTS_PER_SECOND != 4.0
+                or not isinstance(pacer_class, type)
+                or type(pacer) is not pacer_class
+                or not callable(getattr(lock, "acquire", None))
+                or not callable(getattr(lock, "release", None))):
+            raise ValueError
+        with lock:
+            gap = pacer._gap
+            next_slot = pacer._next
+            cooldown = pacer._cooldown
+            stopped = pacer._stopped
+            clock = pacer._clock
+            sleep = pacer._sleep
+            if (not isinstance(gap, (int, float)) or isinstance(gap, bool) or not math.isfinite(gap) or gap <= 0
+                    or not isinstance(next_slot, (int, float)) or isinstance(next_slot, bool)
+                    or not math.isfinite(next_slot) or next_slot < 0
+                    or not isinstance(cooldown, (int, float)) or isinstance(cooldown, bool)
+                    or not math.isfinite(cooldown) or cooldown < 0
+                    or type(stopped) is not bool or not callable(clock) or not callable(sleep)):
+                raise ValueError
+            if stopped:
+                raise CollectionFailure("session", "provider", requestCounts=_RequestTelemetry().snapshot(producer))
+            pacer._gap = max(float(gap), 1.0 / requests_per_second)
+        return pacer
+    except CollectionFailure:
+        raise
+    except Exception:
+        raise CollectionFailure("session", "contract") from None
 
 
 def _bounded_count(value: Any, maximum: int = _COUNT_LIMIT) -> int | None:
@@ -427,8 +465,10 @@ def collect_tides(
     *,
     clock: Callable[[], datetime],
     session_factory: Callable[[], Any] | None,
+    requests_per_second: float = TIDE_REQUESTS_PER_SECOND,
 ) -> dict[str, Any]:
     telemetry = _RequestTelemetry()
+    _configure_tide_pacer(producer, requests_per_second)
     retrieved = _utc(clock()).replace(microsecond=0)
     checkpoint = root / "checkpoint"
     candidate = root / "candidate"
@@ -564,6 +604,7 @@ def collect(
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     modules: Mapping[str, ModuleType] | None = None,
     session_factory: Callable[[], Any] | None = None,
+    tide_requests_per_second: float = TIDE_REQUESTS_PER_SECOND,
 ) -> dict[str, Any]:
     phase = "setup"
     try:
@@ -591,6 +632,7 @@ def collect(
             producer,
             clock=clock,
             session_factory=session_factory,
+            requests_per_second=tide_requests_per_second,
         )
     except CollectionFailure:
         raise
@@ -604,11 +646,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source", required=True)
     parser.add_argument("--root", required=True)
     parser.add_argument("--family", required=True, choices=("surf", "tides"))
+    parser.add_argument("--tide-requests-per-second")
     args = parser.parse_args(argv)
     try:
         if sys.version_info[:2] != (3, 12):
             raise CollectionFailure("setup", "environment")
-        result = collect(args.source, args.root, args.family)
+        if args.tide_requests_per_second != "2":
+            raise CollectionFailure("setup", "contract")
+        result = collect(args.source, args.root, args.family,
+                         tide_requests_per_second=TIDE_REQUESTS_PER_SECOND)
     except Exception as error:
         print(json.dumps(failure_receipt(args.family, error), separators=(",", ":")), file=sys.stderr)
         return 1
