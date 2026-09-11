@@ -209,6 +209,37 @@ test('recurring workflow consumes a core artifact, augments two fields, and uplo
   assert.match(code, /staging-candidates\/wind100\/current-v1\.json|staging-wind100\.mjs activate/);
 });
 
+test('bake staging-only pilot can start only the fresh ECMWF collector and recurring publisher', () => {
+  const source = readFileSync(new URL('../.github/workflows/bake.yml', import.meta.url), 'utf8');
+  const trigger = source.split('\njobs:\n')[0];
+  assert.match(trigger, /staging_wind100_only:\n\s+description: Run only a fresh ECMWF collector and the isolated staging Wind100 publisher\n\s+type: boolean\n\s+required: false\n\s+default: false/);
+  const jobsSource = source.split('\njobs:\n')[1];
+  assert.ok(jobsSource);
+  const starts = [...jobsSource.matchAll(/^  ([A-Za-z_][A-Za-z0-9_-]*):\n/gm)];
+  const jobs = Object.fromEntries(starts.map((match, index) => [match[1],
+    jobsSource.slice(match.index, starts[index + 1]?.index)]));
+  assert.deepEqual(Object.keys(jobs), [
+    'core-ecmwf', 'staging-wind100',
+    'core-gfs', 'core-hrrr', 'core-aifs',
+    'regional-icon', 'regional-hrdps', 'regional-arome-antilles', 'regional-hrrr-ak',
+    'regional-nam', 'regional-nam-hi', 'regional-nam-ak',
+    'publish-ecmwf', 'publish-gfs', 'publish-hrrr', 'publish-aifs',
+    'publish-icon', 'publish-hrdps', 'publish-arome-antilles', 'publish-hrrr-ak',
+    'publish-nam', 'publish-nam-hi', 'publish-nam-ak',
+    'component-publish-status', 'bake', 'model-status',
+  ]);
+  assert.match(jobs['core-ecmwf'], /inputs\.staging_wind100_only == true && github\.event_name == 'workflow_dispatch' && inputs\.model == 'ecmwf' && inputs\.recovery_run_id == ''/);
+  assert.match(jobs['core-ecmwf'], /inputs\.staging_wind100_only != true && \(inputs\.model == '' \|\| inputs\.model == 'all' \|\| inputs\.model == 'ecmwf'\)/);
+  assert.match(jobs['staging-wind100'], /needs\.core-ecmwf\.result == 'success'/);
+  assert.match(jobs['staging-wind100'], /inputs\.staging_wind100_only != true \|\| \(github\.event_name == 'workflow_dispatch' && inputs\.model == 'ecmwf' && inputs\.recovery_run_id == ''\)/);
+  assert.doesNotMatch(jobs['staging-wind100'], /R2_PRODUCTION|CATALOG_ENDPOINT_PRODUCTION|CATALOG_PROMOTION_KEY_PRODUCTION/);
+  for (const [name, block] of Object.entries(jobs)) {
+    if (name === 'core-ecmwf' || name === 'staging-wind100') continue;
+    assert.match(block, /^    if: \$\{\{ inputs\.staging_wind100_only != true && \(/m,
+      `${name} can start during a staging-only pilot`);
+  }
+});
+
 function semantics(initializedAt, leads) {
   return { schemaVersion: 1, contract: 'weatherx-native-wind100-grib-v1', model: 'ecmwf',
     initializedAt: initializedAt.replace('.000Z', 'Z'), verifiedLeadHours: leads,

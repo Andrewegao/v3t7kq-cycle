@@ -19,8 +19,9 @@ test('manual single-model requests collect only that model; schedules still coll
     const kind=coreModels.includes(model)?'core':'regional';
     const job=bake.split(`\n  ${kind}-${model}:`)[1].split(/\n  [a-z]/)[0];
     const expression=job.match(/    if: \$\{\{ (.+) \}\}/)?.[1];
-    assert.equal(expression,`inputs.model == '' || inputs.model == 'all' || inputs.model == '${model}'`);
-    enabled.push([model,selection=>Function('inputs',`return ${expression}`)({model:selection})]);
+    const normal=`inputs.model == '' || inputs.model == 'all' || inputs.model == '${model}'`;
+    assert.ok(expression.includes(normal), `${model} normal selector changed`);
+    enabled.push([model,selection=>Function('inputs',`return ${normal}`)({model:selection})]);
   }
   for(const selection of ['', 'all',...all,'unknown']){
     const actual=enabled.filter(([,accept])=>accept(selection)).map(([model])=>model);
@@ -66,7 +67,8 @@ test('publisher is disabled by default and structurally production-data-only',()
   for(const model of all){
     const job=bake.split(`\n  publish-${model}:`)[1].split(/\n  [a-z]/)[0];
     assert.match(job,/CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true'/);
-    assert.doesNotMatch(job,/staging|PAGES|ui-release/i);
+    assert.match(job,/if: \$\{\{ inputs\.staging_wind100_only != true && \(/);
+    assert.doesNotMatch(job.replace(/^    if: .*$/m,''),/staging|PAGES|ui-release/i);
   }
   assert.match(publisher,/test "\$ATMOS_SHA" != "\$UNQUALIFIED_PLACEHOLDER_SHA"/);
   assert.match(publisher,/CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA/);
