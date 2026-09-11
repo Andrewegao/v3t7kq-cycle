@@ -13,7 +13,7 @@ import {accountQualificationRequired,runAccountQualification,readAccountProof,ac
 import { controlShaFor, TC_CONTROL_SHA, REPOSITORY, MAX_BYTES, gate, hash, createCandidate, validateCandidate,
   readTree, validateFiles, seal, unseal, restore, eligibleRun } from './ui-candidate.mjs';
 import { packBuild, unpackBuild, eligibleBuild } from './ui-build-transfer.mjs';
-import {profileFor,validateProfile,selectionProfile,coreReleaseProfile,tcGuidanceProfile,canonical as profileCanonical,readSelection,readTcSelection,requireProductionProfile,requireStagingApproval,SELECTION_ASSET,TC_SELECTION_ASSET,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt} from './ui-staging-models.mjs';
+import {profileFor,validateProfile,selectionProfile,coreReleaseProfile,tcGuidanceProfile,canonical as profileCanonical,readSelection,readTcSelection,requireProductionProfile,requireStagingApproval,resolveWind100BuildPin,SELECTION_ASSET,TC_SELECTION_ASSET,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt} from './ui-staging-models.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONTROL = resolve(ROOT, '../control');
@@ -275,6 +275,17 @@ function sourceIdentity(profile) {
   git(['diff','--exit-code','HEAD'], SOURCE);
   if (requiredSourceGuard(profile)) git(['merge-base','--is-ancestor',requiredSourceGuard(profile),'HEAD'], SOURCE);
 }
+export function receiptVerificationEnvironment(profile,env=process.env){
+  validateProfile(profile);
+  const wind100=resolveWind100BuildPin(profile,env);
+  const core=coreReleaseProfile(profile);
+  return {...env,ATMOS_PUBLIC_RELEASE:profile.stagingOnly?'0':'1',ATMOS_STAGING_EXPERIMENT_RELEASE:profile.stagingOnly?'1':'0',
+    ATMOS_STAGING_RELEASE_ROSTER:core?'1':'0',ATMOS_STAGING_ACCOUNT_PROFILE:profile.account?'staging-account-v1':'',
+    VITE_PRODUCT:'lab',VITE_APP:'lab',VITE_PLATFORM_ACCOUNT:profile.account?'1':'0',
+    VITE_PLATFORM_DATA_AUTH:profile.account?'public':'',VITE_STAGING_WIND100:wind100?'1':'',
+    VITE_STAGING_WIND100_CATALOG_ID:wind100?.catalogId??'',VITE_STAGING_WIND100_RUN_ID:wind100?.runId??'',
+    VITE_STAGING_WIND100_SELECTION_SHA256:wind100?.selectionSha256??''};
+}
 export function publicBuildEnvironment(profile,selection,env=process.env) {
   validateProfile(profile);
   const selected=selectionProfile(profile),core=coreReleaseProfile(profile);
@@ -282,7 +293,7 @@ export function publicBuildEnvironment(profile,selection,env=process.env) {
     assert.ok(Buffer.isBuffer(selection?.bytes), 'staging experiment selection bytes are required');
     assert.equal(hash(selection.bytes),profile.modelSelectionSha256,'staging experiment selection differs from profile');
   } else assert.equal(selection,null,'non-selection build cannot carry a staging selection');
-  return {...env,ATMOS_CODE_ONLY_BUILD:'1',ATMOS_PUBLIC_RELEASE:profile.stagingOnly?'0':'1',
+  const result={...receiptVerificationEnvironment(profile,env),ATMOS_CODE_ONLY_BUILD:'1',ATMOS_PUBLIC_RELEASE:profile.stagingOnly?'0':'1',
     ATMOS_STATIC_COMPRESSION_PROFILE:staticCompressionProfile(profile)?'static-br11-v1':'',
     VITE_SPRITE_WEBP_QUALIFICATION:core?'1':'0',
     ATMOS_STAGING_EXPERIMENT_RELEASE:profile.stagingOnly?'1':'0',VITE_PRODUCT:'lab',VITE_APP:'lab',VITE_PLATFORM_ACCOUNT:profile.account?'1':'0',
@@ -292,7 +303,16 @@ export function publicBuildEnvironment(profile,selection,env=process.env) {
     ...(profile.account?{VITE_PLATFORM_DATA_AUTH:'public'}:{}),
     ATMOS_STAGING_RELEASE_ROSTER:core?'1':'0',VITE_MODEL_EXPANSION_QUALIFICATION:profile.stagingOnly?'1':'0',VITE_MODEL_LOCAL_BASE:'',
     VITE_STAGING_MODEL_ADMISSION:selected?'1':'0',VITE_STAGING_MODEL_SELECTION_SHA256:profile.modelSelectionSha256??''};
+  for(const key of ['STAGING_WIND100_UI_ENABLED','STAGING_WIND100_UI_CATALOG_ID','STAGING_WIND100_UI_RUN_ID','STAGING_WIND100_UI_SELECTION_SHA256'])delete result[key];
+  return result;
 }
+export function validateWind100BuildReceipt(profile,receipt,env=process.env){
+  const expected=resolveWind100BuildPin(profile,env),actual=receipt?.buildProfile?.wind100;
+  if(!expected){assert.equal(actual,undefined,'staging Wind100 receipt must be absent while disabled');return null;}
+  assert.deepEqual(actual,expected,'staging Wind100 receipt differs from protected approval');
+  return expected;
+}
+function candidateWind100(c,env=process.env){return validateWind100BuildReceipt(c.profile,validateCandidate(c),env);}
 export function installPagesWorker(workerOut,dist) {
   assert.deepEqual(readdirSync(workerOut),['index.js'], 'Pages Functions build emitted unexpected modules');
   const source=readFileSync(resolve(workerOut,'index.js'));
@@ -353,6 +373,7 @@ export function copyPublicShell(profile,{publicDir,shell}) {
 async function build() {
   buildGate(); controller();
   const profile=profileFor(process.env.MODEL_SELECTION_SHA256),selection=readSelection(ROOT,profile),tcSelection=readTcSelection(ROOT,profile);
+  const buildEnv=publicBuildEnvironment(profile,selection);
   sourceIdentity(profile);
   const app = resolve(SOURCE, 'app'), shell = resolve(process.env.RUNNER_TEMP, 'ui-public-shell');
   copyPublicShell(profile,{publicDir:resolve(app,'public'),shell});
@@ -360,7 +381,7 @@ async function build() {
   assert.ok(!existsSync(resolve(shell,TC_SELECTION_ASSET)),'candidate source must not supply TC selection policy');
   if(selection){mkdirSync(dirname(resolve(shell,SELECTION_ASSET)),{recursive:true,mode:0o700});writeFileSync(resolve(shell,SELECTION_ASSET),selection.bytes,{flag:'wx',mode:0o600});}
   if(tcSelection){mkdirSync(dirname(resolve(shell,TC_SELECTION_ASSET)),{recursive:true,mode:0o700});writeFileSync(resolve(shell,TC_SELECTION_ASSET),tcSelection.bytes,{flag:'wx',mode:0o600});}
-  run('npm',['run','build'],{cwd:app,env:{...publicBuildEnvironment(profile,selection),ATMOS_PUBLIC_SHELL_DIR:shell}});
+  run('npm',['run','build'],{cwd:app,env:{...buildEnv,ATMOS_PUBLIC_SHELL_DIR:shell}});
   const dist = resolve(app,'dist');
   // Compile once BEFORE qualification; production must never discover/recompile functions/.
   // Wrangler 4.123+ writes a multipart upload envelope for --outfile. Build
@@ -371,7 +392,9 @@ async function build() {
     '--project-directory',app,'--outdir',workerOut,'--output-routes-path',resolve(dist,'_routes.json'),
     '--compatibility-date','2026-06-23','--minify','--sourcemap=false'], {cwd:app});
   await packagePagesWorker(profile,{app,dist,workerOut,overlay:resolve(process.env.RUNNER_TEMP,'ui-static-compression-overlay')});
-  run('node',[resolve(CONTROL,'ops/release/build-release-receipt.mjs'),dist,resolve(dist,'health/release.json')],{env:publicBuildEnvironment(profile,selection)});
+  const receiptPath=resolve(dist,'health/release.json');
+  run('node',[resolve(CONTROL,'ops/release/build-release-receipt.mjs'),dist,receiptPath],{env:buildEnv});
+  validateWind100BuildReceipt(profile,JSON.parse(readFileSync(receiptPath)),process.env);
   const c = createCandidate(dist,{sourceSha:process.env.ATMOS_SHA,runId:process.env.GITHUB_RUN_ID,
     attempt:process.env.GITHUB_RUN_ATTEMPT,workflowSha:process.env.GITHUB_SHA,pipelineDigest:pipelineDigest(profile),profile});
   save(stateFile(),c);
@@ -385,6 +408,7 @@ function buildGate() {
   for(const k of ['CLOUDFLARE_API_TOKEN','UI_BUILD_PRIVATE_KEY','UI_CANDIDATE_KEY']) assert.equal(process.env[k],undefined);
   const profile=profileFor(process.env.MODEL_SELECTION_SHA256);
   readSelection(ROOT,profile);readTcSelection(ROOT,profile);
+  resolveWind100BuildPin(profile,process.env);
   if(tcGuidanceProfile(profile)){
     assert.equal(process.env.UI_STAGING_CORE_PROFILE_APPROVED,profile.releaseRosterCore,'protected staging core profile approval required');
     assert.equal(process.env.UI_STAGING_TC_PROFILE_APPROVED,profile.tcGuidance,'protected staging TC profile approval required');
@@ -411,6 +435,7 @@ async function receiveBuild() {
   assert.ok(statSync(resolve(out,'build.wxub')).size<=MAX_BYTES*2+1024);
   const c=unpackBuild(readFileSync(resolve(out,'build.wxub')),process.env.UI_BUILD_PRIVATE_KEY);
   requireStagingApproval(c,process.env);
+  candidateWind100(c,process.env);
   eligibleBuild(c,r,jobs.jobs,a.artifacts,{runId:id,attempt,workflowSha:process.env.GITHUB_SHA,
     sourceSha:process.env.ATMOS_SHA,pipelineDigest:pipelineDigest(c.profile),profile:profileFor(process.env.MODEL_SELECTION_SHA256)});
   // Candidate source is absent. Treat every artifact file as opaque data, never execute it.
@@ -418,10 +443,11 @@ async function receiveBuild() {
 }
 function environment(c) {
   const r = validateCandidate(c);
+  const receiptEnv=receiptVerificationEnvironment(c.profile,process.env);
   const adapters=resolve(process.env.RUNNER_TEMP,'ui-upload-bin'); mkdirSync(adapters,{recursive:true,mode:0o700});
   writeFileSync(resolve(adapters,'npx'),readFileSync(resolve(ROOT,'tools/ui-npx.sh')),{mode:0o700});
   chmodSync(resolve(adapters,'npx'),0o700);
-  return {...process.env, PATH:`${adapters}:${resolve(CONTROL,'platform/edge/node_modules/.bin')}:${process.env.PATH}`,
+  return {...receiptEnv, PATH:`${adapters}:${resolve(CONTROL,'platform/edge/node_modules/.bin')}:${process.env.PATH}`,
     UI_WRANGLER_BIN:resolve(CONTROL,'platform/edge/node_modules/.bin/wrangler'),
     RELEASE_GUARD_INCIDENT_DIR:resolve(process.env.RUNNER_TEMP,'ui-incidents'),
     RELEASE_GUARD_FUSE_MODE:'github',RELEASE_GUARD_EXPECTED_GIT_SHA:c.sourceSha,
@@ -445,9 +471,11 @@ async function exactStaging(c) {
   // latest build just because a previous build passed. Restage if this receipt is no longer live.
   const { bytes } = await get(`${ORIGINS.staging}/health/release.json?candidate=${c.artifactDigest}`);
   assert.equal(hash(bytes), c.files.find(f=>f.path==='health/release.json').sha256, 'staging no longer serves this candidate');
+  const wind100=validateWind100BuildReceipt(c.profile,JSON.parse(bytes),process.env);
   const index = await get(`${ORIGINS.staging}/?candidate=${c.artifactDigest}`);
   assert.equal(hash(index.bytes), c.files.find(f=>f.path==='index.html').sha256);
   await publicModes(ORIGINS.staging,c.profile,'candidate');
+  return wind100;
 }
 async function deploy(stage) {
   await preflight(stage);
@@ -463,12 +491,13 @@ async function deploy(stage) {
     'bash',resolve(ROOT,'tools/ui-verify.sh'),stage], {cwd:uploadCwd,env});
   assert.equal(validateFiles(readTree(dist,c.profile),c.profile).digest,c.artifactDigest, 'deployment modified artifact');
   if (stage === 'staging') {
-    const p = await projectSnapshot(stage); await exactStaging(c);
+    const p = await projectSnapshot(stage),wind100=await exactStaging(c);
     const selection=requireStagingApproval(c,process.env),modelProof=c.profile.stagingOnly?readFileSync(resolve(process.env.RUNNER_TEMP,'ui-model-browser.json')):null;
     if(modelProof&&selectionProfile(c.profile))validateBrowserReceipt(modelProof,selection,{sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId,selectionSha256:c.profile.modelSelectionSha256});
     if(modelProof&&coreReleaseProfile(c.profile))validateCoreBrowserReceipt(modelProof,{sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId});
     c.qualification = {origin:ORIGINS.staging, deploymentId:p.canonical_deployment.id,
       artifactDigest:c.artifactDigest,qualifiedAt:new Date().toISOString(),fullTests:true,weatherLab:true,builtRuntime:true,probes:3};
+    if(wind100)Object.assign(c.qualification,{wind100});
     if(modelProof&&selectionProfile(c.profile))Object.assign(c.qualification,{modelSelectionSha256:c.profile.modelSelectionSha256,modelBrowserReceiptSha256:hash(modelProof),modelBrowserModels:selection.entries.length});
     if(modelProof&&coreReleaseProfile(c.profile))Object.assign(c.qualification,{coreProfile:c.profile.releaseRosterCore,coreBrowserReceiptSha256:hash(modelProof),coreBrowserModels:2});
     if(c.profile.account){
@@ -491,6 +520,7 @@ async function verify(stage) {
   const phase=process.env.RELEASE_GUARD_PHASE==='rollback'?'rollback':'candidate';
   if(stage==='production')requireProductionProfile(c.profile);
   else if(phase!=='rollback')requireStagingApproval(c,process.env);
+  if(phase!=='rollback')candidateWind100(c,process.env);
   controller(); await projectSnapshot(stage); await publicModes(ORIGINS[stage],c.profile,phase);
   if (stage === 'production' && phase !== 'rollback') await exactStaging(candidate());
   const verifier=resolve(CONTROL,'ops/release/verify-platform-production.sh');
@@ -528,6 +558,8 @@ async function retain() {
   const c=candidate(), out=resolve(process.env.RUNNER_TEMP,'ui-sealed');
   let compressionProof,accountProof;
   const selection=requireStagingApproval(c,process.env);
+  const wind100=candidateWind100(c,process.env);
+  assert.deepEqual(c.qualification?.wind100,wind100??undefined,'staging Wind100 qualification binding differs from receipt');
   if(selectionProfile(c.profile)){assert.equal(c.qualification?.modelSelectionSha256,c.profile.modelSelectionSha256);assert.equal(c.qualification?.modelBrowserModels,selection.entries.length);assert.match(c.qualification?.modelBrowserReceiptSha256??'',/^[a-f0-9]{64}$/);}
   if(coreReleaseProfile(c.profile)){assert.equal(c.qualification?.coreProfile,c.profile.releaseRosterCore);assert.equal(c.qualification?.coreBrowserModels,2);assert.match(c.qualification?.coreBrowserReceiptSha256??'',/^[a-f0-9]{64}$/);}
   if(c.profile.account){accountProof=await readAccountProof({runnerTemp:process.env.RUNNER_TEMP,controlRoot:CONTROL,

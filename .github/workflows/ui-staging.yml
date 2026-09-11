@@ -32,6 +32,10 @@ jobs:
     timeout-minutes: 5
     outputs:
       model_selection_sha256: ${{ steps.selection.outputs.model_selection_sha256 }}
+      wind100_enabled: ${{ steps.selection.outputs.wind100_enabled }}
+      wind100_catalog_id: ${{ steps.selection.outputs.wind100_catalog_id }}
+      wind100_run_id: ${{ steps.selection.outputs.wind100_run_id }}
+      wind100_selection_sha256: ${{ steps.selection.outputs.wind100_selection_sha256 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { path: cycle, persist-credentials: false }
@@ -45,9 +49,19 @@ jobs:
           APPROVED_CORE_PROFILE: ${{ vars.UI_STAGING_CORE_PROFILE_APPROVED }}
           APPROVED_STATIC_COMPRESSION: ${{ vars.UI_STAGING_STATIC_COMPRESSION_APPROVED }}
           APPROVED_ACCOUNT_PROFILE: ${{ vars.UI_STAGING_ACCOUNT_PROFILE_APPROVED }}
+          STAGING_WIND100_UI_ENABLED: ${{ vars.STAGING_WIND100_UI_ENABLED }}
+          STAGING_WIND100_UI_CATALOG_ID: ${{ vars.STAGING_WIND100_UI_CATALOG_ID }}
+          STAGING_WIND100_UI_RUN_ID: ${{ vars.STAGING_WIND100_UI_RUN_ID }}
+          STAGING_WIND100_UI_SELECTION_SHA256: ${{ vars.STAGING_WIND100_UI_SELECTION_SHA256 }}
         run: |
-          selection="$(node --input-type=module -e "import {resolveSelectionRequest} from './cycle/tools/ui-staging-models.mjs'; console.log(resolveSelectionRequest(process.env.REQUESTED_SELECTION,process.env.APPROVED_SELECTION,process.env.APPROVED_CORE_PROFILE,process.env.APPROVED_STATIC_COMPRESSION,process.env.APPROVED_ACCOUNT_PROFILE));")"
-          printf 'model_selection_sha256=%s\n' "$selection" >> "$GITHUB_OUTPUT"
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          import { profileFor, resolveSelectionRequest, resolveWind100BuildPin } from './cycle/tools/ui-staging-models.mjs';
+          const selection = resolveSelectionRequest(process.env.REQUESTED_SELECTION,process.env.APPROVED_SELECTION,process.env.APPROVED_CORE_PROFILE,process.env.APPROVED_STATIC_COMPRESSION,process.env.APPROVED_ACCOUNT_PROFILE);
+          const pin = resolveWind100BuildPin(profileFor(selection), process.env);
+          appendFileSync(process.env.GITHUB_OUTPUT,
+            `model_selection_sha256=${selection}\nwind100_enabled=${pin ? 'true' : ''}\nwind100_catalog_id=${pin?.catalogId ?? ''}\nwind100_run_id=${pin?.runId ?? ''}\nwind100_selection_sha256=${pin?.selectionSha256 ?? ''}\n`);
+          NODE
   build:
     # Source-read key only. No publisher token, decryption or promotion-signing key.
     needs: profile
@@ -63,6 +77,10 @@ jobs:
       UI_BUILD_PUBLIC_KEY: ${{ vars.UI_BUILD_PUBLIC_KEY }}
       ATMOS_SHA: ${{ inputs.atmos_sha }}
       MODEL_SELECTION_SHA256: ${{ needs.profile.outputs.model_selection_sha256 }}
+      STAGING_WIND100_UI_ENABLED: ${{ needs.profile.outputs.wind100_enabled }}
+      STAGING_WIND100_UI_CATALOG_ID: ${{ needs.profile.outputs.wind100_catalog_id }}
+      STAGING_WIND100_UI_RUN_ID: ${{ needs.profile.outputs.wind100_run_id }}
+      STAGING_WIND100_UI_SELECTION_SHA256: ${{ needs.profile.outputs.wind100_selection_sha256 }}
       VITE_FUSION_CALIBRATION_ENABLED: ${{ vars.FUSION_CALIBRATION_RUNTIME_ENABLED == 'true' && '1' || '0' }}
       VITE_PLATFORM_ACCOUNT: '0'
       VITE_MODEL_EXPANSION_QUALIFICATION: '0'
@@ -164,6 +182,10 @@ jobs:
       UI_STAGING_CORE_PROFILE_APPROVED: ${{ vars.UI_STAGING_CORE_PROFILE_APPROVED }}
       UI_STAGING_STATIC_COMPRESSION_APPROVED: ${{ vars.UI_STAGING_STATIC_COMPRESSION_APPROVED }}
       UI_STAGING_ACCOUNT_PROFILE_APPROVED: ${{ vars.UI_STAGING_ACCOUNT_PROFILE_APPROVED }}
+      STAGING_WIND100_UI_ENABLED: ${{ vars.STAGING_WIND100_UI_ENABLED }}
+      STAGING_WIND100_UI_CATALOG_ID: ${{ vars.STAGING_WIND100_UI_CATALOG_ID }}
+      STAGING_WIND100_UI_RUN_ID: ${{ vars.STAGING_WIND100_UI_RUN_ID }}
+      STAGING_WIND100_UI_SELECTION_SHA256: ${{ vars.STAGING_WIND100_UI_SELECTION_SHA256 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { path: cycle, fetch-depth: 0, persist-credentials: false }
