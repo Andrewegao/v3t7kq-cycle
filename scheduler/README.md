@@ -7,11 +7,15 @@ This scheduled-only Cloudflare Worker dispatches the existing GitHub Actions bak
 - `8-59/10 * * * *`: dispatch `hrrr`
 - `7 * * * *`: dispatch `slow` (`ecmwf`, `gfs`, and `aifs` in parallel)
 - `23 * * * *`: dispatch the idempotent satellite/radar hourly tail only
+- `35 2,8,14,20 * * *`: dispatch an isolated ECMWF collection plus staging-only
+  100 m wind publication, five minutes after each native bake schedule
 
 The GitHub-native schedules are a fail-open independent fallback. Existing workflow
 concurrency and immutable/no-change promotion behavior make duplicate dispatches
 safe. The archive dispatch is restricted to `hourly-tail-v1`; it cannot enter either
-manual backfill path. The reviewed Worker target is `production`; it may be deployed only after the
+manual backfill path. The 100 m wind dispatch is restricted to `bake.yml` on `main`
+with `model=ecmwf`, an empty recovery run, and `staging_wind100_only=true`; every
+production publish and whole-maintenance job remains skipped. The reviewed Worker target is `production`; it may be deployed only after the
 production bootstrap, rollback drill, and `serve` data-edge gate pass. Leave the
 fallback on until the production Worker has produced at least three HRRR dispatches
 and one successful slow dispatch. After that evidence exists, set the repository
