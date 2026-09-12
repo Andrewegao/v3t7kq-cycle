@@ -44,20 +44,42 @@ jobs:
     timeout-minutes: 210
     env:
       CATALOG_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || vars.CATALOG_DEFAULT_TARGET || 'staging' }}
+      ATMOS_SHA: 48be0a6c7cef9a0c831831952cefd80ce967ad2d
+      MODEL: ${{ matrix.model }}
     steps:
+      - name: qualify production source and select schema-1 point reuse before credentials
+        id: point_reuse
+        env:
+          APPROVED_SHA: ${{ vars.CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA }}
+          POINT_REUSE_MODEL: ${{ vars.CURRENT_RUN_POINT_REUSE_MODEL }}
+        run: |
+          test "$CATALOG_TARGET" = staging || test "$CATALOG_TARGET" = production
+          enabled=0
+          if [ "$CATALOG_TARGET" = production ]; then
+            test "$GITHUB_REPOSITORY" = Andrewegao/v3t7kq-cycle
+            test "$GITHUB_REF" = refs/heads/main
+            case "$GITHUB_EVENT_NAME" in schedule|workflow_dispatch) ;; *) exit 2 ;; esac
+            test "$APPROVED_SHA" = "$ATMOS_SHA"
+            case "$POINT_REUSE_MODEL" in
+              ''|all|ecmwf|gfs|hrrr|aifs|icon|hrdps|arome-antilles|hrrr-ak|nam|nam-hi|nam-ak) ;;
+              *) echo 'invalid point reuse selection' >&2; exit 2 ;;
+            esac
+            if [ "$POINT_REUSE_MODEL" = all ] || [ "$POINT_REUSE_MODEL" = "$MODEL" ]; then enabled=1; fi
+          fi
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
       - name: Checkout WeatherX
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
           # Qualified fast-lane source, independent of experimental app master.
-          ref: d8cd45d123f60c30c413c14d46f68113e37468b7
+          ref: 48be0a6c7cef9a0c831831952cefd80ce967ad2d
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: atmos
           persist-credentials: false
       - name: Verify approved immutable component collector
         working-directory: atmos
         run: |
-          test "$(git rev-parse HEAD)" = "d8cd45d123f60c30c413c14d46f68113e37468b7"
+          test "$(git rev-parse HEAD)" = "48be0a6c7cef9a0c831831952cefd80ce967ad2d"
           git diff --exit-code HEAD
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22 }
@@ -157,6 +179,11 @@ jobs:
           MODEL: ${{ matrix.model }}
           PUBLISH: '1'
           DATA_PUBLISH_MODE: component-catalog
+          REUSE_ACTIVE_POINT_COMPONENT: ${{ steps.point_reuse.outputs.enabled }}
+          REUSE_ACTIVE_MAP_COMPONENT: '0'
+          REUSE_ACTIVE_MAP_OBJECTS: '0'
+          PACK_COMPONENT_OBJECTS: '0'
+          POINT_COMPONENT_PUBLISH_METRICS_FILE: ${{ runner.temp }}/point-publication-cost.json
           LIVE: https://weatherx.org
           CATALOG_R2_REMOTE: weatherx:weatherx-data-production
           COMPONENT_R2_REMOTE: weatherx:weatherx-components-production
@@ -178,3 +205,12 @@ jobs:
           : "${CATALOG_ENDPOINT:?CATALOG_ENDPOINT required before collection}"
           : "${CATALOG_PROMOTION_KEY:?CATALOG_PROMOTION_KEY required before collection}"
           bash ops/bake-model-component.sh
+      - name: retain aggregate point costs only after successful production publication
+        if: ${{ success() && env.CATALOG_TARGET == 'production' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: point-publication-cost-${{ matrix.model }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/point-publication-cost.json
+          if-no-files-found: ignore
+          retention-days: 14

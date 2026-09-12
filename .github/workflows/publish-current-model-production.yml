@@ -41,7 +41,7 @@ jobs:
     outputs:
       status: ${{ steps.result.outputs.status }}
     env:
-      ATMOS_SHA: d8cd45d123f60c30c413c14d46f68113e37468b7
+      ATMOS_SHA: 48be0a6c7cef9a0c831831952cefd80ce967ad2d
       UNQUALIFIED_PLACEHOLDER_SHA: 77487534a6ff0a17bf4e5d55f9ab5c06938138d4
       MODEL: ${{ inputs.model }}
       COMPONENT_KIND: ${{ inputs.kind }}
@@ -67,6 +67,18 @@ jobs:
             core:ecmwf|core:gfs|core:hrrr|core:aifs|regional:icon|regional:hrdps|regional:arome-antilles|regional:hrrr-ak|regional:nam|regional:nam-hi|regional:nam-ak) ;;
             *) exit 2 ;;
           esac
+      - name: select explicitly enabled schema-1 point reuse before credentials
+        id: point_reuse
+        env:
+          POINT_REUSE_MODEL: ${{ vars.CURRENT_RUN_POINT_REUSE_MODEL }}
+        run: |
+          case "$POINT_REUSE_MODEL" in
+            ''|all|ecmwf|gfs|hrrr|aifs|icon|hrdps|arome-antilles|hrrr-ak|nam|nam-hi|nam-ak) ;;
+            *) echo 'invalid point reuse selection' >&2; exit 2 ;;
+          esac
+          enabled=0
+          if [ "$POINT_REUSE_MODEL" = all ] || [ "$POINT_REUSE_MODEL" = "$MODEL" ]; then enabled=1; fi
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
       - name: checkout authenticated current-run controller
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -78,7 +90,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: weatherx-hq/atmos
-          ref: d8cd45d123f60c30c413c14d46f68113e37468b7
+          ref: 48be0a6c7cef9a0c831831952cefd80ce967ad2d
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: atmos
           fetch-depth: 32
@@ -156,6 +168,11 @@ jobs:
           PUBLISH: '1'
           LIVE: https://weatherx.org
           DATA_PUBLISH_MODE: component-catalog
+          REUSE_ACTIVE_POINT_COMPONENT: ${{ steps.point_reuse.outputs.enabled }}
+          REUSE_ACTIVE_MAP_COMPONENT: '0'
+          REUSE_ACTIVE_MAP_OBJECTS: '0'
+          PACK_COMPONENT_OBJECTS: '0'
+          POINT_COMPONENT_PUBLISH_METRICS_FILE: ${{ runner.temp }}/point-publication-cost.json
           CATALOG_ENDPOINT: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
           CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
         working-directory: atmos
@@ -181,6 +198,15 @@ jobs:
           else echo 'component publisher returned no recognized fixed result' >&2; exit 1; fi
           echo "status=$status" >> "$GITHUB_OUTPUT"
           echo "$MODEL: $status"
+      - name: retain aggregate point costs only after successful publication
+        if: ${{ steps.publish.outputs.status == 'published' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: point-publication-cost-${{ inputs.model }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/point-publication-cost.json
+          if-no-files-found: ignore
+          retention-days: 14
       - name: encrypt bounded component diagnostics without exposing raw logs
         if: ${{ always() }}
         run: node cycle-controller/tools/component-publish-diagnostic.mjs
