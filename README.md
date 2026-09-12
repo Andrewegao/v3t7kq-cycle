@@ -1,39 +1,20 @@
 # v3t7kq-cycle
 
-Unattended data freshness loop, on GitHub Actions' free public-repo minutes.
-This repo is deliberately thin: one workflow that checks out the private app repo
-read-only and runs its own `ops/bake-weatherx.sh` cycle — all bake logic lives with
-the app, so the laptop launchd loop and this workflow can never drift apart.
+WeatherX's operational controllers on GitHub Actions. This repository contains recurring data collection, independent model publication, archive work, staging qualification, guarded release entrypoints, and recovery diagnostics. Atmos owns the data algorithms and scientific/release validation; Cycle checks out the source declared by each workflow.
 
-**Cycle (4×/day, ~20 min after each ECMWF publication):**
-regional family jobs (ICON / HRDPS / AROME Antilles / NOAA nests → display packs) ∥ bake job:
-hydrate current release → fetch ECMWF/GFS/HRRR/AIFS → install regional packs + roster → enrich
-GFS add-on layers → air bakes → freshness/variable gate vs live → one immutable R2 data release.
-Any failure keeps the live site untouched; a late regional provider only abstains in the roster.
+Use the [workflow inventory](docs/WORKFLOWS.md) to find an entrypoint, its declared triggers, dependency graph, source references, environment, and writer lock. Use the [operation and recovery guide](docs/WORKFLOW_OPERATIONS.md) to distinguish collection, publication, maintenance, and deployment. The index does not claim that a declared schedule is enabled, a source is deployed, or a model is fresh.
 
-The separate `satellite-archive` workflow supports `rolling-year-v1`: the latest
-complete calendar year, split into serialized batches of at most three days.
-Hourly collection and manual backfill have independent enable switches. An
-explicit archive-only $10 planning allowance uses a fixed budget end date and
-existing bucket bytes, includes twelve months of growth without deleting data,
-and expires rather than silently renewing. The default whole-account $20 gate
-remains available. Neither mode deploys the application or prunes archive data.
+The main bake already collects eleven models independently. Each model publisher follows its own collector, while the whole-maintenance job joins inputs and qualifies an immutable whole-data fallback. The separate catalog workflow refreshes core components; satellite/radar archives and isolated staging workflows have their own bounded controllers. A failure in one lane is not evidence that all model publications failed.
 
-**Secrets**
-- `ATMOS_DEPLOY_KEY` — read-only deploy key on the private app repo (configured).
-- `CLOUDFLARE_API_TOKEN` — Pages edit token; until it is set, cycles run `PUBLISH=0`
-  (bake-only validation, deploys skipped). Create: Cloudflare dashboard → My Profile →
-  API Tokens → template "Edit Cloudflare Workers"/Pages, scope to the account, then
-  `gh secret set CLOUDFLARE_API_TOKEN -R Andrewegao/v3t7kq-cycle`.
-- `CLOUDFLARE_DATA_EDGE_API_TOKEN` — account-owned, expiring credential used only by
-  the guarded production data-edge workflow. Scope account permissions to Workers
-  Scripts write and Workers R2 Storage read; scope zone permissions to `weatherx.org`
-  Workers Routes write and Zone read. The pinned D1 binding does not require D1 API
-  access. Never reuse the Pages or scheduler token for this Worker.
-- `R2_PRODUCTION_ACCESS_KEY_ID` + `R2_PRODUCTION_SECRET_ACCESS_KEY` — account-owned
-  R2 S3 credentials used only by production component publishing, bootstrap, and the
-  rollback drill. Grant Object Read & Write on exactly `weatherx-data-production` and
-  `weatherx-components-production`; do not grant staging buckets or R2 administration.
-  Keep this credential separate from Pages, scheduler, and data-edge deployment.
+Common starting points:
 
-Data sources are all open (ECMWF open data CC-BY-4.0 via AWS Open Data, NOAA GFS/HRRR/RTOFS).
+- [Refresh one model](docs/single-model-refresh.md).
+- [Understand authenticated model handoff](docs/current-model-artifact-handoff.md).
+- [Recover the specifically reviewed retained publication](docs/resume-model-publication.md).
+- [Staging and immutable UI promotion](docs/UI-STAGING-PROMOTION.md).
+- [Production consumer refresh](CONSUMER_REFRESH.md).
+- [Scheduler configuration and verification](scheduler/README.md).
+
+Data publication and application/Worker deployment are separate guarded capabilities. Credentials remain scoped to the exact workflows and environments that declare them; a missing Pages token is not a general bake-only switch. The inventory contains no credentials and grants no dispatch or publication authority.
+
+To refresh or check the generated inventory locally, follow the [Node 22 commands](docs/WORKFLOW_OPERATIONS.md#ownership). Metadata is in [ops/workflows.json](ops/workflows.json); executable workflow YAML remains authoritative.
