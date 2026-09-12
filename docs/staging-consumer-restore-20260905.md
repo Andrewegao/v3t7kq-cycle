@@ -1,5 +1,29 @@
 # Restore staging shared weather reader (2026-09-05)
 
+## 2026-09-07 additive 100 m wind reader refresh
+
+The normal `upload` lane now selects the reviewed point-wind reader source while
+historical `reuse-owned-33988771315` remains bound to source `0aa9fbed…`, its exact
+receipt hash, original version, tag and full runtime. The two modes cannot exchange
+source pins or receipts. The workflow proves a normal upload source is merged into
+Atmos master before receiving deployment credentials.
+
+The upload pin `263574001bedcf8e987d7d5909e69321d601348b` is the merged Atmos PR182
+source, not a deployment claim. It is identical in `tools/staging-consumer.mjs` and
+`.github/workflows/staging-consumer-refresh.yml`.
+The candidate `wrangler.jsonc` is byte-identical to the historical
+configuration; a new code-only guard refuses any change to live configuration,
+billing, bindings, secrets, routes or runtime. Historical repair behavior remains
+isolated in its explicit reuse mode.
+
+Perform a fresh read-only preflight and review the exact serving version/settings
+digest; keep all existing ownership, strict runtime and live forecast checks. No
+reader refresh publishes weather objects. Upgrade both staging and production
+point readers **before** enabling the enhanced producer source: older readers
+reject point descriptors declaring `wind_speed_100m`, including primary fields.
+Do not use the historical reuse mode after enhanced data publication; its exact
+historical boundary is not a recovery target for the new format.
+
 ## Scope and observed regression
 
 The owner confirmed that no other task is updating the staging Worker during
