@@ -1,7 +1,7 @@
 {
   "schemaVersion": 3,
   "sourceSha": "9174329db6ca8527569e67f14ef70406dedefb69",
-  "coreSourceSha": "6abda80d3c72d955a6bb91cef36ccd161bdddc0f",
+  "coreSourceSha": "7a50f19714f22e04dc610a5aa33d311b7d1dc673",
   "recurringPublicationMode": "point-only-recurring-v1",
   "recurringStorage": {
     "componentObjectPrefix": "components/point-ecmwf/stage-wind100-recurring-point-ecmwf-",
@@ -62,7 +62,7 @@
     "data/health_snapshot.py": "f950f636c2203bf3a69fa99a05dfd64b1cad338de09cf3bbb78c0d95370b1172",
     "data/hrrr_point.py": "573606d57d0ca91fc9a1d124ab661df30ef63f28dc0ace9b3dbff9ddd2f2b6cd",
     "data/native_wind100.py": "5f3a7775125e6f3ed185362b67a450c273f2d52bad643eec40443d368778ab85",
-    "ops/bake-model-component.sh": "22edd3ddb42a094fe1816ef0ed50557e5329ab6e7efddf1393537a8e63486aec",
+    "ops/bake-model-component.sh": "a48031d969f4048712c974e4740b2b4746a0e6425d16df01b2aea8d80c4b0a39",
     "ops/core_model_artifact.py": "830b67a8fcbd8f739a519b9565977a167c0ea9a2591317ae3285b05cfdccbfb0",
     "ops/platform/build-component-manifest.mjs": "5f33ccb12562fa043556491696597a258486e0e750043169618b282b18999b99",
     "ops/platform/publish-r2-component.sh": "add64955228a620349d7b886fe5a8ef160aa8e4e5f3de9180c15a1305496cfe9",
