@@ -13,6 +13,7 @@ on:
         required: true
         type: choice
         options:
+          - hourly-tail-v1
           - rolling-year-v1
           - storm-window-3d-v1
       from:
@@ -232,7 +233,9 @@ env:
 
 jobs:
   hourly:
-    if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' && vars.SATELLITE_ARCHIVE_ENABLED == '1' }}
+    # GitHub schedule delivery is best-effort. The constrained dispatch policy lets the
+    # existing Cloudflare scheduler bridge invoke this same archive-only, idempotent job.
+    if: ${{ github.ref == 'refs/heads/main' && vars.SATELLITE_ARCHIVE_ENABLED == '1' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.policy == 'hourly-tail-v1')) }}
     environment:
       name: satellite-archive
     runs-on: ubuntu-latest

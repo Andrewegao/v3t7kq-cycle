@@ -1,14 +1,33 @@
-import { HRRR_CRON, SLOW_CRON } from './schedules';
+import { ARCHIVE_CRON, HRRR_CRON, SLOW_CRON } from './schedules';
 const MAX_ATTEMPTS = 4;
 const MAX_ERROR_BYTES = 4_096;
 
 type ModelSelection = 'hrrr' | 'slow';
+type DispatchResult =
+  | { kind: 'catalog'; model: ModelSelection; runId: number | null }
+  | { kind: 'satellite-archive'; policy: 'hourly-tail-v1'; runId: number | null };
+type DispatchPlan =
+  | { kind: 'catalog'; workflow: string; model: ModelSelection; inputs: { model: ModelSelection; target: 'staging' | 'production' } }
+  | { kind: 'satellite-archive'; workflow: string; policy: 'hourly-tail-v1'; inputs: { policy: 'hourly-tail-v1' } };
 type Fetcher = typeof fetch;
 type Sleeper = (delayMs: number) => Promise<void>;
 
-function selectionForCron(cron: string): ModelSelection {
-  if (cron === HRRR_CRON) return 'hrrr';
-  if (cron === SLOW_CRON) return 'slow';
+function dispatchForSchedule(cron: string, env: CloudflareBindings): DispatchPlan {
+  if (cron === HRRR_CRON || cron === SLOW_CRON) {
+    const target: string = env.CATALOG_TARGET;
+    if (target !== 'staging' && target !== 'production') {
+      throw new Error(`unsupported catalog target: ${target}`);
+    }
+    const model = cron === HRRR_CRON ? 'hrrr' : 'slow';
+    return { kind: 'catalog', workflow: env.GITHUB_WORKFLOW, model, inputs: { model, target } };
+  }
+  if (cron === ARCHIVE_CRON) {
+    if (env.SATELLITE_GITHUB_WORKFLOW !== 'satellite-archive.yml') {
+      throw new Error('unsupported satellite archive workflow');
+    }
+    return { kind: 'satellite-archive', workflow: env.SATELLITE_GITHUB_WORKFLOW,
+      policy: 'hourly-tail-v1', inputs: { policy: 'hourly-tail-v1' } };
+  }
   throw new Error(`unsupported scheduler cron: ${cron}`);
 }
 
@@ -32,17 +51,11 @@ export async function dispatchForCron(
   env: CloudflareBindings,
   fetcher: Fetcher = fetch,
   sleep: Sleeper = defaultSleep,
-): Promise<{ model: ModelSelection; runId: number | null }> {
-  const model = selectionForCron(cron);
-  // Wrangler narrows config vars to their currently deployed literal. Keep the runtime
-  // validation alive so a future config-only cutover cannot bypass the fail-closed check.
-  const target: string = env.CATALOG_TARGET;
-  if (target !== 'staging' && target !== 'production') {
-    throw new Error(`unsupported catalog target: ${target}`);
-  }
-  const workflow = encodeURIComponent(env.GITHUB_WORKFLOW);
+): Promise<DispatchResult> {
+  const plan = dispatchForSchedule(cron, env);
+  const workflow = encodeURIComponent(plan.workflow);
   const endpoint = `https://api.github.com/repos/${encodeURIComponent(env.GITHUB_OWNER)}/${encodeURIComponent(env.GITHUB_REPO)}/actions/workflows/${workflow}/dispatches`;
-  const body = JSON.stringify({ ref: env.GITHUB_REF, inputs: { model, target } });
+  const body = JSON.stringify({ ref: env.GITHUB_REF, inputs: plan.inputs });
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
     let response: Response;
@@ -79,7 +92,9 @@ export async function dispatchForCron(
           // The dispatch succeeded; an unrecognized optional response body does not invalidate it.
         }
       }
-      return { model, runId };
+      return plan.kind === 'catalog'
+        ? { kind: 'catalog', model: plan.model, runId }
+        : { kind: 'satellite-archive', policy: plan.policy, runId };
     }
 
     const error = await boundedError(response);
@@ -98,9 +113,8 @@ export default {
       event: 'github_workflow_dispatched',
       cron: controller.cron,
       scheduledTime: new Date(controller.scheduledTime).toISOString(),
-      model: result.model,
-      target: env.CATALOG_TARGET,
-      runId: result.runId,
+      ...result,
+      target: result.kind === 'catalog' ? env.CATALOG_TARGET : undefined,
     }));
   },
 } satisfies ExportedHandler<CloudflareBindings>;

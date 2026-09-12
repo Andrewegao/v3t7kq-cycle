@@ -212,15 +212,20 @@ test('hourly and backfill failure retention remain protected and secret-free', (
   assert.deepEqual(satelliteSecretJobs, ['backfill', 'backfill-plan', 'hourly']);
   for (const name of satelliteSecretJobs) {
     const block = satelliteJobs[name];
-    const event = name === 'hourly' ? 'schedule' : 'workflow_dispatch';
     assert.match(block, /\n    environment:\n      name: satellite-archive\n/,
       `${name} must use the dedicated protected satellite environment`);
     const approval = name === 'hourly'
       ? "vars.SATELLITE_ARCHIVE_ENABLED == '1'"
       : "((inputs.policy == 'storm-window-3d-v1' && vars.SATELLITE_ARCHIVE_STORM_PILOT_ENABLED == '1') || (inputs.policy == 'rolling-year-v1' && vars.SATELLITE_ARCHIVE_ROLLING_YEAR_ENABLED == '1'))";
-    assert.ok(block.includes(
-      `\n    if: \${{ github.event_name == '${event}' && github.ref == 'refs/heads/main' && ${approval} }}\n`,
-    ), `${name} must reject the wrong event, ref or independent approval before secrets are available`);
+    if (name === 'hourly') {
+      assert.ok(block.includes(
+        "\n    if: ${{ github.ref == 'refs/heads/main' && vars.SATELLITE_ARCHIVE_ENABLED == '1' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.policy == 'hourly-tail-v1')) }}\n",
+      ), 'hourly must accept only the native schedule or the constrained external-scheduler policy');
+    } else {
+      assert.ok(block.includes(
+        `\n    if: \${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && ${approval} }}\n`,
+      ), `${name} must reject the wrong event, ref or independent approval before secrets are available`);
+    }
     assert.equal((block.match(/ssh-key: \$\{\{ secrets\.ATMOS_DEPLOY_KEY \}\}/g) || []).length, 1);
     assert.equal((block.match(/persist-credentials: false/g) || []).length, 1,
       `${name} private checkout must not persist its deploy key`);
@@ -233,6 +238,7 @@ test('hourly and backfill failure retention remain protected and secret-free', (
   assert.equal((workflow.match(/path: \$\{\{ runner\.temp \}\}\/satellite-acquisition-failure-evidence/g) ?? []).length, 2);
   assert.equal((workflow.match(/retention-days: 14/g) ?? []).length, 2);
   assert.equal((workflow.match(/vars\.SATELLITE_ARCHIVE_ENABLED == '1'/g) ?? []).length, 1);
+  assert.equal((workflow.match(/inputs\.policy == 'hourly-tail-v1'/g) ?? []).length, 1);
   assert.equal((workflow.match(/vars\.SATELLITE_ARCHIVE_STORM_PILOT_ENABLED == '1'/g) ?? []).length, 2);
   assert.equal((workflow.match(/inputs\.policy == 'storm-window-3d-v1'/g) ?? []).length, 2);
   assert.equal((workflow.match(/vars\.SATELLITE_ARCHIVE_ROLLING_YEAR_ENABLED == '1'/g) ?? []).length, 2);
