@@ -14,7 +14,8 @@ import {requireSelectionMargin} from '../tools/ui-staging-preflight.mjs';
 import {STATIC_COMPRESSION_REQUEST,STATIC_COMPRESSION_PROFILE,staticCompressionProfile,coreReleaseProfile} from '../tools/ui-staging-models.mjs';
 
 const NOW=Date.parse('2026-08-31T20:00:00Z'),INIT='2026083112',SHA='a'.repeat(40),DIGEST='b'.repeat(64);
-const WIND100={catalogId:'stage-wind100-34547542747-1',runId:'2026091000',selectionSha256:'e'.repeat(64)};
+const WIND100={catalogId:'stage-wind100-recurring-34657769540-1',runId:'2026091112',selectionSha256:'e'.repeat(64)};
+const LEGACY_WIND100={catalogId:'stage-wind100-34547542747-1',runId:'2026091000',selectionSha256:'d'.repeat(64)};
 const wind100Env=(change={})=>({STAGING_WIND100_UI_ENABLED:'true',STAGING_WIND100_UI_CATALOG_ID:WIND100.catalogId,
   STAGING_WIND100_UI_RUN_ID:WIND100.runId,STAGING_WIND100_UI_SELECTION_SHA256:WIND100.selectionSha256,...change});
 test('Wind100 pin is optional, exact, and restricted to the account-standard staging profile',()=>{
@@ -23,6 +24,7 @@ test('Wind100 pin is optional, exact, and restricted to the account-standard sta
   assert.deepEqual(resolveWind100BuildPin(ACCOUNT_CORE_PROFILE,wind100Env({STAGING_WIND100_UI_DYNAMIC:'true'})),{...WIND100,dynamic:true});
   assert.deepEqual(validateWind100BuildProfile(WIND100),WIND100);
   assert.deepEqual(validateWind100BuildProfile({...WIND100,dynamic:true}),{...WIND100,dynamic:true});
+  assert.deepEqual(validateWind100BuildProfile(LEGACY_WIND100),LEGACY_WIND100);
   for(const profile of [BASELINE_PROFILE,CORE_RELEASE_PROFILE,profileFor(DIGEST)])
     assert.throws(()=>resolveWind100BuildPin(profile,wind100Env()),/account-standard/);
   for(const env of [
