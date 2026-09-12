@@ -2,7 +2,7 @@
 // the deployed shell; that commit must descend from this producer and preserve this reader closure.
 export const ATMOS_SHA = 'dfa25e9f473f15d5e2f630fe78c268b73234bd3a';
 export const SEARCH_V4_READER_CLOSURE = Object.freeze({
-  'app/src/chrome/Search.tsx': '120f85a4700babdec0cd5d3a9b69630959dab963197c6906b0106f6141ba2f63',
+  'app/src/chrome/Search.tsx': '0a24339be80ca6f964624e7b554639d31014e67dc73acae63f094aaf03489faf',
   'app/src/chrome/searchIndex.ts': '4c0823a346d9a79eb3a83530a06e8ba84d1ce356a16b3e56b24ac5a4d0358372',
   'app/src/chrome/searchCompose.ts': 'b1dbae15f7c5478f8b5018a021697b67adf28146e80084f2e40e28777833b10c',
   'app/src/chrome/searchNormalize.ts': '1723e5350e03a7635015d44087e25882c232aefaf214854e3f81eda508e94b64',

@@ -227,7 +227,7 @@ test('gate refuses local/unreviewed execution, foreign credentials and weather w
 test('V4 source proof binds an exact protected descendant and nine-file reader closure', () => {
   assert.equal(Object.keys(SEARCH_V4_READER_CLOSURE).length, 9);
   assert.equal(SEARCH_V4_READER_CLOSURE['app/src/chrome/Search.tsx'],
-    '120f85a4700babdec0cd5d3a9b69630959dab963197c6906b0106f6141ba2f63');
+    '0a24339be80ca6f964624e7b554639d31014e67dc73acae63f094aaf03489faf');
   const env = { STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA: UI_SHA };
   const evidence = { head: UI_SHA, clean: true, includesSearchV4Base: true,
     files: { ...SEARCH_V4_READER_CLOSURE } };
