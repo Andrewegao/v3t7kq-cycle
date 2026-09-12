@@ -118,6 +118,7 @@ jobs:
       - name: enforce manually enabled isolated build
         run: node cycle/tools/ui-release.mjs build-gate
       - name: check pinned receipt profile compatibility before build work
+        if: ${{ needs.profile.outputs.model_selection_sha256 != 'none' }}
         run: node cycle/tools/ui-release-profile-preflight.mjs
       - name: preflight public staging data before expensive build or deployment
         env:

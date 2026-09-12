@@ -50,6 +50,11 @@ test('actual pinned receipt profile is checked before expensive staging build wo
   const build=staging.slice(staging.indexOf('\n  build:\n'),staging.indexOf('\n  qualify:\n'));
   const preflight='node cycle/tools/ui-release-profile-preflight.mjs';
   assert.equal((build.match(new RegExp(preflight.replaceAll('.','\\.'),'g'))||[]).length,1);
+  const preflightStep=build.slice(build.indexOf('- name: check pinned receipt profile compatibility before build work'),
+    build.indexOf('- name: preflight public staging data before expensive build or deployment'));
+  assert.match(preflightStep,/if: \$\{\{ needs\.profile\.outputs\.model_selection_sha256 != 'none' \}\}/,
+    'baseline must retain its pre-verification production controller path');
+  assert.match(preflightStep,/run: node cycle\/tools\/ui-release-profile-preflight\.mjs/);
   for(const prerequisite of ['checkout reviewed release controller','uses: actions/setup-node@','enforce manually enabled isolated build']){
     assert.ok(build.indexOf(prerequisite)>=0,`missing ${prerequisite}`);
     assert.ok(build.indexOf(preflight)>build.indexOf(prerequisite),`profile preflight must follow ${prerequisite}`);
