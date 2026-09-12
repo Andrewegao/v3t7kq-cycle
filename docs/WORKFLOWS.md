@@ -6,9 +6,9 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `cb784f89cdfac29ba3a264475bd9f2d2606a70aed1952738b632a3d5ab2ddca1`.
+Source digest (registry and workflow bytes): `982b62ac00ae654023bad0c6def96ce881ef3fa1f82e6b70252b913b41e99909`.
 
-49 workflows. Ordering and output are deterministic; no API request or clock is used.
+50 workflows. Ordering and output are deterministic; no API request or clock is used.
 
 | Workflow | Family / subsystem | Lifecycle | Purpose | Runbook |
 | --- | --- | --- | --- | --- |
@@ -35,6 +35,7 @@ Source digest (registry and workflow bytes): `cb784f89cdfac29ba3a264475bd9f2d260
 | [nam-hi-diagnostic](#nam-hi-diagnostic) | staging / Experimental models | diagnostic | Diagnose a bounded NAM-HI acquisition without broadening publication authority. | [guide](../docs/nam-hi-cloud-diagnostic.md) |
 | [point-route-activate](#point-route-activate) | releases / Production point routes | manual-supported | Activate reviewed point routes with ownership-aware rollback. | [guide](../docs/point-route-activation.md) |
 | [publish-current-model-production](#publish-current-model-production) | models / Component publication | recurring | Qualify and publish one authenticated collector result independently of sibling models. | [guide](../docs/current-model-artifact-handoff.md) |
+| [qualify-bake-throughput](#qualify-bake-throughput) | models / Bake qualification | diagnostic | Qualify full-grid GFS frame throughput and runner memory without provider or publication access. | [guide](../docs/bake-throughput-qualification.md) |
 | [resume-model-publication](#resume-model-publication) | models / Publication recovery | manual-supported | Recover publication from the explicitly reviewed retained run without recollecting models. | [guide](../docs/resume-model-publication.md) |
 | [satellite-archive](#satellite-archive) | archives / Satellite and radar | recurring | Collect hourly archive tails or explicit bounded historical batches. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [scheduler-ci](#scheduler-ci) | control-plane / Controller evidence | recurring | Check scheduler, publication, source, and recovery contracts. | [guide](../scheduler/README.md) |
@@ -653,6 +654,32 @@ Checkout declarations (not a claim of approval or checkout success):
 | [publisher / checkout exact qualified Atmos component publisher](../.github/workflows/publish-current-model-production.yml#L89) | <code>weatherx-hq/atmos</code> | <code>48be0a6c7cef9a0c831831952cefd80ce967ad2d</code> |
 
 Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/publish-current-model-production.yml#L53), [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/publish-current-model-production.yml#L52), [CURRENT_RUN_POINT_REUSE_MODEL](../.github/workflows/publish-current-model-production.yml#L73).
+
+
+## qualify-bake-throughput
+
+[.github/workflows/qualify-bake-throughput.yml](../.github/workflows/qualify-bake-throughput.yml#L1) · <code>WeatherX bake throughput qualification</code>
+
+Declared triggers: [workflow_dispatch](../.github/workflows/qualify-bake-throughput.yml#L4).
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-bake-throughput-qualification","cancel-in-progress":false}</code>.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [qualify](../.github/workflows/qualify-bake-throughput.yml#L15) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"atmos-source-read-ui"}</code> | <code>30</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+
+Declared job conditions (additional step/helper checks may apply):
+
+- [qualify](../.github/workflows/qualify-bake-throughput.yml#L15): <code>${{ github.event_name == 'workflow_dispatch' &amp;&amp; github.ref == 'refs/heads/main' }}</code>
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [qualify / checkout exact qualification controller](../.github/workflows/qualify-bake-throughput.yml#L27) | caller repository (implicit) | <code>${{ github.sha }}</code> |
+| [qualify / checkout reviewed production-source candidate](../.github/workflows/qualify-bake-throughput.yml#L33) | <code>weatherx-hq/atmos</code> | <code>0335a3b0a85b629c8659032a032bbc5ea0911eff</code> |
+
+Variable references (declared names only; values and activation unknown): none detected.
 
 
 ## resume-model-publication

@@ -209,6 +209,15 @@
       "runbook": "docs/current-model-artifact-handoff.md"
     },
     {
+      "id": "qualify-bake-throughput",
+      "path": ".github/workflows/qualify-bake-throughput.yml",
+      "family": "models",
+      "purpose": "Qualify full-grid GFS frame throughput and runner memory without provider or publication access.",
+      "subsystem": "Bake qualification",
+      "lifecycle": "diagnostic",
+      "runbook": "docs/bake-throughput-qualification.md"
+    },
+    {
       "id": "resume-model-publication",
       "path": ".github/workflows/resume-model-publication.yml",
       "family": "models",
