@@ -1,0 +1,446 @@
+{
+  "schemaVersion": 1,
+  "workflows": [
+    {
+      "id": "bake",
+      "path": ".github/workflows/bake.yml",
+      "family": "models",
+      "purpose": "Collect independent model inputs and assemble the whole-maintenance fallback.",
+      "subsystem": "Model collection",
+      "lifecycle": "recurring",
+      "runbook": "docs/single-model-refresh.md"
+    },
+    {
+      "id": "catalog-bake",
+      "path": ".github/workflows/catalog-bake.yml",
+      "family": "models",
+      "purpose": "Refresh individual core model components from provider schedules or a manual request.",
+      "subsystem": "Component freshness",
+      "lifecycle": "recurring",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "catalog-bootstrap",
+      "path": ".github/workflows/catalog-bootstrap.yml",
+      "family": "models",
+      "purpose": "Initialize the staging catalog through its guarded bootstrap path.",
+      "subsystem": "Catalog bootstrap",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "catalog-production-bootstrap",
+      "path": ".github/workflows/catalog-production-bootstrap.yml",
+      "family": "models",
+      "purpose": "Initialize the production catalog through its guarded bootstrap path.",
+      "subsystem": "Catalog bootstrap",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "catalog-production-safety-drill",
+      "path": ".github/workflows/catalog-production-safety-drill.yml",
+      "family": "models",
+      "purpose": "Exercise production catalog safety only through the explicit guarded drill.",
+      "subsystem": "Catalog safety",
+      "lifecycle": "diagnostic",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "catalog-promote-existing",
+      "path": ".github/workflows/catalog-promote-existing.yml",
+      "family": "models",
+      "purpose": "Legacy staging promotion recovery requires source-pin and writer-lock review before use.",
+      "subsystem": "Publication recovery",
+      "lifecycle": "legacy-needs-review",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "catalog-r2-probe",
+      "path": ".github/workflows/catalog-r2-probe.yml",
+      "family": "models",
+      "purpose": "Probe scoped staging component storage access.",
+      "subsystem": "Storage boundaries",
+      "lifecycle": "diagnostic",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "catalog-safety-drill",
+      "path": ".github/workflows/catalog-safety-drill.yml",
+      "family": "models",
+      "purpose": "Exercise staging catalog concurrency and rollback under the existing guarded drill.",
+      "subsystem": "Catalog safety",
+      "lifecycle": "diagnostic",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "collect-core-model",
+      "path": ".github/workflows/collect-core-model.yml",
+      "family": "models",
+      "purpose": "Collect and seal one core model for the calling bake.",
+      "subsystem": "Model collection",
+      "lifecycle": "recurring",
+      "runbook": "docs/current-model-artifact-handoff.md"
+    },
+    {
+      "id": "collect-regional-model",
+      "path": ".github/workflows/collect-regional-model.yml",
+      "family": "models",
+      "purpose": "Collect one regional model or retain an honest abstention receipt.",
+      "subsystem": "Model collection",
+      "lifecycle": "recurring",
+      "runbook": "docs/current-model-artifact-handoff.md"
+    },
+    {
+      "id": "consumer-refresh",
+      "path": ".github/workflows/consumer-refresh.yml",
+      "family": "releases",
+      "purpose": "Refresh production consumers with guarded verification and rollback.",
+      "subsystem": "Production consumers",
+      "lifecycle": "manual-supported",
+      "runbook": "CONSUMER_REFRESH.md"
+    },
+    {
+      "id": "data-edge-deploy",
+      "path": ".github/workflows/data-edge-deploy.yml",
+      "family": "releases",
+      "purpose": "Deploy the selected production data-edge phase under its explicit guards.",
+      "subsystem": "Production data edge",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "data-reader-refresh",
+      "path": ".github/workflows/data-reader-refresh.yml",
+      "family": "releases",
+      "purpose": "Refresh the production data reader with compatible fallback recovery.",
+      "subsystem": "Production data reader",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/data-reader-refresh.md"
+    },
+    {
+      "id": "fusion-evaluate",
+      "path": ".github/workflows/fusion-evaluate.yml",
+      "family": "maintenance",
+      "purpose": "Evaluate retained fusion inputs through the existing guarded evaluation path.",
+      "subsystem": "Fusion evaluation",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "fusion-infra",
+      "path": ".github/workflows/fusion-infra.yml",
+      "family": "control-plane",
+      "purpose": "Provision the selected fusion infrastructure through explicit deployment guards.",
+      "subsystem": "Fusion infrastructure",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "fusion-issue",
+      "path": ".github/workflows/fusion-issue.yml",
+      "family": "maintenance",
+      "purpose": "Issue the selected fusion candidate under existing qualification rules.",
+      "subsystem": "Fusion issuance",
+      "lifecycle": "recurring",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "fusion-promote",
+      "path": ".github/workflows/fusion-promote.yml",
+      "family": "maintenance",
+      "purpose": "Promote a qualified fusion candidate through the guarded controller.",
+      "subsystem": "Fusion promotion",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "gdacs-feed-release",
+      "path": ".github/workflows/gdacs-feed-release.yml",
+      "family": "releases",
+      "purpose": "Release the isolated GDACS route through guarded verification and recovery.",
+      "subsystem": "Hazard feed",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "hydrology",
+      "path": ".github/workflows/hydrology.yml",
+      "family": "archives",
+      "purpose": "Prepare hydrology artifacts through the explicit staging path.",
+      "subsystem": "Hydrology",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "model-inputs",
+      "path": ".github/workflows/model-inputs.yml",
+      "family": "staging",
+      "purpose": "Collect isolated experimental model inputs with bounded provider concurrency.",
+      "subsystem": "Experimental models",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/MODEL_CLOUD_INPUTS.md"
+    },
+    {
+      "id": "nam-hi-diagnostic",
+      "path": ".github/workflows/nam-hi-diagnostic.yml",
+      "family": "staging",
+      "purpose": "Diagnose a bounded NAM-HI acquisition without broadening publication authority.",
+      "subsystem": "Experimental models",
+      "lifecycle": "diagnostic",
+      "runbook": "docs/nam-hi-cloud-diagnostic.md"
+    },
+    {
+      "id": "point-route-activate",
+      "path": ".github/workflows/point-route-activate.yml",
+      "family": "releases",
+      "purpose": "Activate reviewed point routes with ownership-aware rollback.",
+      "subsystem": "Production point routes",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/point-route-activation.md"
+    },
+    {
+      "id": "publish-current-model-production",
+      "path": ".github/workflows/publish-current-model-production.yml",
+      "family": "models",
+      "purpose": "Qualify and publish one authenticated collector result independently of sibling models.",
+      "subsystem": "Component publication",
+      "lifecycle": "recurring",
+      "runbook": "docs/current-model-artifact-handoff.md"
+    },
+    {
+      "id": "resume-model-publication",
+      "path": ".github/workflows/resume-model-publication.yml",
+      "family": "models",
+      "purpose": "Recover publication from the explicitly reviewed retained run without recollecting models.",
+      "subsystem": "Publication recovery",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/resume-model-publication.md"
+    },
+    {
+      "id": "satellite-archive",
+      "path": ".github/workflows/satellite-archive.yml",
+      "family": "archives",
+      "purpose": "Collect hourly archive tails or explicit bounded historical batches.",
+      "subsystem": "Satellite and radar",
+      "lifecycle": "recurring",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "scheduler-ci",
+      "path": ".github/workflows/scheduler-ci.yml",
+      "family": "control-plane",
+      "purpose": "Check scheduler, publication, source, and recovery contracts.",
+      "subsystem": "Controller evidence",
+      "lifecycle": "recurring",
+      "runbook": "scheduler/README.md"
+    },
+    {
+      "id": "scheduler-deploy",
+      "path": ".github/workflows/scheduler-deploy.yml",
+      "family": "control-plane",
+      "purpose": "Deploy and verify the selected scheduler revision through existing guards.",
+      "subsystem": "Scheduler",
+      "lifecycle": "manual-supported",
+      "runbook": "scheduler/README.md"
+    },
+    {
+      "id": "source-checkout-probe",
+      "path": ".github/workflows/source-checkout-probe.yml",
+      "family": "control-plane",
+      "purpose": "Probe exact source checkout isolation without granting deployment authority.",
+      "subsystem": "Source provenance",
+      "lifecycle": "diagnostic",
+      "runbook": "docs/source-checkout-isolation.md"
+    },
+    {
+      "id": "staging-consumer-refresh",
+      "path": ".github/workflows/staging-consumer-refresh.yml",
+      "family": "staging",
+      "purpose": "Refresh staging consumers with existing verification and restore controls.",
+      "subsystem": "Staging consumers",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/staging-consumer-restore-20260905.md"
+    },
+    {
+      "id": "staging-current-selection",
+      "path": ".github/workflows/staging-current-selection.yml",
+      "family": "staging",
+      "purpose": "Record the current eligible selection for the staging controller.",
+      "subsystem": "Staging selection",
+      "lifecycle": "recurring",
+      "runbook": "docs/CLOUD-STAGING.md"
+    },
+    {
+      "id": "staging-data-activate",
+      "path": ".github/workflows/staging-data-activate.yml",
+      "family": "staging",
+      "purpose": "Activate qualified staging data within the existing publication transaction.",
+      "subsystem": "Staging data",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/CLOUD-STAGING.md"
+    },
+    {
+      "id": "staging-data",
+      "path": ".github/workflows/staging-data.yml",
+      "family": "staging",
+      "purpose": "Prepare shared staging data under existing source and isolation guards.",
+      "subsystem": "Staging data",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/CLOUD-STAGING.md"
+    },
+    {
+      "id": "staging-follow-master",
+      "path": ".github/workflows/staging-follow-master.yml",
+      "family": "staging",
+      "purpose": "Follow qualified master changes through the staging controller.",
+      "subsystem": "Staging selection",
+      "lifecycle": "recurring",
+      "runbook": "docs/staging-latency-controller.md"
+    },
+    {
+      "id": "staging-model-components",
+      "path": ".github/workflows/staging-model-components.yml",
+      "family": "staging",
+      "purpose": "Prepare isolated model components for staging qualification.",
+      "subsystem": "Experimental models",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/STAGING_MODEL_COMPONENTS.md"
+    },
+    {
+      "id": "staging-model-selection",
+      "path": ".github/workflows/staging-model-selection.yml",
+      "family": "staging",
+      "purpose": "Select the reviewed model components for a staging candidate.",
+      "subsystem": "Experimental models",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/STAGING_MODEL_COMPONENTS.md"
+    },
+    {
+      "id": "staging-place-renewal",
+      "path": ".github/workflows/staging-place-renewal.yml",
+      "family": "staging",
+      "purpose": "Renew the reviewed staging place data through the existing controller.",
+      "subsystem": "Places",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/staging-place-renewal-plan.md"
+    },
+    {
+      "id": "staging-places",
+      "path": ".github/workflows/staging-places.yml",
+      "family": "staging",
+      "purpose": "Prepare and qualify the isolated staging place data.",
+      "subsystem": "Places",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/staging-places.md"
+    },
+    {
+      "id": "staging-search-reader",
+      "path": ".github/workflows/staging-search-reader.yml",
+      "family": "staging",
+      "purpose": "Activate the guarded staging search reader and verify its boundary.",
+      "subsystem": "Search",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/staging-search-reader.md"
+    },
+    {
+      "id": "staging-search",
+      "path": ".github/workflows/staging-search.yml",
+      "family": "staging",
+      "purpose": "Prepare isolated search data for staging qualification.",
+      "subsystem": "Search",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/staging-search.md"
+    },
+    {
+      "id": "staging-shared-read-pin",
+      "path": ".github/workflows/staging-shared-read-pin.yml",
+      "family": "staging",
+      "purpose": "Pin the reviewed shared-data selection for staging.",
+      "subsystem": "Shared data reading",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/STAGING_SHARED_READ.md"
+    },
+    {
+      "id": "staging-shared-read-probe",
+      "path": ".github/workflows/staging-shared-read-probe.yml",
+      "family": "staging",
+      "purpose": "Probe staging shared-data access without treating the probe as activation.",
+      "subsystem": "Shared data reading",
+      "lifecycle": "diagnostic",
+      "runbook": "docs/STAGING_SHARED_READ.md"
+    },
+    {
+      "id": "staging-tc-guidance",
+      "path": ".github/workflows/staging-tc-guidance.yml",
+      "family": "staging",
+      "purpose": "Prepare reviewed tropical cyclone guidance for isolated staging use.",
+      "subsystem": "Tropical cyclone guidance",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/STAGING_TC_GUIDANCE.md"
+    },
+    {
+      "id": "staging-wind100-preflight",
+      "path": ".github/workflows/staging-wind100-preflight.yml",
+      "family": "staging",
+      "purpose": "Check recurring staging wind credentials through the existing check-only path.",
+      "subsystem": "Native wind",
+      "lifecycle": "diagnostic",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "staging-wind100-recurring",
+      "path": ".github/workflows/staging-wind100-recurring.yml",
+      "family": "staging",
+      "purpose": "Maintain the isolated recurring staging native wind selection.",
+      "subsystem": "Native wind",
+      "lifecycle": "recurring",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "staging-wind100",
+      "path": ".github/workflows/staging-wind100.yml",
+      "family": "staging",
+      "purpose": "Qualify isolated native 100 metre wind for staging.",
+      "subsystem": "Native wind",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "ui-release",
+      "path": ".github/workflows/ui-release.yml",
+      "family": "releases",
+      "purpose": "Promote an eligible immutable application candidate through production guards.",
+      "subsystem": "Application shell",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/production-safe-controller-20260907.md"
+    },
+    {
+      "id": "ui-staging-tc",
+      "path": ".github/workflows/ui-staging-tc.yml",
+      "family": "staging",
+      "purpose": "Build an isolated staging shell with reviewed tropical cyclone guidance.",
+      "subsystem": "Application shell",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/STAGING_TC_GUIDANCE.md"
+    },
+    {
+      "id": "ui-staging",
+      "path": ".github/workflows/ui-staging.yml",
+      "family": "staging",
+      "purpose": "Build and qualify an immutable staging application candidate.",
+      "subsystem": "Application shell",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/UI-STAGING-PROMOTION.md"
+    },
+    {
+      "id": "verify-backfill",
+      "path": ".github/workflows/verify-backfill.yml",
+      "family": "maintenance",
+      "purpose": "Backfill verification history with the existing bounded recovery controls.",
+      "subsystem": "Verification archive",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "weatherx-workflow-inventory",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "yaml": "2.9.1"
+  }
+}
