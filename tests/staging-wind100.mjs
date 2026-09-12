@@ -626,6 +626,9 @@ test('synthetic pack layout matches the pinned producer bytes apart from gzip OS
 test('policy fixes one reviewed ECMWF source, exact semantics and dependency closure', () => {
   const policy = readPolicy();
   assert.equal(policy.sourceSha, SOURCE_SHA);
+  assert.equal(policy.coreSourceSha, '7a50f19714f22e04dc610a5aa33d311b7d1dc673');
+  assert.equal(policy.sourceClosure['ops/bake-model-component.sh'],
+    '22edd3ddb42a094fe1816ef0ed50557e5329ab6e7efddf1393537a8e63486aec');
   assert.equal(policy.recurringPublicationMode, 'point-only-recurring-v1');
   assert.deepEqual(policy.recurringStorage, {
     componentObjectPrefix: 'components/point-ecmwf/stage-wind100-recurring-point-ecmwf-',

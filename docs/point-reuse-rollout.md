@@ -97,7 +97,10 @@ exact-head jobs; its implementation passed the 16-suite ready lane and strict
 814-test inventory. The merge adds the narrow task contract and regression tests.
 
 The resulting Wind100 controller digest is
-`860ecd8e65907f35497d690add6af8e32465a384ee1f63deb1956324dd944f61`.
+`1f4473e84107cf2b0d8920c7db044b814b7c9f79d4f0897a6c99cd78e40f243f`.
+The core collector is authenticated separately by `coreSourceSha`; the source
+closure remains bound to the point-only `9174329d` checkout whose bytes it
+verifies.
 It must replace the protected `STAGING_WIND100_CONTROLLER_SHA256` value only as
 part of the authorized activation after older admitted jobs drain.
 
