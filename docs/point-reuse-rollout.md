@@ -40,7 +40,7 @@ artifact consumers, dependencies and readers. The source change must not relabel
 old artifacts: collectors produce new receipts at the new exact source SHA.
 Keep retained manual recovery exceptions unchanged.
 
-Reviewed Atmos source: `0335a3b0a85b629c8659032a032bbc5ea0911eff`. All six workflow consumers and
+Reviewed Atmos source: `6abda80d3c72d955a6bb91cef36ccd161bdddc0f`. All six workflow consumers and
 Wind100 ordinary-source policy/assertion pin this commit. Source-delta evidence
 and the coordinated controller values are recorded below.
 
@@ -79,8 +79,16 @@ observations were 24.635 s and 25.076 s (2.03× median). Peak process RSS was
 7,323.11 MiB and sampled runner availability never fell below 7,716.71 MiB.
 The job had no provider or publication authority.
 
+The [GFS point-stage preservation delta](https://github.com/weatherx-hq/atmos/compare/0335a3b0a85b629c8659032a032bbc5ea0911eff...6abda80d3c72d955a6bb91cef36ccd161bdddc0f)
+changes only `data/fetch.py` and its regression tests. When a hydrated same-run
+GFS map is already complete and enriched but the private point stage is absent,
+the collector now rebuilds only that point/float input and leaves the map frames
+and manifest byte-for-byte unchanged. New model runs retain the qualified full
+parallel encoding and enrichment path. Atmos PR #262 passed all six exact-head
+jobs and the 26-suite ready lane.
+
 The resulting Wind100 controller digest is
-`5b728f1a312fb58095109d864984269abb33f177d0cd81d0fdac7baf58303ca3`.
+`622351183ca6d272abd03c4734638482e5e826c7709a2973946b4412ede0dc0e`.
 It must replace the protected `STAGING_WIND100_CONTROLLER_SHA256` value only as
 part of the authorized activation after older admitted jobs drain.
 
@@ -89,10 +97,10 @@ artifact-handoff tests, and full scheduler check including its deployment dry ru
 No deployment command without `--dry-run` was executed.
 
 Read-only preflight on 2026-09-12 confirmed the protected production source is
-still `48be0a6c7cef9a0c831831952cefd80ce967ad2d`; current-run publishing is
+still `0335a3b0a85b629c8659032a032bbc5ea0911eff`; current-run publishing is
 enabled and point reuse selection is `all`. In `data-staging`, Wind100 is enabled
 and its approved controller digest is
-`0603dfa65a52cb1d2eb69ae8719528bb23d8bc6d7605078e511a3acb5f50d879`.
+`5b728f1a312fb58095109d864984269abb33f177d0cd81d0fdac7baf58303ca3`.
 Re-read these values immediately before any authorized change; they are a
 snapshot, not permission to overwrite later owner changes.
 

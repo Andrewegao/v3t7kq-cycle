@@ -35,7 +35,7 @@ jobs:
       credentials_ready: ${{ steps.staging_credentials.outputs.ready }}
     env:
       ATMOS_SHA: 9174329db6ca8527569e67f14ef70406dedefb69
-      CORE_ATMOS_SHA: 0335a3b0a85b629c8659032a032bbc5ea0911eff
+      CORE_ATMOS_SHA: 6abda80d3c72d955a6bb91cef36ccd161bdddc0f
       MODEL_ID: ecmwf
       STAGING_DATA_ISOLATION_APPROVED: ${{ vars.STAGING_DATA_ISOLATION_APPROVED }}
       STAGING_WIND100_ENABLED: ${{ vars.STAGING_WIND100_ENABLED }}
@@ -75,7 +75,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: weatherx-hq/atmos
-          ref: 0335a3b0a85b629c8659032a032bbc5ea0911eff
+          ref: 6abda80d3c72d955a6bb91cef36ccd161bdddc0f
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: atmos-core
           persist-credentials: false
