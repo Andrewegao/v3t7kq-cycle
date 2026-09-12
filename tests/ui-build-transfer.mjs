@@ -57,7 +57,7 @@ test('account profile authenticates only the exact optional Wind100 receipt shap
   assert.throws(()=>packBuild(candidate(PROFILE,{product:'lab',platformAccount:'0',platformDataAuth:'public',wind100}),keys.publicKey),/cannot enter another profile/);
 });
 test('account profile authenticates the explicit dynamic Wind100 presentation binding',()=>{
-  const wind100={catalogId:'stage-wind100-34547542747-1',runId:'2026091000',selectionSha256:'e'.repeat(64),dynamic:true};
+  const wind100={catalogId:'stage-wind100-recurring-34657769540-1',runId:'2026091112',selectionSha256:'e'.repeat(64),dynamic:true};
   const buildProfile={product:'lab',platformAccount:'1',platformDataAuth:'public',wind100};
   const c=candidate(ACCOUNT_CORE_PROFILE,buildProfile),decoded=unpackBuild(packBuild(c,keys.publicKey),keys.privateKey);
   assert.deepEqual(validateCandidate(decoded).buildProfile.wind100,wind100);

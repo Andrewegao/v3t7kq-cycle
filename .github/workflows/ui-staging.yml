@@ -107,7 +107,7 @@ jobs:
           repository: weatherx-hq/atmos
           # Baseline artifacts keep the production-compatible controller; staging-only
           # profiles use a separately reviewed literal pin. Never accept an input SHA here.
-          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && '25c402db5149daa018e349a34a4beeba1f2dca45' || '1d6a787c0cfd5ada47fd3af9ce2a9e2b9b6227bb' }}
+          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && '25c402db5149daa018e349a34a4beeba1f2dca45' || 'fa857448dafa0f54eafdd63999b85eca4916edc8' }}
           ssh-key: ${{ secrets.ATMOS_READONLY_KEY }}
           persist-credentials: false
           path: control
@@ -117,6 +117,8 @@ jobs:
         with: { python-version: '3.11' }
       - name: enforce manually enabled isolated build
         run: node cycle/tools/ui-release.mjs build-gate
+      - name: check pinned receipt profile compatibility before build work
+        run: node cycle/tools/ui-release-profile-preflight.mjs
       - name: preflight public staging data before expensive build or deployment
         env:
           UI_CYCLE_ROOT: cycle
@@ -197,7 +199,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && '25c402db5149daa018e349a34a4beeba1f2dca45' || '1d6a787c0cfd5ada47fd3af9ce2a9e2b9b6227bb' }}
+          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'none' && '25c402db5149daa018e349a34a4beeba1f2dca45' || 'fa857448dafa0f54eafdd63999b85eca4916edc8' }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
           path: control

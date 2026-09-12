@@ -40,10 +40,27 @@ test('staging workflow leaves release-mode activation to the exact-profile contr
   assert.match(STAGING_CONTROL_SHA,/^[a-f0-9]{40}$/);
   assert.equal((staging.match(/ref: \$\{\{ needs\.profile\.outputs\.model_selection_sha256/g)||[]).length,2);
   assert.match(candidate,/export const CONTROL_SHA = '25c402db5149daa018e349a34a4beeba1f2dca45'/);
+  assert.equal(STAGING_CONTROL_SHA,'fa857448dafa0f54eafdd63999b85eca4916edc8');
   assert.match(prod,/ref: 25c402db5149daa018e349a34a4beeba1f2dca45/);
   assert.match(prod,/repository: weatherx-hq\/atmos/);
   assert.doesNotMatch(prod,/ref: a58eff158b56ef2ba25189d2b859315b00893a14/);
   assert.doesNotMatch(prod,/STAGING_CONTROL_SHA|stagingOnly/);
+});
+test('actual pinned receipt profile is checked before expensive staging build work',()=>{
+  const build=staging.slice(staging.indexOf('\n  build:\n'),staging.indexOf('\n  qualify:\n'));
+  const preflight='node cycle/tools/ui-release-profile-preflight.mjs';
+  assert.equal((build.match(new RegExp(preflight.replaceAll('.','\\.'),'g'))||[]).length,1);
+  for(const prerequisite of ['checkout reviewed release controller','uses: actions/setup-node@','enforce manually enabled isolated build']){
+    assert.ok(build.indexOf(prerequisite)>=0,`missing ${prerequisite}`);
+    assert.ok(build.indexOf(preflight)>build.indexOf(prerequisite),`profile preflight must follow ${prerequisite}`);
+  }
+  for(const expensive of ['preflight public staging data before expensive build or deployment',
+    'checkout exact candidate Atmos source','install locked dependencies and browsers','full application test gate']){
+    assert.ok(build.indexOf(expensive)>=0,`missing ${expensive}`);
+    assert.ok(build.indexOf(preflight)<build.indexOf(expensive),`profile preflight must precede ${expensive}`);
+  }
+  for(const suffix of ['ENABLED','CATALOG_ID','RUN_ID','SELECTION_SHA256','DYNAMIC'])
+    assert.match(build,new RegExp(`STAGING_WIND100_UI_${suffix}: \\$\\{\\{ needs\\.profile\\.outputs\\.wind100_${suffix.toLowerCase()} \\}\\}`));
 });
 test('staging Wind100 pin comes only from protected profile outputs and production has no flags',()=>{
   const profile=staging.slice(staging.indexOf('\n  profile:\n'),staging.indexOf('\n  build:\n'));
