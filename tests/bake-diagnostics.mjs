@@ -34,7 +34,7 @@ assert.doesNotMatch(diagnosticBlock, /\bawk\b|\btail\b|\bcat\b|substr\(/,
   'the final public diagnostic is projected by the schema validator only');
 assert.match(workflow, /path: \$\{\{ runner\.temp \}\}\/weatherx-bake-diagnostic\/receipt\.json/);
 assert.match(workflow, /bake-public-diagnostic\.mjs" retain/);
-assert.match(workflow, /continue-on-error: true[\s\S]*?ATMOS_SHA: 48be0a6c7cef9a0c831831952cefd80ce967ad2d/);
+assert.match(workflow, /continue-on-error: true[\s\S]*?ATMOS_SHA: 0335a3b0a85b629c8659032a032bbc5ea0911eff/);
 const uploadBlock=workflow.split('      - name: upload encrypted bake diagnostic receipt\n')[1]?.split('\n  # Reporting')[0];
 assert.match(uploadBlock,/continue-on-error: true/,'diagnostic artifact outages never change the bake result');
 
