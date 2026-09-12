@@ -8,6 +8,8 @@ export async function loadSchedulerConfig(configUrl = new URL('../wrangler.jsonc
   const workerName = config.name;
   const expectedCrons = config.triggers?.crons;
   const expectedTarget = config.vars?.CATALOG_TARGET;
+  const expectedWind100Workflow = config.vars?.WIND100_GITHUB_WORKFLOW;
+  const expectedRef = config.vars?.GITHUB_REF;
 
   if (typeof accountId !== 'string' || !accountId) throw new Error('wrangler.jsonc is missing account_id');
   if (typeof workerName !== 'string' || !workerName) throw new Error('wrangler.jsonc is missing name');
@@ -21,8 +23,11 @@ export async function loadSchedulerConfig(configUrl = new URL('../wrangler.jsonc
   if (expectedTarget !== 'staging' && expectedTarget !== 'production') {
     throw new Error('wrangler.jsonc must declare a valid CATALOG_TARGET');
   }
+  if (expectedWind100Workflow !== 'bake.yml' || expectedRef !== 'main') {
+    throw new Error('wrangler.jsonc must constrain staging Wind100 dispatches to bake.yml on main');
+  }
 
-  return { accountId, workerName, expectedCrons, expectedTarget };
+  return { accountId, workerName, expectedCrons, expectedTarget, expectedWind100Workflow, expectedRef };
 }
 
 export function assertExactTarget(payload, expectedTarget) {
@@ -35,6 +40,23 @@ export function assertExactTarget(payload, expectedTarget) {
     throw new Error(`live catalog target mismatch: expected ${expectedTarget}`);
   }
   return expectedTarget;
+}
+
+export function assertExactWind100DispatchBindings(payload, expectedWorkflow, expectedRef) {
+  if (!payload || typeof payload !== 'object' || payload.success !== true ||
+      !payload.result || typeof payload.result !== 'object' || !Array.isArray(payload.result.bindings)) {
+    throw new Error('Cloudflare returned malformed Worker settings');
+  }
+  for (const [name, expected] of [
+    ['WIND100_GITHUB_WORKFLOW', expectedWorkflow],
+    ['GITHUB_REF', expectedRef],
+  ]) {
+    const bindings = payload.result.bindings.filter((binding) => binding?.name === name);
+    if (bindings.length !== 1 || bindings[0]?.type !== 'plain_text' || bindings[0]?.text !== expected) {
+      throw new Error(`live staging Wind100 dispatch binding mismatch: ${name}`);
+    }
+  }
+  return { workflow: expectedWorkflow, ref: expectedRef };
 }
 
 export function assertExactSchedules(payload, expectedCrons) {
@@ -78,7 +100,9 @@ export async function fetchLiveSchedules({ accountId, workerName, apiToken, expe
   return assertExactSchedules(payload, expectedCrons);
 }
 
-export async function fetchLiveTarget({ accountId, workerName, apiToken, expectedTarget, fetcher = fetch }) {
+export async function fetchLiveTarget({
+  accountId, workerName, apiToken, expectedTarget, expectedWind100Workflow, expectedRef, fetcher = fetch,
+}) {
   const endpoint = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/workers/scripts/${encodeURIComponent(workerName)}/settings`;
   const response = await fetcher(endpoint, {
     headers: { Authorization: `Bearer ${apiToken}` },
@@ -93,5 +117,6 @@ export async function fetchLiveTarget({ accountId, workerName, apiToken, expecte
   } catch {
     throw new Error('Cloudflare Worker settings API returned invalid JSON');
   }
+  assertExactWind100DispatchBindings(payload, expectedWind100Workflow, expectedRef);
   return assertExactTarget(payload, expectedTarget);
 }
