@@ -285,13 +285,13 @@ jobs:
           repository: weatherx-hq/atmos
           # Approved by full Atmos CI. The whole release produced below must pass
           # its own gates before any staging or production consumer can select it.
-          ref: d8cd45d123f60c30c413c14d46f68113e37468b7
+          ref: 48be0a6c7cef9a0c831831952cefd80ce967ad2d
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 32 # bounded reviewed checkout history
           persist-credentials: false
       - name: Verify approved immutable collector before running source
         run: |
-          test "$(git rev-parse HEAD)" = "d8cd45d123f60c30c413c14d46f68113e37468b7"
+          test "$(git rev-parse HEAD)" = "48be0a6c7cef9a0c831831952cefd80ce967ad2d"
           git diff --exit-code HEAD
       - name: plan conservative no-change fast path
         id: bake_plan
@@ -530,7 +530,7 @@ jobs:
         if: ${{ always() }}
         continue-on-error: true
         env:
-          ATMOS_SHA: d8cd45d123f60c30c413c14d46f68113e37468b7
+          ATMOS_SHA: 48be0a6c7cef9a0c831831952cefd80ce967ad2d
         run: node "$RUNNER_TEMP/public-diagnostic-controller/tools/bake-public-diagnostic.mjs" retain
       - name: upload encrypted bake diagnostic receipt
         if: ${{ always() }}
