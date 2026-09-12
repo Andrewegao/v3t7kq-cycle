@@ -26,8 +26,8 @@ existing production reader can consume every resulting object format.
 
 ## Source and controller closure
 
-The Atmos candidate is a publisher-only backport onto the deployed
-`d8cd45d123f60c30c413c14d46f68113e37468b7` source. The final reviewed SHA must
+The Atmos candidate layers the bounded bake-throughput changes onto the reviewed
+publisher backport from `d8cd45d123f60c30c413c14d46f68113e37468b7`. The final reviewed SHA must
 replace the ordinary producer pin in all six affected workflows: `bake.yml`,
 `collect-core-model.yml`, `collect-regional-model.yml`,
 `publish-current-model-production.yml`, `catalog-bake.yml` and
@@ -40,11 +40,12 @@ artifact consumers, dependencies and readers. The source change must not relabel
 old artifacts: collectors produce new receipts at the new exact source SHA.
 Keep retained manual recovery exceptions unchanged.
 
-Reviewed Atmos source: `48be0a6c7cef9a0c831831952cefd80ce967ad2d`. All six workflow consumers and
-Wind100 ordinary-source policy/assertion pin this commit. Final source-equivalence
-proof and controller digest are recorded below.
+Reviewed Atmos source: `0335a3b0a85b629c8659032a032bbc5ea0911eff`. All six workflow consumers and
+Wind100 ordinary-source policy/assertion pin this commit. Source-delta evidence
+and the coordinated controller values are recorded below.
 
-The reviewed controller digest is
+The underlying point-reuse publisher commit is
+`48be0a6c7cef9a0c831831952cefd80ce967ad2d`. Its reviewed controller digest is
 `0603dfa65a52cb1d2eb69ae8719528bb23d8bc6d7605078e511a3acb5f50d879`.
 Immutable Git-tree comparison of all 9,175 union paths passed: exactly 11
 allowlisted publisher/helper/test/registry/document changes, 9,164 other paths
@@ -59,22 +60,39 @@ unchanged, and a clean source checkout. Protected tree IDs are:
 
 The complete private source-proof JSON has SHA-256
 `7dcf700fbe581bb9e305e24fd1ede591bdb9aa6c5d4660c665545c20723ff51f`.
-The [publisher diff](https://github.com/weatherx-hq/atmos/compare/d8cd45d123f60c30c413c14d46f68113e37468b7...48be0a6c7cef9a0c831831952cefd80ce967ad2d)
+The [publisher-base diff](https://github.com/weatherx-hq/atmos/compare/d8cd45d123f60c30c413c14d46f68113e37468b7...48be0a6c7cef9a0c831831952cefd80ce967ad2d)
 has independent review, all 17 required ready suites, full old-platform checks
 (12 Vitest files / 454 tests plus publisher and workerd tests), and strict test
 inventory passing. Source/dependency specifications are identical outside the
 allowed publisher changes; hosted dependency resolution is not a binary
 reproducibility claim.
 
+The [bake-throughput delta](https://github.com/weatherx-hq/atmos/compare/48be0a6c7cef9a0c831831952cefd80ce967ad2d...0335a3b0a85b629c8659032a032bbc5ea0911eff)
+changes the GFS frame scheduler, verification builder, their tests and test
+registries, plus CI action pins required by repository policy. It imports no
+other modern-master runtime behavior. Atmos PR #259 passed all six exact-head
+jobs. Cycle qualification run 34694293980 then held the actual production GFS
+encoding-stage shape: 25 full 73 × 721 × 1440 float32 arrays, waves enabled and
+1,460 PNGs. All hashes were identical across two frozen-serial and two bounded
+parallel passes. The serial observations were 50.814 s and 50.078 s; parallel
+observations were 24.635 s and 25.076 s (2.03× median). Peak process RSS was
+7,323.11 MiB and sampled runner availability never fell below 7,716.71 MiB.
+The job had no provider or publication authority.
+
+The resulting Wind100 controller digest is
+`5b728f1a312fb58095109d864984269abb33f177d0cd81d0fdac7baf58303ca3`.
+It must replace the protected `STAGING_WIND100_CONTROLLER_SHA256` value only as
+part of the authorized activation after older admitted jobs drain.
+
 Companion local checks pass: 148 Node workflow/controller tests, 27 Python
 artifact-handoff tests, and full scheduler check including its deployment dry run.
 No deployment command without `--dry-run` was executed.
 
 Read-only preflight on 2026-09-12 confirmed the protected production source is
-still `d8cd45d123f60c30c413c14d46f68113e37468b7`; current-run publishing is
-enabled in both repository and production scopes. Point reuse selection is
-absent. In `data-staging`, Wind100 is enabled and its approved controller digest
-is `3a7a87a227a6654486e887cac8ee186fec337fea7989c92b3269ff283937d4b1`.
+still `48be0a6c7cef9a0c831831952cefd80ce967ad2d`; current-run publishing is
+enabled and point reuse selection is `all`. In `data-staging`, Wind100 is enabled
+and its approved controller digest is
+`0603dfa65a52cb1d2eb69ae8719528bb23d8bc6d7605078e511a3acb5f50d879`.
 Re-read these values immediately before any authorized change; they are a
 snapshot, not permission to overwrite later owner changes.
 
@@ -82,14 +100,17 @@ snapshot, not permission to overwrite later owner changes.
 
 1. Review the exact final Atmos commit and Cycle diff and require passing checks.
    Keep point reuse disabled while coordinating the complete source closure.
-2. Drain old component and Wind100 jobs. Updating a variable does not revoke a
+2. Drain old component, Wind100 and whole-maintenance jobs, including queued and
+   pending work and dependent publishers. Updating a variable does not revoke a
    running process which has already passed its gate. Both component lanes use
    the same per-model production lock; the joined maintenance lane has its own
    lock and retains its existing catalog rebase.
-3. Land the complete Cycle change and coordinate the protected
+3. Land the complete Cycle change and immediately coordinate the protected
    `CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA` and
    `STAGING_WIND100_CONTROLLER_SHA256` values. Mismatched values refuse new
-   publication. No reader, scheduler Worker or storage setting change is required.
+   component or Wind100 publication. The whole-maintenance collector has no
+   separate source-approval variable, so the merged pin itself activates that
+   lane. No reader, scheduler Worker or storage setting change is required.
 4. Select one model and use the existing single-model workflow to qualify a
    genuine same-run native-map update. Record controller/source SHAs, schema-1
    manifests, unchanged point key/hash, changed qualified map, successful atomic
