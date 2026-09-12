@@ -72,4 +72,6 @@ Keep these exports local. The report preserves failed, skipped, and cancelled jo
 
 Run the offline contracts with `node --test tests/workflow-timing.mjs`. Raw logs, provider data, receipts, and credentials are not read or included by this tool.
 
+GitHub can copy successful retained jobs into a selective rerun with new job IDs and the later attempt number, while preserving the earlier execution timestamps. A single jobs export therefore cannot establish which work was newly executed. Do not treat its summed duration as incremental retry cost; compare earlier timestamps and actual producer receipts when that distinction matters.
+
 Only metadata, generated documentation, and CI inventory validation are introduced. Publication workflows, source pins, schedules, locks, environments, credentials, retained artifacts, and deployed services are unchanged. CI failure on stale documentation requests regeneration; it never mutates deployment configuration.

@@ -105,6 +105,7 @@ export function timingReport(input, run) {
       'Known step sums exclude unknown timings and can omit setup/teardown or gaps. Overlapping jobs are summed, not treated as critical-path or billable minutes.',
       'Complete jobs span is first job start to last job completion only when every exported job has finished with usable timestamps; it excludes earlier dispatch wait and is not a publication latency measurement.',
       'No live clock, API calls, logs, artifacts or publication receipts are read. Retried attempts require separate exports.',
+      'GitHub can copy retained successful jobs into a later attempt with new job IDs and attempt numbers. This export alone cannot identify reused evidence; summed durations are not incremental retry cost. Compare prior timestamps and producer receipts before claiming work was re-executed.',
     ],
     jobCount: rows.length, outcomes: totals,
     knownJobSeconds: knownDurations.reduce((sum, row) => sum + row.durationSeconds, 0),
