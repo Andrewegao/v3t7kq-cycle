@@ -8,7 +8,7 @@
   "workers_dev": false,
   "preview_urls": false,
   "triggers": {
-    "crons": ["8-59/10 * * * *", "7 * * * *"]
+    "crons": ["8-59/10 * * * *", "7 * * * *", "23 * * * *"]
   },
   "secrets": {
     "required": ["GITHUB_DISPATCH_TOKEN"]
@@ -17,6 +17,7 @@
     "GITHUB_OWNER": "Andrewegao",
     "GITHUB_REPO": "v3t7kq-cycle",
     "GITHUB_WORKFLOW": "catalog-bake.yml",
+    "SATELLITE_GITHUB_WORKFLOW": "satellite-archive.yml",
     "GITHUB_REF": "main",
     "CATALOG_TARGET": "production"
   },

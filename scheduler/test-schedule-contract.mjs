@@ -5,13 +5,19 @@ import { loadSchedulerConfig } from './scripts/live-schedules.mjs';
 const { expectedCrons, expectedTarget } = await loadSchedulerConfig();
 const runtime = await readFile(new URL('./src/schedules.ts', import.meta.url), 'utf8');
 const catalogWorkflow = await readFile(new URL('../.github/workflows/catalog-bake.yml', import.meta.url), 'utf8');
+const archiveWorkflow = await readFile(new URL('../.github/workflows/satellite-archive.yml', import.meta.url), 'utf8');
 const deployWorkflow = await readFile(new URL('../.github/workflows/scheduler-deploy.yml', import.meta.url), 'utf8');
 
 const runtimeCrons = [...runtime.matchAll(/export const \w+_CRON = '([^']+)'/g)].map((match) => match[1]);
 const workflowCrons = [...catalogWorkflow.matchAll(/^\s+- cron: '([^']+)'$/gm)].map((match) => match[1]);
 
 assert.deepEqual([...runtimeCrons].sort(), [...expectedCrons].sort(), 'runtime cron mapping must match wrangler triggers');
-assert.deepEqual([...workflowCrons].sort(), [...expectedCrons].sort(), 'GitHub fallback crons must match wrangler triggers');
+assert.deepEqual([...workflowCrons].sort(), expectedCrons.filter((cron) => cron !== '23 * * * *').sort(),
+  'catalog GitHub fallback crons must match the catalog scheduler triggers');
+assert.match(archiveWorkflow, /cron: '25 \* \* \* \*'/,
+  'the archive must retain an independent GitHub-native fallback');
+assert.match(archiveWorkflow, /inputs\.policy == 'hourly-tail-v1'/,
+  'the external scheduler may dispatch only the constrained hourly archive path');
 assert.equal(expectedTarget, 'production', 'the reviewed scheduler release must publish guarded production components');
 assert.match(catalogWorkflow,
   /github\.event_name == 'workflow_dispatch' \|\| vars\.CATALOG_GITHUB_FALLBACK_DISABLED != 'true'/,
