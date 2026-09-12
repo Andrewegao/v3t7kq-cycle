@@ -1,7 +1,8 @@
 # Production point reuse
 
-Status: preparation only. No workflow was dispatched, protected variable changed,
-historical object removed or production source activated by this change.
+Status: point reuse is active for all current-run component publishers. The GFS
+enrichment-gate follow-up below is reviewed but remains inactive until its exact
+Cycle pin and protected controller values are merged and coordinated.
 
 This rollout avoids uploading a second copy of an unchanged point forecast during
 a same-run map update. It retains the existing schema-1 point component after
@@ -40,7 +41,7 @@ artifact consumers, dependencies and readers. The source change must not relabel
 old artifacts: collectors produce new receipts at the new exact source SHA.
 Keep retained manual recovery exceptions unchanged.
 
-Reviewed Atmos source: `6abda80d3c72d955a6bb91cef36ccd161bdddc0f`. All six workflow consumers and
+Reviewed Atmos source: `7a50f19714f22e04dc610a5aa33d311b7d1dc673`. All six workflow consumers and
 Wind100 ordinary-source policy/assertion pin this commit. Source-delta evidence
 and the coordinated controller values are recorded below.
 
@@ -87,8 +88,16 @@ and manifest byte-for-byte unchanged. New model runs retain the qualified full
 parallel encoding and enrichment path. Atmos PR #262 passed all six exact-head
 jobs and the 26-suite ready lane.
 
+The [GFS component-gate delta](https://github.com/weatherx-hq/atmos/compare/6abda80d3c72d955a6bb91cef36ccd161bdddc0f...7a50f19714f22e04dc610a5aa33d311b7d1dc673)
+aligns the isolated GFS publisher with the established whole-bake contract:
+optional enrichment failures are recorded, then the existing strict live-superset
+validator decides whether publication may continue. A failing validator remains
+fatal, and ECMWF enrichment remains fail-closed. Atmos PR #263 passed all six
+exact-head jobs; its implementation passed the 16-suite ready lane and strict
+814-test inventory. The merge adds the narrow task contract and regression tests.
+
 The resulting Wind100 controller digest is
-`622351183ca6d272abd03c4734638482e5e826c7709a2973946b4412ede0dc0e`.
+`860ecd8e65907f35497d690add6af8e32465a384ee1f63deb1956324dd944f61`.
 It must replace the protected `STAGING_WIND100_CONTROLLER_SHA256` value only as
 part of the authorized activation after older admitted jobs drain.
 
@@ -97,10 +106,10 @@ artifact-handoff tests, and full scheduler check including its deployment dry ru
 No deployment command without `--dry-run` was executed.
 
 Read-only preflight on 2026-09-12 confirmed the protected production source is
-still `0335a3b0a85b629c8659032a032bbc5ea0911eff`; current-run publishing is
+still `6abda80d3c72d955a6bb91cef36ccd161bdddc0f`; current-run publishing is
 enabled and point reuse selection is `all`. In `data-staging`, Wind100 is enabled
 and its approved controller digest is
-`5b728f1a312fb58095109d864984269abb33f177d0cd81d0fdac7baf58303ca3`.
+`622351183ca6d272abd03c4734638482e5e826c7709a2973946b4412ede0dc0e`.
 Re-read these values immediately before any authorized change; they are a
 snapshot, not permission to overwrite later owner changes.
 
