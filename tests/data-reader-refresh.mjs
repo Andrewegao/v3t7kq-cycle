@@ -2,7 +2,35 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {generateKeyPairSync,privateDecrypt,createDecipheriv} from 'node:crypto';
 import { createTransport,safeFailureDiagnostic,encryptInheritanceDiagnostic } from '../tools/gdacs-feed-release.mjs';
-import { execute,recover,assertClosure,CLOSURE,assertVersion,makeOperations,SCRIPT,assertBoundary,versionAnnotations,normalizeHistory,assertHistory,EXCLUSIVE_WINDOW } from '../tools/data-reader-refresh.mjs';
+import { execute,recover,assertClosure,CLOSURE,assertVersion,makeOperations,SCRIPT,assertBoundary,versionAnnotations,normalizeHistory,assertHistory,EXCLUSIVE_WINDOW,assertDataRoutes,WORKER } from '../tools/data-reader-refresh.mjs';
+import { PATTERN } from '../tools/point-route-activate.mjs';
+const basePatterns=['weatherx.org/data/*','weatherx.org/data-atmos/*','weatherx.org/api/platform/internal/catalog*','weatherx.org/api/platform/data-health*'];
+test('code-only refresh accepts only reviewed pre/post point-activation route sets',()=>{
+  const source=basePatterns.map(pattern=>({pattern,zone_name:'weatherx.org'}));
+  const base=basePatterns.map((pattern,i)=>({id:String(i),pattern,script:WORKER,request_limit_fail_open:false}));
+  const point={id:'existing-point-id',pattern:PATTERN,script:WORKER,request_limit_fail_open:false};
+  for(const wanted of [source,[...source,{pattern:PATTERN,zone_name:'weatherx.org'}]]){
+    assertDataRoutes(base,wanted);assertDataRoutes([...base,point],wanted);
+  }
+  for(const routes of [base.slice(1),[...base,{...point,pattern:'weatherx.org/api/v1/*'}],
+    [...base,point,{...point,id:'duplicate'}],[...base,{...point,script:'foreign-worker'}],
+    [...base,{...point,request_limit_fail_open:true}],base.map((r,i)=>i===0?{...r,script:'foreign-worker'}:r),
+    [...base,point,{id:'foreign',pattern:'weatherx.org/api/v1/point-series/gfs*',script:'foreign-worker'}]]){
+    assert.throws(()=>assertDataRoutes(routes,source),/route/);
+  }
+  assert.throws(()=>assertDataRoutes(base,[...source,{pattern:'weatherx.org/*'}]),/route/);
+});
+test('admitted route sets do not permit route identity or phase changes inside a refresh',()=>{
+  const f=fixture();
+  f.receipt.boundary.routes=basePatterns.map((pattern,i)=>({id:String(i),pattern,script:WORKER,request_limit_fail_open:false}));
+  f.receipt.boundary.routes.push({id:'point-owned',pattern:PATTERN,script:WORKER,request_limit_fail_open:false});
+  assertBoundary(structuredClone(f.receipt.boundary),f.receipt);
+  for(const mutate of [r=>r.pop(),r=>r[0].id='recreated',r=>r[4].script='foreign',
+    r=>r[4].request_limit_fail_open=true]){
+    const boundary=structuredClone(f.receipt.boundary);mutate(boundary.routes);
+    assert.throws(()=>assertBoundary(boundary,f.receipt),/boundary changed/);
+  }
+});
 const old='00000000-0000-0000-0000-000000000001',ro='00000000-0000-0000-0000-000000000002',full='00000000-0000-0000-0000-000000000003',foreign='00000000-0000-0000-0000-000000000004';
 function fixture(){
   let current=old;const writes=[],events=[],saved=[],history=[{id:old,number:13}];
@@ -146,6 +174,21 @@ test('closure admits only exact data modules plus optional fallback wrapper',()=
   assertClosure(Object.fromEntries(CLOSURE.map(x=>[x,{}])),'full');
   assert.throws(()=>assertClosure(Object.fromEntries([...CLOSURE,'src/index.ts'].map(x=>[x,{}])),'full'));
   assert.throws(()=>assertClosure(Object.fromEntries(CLOSURE.filter(x=>x!=='src/releasePromotion.ts').map(x=>[x,{}])),'full'));
+});
+test('reviewed boot descriptor joins the exact fifteen-module closure without broadening it',()=>{
+  const reviewed=['access','bootDescriptor','catalog','catalogApi','crypto','data','dataEdge','db','http',
+    'pointSeries','pointSeriesContract','releasePromotion','sharedRead','telemetry','types'].map(name=>`src/${name}.ts`).sort();
+  assert.deepEqual(CLOSURE,reviewed);
+  for(const kind of ['full','readonly']){
+    const expected=[...reviewed,...(kind==='readonly'?['src/dataEdgeReadOnly.ts']:[])];
+    const inputs=paths=>Object.fromEntries(paths.map(path=>[path,{}]));
+    assertClosure(inputs(expected),kind);
+    for(const omitted of expected)assert.throws(()=>assertClosure(inputs(expected.filter(path=>path!==omitted)),kind),/unexpected Worker bundle closure/);
+    for(const extra of ['src/index.ts','src/stripe.ts','src/auth.ts','src/gdacsFeed.ts','src/unreviewed.ts']){
+      assert.throws(()=>assertClosure(inputs([...expected,extra]),kind),/unexpected Worker bundle closure/);
+    }
+  }
+  assert.throws(()=>assertClosure(Object.fromEntries([...reviewed,'src/dataEdgeReadOnly.ts'].map(path=>[path,{}])),'full'));
 });
 test('version source/tag/binding drift rejected',async()=>{const f=fixture();const v=await f.ops.version(ro);v.resources.bindings=[];assert.throws(()=>assertVersion(v,'readonly',f.receipt));});
 test('recorded version ID rejects a different valid UUID with otherwise identical proof',async()=>{

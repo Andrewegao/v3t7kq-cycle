@@ -1,13 +1,25 @@
-# Production data reader upgrade — Phase 1 only
+# Production data reader upgrade — code-only Phase 1
 
 This manual lane prepares and activates code for the existing
 `weatherx-data-edge-production`. It does not deploy Pages/UI, change the platform
 Worker, add point-series routes, edit settings/secrets/crons, or write weather
 objects/catalog pointers. Existing scheduled publishers remain separate.
 
+This lane also supports later code-only reader refreshes after the separate
+point-route activation. Only the four reviewed data routes, or those exact four
+plus `weatherx.org/api/v1/point-series/*` owned by the data Worker, are admitted.
+Missing, duplicated, foreign-owned, broader or unexpected narrower point routes
+refuse the run. The complete observed zone-route records remain in the reviewed
+boundary digest and must remain identical throughout upload, activation and
+recovery. Admitting the existing fifth route does not create, remove or transfer
+it, and does not authorize a Phase 2 operation.
+
 ## Why two versions
 
-The old reader cannot parse catalogs containing point-series component mounts.
+Older readers cannot parse catalogs containing point-series component mounts;
+likewise, readers predating optional native 100 m wind cannot parse point packs
+whose descriptors contain the new storage pair. All serving readers must be
+upgraded before publishing the additive descriptor, not merely before its UI.
 A pointer comparison followed by restoration of the old version has a race with
 ongoing publishers; it is not safe rollback. This lane never deploys the old
 version, even when both pointer hashes appear unchanged.
@@ -33,7 +45,7 @@ containment, not a guarantee of atomic rollback against arbitrary external write
 ## Required review before dispatch
 
 1. Merge and qualify the Atmos normal and read-only entrypoints. Review the exact
-   14-module data-only bundle closure (plus the fallback wrapper), full Worker
+   15-module data-only bundle closure, including the reviewed boot descriptor (plus the fallback wrapper), full Worker
    tests including paired promotion / whole-release promotion / legacy reads.
 2. Confirm existing token capabilities permit Worker version upload/deploy and
    read-only R2/zone/platform/Pages inspection. The lane does not create tokens or
@@ -120,6 +132,7 @@ to actual pinned live responses; this is not a fresh full-bucket inventory audit
 Existing producer inventory/scientific/freshness gates remain mandatory.
 
 After Phase 1, new scheduled/approved data publications can use `promote-set` and
-`promote-release`. Fresh matching map/point publication must pass before a
-separately reviewed Phase 2 exact `/api/v1/point-series/*` route activation.
-This lane contains no Phase 2 route mutation.
+`promote-release`. For an initial point-route activation, fresh matching map/point
+publication must pass before the separately reviewed Phase 2 exact
+`/api/v1/point-series/*` route activation. If that route is already live, it stays
+unchanged during this reader refresh. This lane contains no Phase 2 route mutation.
