@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `499760bcfbb59765692e8007a04d49ca16a8a18b10788747ea122b9ce618e9b7`.
+Source digest (registry and workflow bytes): `5b8128d3b1ba6b1a4030c168a6a22d35989c855d425910317a6865ae2cdc2bb7`.
 
 50 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -432,7 +432,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | --- | --- | --- |
 | [evaluate / step 1](../.github/workflows/fusion-evaluate.yml#L29) | <code>Andrewegao/atmos</code> | <code>${{ vars.FUSION_ENGINE_SHA }}</code> |
 
-Variable references (declared names only; values and activation unknown): [FUSION_CALIBRATION_RUNTIME_ENABLED](../.github/workflows/fusion-evaluate.yml#L64), [FUSION_ENGINE_SHA](../.github/workflows/fusion-evaluate.yml#L32), [FUSION_FEEDBACK_ENABLED](../.github/workflows/fusion-evaluate.yml#L24), [FUSION_SHADOW_CANDIDATE](../.github/workflows/fusion-evaluate.yml#L54), [FUSION_SHADOW_RUN](../.github/workflows/fusion-evaluate.yml#L50).
+Variable references (declared names only; values and activation unknown): [FUSION_CALIBRATION_RUNTIME_ENABLED](../.github/workflows/fusion-evaluate.yml#L65), [FUSION_ENGINE_SHA](../.github/workflows/fusion-evaluate.yml#L32), [FUSION_FEEDBACK_ENABLED](../.github/workflows/fusion-evaluate.yml#L24), [FUSION_SHADOW_CANDIDATE](../.github/workflows/fusion-evaluate.yml#L54), [FUSION_SHADOW_RUN](../.github/workflows/fusion-evaluate.yml#L50).
 
 
 ## fusion-infra
@@ -482,7 +482,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | --- | --- | --- |
 | [record / step 1](../.github/workflows/fusion-issue.yml#L19) | <code>Andrewegao/atmos</code> | <code>${{ vars.FUSION_ENGINE_SHA }}</code> |
 
-Variable references (declared names only; values and activation unknown): [FUSION_CALIBRATION_RUNTIME_ENABLED](../.github/workflows/fusion-issue.yml#L49), [FUSION_ENGINE_SHA](../.github/workflows/fusion-issue.yml#L22), [FUSION_FEEDBACK_ENABLED](../.github/workflows/fusion-issue.yml#L14), [FUSION_SHADOW_CANDIDATE](../.github/workflows/fusion-issue.yml#L44), [FUSION_SHADOW_RUN](../.github/workflows/fusion-issue.yml#L40).
+Variable references (declared names only; values and activation unknown): [FUSION_CALIBRATION_RUNTIME_ENABLED](../.github/workflows/fusion-issue.yml#L55), [FUSION_ENGINE_SHA](../.github/workflows/fusion-issue.yml#L22), [FUSION_FEEDBACK_ENABLED](../.github/workflows/fusion-issue.yml#L14), [FUSION_SHADOW_CANDIDATE](../.github/workflows/fusion-issue.yml#L44), [FUSION_SHADOW_RUN](../.github/workflows/fusion-issue.yml#L40).
 
 
 ## fusion-promote
