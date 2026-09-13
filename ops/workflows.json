@@ -191,6 +191,15 @@
       "runbook": "docs/nam-hi-cloud-diagnostic.md"
     },
     {
+      "id": "observation-bake",
+      "path": ".github/workflows/observation-bake.yml",
+      "family": "maintenance",
+      "purpose": "Refresh point observations through the existing serialized immutable whole-release publisher.",
+      "subsystem": "Observation freshness",
+      "lifecycle": "recurring",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
       "id": "point-route-activate",
       "path": ".github/workflows/point-route-activate.yml",
       "family": "releases",
