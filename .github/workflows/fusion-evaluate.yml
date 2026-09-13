@@ -58,6 +58,7 @@ jobs:
           FUSION_ARCHIVE_READ_KEY: ${{ secrets.FUSION_ARCHIVE_READ_KEY }}
         run: app/node_modules/.bin/tsx ops/fusion/cli.ts pull --days 60 --out feedback-archive
       - name: Score, fit a preregistered candidate, or evaluate the frozen shadow
+        id: score
         env:
           REQUESTED_MODE: ${{ inputs.mode || 'score' }}
           CONFIRMATION: ${{ inputs.confirmation }}
@@ -76,7 +77,29 @@ jobs:
           fi
           if [ "$mode" = evaluate ]; then test -f feedback-evidence/candidate.json; fi
           app/node_modules/.bin/tsx ops/fusion/cli.ts "$mode" --archive feedback-archive --out feedback-output "${candidate_args[@]}"
+      - name: Record a bounded evaluation gap
+        if: ${{ failure() || cancelled() }}
+        env:
+          SCORE_OUTCOME: ${{ steps.score.outcome }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p feedback-output
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+          const value = {
+            schemaVersion: 1,
+            kind: 'fusion-evaluation-gap',
+            recordedAt: new Date().toISOString(),
+            githubRunId: process.env.GITHUB_RUN_ID ?? 'unknown',
+            githubRunAttempt: process.env.GITHUB_RUN_ATTEMPT ?? 'unknown',
+            eventName: process.env.GITHUB_EVENT_NAME ?? 'unknown',
+            jobStatus: process.env.JOB_STATUS || 'unknown',
+            scoreOutcome: process.env.SCORE_OUTCOME || 'not-reached',
+          };
+          writeFileSync('feedback-output/evaluation-gap.json', `${JSON.stringify(value)}\n`, { flag: 'wx', mode: 0o600 });
+          NODE
       - name: Keep source-bound evaluation and separate fusion accuracy
+        if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: fusion-evaluation
@@ -86,5 +109,6 @@ jobs:
             feedback-output/evaluation-receipt.json
             feedback-output/pending.json
             feedback-output/accuracy/*
+            feedback-output/evaluation-gap.json
           if-no-files-found: error
           retention-days: 90
