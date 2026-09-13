@@ -12,6 +12,7 @@ const dataKeys = ['ATMOS_DEPLOY_KEY', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'
 // Whole-release publication now uses the same production-only catalog CAS authority.
 // These credentials cannot deploy a Pages application.
 const maintenanceKeys = [...dataKeys, 'CATALOG_ENDPOINT_PRODUCTION', 'CATALOG_PROMOTION_KEY_PRODUCTION'];
+const observationKeys = [...maintenanceKeys, 'OPENAQ_API_KEY'];
 const componentKeys = [...dataKeys, 'CATALOG_ENDPOINT', 'CATALOG_ENDPOINT_PRODUCTION',
   'CATALOG_PROMOTION_KEY', 'CATALOG_PROMOTION_KEY_PRODUCTION'];
 
@@ -39,6 +40,7 @@ function assertBakeDataOnly(source) {
 
 test('both data bakes and legacy backfill have no UI credential or dispatch capability', () => {
   assertBakeDataOnly(workflows['bake.yml']);
+  assertDataOnly(workflows['observation-bake.yml'], observationKeys);
   assertDataOnly(workflows['catalog-bake.yml'], componentKeys);
   assertDataOnly(workflows['verify-backfill.yml'], ['ATMOS_DEPLOY_KEY']);
   for (const name of ['collect-core-model.yml', 'collect-regional-model.yml'])
@@ -47,6 +49,13 @@ test('both data bakes and legacy backfill have no UI credential or dispatch capa
   assertDataOnly(workflows['resume-model-publication.yml'], maintenanceKeys);
   assert.match(workflows['bake.yml'], /DATA_PUBLISH_MODE: r2-release/);
   assert.match(workflows['catalog-bake.yml'], /bash ops\/bake-model-component\.sh/);
+});
+
+test('the OpenAQ credential is confined to the observation-only data workflow', () => {
+  assert.match(workflows['observation-bake.yml'], /secrets\.OPENAQ_API_KEY\b/);
+  for (const [name, source] of Object.entries(workflows)) {
+    if (name !== 'observation-bake.yml') assert.doesNotMatch(source, /secrets\.OPENAQ_API_KEY\b/, name);
+  }
 });
 
 test('boundary contracts reject legacy key, new UI key, dispatch, inherited secrets and direct upload', () => {

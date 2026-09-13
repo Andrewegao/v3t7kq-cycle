@@ -39,6 +39,14 @@ Repository configuration alone cannot establish which scheduler is deployed or w
 
 No queue setting changes are part of this inventory. Freshness work generally benefits from finishing the running transaction and coalescing replaceable pending requests. Historical batches and explicit recovery carry distinct identities and need their own reviewed retention policy. GitHub queue order is not scientific chronology; expanding a queue does not make an old forecast eligible. Keep archive catalog writers and history/ledger updates serialized under their existing controls.
 
+## Observation-only whole-release fallback
+
+`observation-bake.yml` is a reviewable fallback for METAR, SYNOP, buoy/ship, and OpenAQ freshness. It starts at UTC 02:10, 08:10, 14:10, and 20:10, ahead of the full-maintenance publisher's `:30` schedule, but uses the same `weatherx-data-maintenance` job lock with cancellation disabled. It hydrates the authenticated current whole release, lets each point producer atomically preserve its own last-good artifact on source failure, reads the current release identity again immediately before publication, and reuses the existing immutable upload, verification, and catalog CAS promotion scripts. It does not call the full model bake and has no Pages, staging, vault, outbound workflow-dispatch, or application-deployment credential.
+
+The checked-in Atmos SHA is the exact head that passed the full Atmos CI and overlay gates. A second bounded checkout proves that SHA is already an ancestor of Atmos `master`; execution fails closed before hydration when the queue has not merged it. If Atmos uses a squash or rebase merge, deliberately repin this workflow to the resulting reviewed `master` commit instead of weakening the ancestry check.
+
+This fallback is not activated merely by opening its pull request. Before merging it, the owner must add `OPENAQ_API_KEY` to the protected `production` environment without sharing the value, confirm the pinned Atmos change has merged, and review the schedule/whole-release cost. Do not manually dispatch it as an acceptance test before those conditions hold. After the first authorized run, inspect the immutable release receipt and live catalog freshness separately; repository snapshots are not production evidence.
+
 ## Choose recovery by the failed stage
 
 1. **The provider was late or collection abstained:** use the existing [single-model refresh](single-model-refresh.md) path, after checking current request and source guards. A successful one-model run does not certify all eleven models.

@@ -6,9 +6,9 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `499760bcfbb59765692e8007a04d49ca16a8a18b10788747ea122b9ce618e9b7`.
+Source digest (registry and workflow bytes): `f849e4f7ee6dfca89f3757c62982f382262a45e56b53156edf7a0d34d1379ea2`.
 
-50 workflows. Ordering and output are deterministic; no API request or clock is used.
+51 workflows. Ordering and output are deterministic; no API request or clock is used.
 
 | Workflow | Family / subsystem | Lifecycle | Purpose | Runbook |
 | --- | --- | --- | --- | --- |
@@ -33,6 +33,7 @@ Source digest (registry and workflow bytes): `499760bcfbb59765692e8007a04d49ca16
 | [hydrology](#hydrology) | archives / Hydrology | manual-supported | Prepare hydrology artifacts through the explicit staging path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [model-inputs](#model-inputs) | staging / Experimental models | manual-supported | Collect isolated experimental model inputs with bounded provider concurrency. | [guide](../docs/MODEL_CLOUD_INPUTS.md) |
 | [nam-hi-diagnostic](#nam-hi-diagnostic) | staging / Experimental models | diagnostic | Diagnose a bounded NAM-HI acquisition without broadening publication authority. | [guide](../docs/nam-hi-cloud-diagnostic.md) |
+| [observation-bake](#observation-bake) | maintenance / Observation freshness | recurring | Refresh point observations through the existing serialized immutable whole-release publisher. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [point-route-activate](#point-route-activate) | releases / Production point routes | manual-supported | Activate reviewed point routes with ownership-aware rollback. | [guide](../docs/point-route-activation.md) |
 | [publish-current-model-production](#publish-current-model-production) | models / Component publication | recurring | Qualify and publish one authenticated collector result independently of sibling models. | [guide](../docs/current-model-artifact-handoff.md) |
 | [qualify-bake-throughput](#qualify-bake-throughput) | models / Bake qualification | diagnostic | Qualify full-grid GFS frame throughput and runner memory without provider or publication access. | [guide](../docs/bake-throughput-qualification.md) |
@@ -604,6 +605,28 @@ Checkout declarations (not a claim of approval or checkout success):
 | --- | --- | --- |
 | [diagnose / Checkout exact controller without retained credentials](../.github/workflows/nam-hi-diagnostic.yml#L24) | caller repository (implicit) | <code>${{ github.sha }}</code> |
 | [diagnose / Checkout only the approved read-only scientific source](../.github/workflows/nam-hi-diagnostic.yml#L34) | <code>weatherx-hq/atmos</code> | <code>77487534a6ff0a17bf4e5d55f9ab5c06938138d4</code> |
+
+Variable references (declared names only; values and activation unknown): none detected.
+
+
+## observation-bake
+
+[.github/workflows/observation-bake.yml](../.github/workflows/observation-bake.yml#L1) · <code>observation-bake</code>
+
+Declared triggers: [schedule](../.github/workflows/observation-bake.yml#L9) <code>["10 2,8,14,20 * * *"]</code>; [workflow_dispatch](../.github/workflows/observation-bake.yml#L10).
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: not declared.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [observation-points](../.github/workflows/observation-bake.yml#L14) ← no needs | <code>ubuntu-latest</code> | <code>production</code> | <code>60</code> | <code>{"group":"weatherx-data-maintenance","cancel-in-progress":false}</code> | not declared | inherits workflow/default policy |
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [observation-points / checkout exact CI-approved Atmos observation source](../.github/workflows/observation-bake.yml#L21) | <code>weatherx-hq/atmos</code> | <code>14a2cda498ffb499cbd0fe2410d3818e364fe4d0</code> |
+| [observation-points / checkout bounded Atmos master ancestry witness](../.github/workflows/observation-bake.yml#L40) | <code>weatherx-hq/atmos</code> | <code>master</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
 
