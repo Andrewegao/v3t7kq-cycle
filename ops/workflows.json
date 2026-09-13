@@ -450,6 +450,15 @@
       "subsystem": "Verification archive",
       "lifecycle": "manual-supported",
       "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "fusion-staging-evidence",
+      "path": ".github/workflows/fusion-staging-evidence.yml",
+      "family": "staging",
+      "purpose": "Record isolated prospective forecast evidence and matched references; retain explicit gaps without calibration.",
+      "subsystem": "Fusion evidence",
+      "lifecycle": "recurring",
+      "runbook": "docs/FUSION_STAGING_EVIDENCE.md"
     }
   ]
 }
