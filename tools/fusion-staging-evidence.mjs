@@ -36,10 +36,11 @@ export function collectionSummary(receipt, engine) {
   const stationIds = new Set();
   for (const acquisition of receipt.observationAcquisitions) {
     assert.deepEqual(Object.keys(acquisition).sort(), ['stationId','icao','source','requestUrl','requestedAt','receivedAt','responseBytes','responseSha256'].sort());
-    assert.match(acquisition.stationId, /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/);
+    assert.match(acquisition.stationId, /^M:[A-Z0-9]{3,8}$/);
     assert.ok(!stationIds.has(acquisition.stationId), 'Observation station receipt is duplicated');
     stationIds.add(acquisition.stationId);
     assert.match(acquisition.icao, /^[A-Z0-9]{3,8}$/);
+    assert.equal(acquisition.stationId, `M:${acquisition.icao}`, 'Observation station receipt does not match ICAO');
     assert.equal(acquisition.source, 'noaa-aviationweather-metar');
     const observationUrl = new URL(directObservation(acquisition.requestUrl));
     assert.equal(observationUrl.searchParams.get('ids'), acquisition.icao);
