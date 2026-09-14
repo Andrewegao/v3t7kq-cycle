@@ -25,16 +25,21 @@ test('NOAA observation access cannot use WeatherX production or staging proxies'
   assert.equal(directObservation('https://aviationweather.gov/api/data/metar?ids=ZUCK'), 'https://aviationweather.gov/api/data/metar?ids=ZUCK');
   for(const url of ['https://weatherx.org/cdn/awc/api/data/metar','https://staging.weatherx.org/cdn/awc/api/data/metar','https://aviationweather.gov.evil.test/api/data/metar','https://a:b@aviationweather.gov/api/data/metar']) assert.throws(()=>directObservation(url));
 });
-const receipt={schemaVersion:1,sourceGitSha:'a'.repeat(40),sourceTreeClean:true,published:true,baselineId:'builtin-v1',networkSha256:'b'.repeat(64),generatedAt:'2026-09-13T00:00:00Z',releaseId:'release-1',verifyRunId:'2026091300',issued:64,failed:0,truthCount:100};
+const observationAcquisitions=Array.from({length:64},(_,index)=>{
+  const icao=`K${String(index).padStart(3,'0')}`;
+  return {stationId:`station-${index}`,icao,source:'noaa-aviationweather-metar',requestUrl:`https://aviationweather.gov/api/data/metar?ids=${icao}&hours=48&format=json`,requestedAt:'2026-09-13T00:00:00.000Z',receivedAt:'2026-09-13T00:00:00.025Z',responseBytes:1200,responseSha256:'c'.repeat(64)};
+});
+const receipt={schemaVersion:1,sourceGitSha:'a'.repeat(40),sourceTreeClean:true,published:true,baselineId:'builtin-v1',networkSha256:'b'.repeat(64),generatedAt:'2026-09-13T00:00:00Z',releaseId:'release-1',verifyRunId:'2026091300',issued:64,failed:0,truthCount:100,observationAcquisitions};
 test('receipt never presents partial or missing stations as complete, or unclean/calibrated output as evidence',()=>{
   assert.equal(collectionSummary(receipt,receipt.sourceGitSha).status,'complete');
   assert.equal(collectionSummary({...receipt,issued:63,failed:1},receipt.sourceGitSha).status,'partial');
-  for(const change of [{issued:0,failed:64},{issued:1},{sourceTreeClean:false},{published:false},{sourceGitSha:'c'.repeat(40)},{baselineId:'b'.repeat(64)}]) assert.throws(()=>collectionSummary({...receipt,...change},receipt.sourceGitSha));
+  for(const change of [{issued:0,failed:64},{issued:1},{sourceTreeClean:false},{published:false},{sourceGitSha:'c'.repeat(40)},{baselineId:'b'.repeat(64)},{observationAcquisitions:observationAcquisitions.slice(1)},{observationAcquisitions:observationAcquisitions.map((value,index)=>index===1?{...value,stationId:'station-0'}:value)},{observationAcquisitions:observationAcquisitions.map((value,index)=>index===1?{...value,requestUrl:'https://weatherx.org/cdn/awc'}:value)}]) assert.throws(()=>collectionSummary({...receipt,...change},receipt.sourceGitSha));
 });
 test('workflow has no production environment, deployment, candidate fit, control key, or accuracy publication',async()=>{
   const text=await readFile(new URL('../.github/workflows/fusion-staging-evidence.yml',import.meta.url),'utf8');
   assert.match(text,/environment: staging/);assert.match(text,/FUSION_CALIBRATION_RUNTIME_ENABLED: 'false'/);
   assert.match(text,/FUSION_STAGING_EVIDENCE_ENABLED/);assert.match(text,/--days 7/);assert.match(text,/run-status.json/);assert.match(text,/snapshot.json/);
+  assert.match(text,/--origin "\$READ_ORIGIN" --archive-origin "\$ARCHIVE_ORIGIN" --control-origin "\$CONTROL_ORIGIN"/);
   assert.doesNotMatch(text,/environment: production|FUSION_PROMOTION_KEY|wrangler deploy|cli\.ts (?:promote|build|evaluate|rollback)/);
   assert.ok(text.indexOf("directObservation(canonicalObservationUrl")<text.indexOf('cli.ts collect --publish'));
 });

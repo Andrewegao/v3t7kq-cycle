@@ -18,7 +18,7 @@ export function isolatedArchive(settings, routes, subdomain) {
 }
 export function collectionSummary(receipt, engine) {
   assert.match(engine, /^[a-f0-9]{40}$/);
-  assert.deepEqual(Object.keys(receipt).sort(), ['schemaVersion','sourceGitSha','sourceTreeClean','generatedAt','releaseId','verifyRunId','issued','failed','truthCount','baselineId','networkSha256','published'].sort());
+  assert.deepEqual(Object.keys(receipt).sort(), ['schemaVersion','sourceGitSha','sourceTreeClean','generatedAt','releaseId','verifyRunId','issued','failed','truthCount','observationAcquisitions','baselineId','networkSha256','published'].sort());
   assert.equal(receipt.schemaVersion, 1);
   assert.equal(receipt.sourceGitSha, engine);
   assert.equal(receipt.sourceTreeClean, true);
@@ -32,9 +32,28 @@ export function collectionSummary(receipt, engine) {
   assert.equal(receipt.issued + receipt.failed, 64, 'Every frozen station must be accounted for');
   assert.ok(receipt.issued > 0, 'No forecast issued');
   assert.ok(receipt.truthCount > 0, 'No observations recorded');
+  assert.equal(receipt.observationAcquisitions?.length, 64, 'Every station needs an independent observation receipt');
+  const stationIds = new Set();
+  for (const acquisition of receipt.observationAcquisitions) {
+    assert.deepEqual(Object.keys(acquisition).sort(), ['stationId','icao','source','requestUrl','requestedAt','receivedAt','responseBytes','responseSha256'].sort());
+    assert.match(acquisition.stationId, /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/);
+    assert.ok(!stationIds.has(acquisition.stationId), 'Observation station receipt is duplicated');
+    stationIds.add(acquisition.stationId);
+    assert.match(acquisition.icao, /^[A-Z0-9]{3,8}$/);
+    assert.equal(acquisition.source, 'noaa-aviationweather-metar');
+    const observationUrl = new URL(directObservation(acquisition.requestUrl));
+    assert.equal(observationUrl.searchParams.get('ids'), acquisition.icao);
+    assert.equal(observationUrl.searchParams.get('hours'), '48');
+    assert.equal(observationUrl.searchParams.get('format'), 'json');
+    assert.equal([...observationUrl.searchParams].length, 3);
+    const requestedAt = Date.parse(acquisition.requestedAt), receivedAt = Date.parse(acquisition.receivedAt);
+    assert.ok(Number.isFinite(requestedAt) && Number.isFinite(receivedAt) && receivedAt >= requestedAt);
+    assert.ok(Number.isSafeInteger(acquisition.responseBytes) && acquisition.responseBytes > 0 && acquisition.responseBytes <= 4 * 1024 * 1024);
+    assert.match(acquisition.responseSha256, /^[a-f0-9]{64}$/);
+  }
   return { schemaVersion: 1, kind: 'fusion-staging-collection', recordedAt: receipt.generatedAt,
     sourceGitSha: engine, issued: receipt.issued, failed: receipt.failed, observations: receipt.truthCount,
-    status: receipt.failed ? 'partial' : 'complete', calibrationEnabled: false };
+    observationReceipts: stationIds.size, status: receipt.failed ? 'partial' : 'complete', calibrationEnabled: false };
 }
 export function isolatedReader(settings, subdomain) {
   const bindings = settings?.bindings;
