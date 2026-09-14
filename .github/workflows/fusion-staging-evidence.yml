@@ -40,8 +40,7 @@ jobs:
           node --test cycle/tests/fusion-staging-evidence.mjs
           npm ci --prefix atmos/app
       - name: Require direct independent observations before any collection
-        # Current engine uses a WeatherX production proxy and deliberately fails here.
-        # No production/shared source access is allowed, even for a staging archive.
+        # No WeatherX proxy is allowed, even for a staging archive.
         working-directory: atmos
         run: |
           app/node_modules/.bin/tsx -e "import { canonicalObservationUrl } from './ops/fusion/collection-provenance'; import { directObservation } from '../cycle/tools/fusion-staging-evidence.mjs'; directObservation(canonicalObservationUrl('ZUCK'));"
@@ -58,8 +57,9 @@ jobs:
           FUSION_ALLOW_CUSTOM_SIGNED_ORIGIN: '1'
           READ_ORIGIN: ${{ steps.preflight.outputs.read_origin }}
           ARCHIVE_ORIGIN: ${{ steps.preflight.outputs.archive_origin }}
+          CONTROL_ORIGIN: ${{ steps.preflight.outputs.read_origin }}
         run: |
-          app/node_modules/.bin/tsx ops/fusion/cli.ts collect --publish --max-stations 64 --origin "$READ_ORIGIN" --archive-origin "$ARCHIVE_ORIGIN" --out "$RUNNER_TEMP/fusion-staging-evidence"
+          app/node_modules/.bin/tsx ops/fusion/cli.ts collect --publish --max-stations 64 --origin "$READ_ORIGIN" --archive-origin "$ARCHIVE_ORIGIN" --control-origin "$CONTROL_ORIGIN" --out "$RUNNER_TEMP/fusion-staging-evidence"
       - name: Account for every frozen station
         id: receipt
         run: node cycle/tools/fusion-staging-evidence.mjs receipt "$RUNNER_TEMP/fusion-staging-evidence"
