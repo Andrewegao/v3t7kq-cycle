@@ -25,9 +25,11 @@ import {
   PRODUCTION_MUTATION_CONFIRMATION,
   validateProductionExecutionRequest,
 } from '../tools/production-account-execution.mjs';
+import {LANE_B_CONTRACT} from '../tools/production-account-contract.mjs';
 import {productionReleasePlanDigest} from '../tools/production-account-release.mjs';
 
 const H=character=>character.repeat(64);
+function pagesPayload(failOpen=false){const context=name=>({compatibility_date:'2026-06-23',compatibility_flags:[],fail_open:failOpen,...structuredClone(LANE_B_CONTRACT.pagesBindings[name])});return{deployment_configs:{production:context('production'),preview:context('preview')}};}
 function canonical(value){if(Array.isArray(value))return`[${value.map(canonical).join(',')}]`;if(value&&typeof value==='object')return`{${Object.keys(value).sort().map(key=>`${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;return JSON.stringify(value);}
 function plan(){return{transactionId:'prod-account-20260916-001',leaseOwner:'release-commander-andrew',contractDigest:H('a'),target:{cloudflareAccountId:'account',workerName:'weatherx-platform-edge-production',pagesProject:'atmos-platform',origin:'https://weatherx.org'},identities:{atmosSha:'a'.repeat(40),controllerSha:'b'.repeat(40),profileDigest:H('b'),pipelineDigest:H('c'),artifactDigest:H('d')},candidateBinding:{bindingDigest:H('e')},stripe:{priceIds:{subscription:'price_live_subscription',pass:'price_live_pass'}}};}
 function request(action='prepare-worker',inputReceipt=null){return{schemaVersion:2,kind:'weatherx-production-account-execution-request-v2',mode:'execute',action,plan:plan(),inputReceipt,approval:{payload:{},signature:''}};}
@@ -35,14 +37,14 @@ function preparedTransaction(releasePlan=plan()){return{kind:'weatherx-account-w
 
 function memoryReceipts(){const values=new Map();return{values,async create(id,entry){if(values.has(id))throw new ProductionExecutionError('receipt-attempt-exists');values.set(id,[structuredClone(entry)]);},async append(id,expected,entry){const journal=values.get(id);assert.ok(journal);assert.equal(journal.length-1,expected);journal.push(structuredClone(entry));},async read(id){if(!values.has(id))throw new ProductionExecutionError('receipt-not-found');return structuredClone(values.get(id));}};}
 
-function harness({operation,tamperLease,now=Date.parse('2026-09-16T06:05:00.000Z'),leaseExpires='2026-09-16T06:10:00.000Z'}={}){
+function harness({operation,operationDefinitions={},dependencies={},tamperLease,now=Date.parse('2026-09-16T06:05:00.000Z'),leaseExpires='2026-09-16T06:10:00.000Z'}={}){
   const {publicKey,privateKey}=generateKeyPairSync('ed25519'),leaseKeys=generateKeyPairSync('ed25519');let time=now,acquires=0,reads=0;const receipts=memoryReceipts(),tokens=new Map(),leasesById=new Map();
   const approvals=createTestEd25519ProductionApprovalAuthority({publicKey,issuer:'weatherx-release-owner',audience:'weatherx-production-controller',clock:()=>time});
   const envelope=payload=>({payload,signature:sign(null,Buffer.from(canonical(payload)),leaseKeys.privateKey).toString('base64')});
   const leaseClient={async acquire(expected){acquires++;const predecessorToken=tokens.get(expected.resourceNamespace)??40,fencingToken=predecessorToken+1;tokens.set(expected.resourceNamespace,fencingToken);const payload={schemaVersion:3,kind:PRODUCTION_LEASE_KIND,leaseId:`lease-${fencingToken}`,...structuredClone(expected),predecessorToken,fencingToken,issuedAt:'2026-09-16T06:04:00.000Z',expiresAt:leaseExpires};leasesById.set(payload.leaseId,payload);const signed=envelope(payload);return tamperLease?tamperLease(signed):signed;},async read(leaseId){reads++;return envelope(leasesById.get(leaseId));}};
   const newLeases=()=>createTestMonotonicProductionLeaseAuthority({client:leaseClient,publicKey:leaseKeys.publicKey,issuer:'weatherx-independent-lease-service',audience:'weatherx-production-controller',clock:()=>time});let calls=0;
-  const operations=Object.fromEntries(['prepare-worker','recover-worker-preparation','activate-worker','recover-worker-activation','recover-worker-rollback','prepare-pages','apply-pages','recover-pages'].map(action=>[action,async(...args)=>{calls++;if(operation)return operation(...args);return preparedTransaction(args[0].plan);} ]));
-  const newExecutor=()=>createTestProductionAccountExecutor({testOnly:true,approvalAuthority:approvals,leaseAuthority:newLeases(),receipts,dependencies:{},validatePlan:value=>value,operations});const executor=newExecutor();
+  const operations=Object.fromEntries(['prepare-worker','recover-worker-preparation','activate-worker','recover-worker-activation','recover-worker-rollback','prepare-pages','apply-pages','recover-pages'].map(action=>[action,operationDefinitions[action]??(async(...args)=>{calls++;if(operation)return operation(...args);return preparedTransaction(args[0].plan);})]));
+  const newExecutor=()=>createTestProductionAccountExecutor({testOnly:true,approvalAuthority:approvals,leaseAuthority:newLeases(),receipts,dependencies,validatePlan:value=>value,operations});const executor=newExecutor();
   function authorize(value,{approvalId='approval-1',issuedAt='2026-09-16T06:00:00.000Z',expiresAt='2026-09-16T06:15:00.000Z'}={}){const expected=productionExecutionApprovalContext(value,value.plan);const payload={schemaVersion:2,kind:PRODUCTION_APPROVAL_KIND,approvalId,issuer:'weatherx-release-owner',audience:'weatherx-production-controller',confirmation:PRODUCTION_MUTATION_CONFIRMATION,...expected,issuedAt,expiresAt};value.approval={payload,signature:sign(null,Buffer.from(canonical(payload)),privateKey).toString('base64')};return value;}
   return{executor,authorize,receipts,restartExecutor:newExecutor,get calls(){return calls;},get acquires(){return acquires;},get reads(){return reads;},set time(value){time=value;}};
 }
@@ -144,6 +146,37 @@ test('an orphaned intent refuses rerun and demands an explicit recovery action',
   await assert.rejects(h.executor.execute(value),error=>error.code==='ambiguous-intent-recovery-required');assert.equal(h.calls,0);assert.equal(h.acquires,0);
 });
 
+test('all five provider mutations checkpoint exact intent and signed acknowledgement before post-mutation failure',async()=>{
+  const cases=[
+    ['worker-upload-version','recover-worker-preparation',null],
+    ['worker-activate-version','recover-worker-activation','activation-ack-pending'],
+    ['worker-rollback-version','recover-worker-rollback','rollback-ack-pending'],
+    ['pages-update-project','recover-pages','pages-update-ack-pending'],
+    ['pages-restore-project','recover-pages','pages-restore-ack-pending'],
+  ];
+  for(const[caseIndex,[operation,recoveryAction,phase]]of cases.entries()){
+    const reference={schemaVersion:1,kind:'weatherx-production-mutation-reference-v1',operation,target:`target-${operation}`,operationDigest:H(String(caseIndex+1)),idempotencyKey:`wx-${operation}`,resourceNamespace:`cloudflare:account:${operation.startsWith('pages')?'pages:atmos-platform':'workers:weatherx-platform-edge-production'}`,leaseId:'lease-41',fencingToken:41};
+    const acknowledgement={payload:{operationDigest:reference.operationDigest},signature:`signed-${operation}`};
+    let recoveredInput,providerCalls=0;
+    const source={async prepare(value){return preparedTransaction(value.plan);},async run(_request,_dependencies,_options,_session,_input,_approval,_intent,runtime){await runtime.onPrepared({reference});providerCalls++;await runtime.onAcknowledged({reference,acknowledgement});throw new Error(`post-ack-readback-${operation}`);}};
+    const recovery=async(_request,_dependencies,_options,_session,input)=>{recoveredInput=structuredClone(input);return preparedTransaction(input.plan);};
+    const h=harness({operationDefinitions:{'prepare-worker':source,[recoveryAction]:recovery}}),value=h.authorize(request(),{approvalId:`approval-${operation}`});
+    await assert.rejects(h.executor.execute(value),error=>error.code==='production-operation-recovery-required');
+    const receiptId=`${value.plan.transactionId}:prepare-worker:approval-${operation}`,journal=await h.receipts.read(receiptId);
+    assert.deepEqual(journal.map(entry=>entry.state),['intent','mutation-prepared','acknowledged','recovery-required']);
+    assert.deepEqual(journal[1].record.mutationReference,reference);assert.deepEqual(journal[2].record.evidence,{reference,acknowledgement});
+    assert.deepEqual(journal[3].record.mutationReference,reference);assert.deepEqual(journal[3].record.mutationAcknowledgement,acknowledgement);assert.equal(providerCalls,1);
+    const recoveryInput=journal[2].record.recoveryInput;assert.deepEqual(journal[3].record.recoveryInput,recoveryInput);if(phase)assert.equal(recoveryInput.phase,phase);assert.deepEqual(recoveryInput.acknowledgedMutation,{reference,acknowledgement});
+    const completed=await h.executor.execute(h.authorize(request(recoveryAction,journal[3].record.reference),{approvalId:`recover-${operation}`}));assert.equal(completed.state,'completed');assert.deepEqual(recoveredInput,recoveryInput);assert.equal(providerCalls,1);
+  }
+});
+
+test('pre-mutation checkpoint survives a crash before acknowledgement and is recovery-actionable',async()=>{
+  const reference={schemaVersion:1,kind:'weatherx-production-mutation-reference-v1',operation:'worker-upload-version',target:'worker-target',operationDigest:H('7'),idempotencyKey:'wx-crash-before-ack',resourceNamespace:'cloudflare:account:workers:weatherx-platform-edge-production',leaseId:'lease-41',fencingToken:41};
+  const source={async prepare(value){return preparedTransaction(value.plan);},async run(_request,_dependencies,_options,_session,_input,_approval,_intent,runtime){await runtime.onPrepared({reference});throw new Error('process-killed-after-provider-call');}};
+  const h=harness({operationDefinitions:{'prepare-worker':source}}),value=h.authorize(request(),{approvalId:'approval-pre-ack-crash'});await assert.rejects(h.executor.execute(value),error=>error.code==='production-operation-recovery-required');const journal=await h.receipts.read(`${value.plan.transactionId}:prepare-worker:approval-pre-ack-crash`);assert.deepEqual(journal.map(entry=>entry.state),['intent','mutation-prepared','recovery-required']);assert.deepEqual(journal[2].record.mutationReference,reference);assert.deepEqual(journal[2].record.recoveryInput.pendingMutation,reference);
+});
+
 test('maximum component identities produce a valid round-trippable composite receipt reference',async()=>{
   const h=harness(),value=request();value.plan.transactionId=`t${'x'.repeat(158)}`;h.authorize(value,{approvalId:`a${'y'.repeat(158)}`});const result=await h.executor.execute(value);assert.ok(result.receiptId.length>320);validateProductionExecutionRequest(request('activate-worker',result.reference));assert.deepEqual(await h.receipts.read(result.receiptId),h.receipts.values.get(result.receiptId));
 });
@@ -182,8 +215,27 @@ test('concrete Worker command adapter uses argument arrays, validates exact resp
   await assert.rejects(ambiguous.readMutationAcknowledgement({...capturedReference,operationDigest:H('8')}),error=>error.code==='mutation-acknowledgement-unavailable');
 });
 
+test('concrete adapters checkpoint all five exact mutation references before calls and acknowledgements before readback',async()=>{
+  const acks=acknowledgementHarness(),accountId='a89f9a1af485021fbc60a68b163c7c6e',workerName='weatherx-platform-edge-production',candidateId='22222222-2222-2222-2222-222222222222',mutationContext={approvalId:'approval-1',requestDigest:H('9')};
+  const workerFence={leaseId:'lease-41',fencingToken:41,expiresAt:'2026-09-16T06:10:00.000Z',resourceNamespace:`cloudflare:${accountId}:workers:${workerName}`},deployment={workerName,versionId:'old',deploymentId:'deploy-old',configDigest:H('3'),etag:'etag-1',mutationOwner:null};
+  for(const method of['uploadVersion','activateVersion','rollbackVersion']){
+    const events=[];let deploymentReads=0;
+    const adapter=createCloudflareWorkerCommandAdapter({testOnly:true,accountId,workerName,wranglerPath:'/repo/node_modules/wrangler/bin/wrangler.js',cwd:'/repo/platform/edge',configPath:'/repo/platform/edge/wrangler.jsonc',fenceAcknowledgementAuthority:acks.authority,readFenceAcknowledgement:async()=>{throw new Error('missing');},readResolvedConfig:async()=>({accountId,workerName,environment:'production'}),readDeployment:async()=>{deploymentReads++;if(deploymentReads>1){events.push('post-read');throw new Error('post-ack-read-failed');}return structuredClone(deployment);},readVersion:async()=>{events.push('post-read');throw new Error('post-ack-read-failed');},listVersionsByTag:async()=>[],runner:async(_command,_args,execution)=>{events.push('provider');return{stdout:`Worker Version ID: ${candidateId}\n`,stderr:'',exitCode:0,fenceAcknowledgement:acks.sign(execution.operationReference)};}});
+    const spec=method==='uploadVersion'?{workerName,sourceDigest:H('1'),configDigest:H('2'),tag:'prod-account-1',activate:false,mutationContext,fence:workerFence}:{workerName,versionId:candidateId,expectedEtag:'etag-1',owner:'owner',mutationContext,fence:workerFence};
+    await assert.rejects(adapter[method](spec,{onPrepared:async()=>events.push('prepared'),onAcknowledged:async()=>events.push('acknowledged')}),error=>Boolean(error.mutationReference&&error.mutationAcknowledgement&&error.code.endsWith('readback-failed')));
+    assert.ok(events.indexOf('prepared')<events.indexOf('provider'));assert.ok(events.indexOf('provider')<events.indexOf('acknowledged'));assert.ok(events.indexOf('acknowledged')<events.indexOf('post-read'));
+  }
+  const payload=pagesPayload(),pagesFence={leaseId:'lease-42',fencingToken:42,expiresAt:'2026-09-16T06:10:00.000Z',resourceNamespace:`cloudflare:${accountId}:pages:atmos-platform`},snapshot={projectName:'atmos-platform',configDigest:H('1'),canonicalDeploymentId:'pages-old',etag:'pages-etag',mutationOwner:null,payload};
+  for(const method of['updateProject','restoreProject']){
+    const events=[];let reads=0;
+    const adapter=createCloudflarePagesApiAdapter({testOnly:true,accountId,projectName:'atmos-platform',fenceAcknowledgementAuthority:acks.authority,readFenceAcknowledgement:async()=>{throw new Error('missing');},readProject:async()=>{reads++;if(reads>1){events.push('post-read');throw new Error('post-ack-read-failed');}return structuredClone(snapshot);},patchProject:async({operationReference})=>{events.push('provider');return{acceptedProject:'atmos-platform',fenceAcknowledgement:acks.sign(operationReference)};}});
+    await assert.rejects(adapter[method]({projectName:'atmos-platform',payload,configDigest:H('2'),expectedEtag:'pages-etag',owner:'owner',mutationContext,fence:pagesFence},{onPrepared:async()=>events.push('prepared'),onAcknowledged:async()=>events.push('acknowledged')}),error=>Boolean(error.code==='pages-project-post-mutation-read-failed'&&error.mutationReference&&error.mutationAcknowledgement));
+    assert.deepEqual(events,['prepared','provider','acknowledged','post-read']);
+  }
+});
+
 test('concrete Pages adapter exact-key and project allowlists reject confused or secret-bearing responses',async()=>{
-  const acks=acknowledgementHarness(),namespace='cloudflare:a89f9a1af485021fbc60a68b163c7c6e:pages:atmos-platform',snapshot={projectName:'atmos-platform',configDigest:H('1'),canonicalDeploymentId:'pages-old',etag:'pages-etag',mutationOwner:null,payload:{deployment_configs:{}}},fence={leaseId:'lease-41',fencingToken:41,expiresAt:'2026-09-16T06:10:00.000Z',resourceNamespace:namespace};
+  const acks=acknowledgementHarness(),namespace='cloudflare:a89f9a1af485021fbc60a68b163c7c6e:pages:atmos-platform',snapshot={projectName:'atmos-platform',configDigest:H('1'),canonicalDeploymentId:'pages-old',etag:'pages-etag',mutationOwner:null,payload:pagesPayload()},fence={leaseId:'lease-41',fencingToken:41,expiresAt:'2026-09-16T06:10:00.000Z',resourceNamespace:namespace};
   const patchProject=async({operationReference})=>({acceptedProject:'atmos-platform',fenceAcknowledgement:acks.sign(operationReference)});
   const mutationContext={approvalId:'approval-1',requestDigest:H('9')},adapter=createCloudflarePagesApiAdapter({testOnly:true,accountId:'a89f9a1af485021fbc60a68b163c7c6e',fenceAcknowledgementAuthority:acks.authority,readFenceAcknowledgement:async()=>{throw new Error('missing');},projectName:'atmos-platform',readProject:async()=>structuredClone(snapshot),patchProject});
   await adapter.updateProject({projectName:'atmos-platform',payload:snapshot.payload,configDigest:H('2'),expectedEtag:'pages-etag',owner:'owner',mutationContext,fence});
@@ -191,6 +243,8 @@ test('concrete Pages adapter exact-key and project allowlists reject confused or
   const confused=createCloudflarePagesApiAdapter({...base,readProject:async()=>({...snapshot,projectName:'staging-project'})});await assert.rejects(confused.readProject(),/pages-project-target-invalid/);
   const secret='SECRET_CANARY_PAGES';const bearing=createCloudflarePagesApiAdapter({...base,readProject:async()=>({...snapshot,secret})});await assert.rejects(bearing.readProject(),error=>error.code==='pages-project-response-invalid'&&!error.message.includes(secret));
   const throwing=createCloudflarePagesApiAdapter({...base,readProject:async()=>{throw new Error(secret);}});await assert.rejects(throwing.readProject(),error=>error.code==='pages-project-read-failed'&&!error.message.includes(secret)&&!error.cause);
+  const nestedSecret=createCloudflarePagesApiAdapter({...base,readProject:async()=>({...snapshot,payload:{...pagesPayload(),placement:{credential:'sk_live_CANARY'}}})});await assert.rejects(nestedSecret.readProject(),error=>error.code==='pages-project-response-invalid'&&!error.message.includes('sk_live_CANARY'));
+  let invalidPatches=0;const outgoing=createCloudflarePagesApiAdapter({...base,readProject:async()=>structuredClone(snapshot),patchProject:async()=>{invalidPatches++;throw new Error('must not run');}});await assert.rejects(outgoing.updateProject({projectName:'atmos-platform',payload:{...pagesPayload(),placement:{credential:'sk_live_CANARY'}},configDigest:H('2'),expectedEtag:'pages-etag',owner:'owner',mutationContext,fence}),error=>error.code==='pages-project-payload-invalid'&&!error.message.includes('sk_live_CANARY'));assert.equal(invalidPatches,0);
 
   let current=structuredClone(snapshot),capturedReference,durable,patches=0;
   const ambiguous=createCloudflarePagesApiAdapter({...base,readProject:async()=>structuredClone(current),readFenceAcknowledgement:async reference=>{assert.deepEqual(reference,capturedReference);if(!durable)throw new Error('missing');return durable;},patchProject:async request=>{patches++;capturedReference=request.operationReference;current={...current,configDigest:request.configDigest,payload:structuredClone(request.payload),etag:'pages-etag-2',mutationOwner:request.owner};return{acceptedProject:'atmos-platform',fenceAcknowledgement:{}};}});

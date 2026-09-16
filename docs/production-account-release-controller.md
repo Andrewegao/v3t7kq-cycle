@@ -13,7 +13,7 @@ Lane C is built against one explicit owner-blocked Lane B contract in
 - contract digest: `c91c8cb86378e5034cc0784e2b3217421eb33586375abe5e2d2e1af5a57d0e90`
 - production trust-policy digest: `f2795ab9b504b32fdbdcaa957cde134ac91199ae43a8945a041aa1544601d23c`
 - production profile digest: `230c240535ceea84fe13f123a6e0b75d9b8875a4380828c3bef51f68c2ada5f3`
-- pipeline digest: `41f8e642ad996da8cf828152fabfe166ae3c06386d56eb5b6498bf543ac5c61e`
+- pipeline digest: `251e7d351a34de4b4f54d3f0d32b72b5c41062372ca9d98e9b5bd738aaa63a1b`
 
 Every normal validation path refuses while the contract is provisional. Tests may pass
 `allowProvisional: true` only to exercise mocked transactions. That switch must never appear
@@ -76,7 +76,11 @@ resource namespace and fencing token are passed into the adapter call. The produ
 accepts only module-branded Worker and Pages adapters. Every mutation must return and preserve a
 signed acknowledgement from the independently configured mutation broker for an exact operation
 digest and idempotency key binding the complete mutation specification, physical target, approval,
-request and fence. Activation reloads its immutable prepared receipt from
+request and fence. Before calling a provider, the executor appends the deterministic exact mutation
+reference and recovery input as a `mutation-prepared` checkpoint. Immediately after authenticating
+the broker acknowledgement—and before any provider readback—it appends the exact signed evidence as
+an `acknowledged` checkpoint. Activation/rollback and Pages update/restore therefore keep distinct
+references and checkpoints. Activation reloads its immutable prepared receipt from
 durable storage and rereads the exact prepared Worker version before traffic changes. Signed
 approval and lease claims bind the request and input-receipt digests, preventing substitution.
 
@@ -85,7 +89,9 @@ or wrong-spec acknowledgement after state changes, the journal records the exact
 reference and remains `recovery-required`. Recovery may query only that durable signed broker
 acknowledgement and reread state; it never repeats the upload, activation, rollback, Pages update or
 Pages restore. Only matching acknowledgement plus matching provider state can become a completed
-recovery receipt.
+recovery receipt. A process death after the provider call or after acknowledgement authentication
+leaves the last append-only checkpoint as a recovery input; the recovery action can authenticate the
+persisted signed evidence (or query the same exact broker reference) and read state without remutation.
 
 Each result is appended as `completed` or `recovery-required`; entries are never replaced. Exact
 completed replays return the recorded result without reacquiring a lease or rerunning the operation,
