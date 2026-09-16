@@ -48,6 +48,15 @@ No queue setting changes are part of this inventory. Freshness work generally be
 
 There is no generic retry-any-run command. Missing or expired artifacts, incompatible source, stale eligibility, and malformed provenance remain refusal conditions. No recovery action should interrupt another active publication or use a second lock name to bypass its ownership.
 
+## Production account release preparation
+
+The local [production account release controller](production-account-release-controller.md)
+defines a provisional G3 profile plus mocked Worker and Pages-configuration transactions. It is
+not a workflow entrypoint and its provisional Lane B contract fails closed for normal/live use.
+Do not add a dispatch, Cloudflare adapter, protected value, or approval shortcut merely to exercise
+it. Converge the final Lane B contract first, then review and rehearse the separate Worker upload,
+Worker activation, Pages configuration, and exact-artifact Pages promotion boundaries in order.
+
 ## Legacy and historical material
 
 [catalog-promote-existing.yml](../.github/workflows/catalog-promote-existing.yml) is explicitly `legacy-needs-review`: its staging lock differs from the recurring staging publisher, and its checkout has no explicit immutable ref. This index neither disables it nor certifies it. Review its source and writer contract before recommending use.
