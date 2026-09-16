@@ -20,7 +20,7 @@ The controller accepts only Atmos SHA `0edbbe243589849c3d56c98b24e5d8b7ab96c522`
 
 Stripe pagination is exhaustive (`limit=100` plus `starting_after`) and uses pinned API version `2026-02-25.clover`. The audit reads every live Customer, Subscription (including canceled), Checkout Session, Refund, and Dispute. It rejects test-mode objects, duplicate IDs, incomplete embedded Subscription items, redirects, oversized pages, stalled cursors, and non-allowlisted Stripe endpoints.
 
-Production D1 access consists only of fixed `SELECT` statements for sanitized fields from users, subscriptions, Stripe entitlements, access passes, access-pass refunds, checkout attempts, and webhook review state. The controller invokes the exact Wrangler installed from the reviewed Atmos lockfile. SQL is not accepted from workflow input.
+Production D1 access consists only of fixed `SELECT` statements for sanitized fields from users, subscriptions, Stripe entitlements, access passes, access-pass refunds, checkout attempts, and webhook review state. The controller calls Cloudflare's exact account-scoped D1 query endpoint with the hard-coded production database UUID. It rejects redirects, oversized responses, API errors, and any response metadata reporting a write or database change. SQL is not accepted from workflow input.
 
 Stripe and D1 snapshots are collected in parallel into runner-local files. They are never uploaded and are deleted before artifact retention. Emails, checkout URLs, idempotency keys, API keys, webhook secrets, and raw error strings are never selected or included in the receipt.
 

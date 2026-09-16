@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {execFile} from 'node:child_process';
 import {readFile, writeFile} from 'node:fs/promises';
-import {isAbsolute, resolve} from 'node:path';
-import {promisify} from 'node:util';
+import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 export const STRIPE_API_VERSION = '2026-02-25.clover';
@@ -17,11 +15,14 @@ const STRIPE_PAGE_SIZE = 100;
 const STRIPE_MAX_PAGES = 10_000;
 const STRIPE_MAX_PAGE_BYTES = 2 * 1024 * 1024;
 const STRIPE_TIMEOUT_MS = 15_000;
-const WRANGLER_TIMEOUT_MS = 60_000;
+const CLOUDFLARE_ORIGIN = 'https://api.cloudflare.com';
+const CLOUDFLARE_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
+const CLOUDFLARE_TIMEOUT_MS = 60_000;
+const ACCOUNT_ID = /^[a-f0-9]{32}$/;
+const API_TOKEN = /^[A-Za-z0-9_-]{20,255}$/;
 const ID = /^[A-Za-z0-9_-]{1,255}$/;
 const SHA = /^[a-f0-9]{40}$/;
 const PRICE = /^price_[A-Za-z0-9_]{1,250}$/;
-const execFileAsync = promisify(execFile);
 
 const PLATFORM_QUERIES = Object.freeze({
   users: `SELECT id, stripe_customer_id FROM users ORDER BY id`,
@@ -161,13 +162,20 @@ export async function collectStripeSnapshot(options = {}) {
   return Object.freeze({...snapshot, snapshotDigest: digest(snapshot)});
 }
 
-function parseWranglerRows(stdout, table) {
-  const payload = JSON.parse(stdout);
-  const commands = Array.isArray(payload) ? payload : [payload];
-  assert.equal(commands.length, 1, `platform-${table}-result-count-invalid`);
-  const result = object(commands[0], `platform-${table}-result-invalid`);
-  assert.notEqual(result.success, false, `platform-${table}-query-failed`);
+function parseCloudflareRows(raw, table) {
+  const payload = object(JSON.parse(raw), `platform-${table}-response-invalid`);
+  assert.equal(payload.success, true, `platform-${table}-request-failed`);
+  assert.ok(Array.isArray(payload.errors) && payload.errors.length === 0, `platform-${table}-request-errors`);
+  assert.ok(Array.isArray(payload.result) && payload.result.length === 1, `platform-${table}-result-count-invalid`);
+  const result = object(payload.result[0], `platform-${table}-result-invalid`);
+  assert.equal(result.success, true, `platform-${table}-query-failed`);
   assert.ok(Array.isArray(result.results), `platform-${table}-rows-invalid`);
+  if (result.meta !== undefined) {
+    const meta = object(result.meta, `platform-${table}-meta-invalid`);
+    assert.notEqual(meta.changed_db, true, `platform-${table}-changed-database`);
+    assert.ok(meta.changes === undefined || meta.changes === 0, `platform-${table}-reported-changes`);
+    assert.ok(meta.rows_written === undefined || meta.rows_written === 0, `platform-${table}-reported-writes`);
+  }
   return result.results;
 }
 
@@ -185,21 +193,28 @@ function normalizePlatformRow(table, value) {
   throw new Error(`unsupported-platform-table:${table}`);
 }
 
-export async function collectPlatformSnapshot({wranglerPath, configPath, cwd, runner = execFileAsync} = {}) {
-  assert.ok(isAbsolute(wranglerPath ?? ''), 'wrangler-path-must-be-absolute');
-  assert.ok(isAbsolute(configPath ?? ''), 'wrangler-config-path-must-be-absolute');
-  assert.ok(isAbsolute(cwd ?? ''), 'wrangler-cwd-must-be-absolute');
-  const wranglerEnvironment = {};
-  for (const name of ['PATH', 'HOME', 'CI', 'NO_COLOR', 'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN']) {
-    if (process.env[name] !== undefined) wranglerEnvironment[name] = process.env[name];
-  }
+export async function collectPlatformSnapshot({accountId, apiToken, fetcher = fetch} = {}) {
+  assert.match(accountId ?? '', ACCOUNT_ID, 'cloudflare-account-id-invalid');
+  assert.match(apiToken ?? '', API_TOKEN, 'cloudflare-audit-token-invalid');
+  const url = new URL(`/client/v4/accounts/${accountId}/d1/database/${PRODUCTION_PLATFORM_D1_ID}/query`, CLOUDFLARE_ORIGIN);
   const tables = {};
   for (const [table, query] of Object.entries(PLATFORM_QUERIES)) {
     assert.match(query, /^SELECT\b/i, `platform-${table}-query-not-read-only`);
     assert.doesNotMatch(query, /;|--|\/\*|\b(?:INSERT|UPDATE|DELETE|REPLACE|DROP|ALTER|CREATE|PRAGMA|ATTACH|DETACH|VACUUM)\b/i, `platform-${table}-query-unsafe`);
-    const {stdout, stderr} = await runner(wranglerPath, ['d1', 'execute', PRODUCTION_PLATFORM_D1_ID, '--remote', '--env', 'production', '--config', configPath, '--json', '--command', query], {cwd, encoding: 'utf8', timeout: WRANGLER_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, env: wranglerEnvironment});
-    assert.doesNotMatch(stderr ?? '', /\b(?:error|failed)\b/i, `platform-${table}-wrangler-error`);
-    const rows = parseWranglerRows(stdout, table).map(value => normalizePlatformRow(table, value)).sort((a, b) => a.id.localeCompare(b.id));
+    const response = await fetcher(url, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: {authorization: `Bearer ${apiToken}`, accept: 'application/json', 'content-type': 'application/json'},
+      body: JSON.stringify({sql: query}),
+      signal: AbortSignal.timeout(CLOUDFLARE_TIMEOUT_MS),
+    });
+    assert.equal(response.url ? new URL(response.url).origin : CLOUDFLARE_ORIGIN, CLOUDFLARE_ORIGIN, `platform-${table}-response-origin-changed`);
+    assert.ok(response.status >= 200 && response.status < 300, `platform-${table}-http-${response.status}`);
+    const declaredLength = Number(response.headers?.get?.('content-length'));
+    assert.ok(!Number.isFinite(declaredLength) || declaredLength <= CLOUDFLARE_RESPONSE_MAX_BYTES, `platform-${table}-response-oversized`);
+    const raw = await response.text();
+    assert.ok(Buffer.byteLength(raw) <= CLOUDFLARE_RESPONSE_MAX_BYTES, `platform-${table}-response-oversized`);
+    const rows = parseCloudflareRows(raw, table).map(value => normalizePlatformRow(table, value)).sort((a, b) => a.id.localeCompare(b.id));
     assertUnique(rows, `platform-${table}`);
     tables[table] = rows;
   }
@@ -396,8 +411,8 @@ async function main(argv) {
     return output(options.output, await collectStripeSnapshot({apiKey: process.env.STRIPE_PRODUCTION_AUDIT_KEY}));
   }
   if (command === 'collect-platform') {
-    assert.deepEqual(Object.keys(options).sort(), ['config', 'cwd', 'output', 'wrangler'], 'collect-platform-options-invalid');
-    return output(options.output, await collectPlatformSnapshot({wranglerPath: resolve(options.wrangler), configPath: resolve(options.config), cwd: resolve(options.cwd)}));
+    assert.deepEqual(Object.keys(options).sort(), ['output'], 'collect-platform-options-invalid');
+    return output(options.output, await collectPlatformSnapshot({accountId: process.env.CLOUDFLARE_ACCOUNT_ID, apiToken: process.env.CLOUDFLARE_API_TOKEN}));
   }
   if (command === 'inspect-config') {
     assert.deepEqual(Object.keys(options).sort(), ['atmos-sha', 'config', 'output'], 'inspect-config-options-invalid');

@@ -82,8 +82,6 @@ jobs:
             --config atmos/platform/edge/wrangler.jsonc \
             --atmos-sha "$ATMOS_SHA" \
             --output "$RUNNER_TEMP/production-account-audit/candidate.json"
-      - name: Install the candidate's exact locked Wrangler
-        run: npm ci --prefix atmos/platform/edge
       - name: Capture exhaustive Stripe and sanitized platform snapshots in parallel
         env:
           STRIPE_PRODUCTION_AUDIT_KEY: ${{ secrets.STRIPE_PRODUCTION_AUDIT_KEY }}
@@ -96,9 +94,6 @@ jobs:
           stripe_pid=$!
           env -u STRIPE_PRODUCTION_AUDIT_KEY \
             node cycle/tools/production-account-audit.mjs collect-platform \
-            --wrangler "$GITHUB_WORKSPACE/atmos/platform/edge/node_modules/wrangler/bin/wrangler.js" \
-            --config "$GITHUB_WORKSPACE/atmos/platform/edge/wrangler.jsonc" \
-            --cwd "$GITHUB_WORKSPACE/atmos/platform/edge" \
             --output "$RUNNER_TEMP/production-account-audit/platform.json" &
           platform_pid=$!
           failed=0
