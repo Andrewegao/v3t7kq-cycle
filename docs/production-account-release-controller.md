@@ -5,19 +5,21 @@ dispatch, Cloudflare mutation, D1 migration, Stripe change, Pages deployment, or
 
 ## Current hard block
 
-Lane C is built against one explicit provisional Lane B fixture in
+Lane C is built against one explicit owner-blocked Lane B contract in
 `tools/production-account-contract.mjs`:
 
 - contract version: `lane-b-account-contract-v0-provisional`
-- contract digest: `a5df2584e623d5cda4de7e188927cf2c0dba70052c971dc48a220475a7d9a7eb`
-- production profile digest: `4b106c543d46088339ca74d3db4a431991bf3c9136f42628b18031a280c4df43`
-- required Atmos controller SHA: all zeroes, intentionally unresolvable
+- exact reviewed Atmos integration candidate: `35658a3372e9cb7699cbd52860388d138f967115`
+- contract digest: `f88f450b54f8efb9171add602bb4ac8ebba3763cda2aaa65f905f63199c6c896`
+- production profile digest: `2ebd8d7b6a93383d1c14863281851edc5434916873ca87a20e91b2b7b28c9485`
+- pipeline digest: `523848eb49cecd2a2750e006f7ae974cdb932455a558bd4af8a18eb196cf10d1`
 
 Every normal validation path refuses while the contract is provisional. Tests may pass
 `allowProvisional: true` only to exercise mocked transactions. That switch must never appear
-in a workflow, CLI, or live adapter. Lane B must replace the fixture, supply an actual reviewed
-controller SHA, and change the digest before any live rehearsal. Lane C then reruns all tests,
-reviews the diff, records the new contract/profile/pipeline digests, and qualifies a new candidate.
+in a workflow, CLI, or live adapter. The source and controller identities are now bound to the
+exact reviewed Atmos candidate above, but the owner must still approve the exact live Stripe
+offers and Price/Product identities before the contract can become final or enter a live rehearsal.
+Any final contract change invalidates these digests and requires a fresh candidate qualification.
 
 ## Profiles and candidate identity
 
@@ -37,9 +39,9 @@ provisional override is never applied implicitly. The provisional Stripe subscri
 are deliberately invalid identifiers until the owner chooses exact live Prices; arbitrary
 `price_live_*` values are not accepted as substitutes.
 
-The provisional profile is not exposed through a live workflow selector. Adding that selector
-is part of Lane B convergence, after the zero SHA and provisional receipt are replaced. This
-prevents a protected-variable typo from turning an unfinished fixture into a deployable profile.
+The owner-blocked profile is not exposed through a live workflow selector. Adding that selector
+requires a final owner-approved contract and separately reviewed workflow change. This prevents
+a protected-variable typo from turning an unfinished contract into a deployable profile.
 
 ## G3 transaction separation
 

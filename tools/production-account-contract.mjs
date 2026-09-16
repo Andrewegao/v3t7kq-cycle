@@ -1,15 +1,15 @@
-// Provisional Lane B handoff consumed by the Cycle release-safety lane.
+// Owner-blocked Lane B handoff consumed by the Cycle release-safety lane.
 //
 // This file is deliberately the only place where the controller assumes the shape of
-// the not-yet-frozen Atmos account/billing contract. A production command MUST refuse
-// this contract while status is provisional. Lane B replaces the fixture, supplies an
-// actual reviewed controller SHA, and changes the digest before any live rehearsal.
+// the not-yet-final Atmos account/billing contract. The reviewed integration candidate
+// is exact, but a production command MUST still refuse this contract while status is
+// provisional and the live Stripe offers remain owner-unapproved.
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 
 export const PRODUCTION_ACCOUNT_REQUEST = 'production-account-billing-v1';
 export const PRODUCTION_ACCOUNT_APPROVAL = 'production-account-billing-v1';
-export const PROVISIONAL_CONTROLLER_SHA = '0000000000000000000000000000000000000000';
+export const ATMOS_INTEGRATION_CANDIDATE_SHA = '35658a3372e9cb7699cbd52860388d138f967115';
 export const PRODUCTION_ANALYTICS_D1_ID = 'e7247173-c23d-4989-b29e-f95939c820fe';
 export const STAGING_PLATFORM_D1_ID = '9501827a-7e4c-4249-806b-d45d5857d9e5';
 
@@ -48,8 +48,9 @@ export const LANE_B_CONTRACT = deepFreeze({
   schemaVersion: 1,
   contractVersion: 'lane-b-account-contract-v0-provisional',
   status: 'provisional',
-  blockingReason: 'Lane B must replace this fixture and provide its reviewed final digest before live use.',
-  requiredAtmosControllerSha: PROVISIONAL_CONTROLLER_SHA,
+  blockingReason: 'The owner must approve the exact live Stripe offers and Price/Product identities before live use.',
+  requiredAtmosSourceSha: ATMOS_INTEGRATION_CANDIDATE_SHA,
+  requiredAtmosControllerSha: ATMOS_INTEGRATION_CANDIDATE_SHA,
   target: {
     cloudflareAccountId: 'a89f9a1af485021fbc60a68b163c7c6e',
     workerName: 'weatherx-platform-edge-production',
@@ -112,7 +113,8 @@ export function assertLaneBContractReady({allowProvisional = false} = {}) {
     assert.equal(allowProvisional, true,
       `Lane B contract remains provisional (${LANE_B_CONTRACT_DIGEST}); live release use is blocked`);
     assert.equal(LANE_B_CONTRACT.status, 'provisional');
-    assert.equal(LANE_B_CONTRACT.requiredAtmosControllerSha, PROVISIONAL_CONTROLLER_SHA);
+    assert.equal(LANE_B_CONTRACT.requiredAtmosSourceSha, ATMOS_INTEGRATION_CANDIDATE_SHA);
+    assert.equal(LANE_B_CONTRACT.requiredAtmosControllerSha, ATMOS_INTEGRATION_CANDIDATE_SHA);
   }
   return LANE_B_CONTRACT;
 }

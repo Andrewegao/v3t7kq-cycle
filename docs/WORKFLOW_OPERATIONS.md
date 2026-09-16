@@ -54,7 +54,9 @@ The local [production account release controller](production-account-release-con
 defines a provisional G3 profile plus mocked Worker and Pages-configuration transactions. It is
 not a workflow entrypoint and its provisional Lane B contract fails closed for normal/live use.
 Do not add a dispatch, Cloudflare adapter, protected value, or approval shortcut merely to exercise
-it. Converge the final Lane B contract first, then review and rehearse the separate Worker upload,
+it. The profile is bound to the reviewed Atmos integration candidate, but the live Stripe offer and
+Price/Product owner decisions still block finalization. Converge the final Lane B contract first,
+then review and rehearse the separate Worker upload,
 Worker activation, Pages configuration, and exact-artifact Pages promotion boundaries in order.
 
 ## Legacy and historical material
