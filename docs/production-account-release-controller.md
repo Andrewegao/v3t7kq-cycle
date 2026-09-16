@@ -9,11 +9,11 @@ Lane C is built against one explicit owner-blocked Lane B contract in
 `tools/production-account-contract.mjs`:
 
 - contract version: `lane-b-account-contract-v0-provisional`
-- exact reviewed Atmos integration candidate: `1ad7ffd86f1ed81993ea352d3db53515b376cc00`
-- contract digest: `c91c8cb86378e5034cc0784e2b3217421eb33586375abe5e2d2e1af5a57d0e90`
+- exact reviewed Atmos integration candidate: `6c29c7f74731059fdd433b40d7bc21427a605ab9`
+- contract digest: `7d23c76a2bbfc07c0506ab85c85823723f9cc526f047fd7f9b328e48bd05a93b`
 - production trust-policy digest: `f2795ab9b504b32fdbdcaa957cde134ac91199ae43a8945a041aa1544601d23c`
-- production profile digest: `230c240535ceea84fe13f123a6e0b75d9b8875a4380828c3bef51f68c2ada5f3`
-- pipeline digest: `27fa0f0170d7c27d7645735f5b1612a8a2fd0bd89e731d16c063a346f9d8b1cc`
+- production profile digest: `d326eb3fdd9a9d9db2a0834a5edae262d3536b485bfd8d7e8b225f390505444b`
+- pipeline digest: `7d885f28cebbb303c098989080b7aa92a5c400f3752b225ed809283b8c9b0459`
 
 Every normal validation path refuses while the contract is provisional. Tests may pass
 `allowProvisional: true` only to exercise mocked transactions. That switch must never appear
