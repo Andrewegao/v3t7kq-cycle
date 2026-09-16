@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `c35527faad21b32d9c62f020c9520490a3dc3cf4cf3c9e6ea8c229cb3e792998`.
+Source digest (registry and workflow bytes): `320cbdbff17cd728a8033876e666783e2c7c538fdb1aec4cf6e0963ec27f8e4a`.
 
 51 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -1308,10 +1308,10 @@ Checkout declarations (not a claim of approval or checkout success):
 | --- | --- | --- |
 | [profile / step 1](../.github/workflows/ui-staging.yml#L41) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 | [build / step 2](../.github/workflows/ui-staging.yml#L102) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [build / checkout reviewed release controller](../.github/workflows/ui-staging.yml#L104) | <code>weatherx-hq/atmos</code> | <code>${{ needs.profile.outputs.model_selection_sha256 == 'none' &amp;&amp; '25c402db5149daa018e349a34a4beeba1f2dca45' &#124;&#124; 'fa857448dafa0f54eafdd63999b85eca4916edc8' }}</code> |
+| [build / checkout reviewed release controller](../.github/workflows/ui-staging.yml#L104) | <code>weatherx-hq/atmos</code> | <code>${{ needs.profile.outputs.model_selection_sha256 == 'none' &amp;&amp; '25c402db5149daa018e349a34a4beeba1f2dca45' &#124;&#124; 'fac2fc164420d4d31870a410c9a877d16ad76fb0' }}</code> |
 | [build / checkout exact candidate Atmos source](../.github/workflows/ui-staging.yml#L127) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmos_sha }}</code> |
 | [qualify / step 1](../.github/workflows/ui-staging.yml#L197) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [qualify / checkout pinned controller, NOT candidate source](../.github/workflows/ui-staging.yml#L199) | <code>weatherx-hq/atmos</code> | <code>${{ needs.profile.outputs.model_selection_sha256 == 'none' &amp;&amp; '25c402db5149daa018e349a34a4beeba1f2dca45' &#124;&#124; 'fa857448dafa0f54eafdd63999b85eca4916edc8' }}</code> |
+| [qualify / checkout pinned controller, NOT candidate source](../.github/workflows/ui-staging.yml#L199) | <code>weatherx-hq/atmos</code> | <code>${{ needs.profile.outputs.model_selection_sha256 == 'none' &amp;&amp; '25c402db5149daa018e349a34a4beeba1f2dca45' &#124;&#124; 'fac2fc164420d4d31870a410c9a877d16ad76fb0' }}</code> |
 
 Variable references (declared names only; values and activation unknown): [FUSION_CALIBRATION_RUNTIME_ENABLED](../.github/workflows/ui-staging.yml#L87), [STAGING_WIND100_UI_CATALOG_ID](../.github/workflows/ui-staging.yml#L54), [STAGING_WIND100_UI_DYNAMIC](../.github/workflows/ui-staging.yml#L57), [STAGING_WIND100_UI_ENABLED](../.github/workflows/ui-staging.yml#L53), [STAGING_WIND100_UI_RUN_ID](../.github/workflows/ui-staging.yml#L55), [STAGING_WIND100_UI_SELECTION_SHA256](../.github/workflows/ui-staging.yml#L56), [UI_BUILDS_ENABLED](../.github/workflows/ui-staging.yml#L78), [UI_BUILD_PUBLIC_KEY](../.github/workflows/ui-staging.yml#L79), [UI_DEPLOYMENT_HOLD_UNTIL](../.github/workflows/ui-staging.yml#L184), [UI_ISOLATION_APPROVED](../.github/workflows/ui-staging.yml#L183), [UI_PAGES_CONFIG_SHA256](../.github/workflows/ui-staging.yml#L228), [UI_RELEASES_ENABLED](../.github/workflows/ui-staging.yml#L182), [UI_STAGING_ACCOUNT_ID](../.github/workflows/ui-staging.yml#L227), [UI_STAGING_ACCOUNT_PROFILE_APPROVED](../.github/workflows/ui-staging.yml#L52), [UI_STAGING_CORE_PROFILE_APPROVED](../.github/workflows/ui-staging.yml#L50), [UI_STAGING_MODEL_SELECTION_APPROVED_SHA256](../.github/workflows/ui-staging.yml#L49), [UI_STAGING_STATIC_COMPRESSION_APPROVED](../.github/workflows/ui-staging.yml#L51).
 
