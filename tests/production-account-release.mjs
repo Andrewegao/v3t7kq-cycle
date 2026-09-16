@@ -449,7 +449,7 @@ test('candidate binding comes only from a validated candidate and its exact qual
 });
 
 test('reviewed Atmos integration identity is exact while provisional Price placeholders remain unusable', () => {
-  assert.equal(ATMOS_INTEGRATION_CANDIDATE_SHA, '1ad7ffd86f1ed81993ea352d3db53515b376cc00');
+  assert.equal(ATMOS_INTEGRATION_CANDIDATE_SHA, '6c29c7f74731059fdd433b40d7bc21427a605ab9');
   assert.ok(Object.values(LANE_B_CONTRACT.approvedStripePriceIds).every(value => !value.startsWith('price_')));
   assert.equal(LANE_B_CONTRACT.requiredAtmosSourceSha, ATMOS_INTEGRATION_CANDIDATE_SHA);
   assert.equal(LANE_B_CONTRACT.requiredAtmosControllerSha, ATMOS_INTEGRATION_CANDIDATE_SHA);
