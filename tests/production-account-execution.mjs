@@ -9,13 +9,18 @@ import {
   createCloudflarePagesApiAdapter,
   createCloudflareWorkerCommandAdapter,
   createProductionAccountExecutor,
+  createEd25519ProductionApprovalAuthority,
+  createMonotonicProductionLeaseAuthority,
+  createProductionFenceAcknowledgementAuthority,
   createProductionReceiptStore,
   createTestEd25519ProductionApprovalAuthority,
+  createTestFenceAcknowledgementAuthority,
   createTestMonotonicProductionLeaseAuthority,
   createTestProductionAccountExecutor,
   ProductionExecutionError,
   productionExecutionApprovalContext,
   PRODUCTION_APPROVAL_KIND,
+  PRODUCTION_FENCE_ACK_KIND,
   PRODUCTION_LEASE_KIND,
   PRODUCTION_MUTATION_CONFIRMATION,
   validateProductionExecutionRequest,
@@ -30,17 +35,19 @@ function preparedTransaction(releasePlan=plan()){return{kind:'weatherx-account-w
 
 function memoryReceipts(){const values=new Map();return{values,async create(id,entry){if(values.has(id))throw new ProductionExecutionError('receipt-attempt-exists');values.set(id,[structuredClone(entry)]);},async append(id,expected,entry){const journal=values.get(id);assert.ok(journal);assert.equal(journal.length-1,expected);journal.push(structuredClone(entry));},async read(id){if(!values.has(id))throw new ProductionExecutionError('receipt-not-found');return structuredClone(values.get(id));}};}
 
-function harness({operation,now=Date.parse('2026-09-16T06:05:00.000Z'),leaseExpires='2026-09-16T06:10:00.000Z'}={}){
-  const {publicKey,privateKey}=generateKeyPairSync('ed25519');let time=now,acquires=0,reads=0;const receipts=memoryReceipts();
+function harness({operation,tamperLease,now=Date.parse('2026-09-16T06:05:00.000Z'),leaseExpires='2026-09-16T06:10:00.000Z'}={}){
+  const {publicKey,privateKey}=generateKeyPairSync('ed25519'),leaseKeys=generateKeyPairSync('ed25519');let time=now,acquires=0,reads=0;const receipts=memoryReceipts(),tokens=new Map(),leasesById=new Map();
   const approvals=createTestEd25519ProductionApprovalAuthority({publicKey,issuer:'weatherx-release-owner',audience:'weatherx-production-controller',clock:()=>time});
-  const leaseClient={async acquire(expected){acquires++;return{schemaVersion:2,kind:PRODUCTION_LEASE_KIND,leaseId:'lease-1',issuer:'weatherx-independent-lease-service',...structuredClone(expected),fencingToken:41,issuedAt:'2026-09-16T06:04:00.000Z',expiresAt:leaseExpires};},async read(){reads++;const expected=leaseClient.expected;return{schemaVersion:2,kind:PRODUCTION_LEASE_KIND,leaseId:'lease-1',issuer:'weatherx-independent-lease-service',...structuredClone(expected),fencingToken:41,issuedAt:'2026-09-16T06:04:00.000Z',expiresAt:leaseExpires};}};
-  const originalAcquire=leaseClient.acquire;leaseClient.acquire=async expected=>{leaseClient.expected=structuredClone(expected);return originalAcquire(expected);};
-  const leases=createTestMonotonicProductionLeaseAuthority(leaseClient,()=>time);let calls=0;
-  const operations=Object.fromEntries(['prepare-worker','activate-worker','recover-worker-activation','recover-worker-rollback','prepare-pages','apply-pages','recover-pages'].map(action=>[action,async(...args)=>{calls++;if(operation)return operation(...args);return preparedTransaction(args[0].plan);} ]));
-  const executor=createTestProductionAccountExecutor({testOnly:true,approvalAuthority:approvals,leaseAuthority:leases,receipts,dependencies:{},validatePlan:value=>value,operations});
+  const envelope=payload=>({payload,signature:sign(null,Buffer.from(canonical(payload)),leaseKeys.privateKey).toString('base64')});
+  const leaseClient={async acquire(expected){acquires++;const predecessorToken=tokens.get(expected.resourceNamespace)??40,fencingToken=predecessorToken+1;tokens.set(expected.resourceNamespace,fencingToken);const payload={schemaVersion:3,kind:PRODUCTION_LEASE_KIND,leaseId:`lease-${fencingToken}`,...structuredClone(expected),predecessorToken,fencingToken,issuedAt:'2026-09-16T06:04:00.000Z',expiresAt:leaseExpires};leasesById.set(payload.leaseId,payload);const signed=envelope(payload);return tamperLease?tamperLease(signed):signed;},async read(leaseId){reads++;return envelope(leasesById.get(leaseId));}};
+  const newLeases=()=>createTestMonotonicProductionLeaseAuthority({client:leaseClient,publicKey:leaseKeys.publicKey,issuer:'weatherx-independent-lease-service',audience:'weatherx-production-controller',clock:()=>time});let calls=0;
+  const operations=Object.fromEntries(['prepare-worker','recover-worker-preparation','activate-worker','recover-worker-activation','recover-worker-rollback','prepare-pages','apply-pages','recover-pages'].map(action=>[action,async(...args)=>{calls++;if(operation)return operation(...args);return preparedTransaction(args[0].plan);} ]));
+  const newExecutor=()=>createTestProductionAccountExecutor({testOnly:true,approvalAuthority:approvals,leaseAuthority:newLeases(),receipts,dependencies:{},validatePlan:value=>value,operations});const executor=newExecutor();
   function authorize(value,{approvalId='approval-1',issuedAt='2026-09-16T06:00:00.000Z',expiresAt='2026-09-16T06:15:00.000Z'}={}){const expected=productionExecutionApprovalContext(value,value.plan);const payload={schemaVersion:2,kind:PRODUCTION_APPROVAL_KIND,approvalId,issuer:'weatherx-release-owner',audience:'weatherx-production-controller',confirmation:PRODUCTION_MUTATION_CONFIRMATION,...expected,issuedAt,expiresAt};value.approval={payload,signature:sign(null,Buffer.from(canonical(payload)),privateKey).toString('base64')};return value;}
-  return{executor,authorize,receipts,get calls(){return calls;},get acquires(){return acquires;},get reads(){return reads;},set time(value){time=value;}};
+  return{executor,authorize,receipts,restartExecutor:newExecutor,get calls(){return calls;},get acquires(){return acquires;},get reads(){return reads;},set time(value){time=value;}};
 }
+
+function acknowledgementHarness(){const keys=generateKeyPairSync('ed25519'),issuer='weatherx-test-mutation-broker',audience='weatherx-production-controller';const authority=createTestFenceAcknowledgementAuthority({publicKey:keys.publicKey,issuer,audience});return{authority,sign(expected){const payload={schemaVersion:1,kind:PRODUCTION_FENCE_ACK_KIND,issuer,audience,...expected,acknowledgedAt:'2026-09-16T06:04:30.000Z'};return{payload,signature:sign(null,Buffer.from(canonical(payload)),keys.privateKey).toString('base64')};}};}
 
 test('request shape has no caller clock or self-asserted lease and requires a signed approval envelope',()=>{
   const value=request();validateProductionExecutionRequest(value);
@@ -57,11 +64,20 @@ test('authenticated success is append-only, fenced, and exact replay is idempote
   h.time=Date.parse('2026-09-16T07:00:00.000Z');assert.deepEqual(await h.executor.execute(value),first);assert.equal(h.calls,1);
 });
 
-test('production executor rejects test authorities and a lease token must advance for a new attempt',async()=>{
+test('production factories reject caller-selected trust roots while the reviewed policy is provisional',()=>{
+  const keys=generateKeyPairSync('ed25519');
+  assert.throws(()=>createEd25519ProductionApprovalAuthority({publicKey:keys.publicKey}),/production-account-trust-policy-provisional/);
+  assert.throws(()=>createEd25519ProductionApprovalAuthority({publicKey:keys.publicKey,issuer:'caller'}),/production-approval-authority-options-invalid/);
+  assert.throws(()=>createMonotonicProductionLeaseAuthority({client:{},publicKey:keys.publicKey}),/production-account-trust-policy-provisional/);
+  assert.throws(()=>createProductionFenceAcknowledgementAuthority({publicKey:keys.publicKey}),/production-account-trust-policy-provisional/);
   const h=harness();assert.throws(()=>createProductionAccountExecutor({approvalAuthority:{},leaseAuthority:{},receipts:h.receipts}),/production-approval-authority-required/);
-  await h.executor.execute(h.authorize(request(),{approvalId:'approval-first'}));
-  await assert.rejects(h.executor.execute(h.authorize(request(),{approvalId:'approval-second'})),/lease-fencing-token-not-monotonic/);
-  assert.equal(h.calls,1);
+});
+
+test('the signed lease service advances one physical-resource fence across attempts',async()=>{
+  const h=harness();const first=await h.executor.execute(h.authorize(request(),{approvalId:'approval-first'}));const changed=request();changed.plan.candidateBinding.bindingDigest=H('9');const second=await h.restartExecutor().execute(h.authorize(changed,{approvalId:'approval-second'}));
+  assert.equal((await h.receipts.read(first.receiptId))[0].record.lease.fencingToken,41);
+  assert.equal((await h.receipts.read(second.receiptId))[0].record.lease.fencingToken,42);
+  assert.equal(h.calls,2);
 });
 
 test('crash or provider failure becomes recovery-required, leaks no secret, and cannot rerun',async()=>{
@@ -77,6 +93,7 @@ test('expired approvals and short leases fail before operation or intent creatio
   await assert.rejects(expired.executor.execute(expiredRequest),/approval-not-current/);assert.equal(expired.calls,0);assert.equal(expired.receipts.values.size,0);
   const short=harness({leaseExpires:'2026-09-16T06:05:30.000Z'}),shortRequest=short.authorize(request());
   await assert.rejects(short.executor.execute(shortRequest),/lease-insufficient-remaining-time/);assert.equal(short.calls,0);assert.equal(short.receipts.values.size,0);
+  const forged=harness({tamperLease:envelope=>({...envelope,signature:Buffer.alloc(64).toString('base64')})});await assert.rejects(forged.executor.execute(forged.authorize(request())),/lease-signature-invalid/);assert.equal(forged.calls,0);assert.equal(forged.receipts.values.size,0);
 });
 
 test('prepared receipts are reloaded by immutable reference and rebound to the authorized plan',async()=>{
@@ -88,8 +105,22 @@ test('prepared receipts are reloaded by immutable reference and rebound to the a
   await assert.rejects(h.executor.execute(bad),/input-receipt-owner-mismatch/);assert.equal(h.calls,1);
 });
 
+test('Worker preparation recovery reloads the durable pre-upload intent instead of rerunning upload',async()=>{
+  const expectedPlan=plan(),operationIntent={transactionId:expectedPlan.transactionId,leaseOwner:expectedPlan.leaseOwner,
+    contractDigest:expectedPlan.contractDigest,planDigest:productionReleasePlanDigest(expectedPlan),plan:structuredClone(expectedPlan),
+    uploadTag:'wx-prod-recovery-bound-tag'};
+  const h=harness({operation:async(_request,_dependencies,_options,_session,input)=>{
+    assert.deepEqual(input,operationIntent);return preparedTransaction(input.plan);
+  }}),sourceId='prod-account-20260916-001:prepare-worker:approval-ambiguous';
+  await h.receipts.create(sourceId,{sequence:0,state:'intent',record:{requestDigest:H('4'),operationIntent}});
+  await h.receipts.append(sourceId,0,{sequence:1,state:'recovery-required',record:{failure:{code:'production-operation-failed'}}});
+  const digest=(await import('node:crypto')).createHash('sha256').update(canonical(operationIntent)).digest('hex');
+  const result=await h.executor.execute(h.authorize(request('recover-worker-preparation',{receiptId:sourceId,digest}),{approvalId:'approval-recover-preparation'}));
+  assert.equal(result.state,'completed');assert.equal(h.calls,1);
+});
+
 test('production activation operation rereads the exact prepared Worker version before activation',async()=>{
-  const source=await readFile(new URL('../tools/production-account-execution.mjs',import.meta.url),'utf8');const operation=source.slice(source.indexOf("async'activate-worker'"),source.indexOf("async'recover-worker-activation'"));
+  const source=await readFile(new URL('../tools/production-account-execution.mjs',import.meta.url),'utf8');const operation=source.slice(source.indexOf("'activate-worker':"),source.indexOf("'recover-worker-activation':"));
   assert.ok(operation.indexOf('readVersion(input.candidate.versionId)')<operation.indexOf('activatePreparedWorker(input'));
   assert.match(operation,/prepared-worker-version-readback-mismatch/);
 });
@@ -97,6 +128,10 @@ test('production activation operation rereads the exact prepared Worker version 
 test('an orphaned intent refuses rerun and demands an explicit recovery action',async()=>{
   const h=harness(),value=h.authorize(request(),{approvalId:'approval-orphan'}),id=`${value.plan.transactionId}:${value.action}:approval-orphan`;await h.receipts.create(id,{sequence:0,state:'intent',record:{requestDigest:value.approval.payload.requestDigest}});
   await assert.rejects(h.executor.execute(value),error=>error.code==='ambiguous-intent-recovery-required');assert.equal(h.calls,0);assert.equal(h.acquires,0);
+});
+
+test('maximum component identities produce a valid round-trippable composite receipt reference',async()=>{
+  const h=harness(),value=request();value.plan.transactionId=`t${'x'.repeat(158)}`;h.authorize(value,{approvalId:`a${'y'.repeat(158)}`});const result=await h.executor.execute(value);assert.ok(result.receiptId.length>320);validateProductionExecutionRequest(request('activate-worker',result.reference));assert.deepEqual(await h.receipts.read(result.receiptId),h.receipts.values.get(result.receiptId));
 });
 
 test('approval signature, issuer, audience, request digest and input digest are authenticated',async()=>{
@@ -110,25 +145,30 @@ test('approval signature, issuer, audience, request digest and input digest are 
 });
 
 test('concrete Worker command adapter uses argument arrays, validates exact responses and never exposes command stderr',async()=>{
-  const secret='SECRET_CANARY_STDERR',calls=[],candidate={versionId:'22222222-2222-2222-2222-222222222222',sourceDigest:H('1'),configDigest:H('2')};
+  const secret='SECRET_CANARY_STDERR',calls=[],acks=acknowledgementHarness(),candidate={versionId:'22222222-2222-2222-2222-222222222222',sourceDigest:H('1'),configDigest:H('2')};
   const deployment={workerName:'weatherx-platform-edge-production',versionId:'old',deploymentId:'deploy-old',configDigest:H('3'),etag:'etag-1',mutationOwner:null};
-  const options={workerName:deployment.workerName,wranglerPath:'/repo/node_modules/wrangler/bin/wrangler.js',cwd:'/repo/platform/edge',configPath:'/repo/platform/edge/wrangler.jsonc',readDeployment:async()=>structuredClone(deployment),readVersion:async()=>structuredClone(candidate),runner:async(command,args,execution)=>{calls.push({command,args,execution});return{stdout:`Worker Version ID: ${candidate.versionId}\n`,stderr:'',exitCode:0};}};
-  const adapter=createCloudflareWorkerCommandAdapter(options),fence={leaseId:'lease-1',fencingToken:41,expiresAt:'2026-09-16T06:10:00.000Z'};assert.deepEqual(await adapter.uploadVersion({workerName:deployment.workerName,sourceDigest:H('1'),configDigest:H('2'),tag:'prod-account-1',activate:false,fence}),candidate);
+  const accountId='a89f9a1af485021fbc60a68b163c7c6e',options={testOnly:true,accountId,workerName:deployment.workerName,wranglerPath:'/repo/node_modules/wrangler/bin/wrangler.js',cwd:'/repo/platform/edge',configPath:'/repo/platform/edge/wrangler.jsonc',fenceAcknowledgementAuthority:acks.authority,readResolvedConfig:async()=>({accountId,workerName:deployment.workerName,environment:'production'}),readDeployment:async()=>structuredClone(deployment),readVersion:async()=>structuredClone(candidate),listVersionsByTag:async tag=>[{versionId:candidate.versionId,tag}],runner:async(command,args,execution)=>{calls.push({command,args,execution});return{stdout:`Worker Version ID: ${candidate.versionId}\n`,stderr:'',exitCode:0,fenceAcknowledgement:acks.sign({resourceNamespace:execution.fence.resourceNamespace,leaseId:execution.fence.leaseId,fencingToken:execution.fence.fencingToken,operation:'worker-upload-version',target:`worker:${deployment.workerName}`})};}};
+  const adapter=createCloudflareWorkerCommandAdapter(options),fence={leaseId:'lease-41',fencingToken:41,expiresAt:'2026-09-16T06:10:00.000Z',resourceNamespace:`cloudflare:${accountId}:workers:${deployment.workerName}`};assert.deepEqual(await adapter.uploadVersion({workerName:deployment.workerName,sourceDigest:H('1'),configDigest:H('2'),tag:'prod-account-1',activate:false,fence}),candidate);
   assert.equal(calls[0].command,process.execPath);assert.ok(calls[0].args.includes('versions')&&calls[0].args.includes('upload'));assert.equal(calls[0].execution.fence.fencingToken,41);
-  const failed=createCloudflareWorkerCommandAdapter({...options,runner:async()=>({stdout:'',stderr:secret,exitCode:1})});await assert.rejects(failed.uploadVersion({workerName:deployment.workerName,sourceDigest:H('1'),configDigest:H('2'),tag:'prod-account-1',activate:false,fence}),error=>error.code==='cloudflare-command-failed'&&!error.message.includes(secret));
+  assert.deepEqual(calls[0].args.slice(-8),['--message','WeatherX prod-account-1','--name',deployment.workerName,'--config',options.configPath,'--env','production']);
+  const failed=createCloudflareWorkerCommandAdapter({...options,runner:async()=>({stdout:'',stderr:secret,exitCode:1,fenceAcknowledgement:{}})});await assert.rejects(failed.uploadVersion({workerName:deployment.workerName,sourceDigest:H('1'),configDigest:H('2'),tag:'prod-account-1',activate:false,fence}),error=>error.code==='cloudflare-command-failed'&&!error.message.includes(secret));
   const throwing=createCloudflareWorkerCommandAdapter({...options,runner:async()=>{throw new Error(secret);}});await assert.rejects(throwing.uploadVersion({workerName:deployment.workerName,sourceDigest:H('1'),configDigest:H('2'),tag:'prod-account-1',activate:false,fence}),error=>error.code==='cloudflare-command-failed'&&!error.message.includes(secret)&&!error.cause);
-  const malformed=createCloudflareWorkerCommandAdapter({...options,runner:async()=>({stdout:{secret},stderr:'',exitCode:0})});await assert.rejects(malformed.uploadVersion({workerName:deployment.workerName,sourceDigest:H('1'),configDigest:H('2'),tag:'prod-account-1',activate:false,fence}),error=>error.code==='cloudflare-command-response-invalid'&&!error.message.includes(secret)&&!error.cause);
+  const malformed=createCloudflareWorkerCommandAdapter({...options,runner:async()=>({stdout:{secret},stderr:'',exitCode:0,fenceAcknowledgement:{}})});await assert.rejects(malformed.uploadVersion({workerName:deployment.workerName,sourceDigest:H('1'),configDigest:H('2'),tag:'prod-account-1',activate:false,fence}),error=>error.code==='cloudflare-command-response-invalid'&&!error.message.includes(secret)&&!error.cause);
   const extra=createCloudflareWorkerCommandAdapter({...options,readDeployment:async()=>({...deployment,secret})});await assert.rejects(extra.readDeployment(),error=>error.code==='worker-deployment-response-invalid'&&!error.message.includes(secret));
   const wrongVersion=createCloudflareWorkerCommandAdapter({...options,readVersion:async()=>({...candidate,versionId:'33333333-3333-3333-3333-333333333333'})});await assert.rejects(wrongVersion.readVersion(candidate.versionId),error=>error.code==='worker-version-target-invalid');
+  const before=calls.length,mismatch=createCloudflareWorkerCommandAdapter({...options,readResolvedConfig:async()=>({accountId:'0'.repeat(32),workerName:deployment.workerName,environment:'production'})});await assert.rejects(mismatch.uploadVersion({workerName:deployment.workerName,sourceDigest:H('1'),configDigest:H('2'),tag:'prod-account-1',activate:false,fence}),error=>error.code==='cloudflare-config-target-mismatch');assert.equal(calls.length,before);
+  const badAck=createCloudflareWorkerCommandAdapter({...options,runner:async()=>({stdout:`Worker Version ID: ${candidate.versionId}\n`,stderr:'',exitCode:0,fenceAcknowledgement:{payload:{secret},signature:''}})});await assert.rejects(badAck.uploadVersion({workerName:deployment.workerName,sourceDigest:H('1'),configDigest:H('2'),tag:'prod-account-1',activate:false,fence}),error=>!error.message.includes(secret));
 });
 
 test('concrete Pages adapter exact-key and project allowlists reject confused or secret-bearing responses',async()=>{
-  const snapshot={projectName:'atmos-platform',configDigest:H('1'),canonicalDeploymentId:'pages-old',etag:'pages-etag',mutationOwner:null,payload:{deployment_configs:{}}},fence={leaseId:'lease-1',fencingToken:41,expiresAt:'2026-09-16T06:10:00.000Z'};
-  const adapter=createCloudflarePagesApiAdapter({projectName:'atmos-platform',readProject:async()=>structuredClone(snapshot),patchProject:async()=>({acceptedProject:'atmos-platform'})});
+  const acks=acknowledgementHarness(),namespace='cloudflare:a89f9a1af485021fbc60a68b163c7c6e:pages:atmos-platform',snapshot={projectName:'atmos-platform',configDigest:H('1'),canonicalDeploymentId:'pages-old',etag:'pages-etag',mutationOwner:null,payload:{deployment_configs:{}}},fence={leaseId:'lease-41',fencingToken:41,expiresAt:'2026-09-16T06:10:00.000Z',resourceNamespace:namespace};
+  const patchProject=async({fence:accepted})=>({acceptedProject:'atmos-platform',fenceAcknowledgement:acks.sign({resourceNamespace:accepted.resourceNamespace,leaseId:accepted.leaseId,fencingToken:accepted.fencingToken,operation:'pages-update-project',target:'pages:atmos-platform'})});
+  const adapter=createCloudflarePagesApiAdapter({testOnly:true,accountId:'a89f9a1af485021fbc60a68b163c7c6e',fenceAcknowledgementAuthority:acks.authority,projectName:'atmos-platform',readProject:async()=>structuredClone(snapshot),patchProject});
   await adapter.updateProject({projectName:'atmos-platform',payload:snapshot.payload,configDigest:H('2'),expectedEtag:'pages-etag',owner:'owner',fence});
-  const confused=createCloudflarePagesApiAdapter({projectName:'atmos-platform',readProject:async()=>({...snapshot,projectName:'staging-project'}),patchProject:async()=>({acceptedProject:'atmos-platform'})});await assert.rejects(confused.readProject(),/pages-project-target-invalid/);
-  const secret='SECRET_CANARY_PAGES';const bearing=createCloudflarePagesApiAdapter({projectName:'atmos-platform',readProject:async()=>({...snapshot,secret}),patchProject:async()=>({acceptedProject:'atmos-platform'})});await assert.rejects(bearing.readProject(),error=>error.code==='pages-project-response-invalid'&&!error.message.includes(secret));
-  const throwing=createCloudflarePagesApiAdapter({projectName:'atmos-platform',readProject:async()=>{throw new Error(secret);},patchProject:async()=>({acceptedProject:'atmos-platform'})});await assert.rejects(throwing.readProject(),error=>error.code==='pages-project-read-failed'&&!error.message.includes(secret)&&!error.cause);
+  const base={testOnly:true,accountId:'a89f9a1af485021fbc60a68b163c7c6e',fenceAcknowledgementAuthority:acks.authority,projectName:'atmos-platform',patchProject};
+  const confused=createCloudflarePagesApiAdapter({...base,readProject:async()=>({...snapshot,projectName:'staging-project'})});await assert.rejects(confused.readProject(),/pages-project-target-invalid/);
+  const secret='SECRET_CANARY_PAGES';const bearing=createCloudflarePagesApiAdapter({...base,readProject:async()=>({...snapshot,secret})});await assert.rejects(bearing.readProject(),error=>error.code==='pages-project-response-invalid'&&!error.message.includes(secret));
+  const throwing=createCloudflarePagesApiAdapter({...base,readProject:async()=>{throw new Error(secret);}});await assert.rejects(throwing.readProject(),error=>error.code==='pages-project-read-failed'&&!error.message.includes(secret)&&!error.cause);
 });
 
 test('filesystem journal is append-only, create-if-absent, no-follow and mode-0700 anchored',async()=>{

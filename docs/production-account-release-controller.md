@@ -9,10 +9,11 @@ Lane C is built against one explicit owner-blocked Lane B contract in
 `tools/production-account-contract.mjs`:
 
 - contract version: `lane-b-account-contract-v0-provisional`
-- exact reviewed Atmos integration candidate: `29ff8f58b36d31059b2cd5fb80b3b90224130282`
-- contract digest: `1acc28da489682a8200f12c4a4654866950c69047d88bdb9f9c13380dbecb6ba`
-- production profile digest: `724b78d9f57ae149e1e57ce90ee457f3b69dff891d388eb7a44828abbcca8fe7`
-- pipeline digest: `71a1f2c7f9438cfa869f6c8b2ccfc0aea4fbbd0dc7773ef74dd2c84e3116595f`
+- exact reviewed Atmos integration candidate: `aa092f28f1a99f965cf95d4dd726291a3110d233`
+- contract digest: `73df5cd796110345d32cbbe1a4d0a18c3d521ab1a77d53e4bb6823101676d9ef`
+- production trust-policy digest: `f2795ab9b504b32fdbdcaa957cde134ac91199ae43a8945a041aa1544601d23c`
+- production profile digest: `a412cbe53092685c70de84151de120bfd117925b0a94ef76d96058f7808c7d22`
+- pipeline digest: `43074aae10dd64e31c1bc08903a707190524c751e1fc15def9da79e4aa0e2ef7`
 
 Every normal validation path refuses while the contract is provisional. Tests may pass
 `allowProvisional: true` only to exercise mocked transactions. That switch must never appear
@@ -20,6 +21,10 @@ in a workflow, CLI, or live adapter. The source and controller identities are no
 exact reviewed Atmos candidate above, but the owner must still approve the exact live Stripe
 offers and Price/Product identities before the contract can become final or enter a live rehearsal.
 Any final contract change invalidates these digests and requires a fresh candidate qualification.
+The reviewed trust policy is also deliberately provisional: its approval-owner, lease-service and
+mutation-broker public-key fingerprints and issuer identities are unusable placeholders. Production
+factories cannot be constructed until those exact non-secret trust roots are owner-finalized in
+source, which changes the pipeline digest and requires fresh qualification.
 
 ## Profiles and candidate identity
 
@@ -61,13 +66,16 @@ authorities can be used only by the explicit test factory. Before an adapter can
   exact request, input-receipt, plan and target digests and the literal
   `AUTHORIZE WEATHERX PRODUCTION MUTATION`, with a maximum 30-minute lifetime;
 - obtains a fresh approval/action/transaction/request/target-bound lease from an independently
-  configured authority, with a monotonically increasing fencing token, maximum ten-minute lifetime
-  and at least one minute remaining; and
+  authenticated lease service, whose durable counter increases globally for the physical Worker or
+  Pages namespace rather than for a candidate, with a maximum ten-minute lifetime and at least one
+  minute remaining; and
 - durably creates a sanitized pre-mutation intent as the first entry of an append-only journal.
 
-The lease is re-read immediately before every provider mutation and recovery, and its identity and
-fencing token are passed into the adapter call. Activation reloads its immutable prepared receipt
-from durable storage and rereads the exact prepared Worker version before traffic changes. Signed
+The lease is re-read immediately before every provider mutation and recovery, and its physical
+resource namespace and fencing token are passed into the adapter call. Every mutation must return a
+signed acknowledgement from the independently configured mutation broker for that exact namespace,
+lease, fence token, operation and target. Activation reloads its immutable prepared receipt from
+durable storage and rereads the exact prepared Worker version before traffic changes. Signed
 approval and lease claims bind the request and input-receipt digests, preventing substitution.
 
 Each result is appended as `completed` or `recovery-required`; entries are never replaced. Exact
@@ -84,7 +92,9 @@ unexpected files and ownership/mode drift.
 Concrete non-invoked adapters define the production Wrangler argument-vector boundary for Worker
 version upload/deploy/rollback and the Pages project API capability boundary. They exact-key and
 target-check provider responses, accept no shell strings, never put credentials into command
-arguments, and require the current fence on every mutation. No workflow exposes these adapters yet.
+arguments, and require the current fence on every mutation. The Wrangler boundary always supplies
+the exact `--name`, `--config` and production `--env`, and validates the resolved account, Worker and
+environment before the command runner is reached. No workflow exposes these adapters yet.
 
 Live Stripe Product and Price IDs are non-secret inputs carried by the release plan, not credentials
 or source defaults. They must be exact valid live Price IDs, must equal the final owner-approved Lane
@@ -101,8 +111,10 @@ Three operations stay independent:
    declaration; platform health `authMode=observe`, `billingMode=enabled`, and
    `billingPurchaseMode=closed`; live Stripe; separate data health `authMode=public`; exact
    rollback Worker version/deployment/configuration; and old-UI/additive-schema compatibility.
-   Upload a new Worker version without activation, read it back, and prove the active deployment
-   did not change.
+   Persist an approval/request-bound pre-upload snapshot and unique upload tag, upload a new Worker
+   version without activation, read it back, and prove the active deployment did not change. If the
+   upload outcome is ambiguous, a separate recovery action lists only that exact tag, requires one
+   match and exact version readback, and never re-uploads.
 2. **Account Worker activation.** Re-read the exact pre-change deployment and CAS/ownership
    identity, activate only the prepared version, verify purchase-closed/webhook-servicing and
    old-UI contracts, and write before/after receipts. Verification is structured evidence for the
@@ -112,7 +124,9 @@ Three operations stay independent:
    transaction. Worker rollback retains the additive D1 schema; it never attempts a database
    restore.
 3. **Pages/service configuration.** In a separate transaction, validate the exact Pages target,
-   sanitized before/after configuration digests and payload, and exact-allowlist the retained
+   sanitized before/after configuration digests and payload, accept only the canonical nested
+   `compatibility_date`, `compatibility_flags`, `fail_open`, `env_vars`, `d1_databases` and
+   `services` runtime schema, and exact-allowlist the retained
    production/preview secret references and analytics D1 identity. Persist the full sanitized
    preimage receipt before mutation; reject the staging D1 identity, staging URLs/resources and
    known test Price IDs; CAS the configuration; and verify both the old UI deployment and exact
@@ -182,6 +196,7 @@ refusal, exact candidate invalidation, inactive upload, old-UI compatibility, CA
 interrupted activation, Worker rollback with retained additive schema, and Pages configuration
 rollback. These are mocked controller contracts, not live Cloudflare or Stripe receipts.
 The execution-boundary suite additionally covers authenticated success, completed replay, crashes,
-orphaned intents, approval and lease expiry, monotonic fencing, wrong prepared receipts, exact Worker
-readback, secret-bearing provider failures, concrete command/API adapters and hardened append-only
-receipt storage.
+orphaned intents, approval and lease expiry, restart/candidate-independent monotonic fencing, wrong
+prepared receipts, inactive-upload recovery without re-upload, exact Worker readback, signed broker
+acknowledgements, secret-bearing provider failures, concrete command/API adapters and hardened
+append-only receipt storage.
