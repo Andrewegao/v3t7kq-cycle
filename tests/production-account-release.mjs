@@ -43,6 +43,7 @@ const S = character => character.repeat(40);
 
 function pagesPayload(failOpen) {
   const context = name => ({
+    ...structuredClone(LANE_B_CONTRACT.pagesRuntime),
     compatibility_date: '2026-06-23',
     compatibility_flags: [],
     fail_open: failOpen,
@@ -417,7 +418,7 @@ test('preflight binds all identities, targets, modes, routes and rollback identi
 test('production Pages configuration rejects staging bindings, URLs and known test identifiers', () => {
   validateProductionPagesConfiguration(plan().desired.pages.payload);
   const mutations = [
-    value => { value.deployment_configs.production.services.WX_AI_ADMISSION = {service: 'weatherx-platform-edge-staging'}; },
+    value => { value.deployment_configs.production.services = {WX_AI_ADMISSION: {service: 'weatherx-platform-edge-staging'}}; },
     value => { value.deployment_configs.production.env_vars.ORIGIN = {type: 'plain_text', value: 'https://staging.weatherx.org'}; },
     value => { value.deployment_configs.production.env_vars.PRICE = {type: 'plain_text', value: LANE_B_CONTRACT.forbiddenStripePriceIds[0]}; },
     value => { value.deployment_configs.production.d1_databases.WX_ANALYTICS.id = '9501827a-7e4c-4249-806b-d45d5857d9e5'; },
@@ -426,6 +427,9 @@ test('production Pages configuration rejects staging bindings, URLs and known te
     value => { value.deployment_configs.production.r2_buckets = {DATA: {bucket_name: 'weatherx-data-production'}}; },
     value => { value.deployment_configs.production.placement = {credential: 'sk_live_CANARY'}; },
     value => { value.deployment_configs.production.services = {UNKNOWN: {service: 'weatherx-platform-edge-production'}}; },
+    value => { value.deployment_configs.production.always_use_latest_compatibility_date = true; },
+    value => { value.deployment_configs.production.build_image_major_version = 4; },
+    value => { value.deployment_configs.production.usage_model = 'bundled'; },
   ];
   for (const mutate of mutations) {
     const payload = pagesPayload(false);
