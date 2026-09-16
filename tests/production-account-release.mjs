@@ -789,6 +789,19 @@ test('persisted authenticated acknowledgements recover all five mutations withou
   assert.equal((await recoverPagesConfiguration(withAck(restorePending),restore,pagesOptions(restore))).phase,'rolled-back-after-interruption');assert.equal(restore.calls.filter(call=>call==='restoreProject').length,1);assert.equal(restore.calls.filter(call=>call.startsWith('readMutationAcknowledgement:')).length,restoreQueries);
 });
 
+test('acknowledged activation and Pages update never classify stale before-state as unattempted',async()=>{
+  const worker=new WorkerClient(),prepared=await prepareWorkerVersion(plan(),worker,OPTIONS),activationReference=mockMutationReference('worker-activate-version',{versionId:prepared.candidate.versionId,expectedEtag:prepared.before.etag,owner:prepared.leaseOwner}),activationPending={...prepared,phase:'activation-ack-pending',pendingMutation:activationReference,acknowledgedMutation:{reference:activationReference,acknowledgement:mockAcknowledgement(activationReference)}};
+  assert.equal((await recoverWorkerActivation(prepared,worker,{...OPTIONS,verify:async()=>safetyVerification()})).phase,'interrupted-before-activation');
+  const staleWorker=await recoverWorkerActivation(activationPending,worker,{...OPTIONS,verify:async()=>safetyVerification()});assert.equal(staleWorker.phase,'activation-ack-pending');assert.equal(worker.calls.filter(call=>call==='activateVersion').length,0);
+  worker.active={...worker.active,versionId:prepared.candidate.versionId,deploymentId:'worker-deploy-candidate',configDigest:prepared.candidate.configDigest,etag:'worker-etag-2',mutationOwner:prepared.leaseOwner};
+  assert.equal((await recoverWorkerActivation(activationPending,worker,{...OPTIONS,verify:async()=>safetyVerification()})).phase,'activated-after-interruption');assert.equal(worker.calls.filter(call=>call==='activateVersion').length,0);
+
+  const pages=new PagesClient(),pagesPrepared=await preparePages(pages),updateSpec={configDigest:pagesPrepared.plan.desired.pages.configDigest,payload:pagesPrepared.plan.desired.pages.payload,expectedEtag:pagesPrepared.before.etag,owner:pagesPrepared.leaseOwner},updateReference=mockMutationReference('pages-update-project',updateSpec),pagesPending={...pagesPrepared,phase:'pages-update-ack-pending',pendingMutation:updateReference,acknowledgedMutation:{reference:updateReference,acknowledgement:mockAcknowledgement(updateReference)}};
+  const stalePages=await recoverPagesConfiguration(pagesPending,pages,pagesOptions(pages,{verify:async()=>safetyVerification({candidateUi:true})}));assert.equal(stalePages.phase,'pages-update-ack-pending');assert.equal(pages.calls.filter(call=>call==='updateProject').length,0);
+  pages.current={...pages.current,configDigest:pagesPrepared.plan.desired.pages.configDigest,payload:structuredClone(pagesPrepared.plan.desired.pages.payload),etag:'pages-etag-2',mutationOwner:pagesPrepared.leaseOwner};
+  assert.equal((await recoverPagesConfiguration(pagesPending,pages,pagesOptions(pages,{verify:async()=>safetyVerification({candidateUi:true})}))).phase,'applied-after-interruption');assert.equal(pages.calls.filter(call=>call==='updateProject').length,0);
+});
+
 test('production promotion audit hashes the candidate profile policy', () => {
   const source = readFileSync(new URL('../tools/ui-release.mjs', import.meta.url), 'utf8');
   const audit = source.slice(source.indexOf('async function auditRun'), source.indexOf('async function download'));

@@ -13,7 +13,7 @@ Lane C is built against one explicit owner-blocked Lane B contract in
 - contract digest: `c91c8cb86378e5034cc0784e2b3217421eb33586375abe5e2d2e1af5a57d0e90`
 - production trust-policy digest: `f2795ab9b504b32fdbdcaa957cde134ac91199ae43a8945a041aa1544601d23c`
 - production profile digest: `230c240535ceea84fe13f123a6e0b75d9b8875a4380828c3bef51f68c2ada5f3`
-- pipeline digest: `251e7d351a34de4b4f54d3f0d32b72b5c41062372ca9d98e9b5bd738aaa63a1b`
+- pipeline digest: `27fa0f0170d7c27d7645735f5b1612a8a2fd0bd89e731d16c063a346f9d8b1cc`
 
 Every normal validation path refuses while the contract is provisional. Tests may pass
 `allowProvisional: true` only to exercise mocked transactions. That switch must never appear
@@ -92,6 +92,9 @@ Pages restore. Only matching acknowledgement plus matching provider state can be
 recovery receipt. A process death after the provider call or after acknowledgement authentication
 leaves the last append-only checkpoint as a recovery input; the recovery action can authenticate the
 persisted signed evidence (or query the same exact broker reference) and read state without remutation.
+Once an activation or Pages-update checkpoint exists, recovery authenticates that exact evidence before
+classifying provider state. An acknowledged mutation observed temporarily at its old preimage remains
+pending; only a genuinely unattempted prepared receipt may complete as interrupted-before-mutation.
 
 Each result is appended as `completed` or `recovery-required`; entries are never replaced. Exact
 completed replays return the recorded result without reacquiring a lease or rerunning the operation,
