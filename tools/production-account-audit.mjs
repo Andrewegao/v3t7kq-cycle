@@ -19,9 +19,7 @@ const CLOUDFLARE_ORIGIN = 'https://api.cloudflare.com';
 const CLOUDFLARE_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 const CLOUDFLARE_TIMEOUT_MS = 60_000;
 const ACCOUNT_ID = /^[a-f0-9]{32}$/;
-// Cloudflare documents legacy 40-character tokens and current prefixed,
-// checksummed credentials with a total API value length of 40–80 characters.
-const API_TOKEN = /^[\x21-\x7e]{40,80}$/;
+const API_TOKEN_MAX_BYTES = 4096;
 const ID = /^[A-Za-z0-9_-]{1,255}$/;
 const SHA = /^[a-f0-9]{40}$/;
 const PRICE = /^price_[A-Za-z0-9_]{1,250}$/;
@@ -199,7 +197,9 @@ export async function collectPlatformSnapshot({accountId, apiToken, fetcher = fe
   const normalizedAccountId = typeof accountId === 'string' ? accountId.trim() : '';
   const normalizedApiToken = typeof apiToken === 'string' ? apiToken.trim() : '';
   assert.match(normalizedAccountId, ACCOUNT_ID, 'cloudflare-account-id-invalid');
-  assert.match(normalizedApiToken, API_TOKEN, 'cloudflare-audit-token-invalid');
+  assert.ok(normalizedApiToken.length > 0, 'cloudflare-audit-token-empty');
+  assert.ok(Buffer.byteLength(normalizedApiToken) <= API_TOKEN_MAX_BYTES, 'cloudflare-audit-token-oversized');
+  assert.doesNotMatch(normalizedApiToken, /[\x00-\x1f\x7f]/, 'cloudflare-audit-token-control-character');
   const url = new URL(`/client/v4/accounts/${normalizedAccountId}/d1/database/${PRODUCTION_PLATFORM_D1_ID}/query`, CLOUDFLARE_ORIGIN);
   const tables = {};
   for (const [table, query] of Object.entries(PLATFORM_QUERIES)) {
