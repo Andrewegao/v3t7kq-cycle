@@ -180,7 +180,7 @@ export function validateProductionCandidateBinding(binding, candidate, qualifica
   return binding;
 }
 
-function planDigest(plan) {
+export function productionReleasePlanDigest(plan) {
   return digest(productionContractCanonical(plan));
 }
 
@@ -242,7 +242,7 @@ function workerReceiptBase(plan, before, candidate) {
     transactionId: plan.transactionId,
     leaseOwner: plan.leaseOwner,
     contractDigest: plan.contractDigest,
-    planDigest: planDigest(plan),
+    planDigest: productionReleasePlanDigest(plan),
     target: structuredClone(plan.target),
     modes: structuredClone(plan.modes),
     identities: structuredClone(plan.identities),
@@ -258,7 +258,7 @@ function validatePreparedReceipt(receipt, options = {}, phases = ['prepared']) {
   assert.equal(receipt.kind, 'weatherx-account-worker-transaction-receipt');
   assert.ok(phases.includes(receipt.phase), `Worker receipt phase ${receipt.phase} is not recoverable here`);
   const plan = validateProductionReleasePlan(receipt.plan, options);
-  assert.equal(receipt.planDigest, planDigest(plan), 'Worker plan changed after preparation');
+  assert.equal(receipt.planDigest, productionReleasePlanDigest(plan), 'Worker plan changed after preparation');
   assert.equal(receipt.contractDigest, plan.contractDigest);
   assert.equal(receipt.transactionId, plan.transactionId);
   assert.equal(receipt.leaseOwner, plan.leaseOwner);
@@ -476,7 +476,7 @@ function validatePagesReceipt(receipt, options = {}, phases = ['prepared']) {
   assert.equal(receipt.kind, 'weatherx-pages-configuration-transaction-receipt');
   assert.ok(phases.includes(receipt.phase), `Pages receipt phase ${receipt.phase} is not recoverable here`);
   const plan = validateProductionReleasePlan(receipt.plan, options);
-  assert.equal(receipt.planDigest, planDigest(plan), 'Pages plan changed after pre-mutation receipt');
+  assert.equal(receipt.planDigest, productionReleasePlanDigest(plan), 'Pages plan changed after pre-mutation receipt');
   assert.equal(receipt.contractDigest, plan.contractDigest);
   assert.equal(receipt.transactionId, plan.transactionId);
   assert.equal(receipt.leaseOwner, plan.leaseOwner);
@@ -514,7 +514,7 @@ export async function preparePagesConfiguration(value, client, options = {}) {
     transactionId: plan.transactionId,
     leaseOwner: plan.leaseOwner,
     contractDigest: plan.contractDigest,
-    planDigest: planDigest(plan),
+    planDigest: productionReleasePlanDigest(plan),
     target: {pagesProject: plan.target.pagesProject, origin: plan.target.origin},
     identities: structuredClone(plan.identities),
     modes: structuredClone(plan.modes),

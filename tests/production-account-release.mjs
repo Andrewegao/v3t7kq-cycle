@@ -280,6 +280,7 @@ test('production account candidate is contract-bound and cannot inherit staging 
   assert.equal(controlShaFor(PRODUCTION_ACCOUNT_PROFILE), LANE_B_CONTRACT.requiredAtmosControllerSha);
   assert.ok(POLICY_FILES.includes('tools/production-account-contract.mjs'));
   assert.ok(POLICY_FILES.includes('tools/production-account-release.mjs'));
+  assert.ok(POLICY_FILES.includes('tools/production-account-execution.mjs'));
   const env = publicBuildEnvironment(PRODUCTION_ACCOUNT_PROFILE, null, {
     ATMOS_STAGING_ACCOUNT_PROFILE: 'staging-account-v1',
     ATMOS_PRODUCTION_ACCOUNT_PROFILE: 'ambient-wrong',
