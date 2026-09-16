@@ -40,7 +40,7 @@ test('staging workflow leaves release-mode activation to the exact-profile contr
   assert.match(STAGING_CONTROL_SHA,/^[a-f0-9]{40}$/);
   assert.equal((staging.match(/ref: \$\{\{ needs\.profile\.outputs\.model_selection_sha256/g)||[]).length,2);
   assert.match(candidate,/export const CONTROL_SHA = '25c402db5149daa018e349a34a4beeba1f2dca45'/);
-  assert.equal(STAGING_CONTROL_SHA,'fa857448dafa0f54eafdd63999b85eca4916edc8');
+  assert.equal(STAGING_CONTROL_SHA,'fac2fc164420d4d31870a410c9a877d16ad76fb0');
   assert.match(prod,/ref: 25c402db5149daa018e349a34a4beeba1f2dca45/);
   assert.match(prod,/repository: weatherx-hq\/atmos/);
   assert.doesNotMatch(prod,/ref: a58eff158b56ef2ba25189d2b859315b00893a14/);
