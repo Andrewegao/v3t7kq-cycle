@@ -9,7 +9,7 @@ import {createHash} from 'node:crypto';
 
 export const PRODUCTION_ACCOUNT_REQUEST = 'production-account-billing-v1';
 export const PRODUCTION_ACCOUNT_APPROVAL = 'production-account-billing-v1';
-export const ATMOS_INTEGRATION_CANDIDATE_SHA = '29ff8f58b36d31059b2cd5fb80b3b90224130282';
+export const ATMOS_INTEGRATION_CANDIDATE_SHA = 'aa092f28f1a99f965cf95d4dd726291a3110d233';
 export const PRODUCTION_ANALYTICS_D1_ID = 'e7247173-c23d-4989-b29e-f95939c820fe';
 export const STAGING_PLATFORM_D1_ID = '9501827a-7e4c-4249-806b-d45d5857d9e5';
 
@@ -140,22 +140,22 @@ export function assertProductionIdentifiers(value) {
 
 export function validateProductionPagesConfiguration(payload) {
   assert.ok(payload && typeof payload === 'object' && !Array.isArray(payload), 'Pages configuration payload is required');
+  assert.deepEqual(Object.keys(payload).sort(), ['deployment_configs'], 'Pages payload fields differ from the exact schema');
   assertProductionIdentifiers(payload);
   assert.ok(payload.deployment_configs && typeof payload.deployment_configs === 'object'
     && !Array.isArray(payload.deployment_configs), 'Pages deployment configurations are required');
   assert.deepEqual(Object.keys(payload.deployment_configs).sort(), ['preview','production'],
     'production and preview Pages contexts are both required');
-  const runtimeFields = new Set(['compatibility_date','compatibility_flags','always_use_latest_compatibility_date',
-    'usage_model','placement','limits','fail_open','build_image_major_version','wrangler_config_hash']);
-  const resourceFields = new Set(['d1_databases','kv_namespaces','r2_buckets','services','service_bindings',
-    'queue_producers','queue_consumers','durable_object_namespaces','analytics_engine_datasets','ai_bindings',
-    'hyperdrive_bindings','vectorize_bindings','mtls_certificates','browsers','secret_store_secrets','secrets',
-    'env_vars','future_resource_bindings']);
+  const projection = {deployment_configs: {}};
   for (const context of ['production','preview']) {
     const config = payload.deployment_configs[context];
     assert.ok(config && typeof config === 'object' && !Array.isArray(config), `Pages ${context} configuration is required`);
+    assert.deepEqual(Object.keys(config).sort(),
+      ['compatibility_date','compatibility_flags','d1_databases','env_vars','fail_open','services'].sort(),
+      `Pages ${context} fields differ from the exact runtime schema`);
     assert.equal(config.compatibility_date, '2026-06-23', `Pages ${context} compatibility date changed`);
-    assert.deepEqual(config.compatibility_flags ?? [], [], `Pages ${context} compatibility flags changed`);
+    assert.deepEqual(config.compatibility_flags, [], `Pages ${context} compatibility flags changed`);
+    assert.equal(typeof config.fail_open, 'boolean', `Pages ${context} fail_open is invalid`);
     const expected = LANE_B_CONTRACT.pagesBindings[context];
     const envVars = config.env_vars ?? {};
     assert.ok(envVars && typeof envVars === 'object' && !Array.isArray(envVars), `Pages ${context} env_vars are invalid`);
@@ -177,19 +177,27 @@ export function validateProductionPagesConfiguration(payload) {
       assert.deepEqual(Object.keys(entry).sort(), ['id'], `Pages ${context}.d1_databases.${name} shape changed`);
       assert.equal(entry.id, approved.id, `Pages ${context}.d1_databases.${name} identity changed`);
     }
-    assert.deepEqual(config.services ?? {}, expected.services,
+    assert.deepEqual(config.services, expected.services,
       `Pages ${context} service binding names differ from the exact production allowlist`);
-    for (const [field, value] of Object.entries(config)) {
-      assert.ok(runtimeFields.has(field) || resourceFields.has(field), `Pages ${context}.${field} is not allowlisted`);
-      if (!['env_vars','d1_databases','services'].includes(field) && resourceFields.has(field)) {
-        assert.ok(value == null || (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0),
-          `Pages ${context}.${field} bindings/resources must be empty`);
-      }
-    }
+    projection.deployment_configs[context] = {
+      compatibility_date: config.compatibility_date,
+      compatibility_flags: structuredClone(config.compatibility_flags),
+      fail_open: config.fail_open,
+      env_vars: structuredClone(config.env_vars),
+      d1_databases: structuredClone(config.d1_databases),
+      services: structuredClone(config.services),
+    };
   }
   assert.ok(!productionContractCanonical(payload).includes(STAGING_PLATFORM_D1_ID),
     'staging D1 identity is forbidden in production Pages configuration');
+  assert.equal(productionContractCanonical(payload), productionContractCanonical(projection),
+    'Pages payload differs from its exact canonical projection');
   return payload;
+}
+
+export function productionPagesConfigurationProjection(payload) {
+  validateProductionPagesConfiguration(payload);
+  return structuredClone(payload);
 }
 
 export function productionContractCanonical(value) {

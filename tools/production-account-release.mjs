@@ -18,6 +18,10 @@ import {PRODUCTION_ACCOUNT_PROFILE, profileDigest, requireProductionProfile} fro
 const SHA = /^[a-f0-9]{40}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,159}$/;
+const RELEASE_FAILURE_CODES = new Set([
+  'worker-verification-failed','worker-rollback-outcome-unknown',
+  'pages-verification-failed','pages-restore-outcome-unknown',
+]);
 
 const digest = value => createHash('sha256').update(value).digest('hex');
 
@@ -253,7 +257,7 @@ function workerReceiptBase(plan, before, candidate) {
   };
 }
 
-function validatePreparedReceipt(receipt, options = {}, phases = ['prepared']) {
+function validatePreparedReceipt(receipt, options = {}, phases = ['prepared','prepared-after-interruption']) {
   record(receipt, 'prepared Worker receipt is required');
   assert.equal(receipt.kind, 'weatherx-account-worker-transaction-receipt');
   assert.ok(phases.includes(receipt.phase), `Worker receipt phase ${receipt.phase} is not recoverable here`);
@@ -274,28 +278,107 @@ function validatePreparedReceipt(receipt, options = {}, phases = ['prepared']) {
   return plan;
 }
 
-export async function prepareWorkerVersion(value, client, options = {}) {
+function workerUploadTag(plan, options) {
+  const authorization = exactKeys(options.preparationAuthorization,
+    ['approvalId','requestDigest'], 'Worker preparation authorization identity is required');
+  assert.match(authorization.approvalId ?? '', ID, 'invalid Worker preparation approval identity');
+  assert.match(authorization.requestDigest ?? '', DIGEST, 'invalid Worker preparation request digest');
+  return `wx-prod-${digest(productionContractCanonical({
+    transactionId: plan.transactionId,
+    approvalId: authorization.approvalId,
+    requestDigest: authorization.requestDigest,
+    workerName: plan.target.workerName,
+  })).slice(0,48)}`;
+}
+
+function validateWorkerPreparationIntent(intent, options = {}) {
+  exactKeys(intent, ['schemaVersion','kind','transactionId','leaseOwner','contractDigest','planDigest',
+    'approvalId','requestDigest','uploadTag','before','plan'], 'invalid Worker preparation intent');
+  assert.equal(intent.schemaVersion, 1);
+  assert.equal(intent.kind, 'weatherx-account-worker-preparation-intent');
+  const plan = validateProductionReleasePlan(intent.plan, options);
+  assert.equal(intent.transactionId, plan.transactionId);
+  assert.equal(intent.leaseOwner, plan.leaseOwner);
+  assert.equal(intent.contractDigest, plan.contractDigest);
+  assert.equal(intent.planDigest, productionReleasePlanDigest(plan));
+  assertWorkerBefore(intent.before, plan);
+  assert.equal(intent.uploadTag, workerUploadTag(plan, {preparationAuthorization: {
+    approvalId: intent.approvalId, requestDigest: intent.requestDigest,
+  }}));
+  return plan;
+}
+
+export async function prepareWorkerUploadIntent(value, client, options = {}) {
   const plan = validateProductionReleasePlan(value, options);
-  for (const method of ['readDeployment','uploadVersion','readVersion']) assert.equal(typeof client?.[method], 'function', `Worker client is missing ${method}`);
+  assert.equal(typeof client?.readDeployment, 'function', 'Worker client is missing readDeployment');
   const before = assertWorkerBefore(await client.readDeployment(), plan);
   const immediate = assertWorkerBefore(await client.readDeployment(), plan);
   assert.equal(immediate.etag, before.etag, 'Worker changed before inactive upload');
+  const authorization = options.preparationAuthorization;
+  const uploadTag = workerUploadTag(plan, options);
+  return {
+    schemaVersion: 1,
+    kind: 'weatherx-account-worker-preparation-intent',
+    transactionId: plan.transactionId,
+    leaseOwner: plan.leaseOwner,
+    contractDigest: plan.contractDigest,
+    planDigest: productionReleasePlanDigest(plan),
+    approvalId: authorization.approvalId,
+    requestDigest: authorization.requestDigest,
+    uploadTag,
+    before: structuredClone(before),
+    plan: structuredClone(plan),
+  };
+}
+
+export async function completeWorkerPreparation(intent, client, options = {}) {
+  const plan = validateWorkerPreparationIntent(intent, options);
+  for (const method of ['uploadVersion','readVersion','readDeployment']) assert.equal(typeof client?.[method], 'function', `Worker client is missing ${method}`);
   const candidate = await client.uploadVersion({
     workerName: plan.target.workerName,
     sourceDigest: plan.desired.worker.sourceDigest,
     configDigest: plan.desired.worker.configDigest,
-    tag: plan.transactionId,
+    tag: intent.uploadTag,
     activate: false,
   });
   record(candidate, 'Worker upload did not return a version identity');
   assert.match(candidate.versionId ?? '', ID, 'invalid uploaded Worker version identity');
-  assert.notEqual(candidate.versionId, before.versionId, 'inactive upload reused the active Worker version');
+  assert.notEqual(candidate.versionId, intent.before.versionId, 'inactive upload reused the active Worker version');
   assert.equal(candidate.sourceDigest, plan.desired.worker.sourceDigest, 'uploaded Worker source digest changed');
   assert.equal(candidate.configDigest, plan.desired.worker.configDigest, 'uploaded Worker config digest changed');
   assert.deepEqual(await client.readVersion(candidate.versionId), candidate, 'uploaded Worker version readback differs');
   const unchanged = assertWorkerBefore(await client.readDeployment(), plan);
-  assert.equal(unchanged.etag, before.etag, 'inactive upload changed the active Worker deployment');
-  return {...workerReceiptBase(plan, before, candidate), phase: 'prepared'};
+  assert.equal(unchanged.etag, intent.before.etag, 'inactive upload changed the active Worker deployment');
+  return {...workerReceiptBase(plan, intent.before, candidate), phase: 'prepared', uploadTag: intent.uploadTag,
+    preparationApprovalId: intent.approvalId, preparationRequestDigest: intent.requestDigest};
+}
+
+export async function prepareWorkerVersion(value, client, options = {}) {
+  assert.equal(typeof options.storePreparationIntent, 'function', 'durable Worker preparation intent storage is required');
+  const intent = await prepareWorkerUploadIntent(value, client, options);
+  await options.storePreparationIntent(structuredClone(intent));
+  return completeWorkerPreparation(intent, client, options);
+}
+
+export async function recoverWorkerPreparation(intent, client, options = {}) {
+  const plan = validateWorkerPreparationIntent(intent, options);
+  for (const method of ['listVersionsByTag','readVersion','readDeployment']) assert.equal(typeof client?.[method], 'function', `Worker client is missing ${method}`);
+  const current = assertWorkerBefore(await client.readDeployment(), plan);
+  assert.equal(current.etag, intent.before.etag, 'active Worker changed during preparation recovery');
+  const matches = await client.listVersionsByTag(intent.uploadTag);
+  assert.ok(Array.isArray(matches), 'Worker tagged-version listing is invalid');
+  assert.equal(matches.length, 1, 'Worker preparation recovery requires exactly one tagged version');
+  const summary = exactKeys(matches[0], ['versionId','tag'], 'Worker tagged-version summary is invalid');
+  assert.equal(summary.tag, intent.uploadTag, 'Worker tagged-version listing returned a different tag');
+  assert.match(summary.versionId ?? '', ID, 'Worker tagged-version identity is invalid');
+  const candidate = await client.readVersion(summary.versionId);
+  record(candidate, 'Worker preparation recovery readback is missing');
+  assert.equal(candidate.versionId, summary.versionId, 'Worker preparation recovery version changed');
+  assert.equal(candidate.sourceDigest, plan.desired.worker.sourceDigest, 'recovered Worker source digest changed');
+  assert.equal(candidate.configDigest, plan.desired.worker.configDigest, 'recovered Worker config digest changed');
+  return {...workerReceiptBase(plan, intent.before, candidate), phase: 'prepared-after-interruption',
+    uploadTag: intent.uploadTag, preparationApprovalId: intent.approvalId,
+    preparationRequestDigest: intent.requestDigest};
 }
 
 function foreignWorker(snapshot, receipt) {
@@ -317,15 +400,20 @@ function workerRestored(snapshot, receipt) {
       || (snapshot.deploymentId === receipt.before.deploymentId && snapshot.etag === receipt.before.etag));
 }
 
-function rolledBackWorkerReceipt(receipt, after, failure, phase = 'rolled-back') {
-  return {...receipt, phase, after: structuredClone(after),
-    failure: {message: failure instanceof Error ? failure.message : String(failure)}};
+function stableFailure(code) {
+  assert.ok(RELEASE_FAILURE_CODES.has(code), 'invalid-release-failure-code');
+  return {code};
 }
 
-async function rollbackOwnedWorker(receipt, client, failure) {
+function rolledBackWorkerReceipt(receipt, after, failureCode, phase = 'rolled-back') {
+  return {...receipt, phase, after: structuredClone(after),
+    failure: stableFailure(failureCode)};
+}
+
+async function rollbackOwnedWorker(receipt, client, failureCode) {
   const current = await client.readDeployment();
   if (foreignWorker(current, receipt) || current.mutationOwner !== receipt.leaseOwner) {
-    throw new Error('foreign writer changed the Worker; refusing rollback overwrite', {cause: failure});
+    throw new Error('foreign writer changed the Worker; refusing rollback overwrite');
   }
   assertWorkerCandidate(current, receipt);
   let restored;
@@ -339,12 +427,12 @@ async function rollbackOwnedWorker(receipt, client, failure) {
   } catch (rollbackError) {
     const observed = await client.readDeployment();
     if (workerRestored(observed, receipt)) {
-      return rolledBackWorkerReceipt(receipt, observed, failure, 'rolled-back-after-interruption');
+      return rolledBackWorkerReceipt(receipt, observed, failureCode, 'rolled-back-after-interruption');
     }
     if (!foreignWorker(observed, receipt)) {
       return {...receipt, phase: 'rollback-pending', after: structuredClone(observed),
-        failure: {message: failure instanceof Error ? failure.message : String(failure)},
-        recovery: {message: rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}};
+        failure: stableFailure(failureCode),
+        recovery: stableFailure('worker-rollback-outcome-unknown')};
     }
     throw new Error('foreign writer changed the Worker during ambiguous rollback', {cause: rollbackError});
   }
@@ -353,7 +441,7 @@ async function rollbackOwnedWorker(receipt, client, failure) {
   assert.equal(after.versionId, receipt.before.versionId, 'Worker rollback did not restore the prior version');
   assert.equal(after.configDigest, receipt.before.configDigest, 'Worker rollback did not restore the prior configuration');
   assert.equal(restored.versionId, after.versionId);
-  return rolledBackWorkerReceipt(receipt, after, failure);
+  return rolledBackWorkerReceipt(receipt, after, failureCode);
 }
 
 async function verifyActiveWorker(receipt, client, verify, phase) {
@@ -373,7 +461,7 @@ async function verifyActiveWorker(receipt, client, verify, phase) {
     validateSafetyVerification(verification, receipt);
     return {...receipt, phase, after: structuredClone(after), verification: structuredClone(verification)};
   } catch (error) {
-    return rollbackOwnedWorker(receipt, client, error);
+    return rollbackOwnedWorker(receipt, client, 'worker-verification-failed');
   }
 }
 
@@ -383,13 +471,13 @@ export async function recoverWorkerRollback(receipt, client, options = {}) {
   assert.equal(typeof client?.rollbackVersion, 'function', 'Worker client is missing rollbackVersion');
   const current = await client.readDeployment();
   if (workerRestored(current, receipt)) {
-    return rolledBackWorkerReceipt(receipt, current, new Error(receipt.failure?.message ?? 'verification failed'),
+    return rolledBackWorkerReceipt(receipt, current, receipt.failure?.code ?? 'worker-verification-failed',
       'rolled-back-after-interruption');
   }
   if (foreignWorker(current, receipt)) {
     throw new Error('foreign writer changed the Worker; refusing rollback recovery overwrite');
   }
-  return rollbackOwnedWorker(receipt, client, new Error(receipt.failure?.message ?? 'verification failed'));
+  return rollbackOwnedWorker(receipt, client, receipt.failure?.code ?? 'worker-verification-failed');
 }
 
 export async function recoverWorkerActivation(receipt, client, options = {}) {
@@ -526,15 +614,15 @@ export async function preparePagesConfiguration(value, client, options = {}) {
   return receipt;
 }
 
-async function rollbackPagesConfiguration(receipt, client, failure) {
+async function rollbackPagesConfiguration(receipt, client, failureCode) {
   const current = await client.readProject();
   const state = pagesState(current, receipt);
   if (state === 'before') {
     return {...receipt, phase: 'rolled-back-after-interruption', after: structuredClone(current),
-      failure: {message: failure instanceof Error ? failure.message : String(failure)}};
+      failure: stableFailure(failureCode)};
   }
   if (state === 'foreign') {
-    throw new Error('foreign writer changed Pages configuration; refusing rollback overwrite', {cause: failure});
+    throw new Error('foreign writer changed Pages configuration; refusing rollback overwrite');
   }
   try {
     await client.restoreProject({
@@ -549,12 +637,12 @@ async function rollbackPagesConfiguration(receipt, client, failure) {
     const observedState = pagesState(observed, receipt);
     if (observedState === 'before') {
       return {...receipt, phase: 'rolled-back-after-interruption', after: structuredClone(observed),
-        failure: {message: failure instanceof Error ? failure.message : String(failure)}};
+        failure: stableFailure(failureCode)};
     }
     if (observedState === 'desired') {
       return {...receipt, phase: 'rollback-pending', after: structuredClone(observed),
-        failure: {message: failure instanceof Error ? failure.message : String(failure)},
-        recovery: {message: restoreError instanceof Error ? restoreError.message : String(restoreError)}};
+        failure: stableFailure(failureCode),
+        recovery: stableFailure('pages-restore-outcome-unknown')};
     }
     throw new Error('foreign writer changed Pages configuration during ambiguous restore', {cause: restoreError});
   }
@@ -564,7 +652,7 @@ async function rollbackPagesConfiguration(receipt, client, failure) {
   assert.deepEqual(restored.payload, receipt.before.payload,
     'Pages rollback did not restore the exact persisted preimage payload');
   return {...receipt, phase: 'rolled-back', after: structuredClone(restored),
-    failure: {message: failure instanceof Error ? failure.message : String(failure)}};
+    failure: stableFailure(failureCode)};
 }
 
 async function verifyPagesConfiguration(receipt, client, options, phase) {
@@ -582,7 +670,7 @@ async function verifyPagesConfiguration(receipt, client, options, phase) {
     return {...receipt, phase, applied: structuredClone(after), after: structuredClone(after),
       verification: structuredClone(verification)};
   } catch (error) {
-    return rollbackPagesConfiguration(receipt, client, error);
+    return rollbackPagesConfiguration(receipt, client, 'pages-verification-failed');
   }
 }
 
@@ -630,7 +718,7 @@ export async function recoverPagesConfiguration(receipt, client, options = {}) {
     if (state === 'before') {
       return {...receipt, phase: 'rolled-back-after-interruption', after: structuredClone(current)};
     }
-    return rollbackPagesConfiguration(receipt, client, new Error(receipt.failure?.message ?? 'verification failed'));
+    return rollbackPagesConfiguration(receipt, client, receipt.failure?.code ?? 'pages-verification-failed');
   }
   if (state === 'before') {
     return {...receipt, phase: 'interrupted-before-mutation', after: structuredClone(current)};

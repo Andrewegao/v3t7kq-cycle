@@ -11,6 +11,7 @@ import {
   PRODUCTION_ACCOUNT_REQUEST,
   validateProductionPagesConfiguration,
 } from '../tools/production-account-contract.mjs';
+import {PRODUCTION_ACCOUNT_TRUST_POLICY,PRODUCTION_ACCOUNT_TRUST_POLICY_DIGEST} from '../tools/production-account-trust-policy.mjs';
 import {
   BASELINE_PROFILE,
   PRODUCTION_ACCOUNT_PROFILE,
@@ -25,8 +26,10 @@ import {
   applyPagesConfiguration,
   preparePagesConfiguration,
   prepareWorkerVersion,
+  prepareWorkerUploadIntent,
   productionCandidateBinding,
   recoverPagesConfiguration,
+  recoverWorkerPreparation,
   recoverWorkerActivation,
   recoverWorkerRollback,
   validateProductionCandidateBinding,
@@ -93,7 +96,9 @@ function candidateFixture(sourceSha = ATMOS_INTEGRATION_CANDIDATE_SHA) {
 
 const CANDIDATE = candidateFixture();
 const QUALIFICATION = structuredClone(CANDIDATE.qualification);
-const OPTIONS = {allowProvisional: true, candidate: CANDIDATE, qualification: QUALIFICATION};
+const OPTIONS = {allowProvisional: true, candidate: CANDIDATE, qualification: QUALIFICATION,
+  preparationAuthorization: {approvalId: 'approval-test', requestDigest: H('7')},
+  storePreparationIntent: async () => {}};
 
 function plan(overrides = {}, candidate = CANDIDATE) {
   const value = {
@@ -149,25 +154,31 @@ function merge(value, overrides) {
 }
 
 class WorkerClient {
-  constructor({interruptAfterActivation = false, interruptRollback = null} = {}) {
+  constructor({interruptAfterActivation = false, interruptRollback = null, interruptUpload = null} = {}) {
     this.calls = [];
     this.interruptAfterActivation = interruptAfterActivation;
     this.interruptRollback = interruptRollback;
+    this.interruptUpload = interruptUpload;
     this.active = {
       workerName: LANE_B_CONTRACT.target.workerName,
       versionId: 'worker-old', deploymentId: 'worker-deploy-old', configDigest: H('d'),
       etag: 'worker-etag-1', mutationOwner: null,
     };
     this.versions = new Map([['worker-old', {versionId: 'worker-old', sourceDigest: H('0'), configDigest: H('d')}]]);
+    this.tags = new Map();
   }
   async readDeployment() { this.calls.push('readDeployment'); return structuredClone(this.active); }
   async uploadVersion(spec) {
     this.calls.push('uploadVersion');
+    if (this.interruptUpload === 'before') throw new Error('sk_live_CANARY_UPLOAD_BEFORE');
     const uploaded = {versionId: 'worker-candidate', sourceDigest: spec.sourceDigest, configDigest: spec.configDigest};
     this.versions.set(uploaded.versionId, uploaded);
+    this.tags.set(uploaded.versionId, spec.tag);
+    if (this.interruptUpload === 'after') throw new Error('sk_live_CANARY_UPLOAD_AFTER');
     return structuredClone(uploaded);
   }
   async readVersion(versionId) { this.calls.push(`readVersion:${versionId}`); return structuredClone(this.versions.get(versionId)); }
+  async listVersionsByTag(tag) { this.calls.push(`listVersionsByTag:${tag}`); return [...this.tags.entries()].filter(([,value]) => value === tag).map(([versionId]) => ({versionId,tag})); }
   async activateVersion({versionId, expectedEtag, owner}) {
     this.calls.push('activateVersion');
     assert.equal(this.active.etag, expectedEtag);
@@ -270,6 +281,13 @@ test('production account profile is explicit while the historical baseline stays
   assert.equal(PRODUCTION_ACCOUNT_PROFILE.account, true);
   assert.equal(PRODUCTION_ACCOUNT_PROFILE.productionAccount, PRODUCTION_ACCOUNT_APPROVAL);
   assert.equal(PRODUCTION_ACCOUNT_PROFILE.accountContractSha256, LANE_B_CONTRACT_DIGEST);
+  assert.equal(PRODUCTION_ACCOUNT_TRUST_POLICY.status, 'provisional');
+  assert.match(PRODUCTION_ACCOUNT_TRUST_POLICY_DIGEST, /^[a-f0-9]{64}$/);
+  assert.equal(PRODUCTION_ACCOUNT_TRUST_POLICY.cloudflare.resourceNamespaces.worker,
+    `cloudflare:${LANE_B_CONTRACT.target.cloudflareAccountId}:workers:${LANE_B_CONTRACT.target.workerName}`);
+  assert.equal(PRODUCTION_ACCOUNT_TRUST_POLICY.cloudflare.resourceNamespaces.pages,
+    `cloudflare:${LANE_B_CONTRACT.target.cloudflareAccountId}:pages:${LANE_B_CONTRACT.target.pagesProject}`);
+  assert.ok(POLICY_FILES.includes('tools/production-account-trust-policy.mjs'));
   assert.throws(() => resolveSelectionRequest(PRODUCTION_ACCOUNT_REQUEST, undefined, undefined,
     undefined, undefined, undefined, PRODUCTION_ACCOUNT_APPROVAL), /Lane B contract remains provisional/);
   assert.equal(resolveSelectionRequest(PRODUCTION_ACCOUNT_REQUEST, undefined, undefined,
@@ -376,6 +394,8 @@ test('production Pages configuration rejects staging bindings, URLs and known te
     value => { value.deployment_configs.preview.d1_databases.WX_ANALYTICS.id = '9501827a-7e4c-4249-806b-d45d5857d9e5'; },
     value => { value.deployment_configs.preview.env_vars.AI_API_KEY = {type: 'secret_text'}; },
     value => { value.deployment_configs.production.r2_buckets = {DATA: {bucket_name: 'weatherx-data-production'}}; },
+    value => { value.deployment_configs.production.placement = {credential: 'sk_live_CANARY'}; },
+    value => { value.deployment_configs.production.services = {UNKNOWN: {service: 'weatherx-platform-edge-production'}}; },
   ];
   for (const mutate of mutations) {
     const payload = pagesPayload(false);
@@ -401,7 +421,7 @@ test('candidate binding comes only from a validated candidate and its exact qual
 });
 
 test('reviewed Atmos integration identity is exact while provisional Price placeholders remain unusable', () => {
-  assert.equal(ATMOS_INTEGRATION_CANDIDATE_SHA, '29ff8f58b36d31059b2cd5fb80b3b90224130282');
+  assert.equal(ATMOS_INTEGRATION_CANDIDATE_SHA, 'aa092f28f1a99f965cf95d4dd726291a3110d233');
   assert.ok(Object.values(LANE_B_CONTRACT.approvedStripePriceIds).every(value => !value.startsWith('price_')));
   assert.equal(LANE_B_CONTRACT.requiredAtmosSourceSha, ATMOS_INTEGRATION_CANDIDATE_SHA);
   assert.equal(LANE_B_CONTRACT.requiredAtmosControllerSha, ATMOS_INTEGRATION_CANDIDATE_SHA);
@@ -427,6 +447,23 @@ test('Worker preparation uploads an inactive version and leaves the old deployme
   assert.equal(client.active.versionId, 'worker-old');
   assert.ok(client.calls.includes('uploadVersion'));
   assert.equal(client.calls.includes('activateVersion'), false);
+});
+
+test('ambiguous inactive upload is recovered by its approval-bound exact tag without re-upload', async () => {
+  const client = new WorkerClient({interruptUpload: 'after'});
+  const stored = [];
+  const intent = await prepareWorkerUploadIntent(plan(), client, OPTIONS);
+  stored.push(structuredClone(intent));
+  await assert.rejects(prepareWorkerVersion(plan(), client, {...OPTIONS,
+    storePreparationIntent: async value => stored.push(structuredClone(value)),
+  }));
+  const recovered = await recoverWorkerPreparation(stored.at(-1), client, OPTIONS);
+  assert.equal(recovered.phase, 'prepared-after-interruption');
+  assert.equal(recovered.uploadTag, stored.at(-1).uploadTag);
+  assert.equal(client.calls.filter(call => call === 'uploadVersion').length, 1);
+  client.tags.set('duplicate-version', stored.at(-1).uploadTag);
+  client.versions.set('duplicate-version', {versionId:'duplicate-version',sourceDigest:H('f'),configDigest:H('1')});
+  await assert.rejects(recoverWorkerPreparation(stored.at(-1), client, OPTIONS), /exactly one tagged version/);
 });
 
 test('Worker activation uses CAS, verifies purchase-closed mode and emits before/after receipts', async () => {
@@ -506,7 +543,7 @@ test('Worker verification requires structured old-UI, purchase, servicing, publi
     ...OPTIONS, verify: async () => incomplete,
   });
   assert.equal(receipt.phase, 'rolled-back');
-  assert.match(receipt.failure.message, /billing servicing verification/);
+  assert.equal(receipt.failure.code, 'worker-verification-failed');
 });
 
 test('failed Worker verification rolls code back while retaining the additive schema', async () => {
@@ -520,6 +557,20 @@ test('failed Worker verification rolls code back while retaining the additive sc
   assert.equal(receipt.schema.action, 'retain-additive');
   assert.equal(receipt.schema.databaseRestoreAttempted, false);
   assert.ok(client.calls.includes('rollbackVersion'));
+});
+
+test('Worker rollback receipts never serialize canary exception messages', async () => {
+  for (const interruptRollback of [null,'before']) {
+    const client = new WorkerClient({interruptRollback});
+    const prepared = await prepareWorkerVersion(plan(), client, OPTIONS);
+    const receipt = await activatePreparedWorker(prepared, client, {
+      ...OPTIONS, verify: async () => { throw new Error('sk_live_CANARY_WORKER_RECEIPT'); },
+    });
+    assert.ok(['rolled-back','rollback-pending'].includes(receipt.phase));
+    assert.equal(receipt.failure.code, 'worker-verification-failed');
+    assert.ok(!JSON.stringify(receipt).includes('sk_live_CANARY_WORKER_RECEIPT'));
+    if (receipt.phase === 'rollback-pending') assert.equal(receipt.recovery.code, 'worker-rollback-outcome-unknown');
+  }
 });
 
 test('ambiguous Worker rollback is classified and safely recoverable', async () => {
@@ -591,6 +642,20 @@ test('Pages verification failure reverses only an owned configuration mutation',
   assert.equal(foreign.calls.includes('restoreProject'), false);
 });
 
+test('Pages rollback receipts never serialize canary exception messages', async () => {
+  for (const interruptRestore of [null,'before']) {
+    const client = new PagesClient({interruptRestore});
+    const prepared = await preparePages(client);
+    const receipt = await applyPagesConfiguration(prepared, client, pagesOptions(client, {
+      verify: async () => { throw new Error('sk_live_CANARY_PAGES_RECEIPT'); },
+    }));
+    assert.ok(['rolled-back','rollback-pending'].includes(receipt.phase));
+    assert.equal(receipt.failure.code, 'pages-verification-failed');
+    assert.ok(!JSON.stringify(receipt).includes('sk_live_CANARY_PAGES_RECEIPT'));
+    if (receipt.phase === 'rollback-pending') assert.equal(receipt.recovery.code, 'pages-restore-outcome-unknown');
+  }
+});
+
 test('Pages recovery classifies unchanged, owned desired, foreign, and ambiguous restore outcomes', async () => {
   const unchanged = new PagesClient();
   const unchangedReceipt = await preparePages(unchanged);
@@ -642,6 +707,7 @@ test('runbooks preserve G3/G4/G5 sequencing and workflows cannot enable the prov
     assert.match(runbook, new RegExp(phrase));
   }
   assert.match(runbook, new RegExp(LANE_B_CONTRACT_DIGEST));
+  assert.match(runbook, new RegExp(PRODUCTION_ACCOUNT_TRUST_POLICY_DIGEST));
   assert.match(runbook, new RegExp(profileDigest(PRODUCTION_ACCOUNT_PROFILE)));
   assert.match(runbook, new RegExp(pipelineDigest(PRODUCTION_ACCOUNT_PROFILE)));
   const workflows = ['ui-staging.yml','ui-release.yml']
