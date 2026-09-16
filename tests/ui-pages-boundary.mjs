@@ -2,11 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { configurationDigest, STAGING_AI_AUTH_POLICY, STAGING_AI_SERVICE,
   stagingEnvVarAllowed, validateProjectSnapshot } from '../tools/ui-release.mjs';
+import {LANE_B_CONTRACT, STAGING_PLATFORM_D1_ID} from '../tools/production-account-contract.mjs';
 
 function project(stage = 'staging') {
+  const exactProduction = context => ({compatibility_date: '2026-06-23', compatibility_flags: [],
+    ...structuredClone(LANE_B_CONTRACT.pagesBindings[context])});
   return { name: stage === 'staging' ? 'weatherx-platform-staging' : 'atmos-platform', production_branch: 'main', source: null,
     domains: [stage === 'staging' ? 'staging.weatherx.org' : 'weatherx.org'],
-    deployment_configs: { production: { compatibility_date: '2026-06-23', compatibility_flags: [], env_vars: {}, d1_databases: {} }, preview: {} },
+    deployment_configs: stage === 'staging'
+      ? { production: { compatibility_date: '2026-06-23', compatibility_flags: [], env_vars: {}, d1_databases: {} }, preview: {} }
+      : {production: exactProduction('production'), preview: exactProduction('preview')},
     canonical_deployment: { latest_stage: { status: 'success' } } };
 }
 const validate = (p, stage = 'staging') => validateProjectSnapshot(stage, p, configurationDigest(p));
@@ -64,9 +69,16 @@ test('empty API maps and supported runtime metadata remain valid without alterin
   delete p.source; assert.equal(configurationDigest(p), digest); assert.equal(validate(p), p);
 });
 test('production keeps its existing resource/config policy, public modes and approval digest checks', () => {
-  const p = project('production'); p.deployment_configs.production.d1_databases = { WX_ANALYTICS: { id: 'e7247173-c23d-4989-b29e-f95939c820fe' } };
-  p.deployment_configs.production.env_vars = { EXISTING: { type: 'secret_text' } };
+  const p = project('production');
   assert.equal(validate(p, 'production'), p);
+  for (const context of ['production','preview']) {
+    const staging = project('production');
+    staging.deployment_configs[context].d1_databases.WX_ANALYTICS.id = STAGING_PLATFORM_D1_ID;
+    assert.throws(() => validate(staging, 'production'), /D1 binding|staging D1|identity changed/);
+  }
+  const renamed = project('production');
+  renamed.deployment_configs.production.env_vars.EXISTING = {type: 'secret_text'};
+  assert.throws(() => validate(renamed, 'production'), /exact production allowlist/);
   assert.throws(() => validateProjectSnapshot('production', p, '0'.repeat(64)), /configuration changed/);
   assert.throws(() => validateProjectSnapshot('staging', p, configurationDigest(p)));
 });
@@ -158,9 +170,9 @@ test('partial AI configuration, preview credentials, legacy codes and extra reso
     assert.throws(() => validate(p), error => /service|profile|binding/.test(error.message) && !error.message.includes('sensitive-fixture'));
   }
 });
-test('production validation remains independent from the staging AI profile policy', () => {
+test('production validation rejects the staging-only AI profile and bindings', () => {
   const p = project('production'); Object.assign(p.deployment_configs.production, aiProfile());
   p.deployment_configs.production.env_vars.AI_ACCESS_CODE = { type: 'secret_text' };
   p.deployment_configs.production.services.EXTRA = { service: 'production-worker', environment: 'production' };
-  assert.equal(validate(p, 'production'), p);
+  assert.throws(() => validate(p, 'production'), /staging identifier is forbidden in production/);
 });

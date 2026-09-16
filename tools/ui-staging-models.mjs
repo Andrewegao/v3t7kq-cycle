@@ -4,6 +4,14 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {readFileSync,lstatSync,realpathSync} from 'node:fs';
 import {resolve} from 'node:path';
+import {
+  LANE_B_CONTRACT_DIGEST,
+  PRODUCTION_ACCOUNT_APPROVAL,
+  PRODUCTION_ACCOUNT_REQUEST,
+  assertLaneBContractReady,
+} from './production-account-contract.mjs';
+
+export {PRODUCTION_ACCOUNT_APPROVAL,PRODUCTION_ACCOUNT_REQUEST};
 
 export const STAGING_ORIGIN='https://staging.weatherx.org';
 export const SELECTION_ASSET='assets/staging-model-selection.json';
@@ -24,6 +32,10 @@ export const CORE_RELEASE_PROFILE=Object.freeze({...BASELINE_PROFILE,expandedMod
 export const STATIC_COMPRESSION_PROFILE=Object.freeze({...CORE_RELEASE_PROFILE,staticCompression:'static-br11-v1'});
 // A distinct, non-promotable profile. Existing defaults never acquire account/billing.
 export const ACCOUNT_CORE_PROFILE=Object.freeze({...CORE_RELEASE_PROFILE,account:true,stagingAccount:ACCOUNT_APPROVAL});
+// Production accounts are a different release policy, never an alias for the staging account
+// profile. Its provisional Lane B digest intentionally changes candidate identity at handoff.
+export const PRODUCTION_ACCOUNT_PROFILE=Object.freeze({...BASELINE_PROFILE,account:true,
+  productionAccount:PRODUCTION_ACCOUNT_APPROVAL,accountContractSha256:LANE_B_CONTRACT_DIGEST});
 // TC release flags require account=0. Keep this separate from the existing account-enabled
 // staging profile and qualify it only as an isolated, non-deployed build artifact.
 export const TC_RELEASE_PROFILE=Object.freeze({...CORE_RELEASE_PROFILE,tcGuidance:TC_APPROVAL,tcSelectionSha256:TC_SELECTION_SHA256});
@@ -74,13 +86,18 @@ export function resolveWind100BuildPin(profile,env={}){
   assert.ok(dynamic===''||dynamic==='true','protected staging Wind100 dynamic presentation approval must be exactly true or empty');
   return dynamic==='true'?Object.freeze({...pin,dynamic:true}):pin;
 }
-export function resolveSelectionRequest(requested='approved',approved,approvedCore,approvedStaticCompression,approvedAccount,approvedTc){
-  assert.ok(requested==='approved'||requested==='none'||requested===CORE_RELEASE_REQUEST||requested===STATIC_COMPRESSION_REQUEST||requested===ACCOUNT_CORE_REQUEST||requested===TC_RELEASE_REQUEST||HASH.test(requested??''),'invalid staging selection request');
+export function resolveSelectionRequest(requested='approved',approved,approvedCore,approvedStaticCompression,approvedAccount,approvedTc,approvedProductionAccount,options={}){
+  assert.ok(requested==='approved'||requested==='none'||requested===CORE_RELEASE_REQUEST||requested===STATIC_COMPRESSION_REQUEST||requested===ACCOUNT_CORE_REQUEST||requested===TC_RELEASE_REQUEST||requested===PRODUCTION_ACCOUNT_REQUEST||HASH.test(requested??''),'invalid staging selection request');
   if(requested==='none')return 'none';
   if(requested===TC_RELEASE_REQUEST){
     assert.equal(approvedCore,CORE_RELEASE_REQUEST,'protected staging core profile approval required');
     assert.equal(approvedTc,TC_APPROVAL,'protected staging TC profile approval required');
     return TC_RELEASE_REQUEST;
+  }
+  if(requested===PRODUCTION_ACCOUNT_REQUEST){
+    assert.equal(approvedProductionAccount,PRODUCTION_ACCOUNT_APPROVAL,'protected production account profile approval required');
+    assertLaneBContractReady(options);
+    return PRODUCTION_ACCOUNT_REQUEST;
   }
   if(requested===ACCOUNT_CORE_REQUEST){
     assert.equal(approvedCore,CORE_RELEASE_REQUEST,'protected staging core profile approval required');
@@ -106,6 +123,7 @@ function keys(object,expected){assert.ok(object&&typeof object==='object'&&!Arra
 export function profileFor(selection='none'){
   if(selection===undefined||selection==='none')return BASELINE_PROFILE;
   if(selection===TC_RELEASE_REQUEST)return TC_RELEASE_PROFILE;
+  if(selection===PRODUCTION_ACCOUNT_REQUEST)return PRODUCTION_ACCOUNT_PROFILE;
   if(selection===CORE_RELEASE_REQUEST)return CORE_RELEASE_PROFILE;
   if(selection===ACCOUNT_CORE_REQUEST)return ACCOUNT_CORE_PROFILE;
   if(selection===STATIC_COMPRESSION_REQUEST)return STATIC_COMPRESSION_PROFILE;
@@ -113,6 +131,7 @@ export function profileFor(selection='none'){
 }
 export function validateProfile(profile){
   if(profile?.tcGuidance!==undefined||profile?.tcSelectionSha256!==undefined){assert.deepEqual(profile,TC_RELEASE_PROFILE);return profile;}
+  if(profile?.productionAccount!==undefined||profile?.accountContractSha256!==undefined){assert.deepEqual(profile,PRODUCTION_ACCOUNT_PROFILE);return profile;}
   if(profile?.stagingAccount!==undefined){assert.deepEqual(profile,ACCOUNT_CORE_PROFILE);return profile;}
   if(profile?.staticCompression!==undefined){assert.deepEqual(profile,STATIC_COMPRESSION_PROFILE);return profile;}
   if(profile?.expandedModels===false){assert.deepEqual(profile,BASELINE_PROFILE);return profile;}
@@ -123,7 +142,15 @@ export function validateProfile(profile){
 // means "no regional models": the seven regional packs ride the immutable data release and the app
 // admits them from the release-carried data/model-roster.json (data admission), never from a UI
 // build flag or a staging selection. Only a hash-pinned staging experiment remains profile-gated.
-export function requireProductionProfile(profile){assert.deepEqual(profile,BASELINE_PROFILE,'staging experiment cannot enter production');}
+export function productionAccountProfile(profile){validateProfile(profile);return profile.productionAccount===PRODUCTION_ACCOUNT_APPROVAL;}
+export function profileDigest(profile){return digest(Buffer.from(canonical(validateProfile(profile))));}
+export function requireProductionProfile(profile){
+  validateProfile(profile);
+  assert.ok(profile===BASELINE_PROFILE||profile===PRODUCTION_ACCOUNT_PROFILE||
+    JSON.stringify(profile)===JSON.stringify(BASELINE_PROFILE)||JSON.stringify(profile)===JSON.stringify(PRODUCTION_ACCOUNT_PROFILE),
+  'staging experiment cannot enter production');
+  return profile;
+}
 export function cycleTime(init,now=Date.now()){
   assert.match(init??'',/^\d{8}(00|06|12|18)$/);const iso=`${init.slice(0,4)}-${init.slice(4,6)}-${init.slice(6,8)}T${init.slice(8)}:00:00.000Z`,time=Date.parse(iso);
   assert.ok(Number.isFinite(time)&&new Date(time).toISOString()===iso&&(now===null||(now>=time&&now-time<=12*3600000)),'stale/future model selection');return time;
@@ -199,13 +226,17 @@ export function validateCandidateTcSelection(candidate,now=null){
   assert.ok(asset,'TC profile selection asset required');
   return validateTcSelection(Buffer.from(asset.base64,'base64'),profile.tcSelectionSha256,now);
 }
-export function requireStagingApproval(candidate,env,now=Date.now()){
+export function requireStagingApproval(candidate,env,now=Date.now(),options={}){
   const expected=profileFor(env.MODEL_SELECTION_SHA256);assert.deepEqual(candidate.profile,expected,'candidate differs from requested UI profile');
   const bundle=validateCandidateSelection(candidate,now);
   validateCandidateTcSelection(candidate,now);
   if(rawSelectionProfile(expected))assert.equal(env.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256,expected.modelSelectionSha256,'protected staging selection approval required');
   if(expected.releaseRosterCore===CORE_RELEASE_REQUEST)assert.equal(env.UI_STAGING_CORE_PROFILE_APPROVED,CORE_RELEASE_REQUEST,'protected staging core profile approval required');
-  if(expected.account)assert.equal(env.UI_STAGING_ACCOUNT_PROFILE_APPROVED,ACCOUNT_APPROVAL,'protected staging account profile approval required');
+  if(expected.stagingAccount)assert.equal(env.UI_STAGING_ACCOUNT_PROFILE_APPROVED,ACCOUNT_APPROVAL,'protected staging account profile approval required');
+  if(productionAccountProfile(expected)){
+    assert.equal(env.UI_PRODUCTION_ACCOUNT_PROFILE_APPROVED,PRODUCTION_ACCOUNT_APPROVAL,'protected production account profile approval required');
+    assertLaneBContractReady(options);
+  }
   if(tcGuidanceProfile(expected))assert.equal(env.UI_STAGING_TC_PROFILE_APPROVED,TC_APPROVAL,'protected staging TC profile approval required');
   if(staticCompressionProfile(expected))assert.equal(env.UI_STAGING_STATIC_COMPRESSION_APPROVED,'static-br11-v1','protected staging static compression approval required');
   return bundle;

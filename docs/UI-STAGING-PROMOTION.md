@@ -32,7 +32,12 @@ explicit approval. Normal data collection, scoring, archive and R2 publication a
    Failure restores the exact prior Pages deployment and opens the existing release fuse.
    Never bypass a fuse or retry until green; diagnose the retained incident first.
 
-Account/billing UI and experimental model expansion are explicitly disabled at build time.
+The historical production-compatible baseline still explicitly disables account/billing UI and
+experimental model expansion at build time. A separate production account profile now exists as
+a **provisional local G3 contract**, but it is intentionally blocked from workflow selection until
+Lane B replaces its zero controller SHA and provisional contract/receipt. See
+[Production account release controller](production-account-release-controller.md). Do not relabel
+the staging-only account profile or expose the provisional profile by changing a protected value.
 No UI workflow writes data buckets, Workers, bindings, DNS, accounts, billing or Fusion flags.
 Changes to those systems require their own separate staging, review and release process.
 Public UI releases do not imply that a weather-data update or a backend release has occurred.
@@ -129,6 +134,11 @@ staging parity are approved, perform a staging-only qualification and an intenti
 staging verification to exercise actual rollback/fuse behavior. Inspect the encrypted artifact
 handoff and real browser results. Only then enable production promotion for Andrew's explicit
 manual action. No production test deployment is part of this setup.
+
+For the owner-required account/billing launch, complete the separate G3/G4 Worker and Pages
+configuration transactions first, with purchase creation closed and the old public UI still
+healthy. Finalize their digests before creating the G5 candidate. A Pages code rollback does not
+revert Worker versions, D1 migrations, Stripe state, or Pages service configuration.
 
 The local legacy `com.weatherx.bake` LaunchAgent remains disabled. `verify-backfill.yml` no
 longer has any Pages token/deploy step; it qualifies and caches archive inputs only. Normal
