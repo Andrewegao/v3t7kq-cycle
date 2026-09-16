@@ -14,6 +14,7 @@ import {
 
 const SUBSCRIPTION_PRICE = 'price_live_subscription_1';
 const PASS_PRICE = 'price_live_pass_1';
+const CLOUDFLARE_TOKEN = `cfut_${'a'.repeat(40)}_${'b'.repeat(8)}`;
 const USER = 'weatherx_user_1';
 const CUSTOMER = 'cus_weatherx_1';
 const PERIOD = 1_800_000_000;
@@ -70,7 +71,7 @@ function platformFetch(rows, calls = []) {
 async function snapshots({stripe = stripeFixture(), platform = platformFixture()} = {}) {
   return {
     stripeSnapshot: await collectStripeSnapshot({apiKey: 'rk_live_fixture_key', fetcher: stripeFetch(stripe)}),
-    platformSnapshot: await collectPlatformSnapshot({accountId: 'a'.repeat(32), apiToken: 'cloudflare_audit_fixture_token', fetcher: platformFetch(platform)}),
+    platformSnapshot: await collectPlatformSnapshot({accountId: 'a'.repeat(32), apiToken: CLOUDFLARE_TOKEN, fetcher: platformFetch(platform)}),
   };
 }
 
@@ -95,7 +96,7 @@ test('Stripe collection paginates exhaustively with a restricted live key and pi
 
 test('platform collection executes only fixed SELECT statements against the exact production D1 API', async () => {
   const calls = [];
-  const snapshot = await collectPlatformSnapshot({accountId: ` ${'a'.repeat(32)}\n`, apiToken: ' cloudflare_audit_fixture_token\n', fetcher: platformFetch(platformFixture(), calls)});
+  const snapshot = await collectPlatformSnapshot({accountId: ` ${'a'.repeat(32)}\n`, apiToken: ` ${CLOUDFLARE_TOKEN}\n`, fetcher: platformFetch(platformFixture(), calls)});
   assert.equal(snapshot.databaseId, PRODUCTION_PLATFORM_D1_ID);
   assert.equal(calls.length, 7);
   for (const call of calls) {
@@ -103,7 +104,7 @@ test('platform collection executes only fixed SELECT statements against the exac
     assert.equal(new URL(call.url).pathname, `/client/v4/accounts/${'a'.repeat(32)}/d1/database/${PRODUCTION_PLATFORM_D1_ID}/query`);
     assert.equal(call.options.method, 'POST');
     assert.equal(call.options.redirect, 'manual');
-    assert.equal(call.options.headers.authorization, 'Bearer cloudflare_audit_fixture_token');
+    assert.equal(call.options.headers.authorization, `Bearer ${CLOUDFLARE_TOKEN}`);
     const body = JSON.parse(call.options.body);
     assert.deepEqual(Object.keys(body), ['sql']);
     assert.match(body.sql, /^SELECT\b/);
@@ -114,9 +115,9 @@ test('platform collection executes only fixed SELECT statements against the exac
 
 test('platform collection fails closed on Cloudflare errors and any reported write', async () => {
   const denied = async () => new Response(JSON.stringify({success: false, errors: [{code: 9109, message: 'Unauthorized'}], result: null}), {status: 403});
-  await assert.rejects(() => collectPlatformSnapshot({accountId: 'a'.repeat(32), apiToken: 'cloudflare_audit_fixture_token', fetcher: denied}), /platform-users-http-403/);
+  await assert.rejects(() => collectPlatformSnapshot({accountId: 'a'.repeat(32), apiToken: CLOUDFLARE_TOKEN, fetcher: denied}), /platform-users-http-403/);
   const wrote = async () => new Response(JSON.stringify({success: true, errors: [], result: [{success: true, results: [], meta: {changed_db: true, changes: 1, rows_written: 1}}]}), {status: 200});
-  await assert.rejects(() => collectPlatformSnapshot({accountId: 'a'.repeat(32), apiToken: 'cloudflare_audit_fixture_token', fetcher: wrote}), /platform-users-changed-database/);
+  await assert.rejects(() => collectPlatformSnapshot({accountId: 'a'.repeat(32), apiToken: CLOUDFLARE_TOKEN, fetcher: wrote}), /platform-users-changed-database/);
 });
 
 test('a complete matching live Stripe and platform inventory produces a clear deterministic receipt', async () => {
