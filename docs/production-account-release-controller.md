@@ -9,10 +9,10 @@ Lane C is built against one explicit owner-blocked Lane B contract in
 `tools/production-account-contract.mjs`:
 
 - contract version: `lane-b-account-contract-v0-provisional`
-- exact reviewed Atmos integration candidate: `64065f12326077dca3d8a11316b0151b10ba4d0b`
-- contract digest: `e4d460c5e58223ff2ae0e5cf277ab7348cda8935e833e9ec986957cfd4b8de2c`
-- production profile digest: `1a9cac5a307a4e97ee240709725a9d4a255b7480a7d585a65543b2bdcf87e931`
-- pipeline digest: `6751e43d49d02dc36a6fd17b444aba1b2810be1e9ae28cc694cc91e295905199`
+- exact reviewed Atmos integration candidate: `29ff8f58b36d31059b2cd5fb80b3b90224130282`
+- contract digest: `1acc28da489682a8200f12c4a4654866950c69047d88bdb9f9c13380dbecb6ba`
+- production profile digest: `724b78d9f57ae149e1e57ce90ee457f3b69dff891d388eb7a44828abbcca8fe7`
+- pipeline digest: `71a1f2c7f9438cfa869f6c8b2ccfc0aea4fbbd0dc7773ef74dd2c84e3116595f`
 
 Every normal validation path refuses while the contract is provisional. Tests may pass
 `allowProvisional: true` only to exercise mocked transactions. That switch must never appear
@@ -51,19 +51,40 @@ authorization and never invokes a Cloudflare adapter. It may render the provisio
 contract only as an explicitly blocked preview. The preview currently reports both the provisional
 Lane B contract and missing owner-approved live Stripe Prices.
 
-Execute mode has no provisional override. Before it can call an injected adapter, it independently:
+Execute mode has no provisional override and accepts no caller-supplied clock or lease assertion.
+The production factory accepts only module-branded production authorities; separately branded test
+authorities can be used only by the explicit test factory. Before an adapter can run, the boundary:
 
 - validates the final contract, candidate, staging qualification, target, artifact and rollback
   identities;
-- requires an action-specific authorization containing the exact plan and target digests and the
-  literal `AUTHORIZE WEATHERX PRODUCTION MUTATION`, with a maximum 30-minute lifetime;
-- obtains a fresh action/transaction/target-bound exclusive-lease proof; and
-- durably writes and reads back a sanitized pre-mutation intent receipt.
+- authenticates an Ed25519-signed, issuer/audience/approval-ID-bound authorization containing the
+  exact request, input-receipt, plan and target digests and the literal
+  `AUTHORIZE WEATHERX PRODUCTION MUTATION`, with a maximum 30-minute lifetime;
+- obtains a fresh approval/action/transaction/request/target-bound lease from an independently
+  configured authority, with a monotonically increasing fencing token, maximum ten-minute lifetime
+  and at least one minute remaining; and
+- durably creates a sanitized pre-mutation intent as the first entry of an append-only journal.
 
-Every result is written and read back as a separate completed receipt. Failures persist only a safe
-failure code; arbitrary provider output and secret values never enter the receipt. Pages preimages
-use their own durable receipt identity. The filesystem store uses bounded, mode-0600 JSON envelopes,
-atomic replacement, canonical hashed filenames and symlink refusal.
+The lease is re-read immediately before every provider mutation and recovery, and its identity and
+fencing token are passed into the adapter call. Activation reloads its immutable prepared receipt
+from durable storage and rereads the exact prepared Worker version before traffic changes. Signed
+approval and lease claims bind the request and input-receipt digests, preventing substitution.
+
+Each result is appended as `completed` or `recovery-required`; entries are never replaced. Exact
+completed replays return the recorded result without reacquiring a lease or rerunning the operation,
+including after approval expiry. An orphaned intent or recovery-required result cannot be rerun and
+requires an explicit recovery action. Provider failures persist only stable error codes; arbitrary
+provider output and secret values never enter receipts or errors.
+
+The filesystem journal requires an owner-only mode-0700 trusted anchor and every child directory,
+uses create-if-absent entries opened with no-follow and verified by descriptor metadata, writes
+mode-0600 bounded envelopes, fsyncs files and directories, and rejects symlinks, gaps, replacement,
+unexpected files and ownership/mode drift.
+
+Concrete non-invoked adapters define the production Wrangler argument-vector boundary for Worker
+version upload/deploy/rollback and the Pages project API capability boundary. They exact-key and
+target-check provider responses, accept no shell strings, never put credentials into command
+arguments, and require the current fence on every mutation. No workflow exposes these adapters yet.
 
 Live Stripe Product and Price IDs are non-secret inputs carried by the release plan, not credentials
 or source defaults. They must be exact valid live Price IDs, must equal the final owner-approved Lane
@@ -160,5 +181,7 @@ The transaction suite covers wrong target/digest, known staging/test identifiers
 refusal, exact candidate invalidation, inactive upload, old-UI compatibility, CAS/foreign writer,
 interrupted activation, Worker rollback with retained additive schema, and Pages configuration
 rollback. These are mocked controller contracts, not live Cloudflare or Stripe receipts.
-The execution-boundary suite additionally covers blocked planning, no-authorization refusal,
-action/target/expiry-bound authorization, input-receipt separation and durable receipt storage.
+The execution-boundary suite additionally covers authenticated success, completed replay, crashes,
+orphaned intents, approval and lease expiry, monotonic fencing, wrong prepared receipts, exact Worker
+readback, secret-bearing provider failures, concrete command/API adapters and hardened append-only
+receipt storage.
