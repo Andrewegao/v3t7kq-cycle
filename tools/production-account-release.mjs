@@ -292,8 +292,10 @@ function workerUploadTag(plan, options) {
 }
 
 function validateWorkerPreparationIntent(intent, options = {}) {
-  exactKeys(intent, ['schemaVersion','kind','transactionId','leaseOwner','contractDigest','planDigest',
-    'approvalId','requestDigest','uploadTag','before','plan'], 'invalid Worker preparation intent');
+  const keys = ['schemaVersion','kind','transactionId','leaseOwner','contractDigest','planDigest',
+    'approvalId','requestDigest','uploadTag','before','plan'];
+  if (Object.hasOwn(intent, 'pendingMutation')) keys.push('pendingMutation');
+  exactKeys(intent, keys, 'invalid Worker preparation intent');
   assert.equal(intent.schemaVersion, 1);
   assert.equal(intent.kind, 'weatherx-account-worker-preparation-intent');
   const plan = validateProductionReleasePlan(intent.plan, options);
@@ -333,14 +335,28 @@ export async function prepareWorkerUploadIntent(value, client, options = {}) {
 
 export async function completeWorkerPreparation(intent, client, options = {}) {
   const plan = validateWorkerPreparationIntent(intent, options);
-  for (const method of ['uploadVersion','readVersion','readDeployment']) assert.equal(typeof client?.[method], 'function', `Worker client is missing ${method}`);
-  const candidate = await client.uploadVersion({
-    workerName: plan.target.workerName,
-    sourceDigest: plan.desired.worker.sourceDigest,
-    configDigest: plan.desired.worker.configDigest,
-    tag: intent.uploadTag,
-    activate: false,
-  });
+  for (const method of ['uploadVersion','readVersion','readDeployment','listVersionsByTag']) assert.equal(typeof client?.[method], 'function', `Worker client is missing ${method}`);
+  let outcome;
+  try { outcome = mutationOutcome(await client.uploadVersion({workerName: plan.target.workerName,
+    sourceDigest: plan.desired.worker.sourceDigest, configDigest: plan.desired.worker.configDigest,
+    tag: intent.uploadTag, activate: false}), 'Worker upload outcome is invalid'); }
+  catch (error) {
+    const reference = error?.mutationReference;
+    if (!reference) throw error;
+    const matches = await client.listVersionsByTag(intent.uploadTag);
+    assert.ok(Array.isArray(matches), 'Worker tagged-version listing is invalid');
+    if (matches.length !== 1) throw error;
+    const candidate = await client.readVersion(matches[0].versionId);
+    const unchanged = assertWorkerBefore(await client.readDeployment(), plan);
+    assert.equal(unchanged.etag, intent.before.etag, 'inactive upload changed the active Worker deployment');
+    const acknowledgement = await durableMutationAcknowledgement(client, reference);
+    const receipt = {...workerReceiptBase(plan, intent.before, candidate), uploadTag: intent.uploadTag,
+      preparationApprovalId: intent.approvalId, preparationRequestDigest: intent.requestDigest};
+    return acknowledgement
+      ? {...receipt, phase:'prepared-after-interruption', mutationEvidence:{reference:structuredClone(reference),acknowledgement}}
+      : pendingMutation(receipt, 'preparation-ack-pending', reference);
+  }
+  const candidate = outcome.result;
   record(candidate, 'Worker upload did not return a version identity');
   assert.match(candidate.versionId ?? '', ID, 'invalid uploaded Worker version identity');
   assert.notEqual(candidate.versionId, intent.before.versionId, 'inactive upload reused the active Worker version');
@@ -350,7 +366,8 @@ export async function completeWorkerPreparation(intent, client, options = {}) {
   const unchanged = assertWorkerBefore(await client.readDeployment(), plan);
   assert.equal(unchanged.etag, intent.before.etag, 'inactive upload changed the active Worker deployment');
   return {...workerReceiptBase(plan, intent.before, candidate), phase: 'prepared', uploadTag: intent.uploadTag,
-    preparationApprovalId: intent.approvalId, preparationRequestDigest: intent.requestDigest};
+    preparationApprovalId: intent.approvalId, preparationRequestDigest: intent.requestDigest,
+    mutationEvidence: mutationEvidence(outcome)};
 }
 
 export async function prepareWorkerVersion(value, client, options = {}) {
@@ -361,6 +378,18 @@ export async function prepareWorkerVersion(value, client, options = {}) {
 }
 
 export async function recoverWorkerPreparation(intent, client, options = {}) {
+  if (intent.kind === 'weatherx-account-worker-transaction-receipt') {
+    validatePreparedReceipt(intent, options, ['preparation-ack-pending']);
+    const acknowledgement = await durableMutationAcknowledgement(client, intent.pendingMutation);
+    if (!acknowledgement) return structuredClone(intent);
+    const current = assertWorkerBefore(await client.readDeployment(), intent.plan);
+    assert.equal(current.etag, intent.before.etag, 'active Worker changed during preparation recovery');
+    assert.deepEqual(await client.readVersion(intent.candidate.versionId), intent.candidate,
+      'recovered Worker version readback differs');
+    const recovered = {...intent, phase:'prepared-after-interruption',
+      mutationEvidence:{reference:structuredClone(intent.pendingMutation),acknowledgement}};
+    delete recovered.pendingMutation;return recovered;
+  }
   const plan = validateWorkerPreparationIntent(intent, options);
   for (const method of ['listVersionsByTag','readVersion','readDeployment']) assert.equal(typeof client?.[method], 'function', `Worker client is missing ${method}`);
   const current = assertWorkerBefore(await client.readDeployment(), plan);
@@ -376,9 +405,12 @@ export async function recoverWorkerPreparation(intent, client, options = {}) {
   assert.equal(candidate.versionId, summary.versionId, 'Worker preparation recovery version changed');
   assert.equal(candidate.sourceDigest, plan.desired.worker.sourceDigest, 'recovered Worker source digest changed');
   assert.equal(candidate.configDigest, plan.desired.worker.configDigest, 'recovered Worker config digest changed');
-  return {...workerReceiptBase(plan, intent.before, candidate), phase: 'prepared-after-interruption',
-    uploadTag: intent.uploadTag, preparationApprovalId: intent.approvalId,
-    preparationRequestDigest: intent.requestDigest};
+  const acknowledgement = await durableMutationAcknowledgement(client, intent.pendingMutation);
+  const receipt = {...workerReceiptBase(plan, intent.before, candidate), uploadTag: intent.uploadTag,
+    preparationApprovalId: intent.approvalId, preparationRequestDigest: intent.requestDigest};
+  return acknowledgement
+    ? {...receipt, phase:'prepared-after-interruption',mutationEvidence:{reference:structuredClone(intent.pendingMutation),acknowledgement}}
+    : pendingMutation(receipt,'preparation-ack-pending',intent.pendingMutation);
 }
 
 function foreignWorker(snapshot, receipt) {
@@ -405,6 +437,32 @@ function stableFailure(code) {
   return {code};
 }
 
+function mutationOutcome(value, message) {
+  exactKeys(value, ['result','acknowledgement','mutationReference'], message);
+  record(value.result, `${message} result`);
+  record(value.acknowledgement, `${message} acknowledgement`);
+  record(value.mutationReference, `${message} reference`);
+  return value;
+}
+
+async function durableMutationAcknowledgement(client, reference) {
+  if (!reference || typeof client?.readMutationAcknowledgement !== 'function') return null;
+  try {
+    const acknowledgement = await client.readMutationAcknowledgement(structuredClone(reference));
+    return record(acknowledgement, 'durable mutation acknowledgement is invalid');
+  } catch {
+    return null;
+  }
+}
+
+const mutationEvidence = outcome => ({reference: structuredClone(outcome.mutationReference),
+  acknowledgement: structuredClone(outcome.acknowledgement)});
+
+function pendingMutation(receipt, phase, reference, after) {
+  return {...receipt, phase, ...(after ? {after: structuredClone(after)} : {}),
+    pendingMutation: structuredClone(record(reference, 'pending mutation reference is required'))};
+}
+
 function rolledBackWorkerReceipt(receipt, after, failureCode, phase = 'rolled-back') {
   return {...receipt, phase, after: structuredClone(after),
     failure: stableFailure(failureCode)};
@@ -416,21 +474,25 @@ async function rollbackOwnedWorker(receipt, client, failureCode) {
     throw new Error('foreign writer changed the Worker; refusing rollback overwrite');
   }
   assertWorkerCandidate(current, receipt);
-  let restored;
+  let outcome;
   try {
-    restored = await client.rollbackVersion({
+    outcome = mutationOutcome(await client.rollbackVersion({
       workerName: receipt.target.workerName,
       versionId: receipt.before.versionId,
       expectedEtag: current.etag,
       owner: receipt.leaseOwner,
-    });
+    }), 'Worker rollback outcome is invalid');
   } catch (rollbackError) {
     const observed = await client.readDeployment();
+    const reference = rollbackError?.mutationReference;
     if (workerRestored(observed, receipt)) {
-      return rolledBackWorkerReceipt(receipt, observed, failureCode, 'rolled-back-after-interruption');
+      const acknowledgement = await durableMutationAcknowledgement(client, reference);
+      if (acknowledgement) return {...rolledBackWorkerReceipt(receipt, observed, failureCode,
+        'rolled-back-after-interruption'), rollbackEvidence:{reference:structuredClone(reference),acknowledgement}};
+      return pendingMutation({...receipt,failure:stableFailure(failureCode)},'rollback-ack-pending',reference,observed);
     }
     if (!foreignWorker(observed, receipt)) {
-      return {...receipt, phase: 'rollback-pending', after: structuredClone(observed),
+      return {...receipt, phase: 'rollback-pending', after: structuredClone(observed), pendingMutation:structuredClone(record(reference,'pending Worker rollback mutation reference is required')),
         failure: stableFailure(failureCode),
         recovery: stableFailure('worker-rollback-outcome-unknown')};
     }
@@ -440,11 +502,11 @@ async function rollbackOwnedWorker(receipt, client, failureCode) {
   assert.ok(workerRestored(after, receipt), 'Worker rollback readback did not restore the prior version and configuration');
   assert.equal(after.versionId, receipt.before.versionId, 'Worker rollback did not restore the prior version');
   assert.equal(after.configDigest, receipt.before.configDigest, 'Worker rollback did not restore the prior configuration');
-  assert.equal(restored.versionId, after.versionId);
-  return rolledBackWorkerReceipt(receipt, after, failureCode);
+  assert.equal(outcome.result.versionId, after.versionId);
+  return {...rolledBackWorkerReceipt(receipt, after, failureCode),rollbackEvidence:mutationEvidence(outcome)};
 }
 
-async function verifyActiveWorker(receipt, client, verify, phase) {
+async function verifyActiveWorker(receipt, client, verify, phase, {rollbackOnFailure=true}={}) {
   const after = assertWorkerCandidate(await client.readDeployment(), receipt);
   try {
     const verification = await verify({
@@ -461,37 +523,42 @@ async function verifyActiveWorker(receipt, client, verify, phase) {
     validateSafetyVerification(verification, receipt);
     return {...receipt, phase, after: structuredClone(after), verification: structuredClone(verification)};
   } catch (error) {
+    if(!rollbackOnFailure)throw new Error('Worker verification failed during acknowledgement-only recovery');
     return rollbackOwnedWorker(receipt, client, 'worker-verification-failed');
   }
 }
 
 export async function recoverWorkerRollback(receipt, client, options = {}) {
-  validatePreparedReceipt(receipt, options, ['rollback-pending']);
+  validatePreparedReceipt(receipt, options, ['rollback-pending','rollback-ack-pending']);
   assert.equal(typeof client?.readDeployment, 'function', 'Worker client is missing readDeployment');
-  assert.equal(typeof client?.rollbackVersion, 'function', 'Worker client is missing rollbackVersion');
+  const acknowledgement = await durableMutationAcknowledgement(client, receipt.pendingMutation);
+  if (!acknowledgement) return structuredClone(receipt);
   const current = await client.readDeployment();
   if (workerRestored(current, receipt)) {
-    return rolledBackWorkerReceipt(receipt, current, receipt.failure?.code ?? 'worker-verification-failed',
-      'rolled-back-after-interruption');
+    const recovered={...rolledBackWorkerReceipt(receipt, current, receipt.failure?.code ?? 'worker-verification-failed',
+      'rolled-back-after-interruption'),rollbackEvidence:{reference:structuredClone(receipt.pendingMutation),acknowledgement}};
+    delete recovered.pendingMutation;return recovered;
   }
-  if (foreignWorker(current, receipt)) {
-    throw new Error('foreign writer changed the Worker; refusing rollback recovery overwrite');
-  }
-  return rollbackOwnedWorker(receipt, client, receipt.failure?.code ?? 'worker-verification-failed');
+  throw new Error('acknowledged Worker rollback does not match provider readback');
 }
 
 export async function recoverWorkerActivation(receipt, client, options = {}) {
-  validatePreparedReceipt(receipt, options);
+  validatePreparedReceipt(receipt, options, ['prepared','prepared-after-interruption','activation-ack-pending']);
   assert.equal(typeof options.verify, 'function', 'Worker verification callback is required');
   assert.equal(typeof client?.readDeployment, 'function', 'Worker client is missing readDeployment');
-  assert.equal(typeof client?.rollbackVersion, 'function', 'Worker client is missing rollbackVersion');
   const current = await client.readDeployment();
   if (foreignWorker(current, receipt)) throw new Error('foreign writer changed the Worker; refusing recovery overwrite');
   if (current.versionId === receipt.before.versionId) {
     assertWorkerBefore(current, receipt.plan);
     return {...receipt, phase: 'interrupted-before-activation', after: structuredClone(current)};
   }
-  return verifyActiveWorker(receipt, client, options.verify, 'activated-after-interruption');
+  if (receipt.phase==='activation-ack-pending') {
+    const acknowledgement=await durableMutationAcknowledgement(client,receipt.pendingMutation);
+    if(!acknowledgement)return structuredClone(receipt);
+    const recovered={...receipt,mutationEvidence:{reference:structuredClone(receipt.pendingMutation),acknowledgement}};
+    delete recovered.pendingMutation;return verifyActiveWorker(recovered,client,options.verify,'activated-after-interruption',{rollbackOnFailure:false});
+  }
+  throw new Error('Worker activation state requires its acknowledgement-bound recovery receipt');
 }
 
 export async function activatePreparedWorker(receipt, client, options = {}) {
@@ -502,20 +569,23 @@ export async function activatePreparedWorker(receipt, client, options = {}) {
   if (foreignWorker(current, receipt)) throw new Error('foreign writer changed the Worker; refusing activation overwrite');
   assertWorkerBefore(current, receipt.plan);
   assert.equal(current.etag, receipt.before.etag, 'Worker CAS identity changed after preparation');
+  let outcome;
   try {
-    await client.activateVersion({
+    outcome=mutationOutcome(await client.activateVersion({
       workerName: receipt.target.workerName,
       versionId: receipt.candidate.versionId,
       expectedEtag: current.etag,
       owner: receipt.leaseOwner,
-    });
+    }), 'Worker activation outcome is invalid');
   } catch (error) {
     const observed = await client.readDeployment();
     if (foreignWorker(observed, receipt)) throw new Error('foreign writer changed the Worker during interrupted activation', {cause: error});
     if (observed.versionId === receipt.before.versionId) throw error;
-    return verifyActiveWorker(receipt, client, options.verify, 'activated-after-interruption');
+    const reference=error?.mutationReference,acknowledgement=await durableMutationAcknowledgement(client,reference);
+    if(!acknowledgement)return pendingMutation(receipt,'activation-ack-pending',reference,observed);
+    return verifyActiveWorker({...receipt,mutationEvidence:{reference:structuredClone(reference),acknowledgement}}, client, options.verify, 'activated-after-interruption');
   }
-  return verifyActiveWorker(receipt, client, options.verify, 'activated');
+  return verifyActiveWorker({...receipt,mutationEvidence:mutationEvidence(outcome)}, client, options.verify, 'activated');
 }
 
 function assertPagesSnapshot(snapshot, message = 'Pages project snapshot is required') {
@@ -617,30 +687,30 @@ export async function preparePagesConfiguration(value, client, options = {}) {
 async function rollbackPagesConfiguration(receipt, client, failureCode) {
   const current = await client.readProject();
   const state = pagesState(current, receipt);
-  if (state === 'before') {
-    return {...receipt, phase: 'rolled-back-after-interruption', after: structuredClone(current),
-      failure: stableFailure(failureCode)};
-  }
+  if (state === 'before') throw new Error('Pages restore state has no acknowledgement-bound mutation');
   if (state === 'foreign') {
     throw new Error('foreign writer changed Pages configuration; refusing rollback overwrite');
   }
+  let outcome;
   try {
-    await client.restoreProject({
+    outcome=mutationOutcome(await client.restoreProject({
       projectName: receipt.target.pagesProject,
       payload: structuredClone(receipt.before.payload),
       configDigest: receipt.before.configDigest,
       expectedEtag: current.etag,
       owner: receipt.leaseOwner,
-    });
+    }), 'Pages restore outcome is invalid');
   } catch (restoreError) {
     const observed = await client.readProject();
     const observedState = pagesState(observed, receipt);
     if (observedState === 'before') {
-      return {...receipt, phase: 'rolled-back-after-interruption', after: structuredClone(observed),
-        failure: stableFailure(failureCode)};
+      const reference=restoreError?.mutationReference,acknowledgement=await durableMutationAcknowledgement(client,reference);
+      if(acknowledgement)return {...receipt, phase:'rolled-back-after-interruption',after:structuredClone(observed),
+        failure:stableFailure(failureCode),restoreEvidence:{reference:structuredClone(reference),acknowledgement}};
+      return pendingMutation({...receipt,failure:stableFailure(failureCode)},'pages-restore-ack-pending',reference,observed);
     }
     if (observedState === 'desired') {
-      return {...receipt, phase: 'rollback-pending', after: structuredClone(observed),
+      return {...receipt, phase: 'rollback-pending', after: structuredClone(observed), pendingMutation:structuredClone(record(restoreError?.mutationReference,'pending Pages restore mutation reference is required')),
         failure: stableFailure(failureCode),
         recovery: stableFailure('pages-restore-outcome-unknown')};
     }
@@ -652,10 +722,10 @@ async function rollbackPagesConfiguration(receipt, client, failureCode) {
   assert.deepEqual(restored.payload, receipt.before.payload,
     'Pages rollback did not restore the exact persisted preimage payload');
   return {...receipt, phase: 'rolled-back', after: structuredClone(restored),
-    failure: stableFailure(failureCode)};
+    failure: stableFailure(failureCode),restoreEvidence:mutationEvidence(outcome)};
 }
 
-async function verifyPagesConfiguration(receipt, client, options, phase) {
+async function verifyPagesConfiguration(receipt, client, options, phase, {rollbackOnFailure=true}={}) {
   const after = await client.readProject();
   assert.equal(pagesState(after, receipt), 'desired',
     'Pages desired configuration full readback differs from the approved payload');
@@ -670,6 +740,7 @@ async function verifyPagesConfiguration(receipt, client, options, phase) {
     return {...receipt, phase, applied: structuredClone(after), after: structuredClone(after),
       verification: structuredClone(verification)};
   } catch (error) {
+    if(!rollbackOnFailure)throw new Error('Pages verification failed during acknowledgement-only recovery');
     return rollbackPagesConfiguration(receipt, client, 'pages-verification-failed');
   }
 }
@@ -684,16 +755,17 @@ export async function applyPagesConfiguration(receipt, client, options = {}) {
   const current = await client.readProject();
   const state = pagesState(current, receipt);
   if (state === 'foreign') throw new Error('foreign writer changed Pages configuration; refusing mutation');
-  if (state === 'desired') return verifyPagesConfiguration(receipt, client, options, 'applied-after-interruption');
+  if (state === 'desired') throw new Error('Pages desired state has no acknowledgement-bound recovery receipt');
   assert.equal(current.etag, receipt.before.etag, 'Pages CAS identity changed after receipt persistence');
+  let outcome;
   try {
-    await client.updateProject({
+    outcome=mutationOutcome(await client.updateProject({
       projectName: plan.target.pagesProject,
       payload: structuredClone(plan.desired.pages.payload),
       configDigest: plan.desired.pages.configDigest,
       expectedEtag: current.etag,
       owner: plan.leaseOwner,
-    });
+    }), 'Pages update outcome is invalid');
   } catch (error) {
     const observed = await client.readProject();
     const observedState = pagesState(observed, receipt);
@@ -701,28 +773,35 @@ export async function applyPagesConfiguration(receipt, client, options = {}) {
       throw new Error('foreign writer changed Pages configuration during interrupted mutation', {cause: error});
     }
     if (observedState === 'before') throw error;
-    return verifyPagesConfiguration(receipt, client, options, 'applied-after-interruption');
+    const reference=error?.mutationReference,acknowledgement=await durableMutationAcknowledgement(client,reference);
+    if(!acknowledgement)return pendingMutation(receipt,'pages-update-ack-pending',reference,observed);
+    return verifyPagesConfiguration({...receipt,mutationEvidence:{reference:structuredClone(reference),acknowledgement}}, client, options, 'applied-after-interruption');
   }
-  return verifyPagesConfiguration(receipt, client, options, 'applied');
+  return verifyPagesConfiguration({...receipt,mutationEvidence:mutationEvidence(outcome)}, client, options, 'applied');
 }
 
 export async function recoverPagesConfiguration(receipt, client, options = {}) {
-  validatePagesReceipt(receipt, options, ['prepared','rollback-pending']);
+  validatePagesReceipt(receipt, options, ['prepared','rollback-pending','pages-update-ack-pending','pages-restore-ack-pending']);
   await requireStoredPagesPreimage(receipt, options);
   assert.equal(typeof client?.readProject, 'function', 'Pages client is missing readProject');
-  assert.equal(typeof client?.restoreProject, 'function', 'Pages client is missing restoreProject');
   const current = await client.readProject();
   const state = pagesState(current, receipt);
   if (state === 'foreign') throw new Error('foreign writer changed Pages configuration; refusing recovery overwrite');
-  if (receipt.phase === 'rollback-pending') {
-    if (state === 'before') {
-      return {...receipt, phase: 'rolled-back-after-interruption', after: structuredClone(current)};
-    }
-    return rollbackPagesConfiguration(receipt, client, receipt.failure?.code ?? 'pages-verification-failed');
+  if (receipt.phase === 'rollback-pending'||receipt.phase === 'pages-restore-ack-pending') {
+    const acknowledgement=await durableMutationAcknowledgement(client,receipt.pendingMutation);
+    if(!acknowledgement)return structuredClone(receipt);
+    assert.equal(state,'before','acknowledged Pages restore does not match provider readback');
+    const recovered={...receipt,phase:'rolled-back-after-interruption',after:structuredClone(current),
+      restoreEvidence:{reference:structuredClone(receipt.pendingMutation),acknowledgement}};
+    delete recovered.pendingMutation;return recovered;
   }
   if (state === 'before') {
     return {...receipt, phase: 'interrupted-before-mutation', after: structuredClone(current)};
   }
   assert.equal(typeof options.verify, 'function', 'Pages compatibility verification callback is required');
-  return verifyPagesConfiguration(receipt, client, options, 'applied-after-interruption');
+  if(receipt.phase!=='pages-update-ack-pending')throw new Error('Pages desired state has no acknowledgement-bound recovery receipt');
+  const acknowledgement=await durableMutationAcknowledgement(client,receipt.pendingMutation);
+  if(!acknowledgement)return structuredClone(receipt);
+  const recovered={...receipt,mutationEvidence:{reference:structuredClone(receipt.pendingMutation),acknowledgement}};
+  delete recovered.pendingMutation;return verifyPagesConfiguration(recovered, client, options, 'applied-after-interruption',{rollbackOnFailure:false});
 }

@@ -9,7 +9,7 @@ import {createHash} from 'node:crypto';
 
 export const PRODUCTION_ACCOUNT_REQUEST = 'production-account-billing-v1';
 export const PRODUCTION_ACCOUNT_APPROVAL = 'production-account-billing-v1';
-export const ATMOS_INTEGRATION_CANDIDATE_SHA = 'aa092f28f1a99f965cf95d4dd726291a3110d233';
+export const ATMOS_INTEGRATION_CANDIDATE_SHA = '1ad7ffd86f1ed81993ea352d3db53515b376cc00';
 export const PRODUCTION_ANALYTICS_D1_ID = 'e7247173-c23d-4989-b29e-f95939c820fe';
 export const STAGING_PLATFORM_D1_ID = '9501827a-7e4c-4249-806b-d45d5857d9e5';
 

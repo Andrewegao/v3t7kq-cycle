@@ -153,12 +153,24 @@ function merge(value, overrides) {
   return result;
 }
 
+function mockMutationReference(operation, spec) {
+  const operationDigest = createHash('sha256').update(JSON.stringify({operation,spec})).digest('hex');
+  return {schemaVersion:1,kind:'weatherx-production-mutation-reference-v1',operation,target:'mock-target',
+    operationDigest,idempotencyKey:`wx-${operationDigest.slice(0,48)}`,resourceNamespace:'mock-resource',
+    leaseId:'mock-lease',fencingToken:1};
+}
+const mockAcknowledgement = reference => ({payload:{operationDigest:reference.operationDigest,
+  idempotencyKey:reference.idempotencyKey},signature:'mock-signature'});
+function interrupted(message, reference) { const error=new Error(message);error.mutationReference=structuredClone(reference);return error; }
+
 class WorkerClient {
-  constructor({interruptAfterActivation = false, interruptRollback = null, interruptUpload = null} = {}) {
+  constructor({interruptAfterActivation = false, interruptRollback = null, interruptUpload = null, missingAcknowledgement = null} = {}) {
     this.calls = [];
     this.interruptAfterActivation = interruptAfterActivation;
     this.interruptRollback = interruptRollback;
     this.interruptUpload = interruptUpload;
+    this.missingAcknowledgement = missingAcknowledgement;
+    this.acknowledgements = new Map();
     this.active = {
       workerName: LANE_B_CONTRACT.target.workerName,
       versionId: 'worker-old', deploymentId: 'worker-deploy-old', configDigest: H('d'),
@@ -170,48 +182,57 @@ class WorkerClient {
   async readDeployment() { this.calls.push('readDeployment'); return structuredClone(this.active); }
   async uploadVersion(spec) {
     this.calls.push('uploadVersion');
-    if (this.interruptUpload === 'before') throw new Error('sk_live_CANARY_UPLOAD_BEFORE');
+    const reference=mockMutationReference('worker-upload-version',spec);
+    if (this.interruptUpload === 'before') throw interrupted('sk_live_CANARY_UPLOAD_BEFORE',reference);
     const uploaded = {versionId: 'worker-candidate', sourceDigest: spec.sourceDigest, configDigest: spec.configDigest};
     this.versions.set(uploaded.versionId, uploaded);
     this.tags.set(uploaded.versionId, spec.tag);
-    if (this.interruptUpload === 'after') throw new Error('sk_live_CANARY_UPLOAD_AFTER');
-    return structuredClone(uploaded);
+    if(this.missingAcknowledgement!=='upload')this.acknowledgements.set(reference.operationDigest,mockAcknowledgement(reference));
+    if (this.interruptUpload === 'after') throw interrupted('sk_live_CANARY_UPLOAD_AFTER',reference);
+    return {result:structuredClone(uploaded),acknowledgement:mockAcknowledgement(reference),mutationReference:reference};
   }
   async readVersion(versionId) { this.calls.push(`readVersion:${versionId}`); return structuredClone(this.versions.get(versionId)); }
   async listVersionsByTag(tag) { this.calls.push(`listVersionsByTag:${tag}`); return [...this.tags.entries()].filter(([,value]) => value === tag).map(([versionId]) => ({versionId,tag})); }
+  async readMutationAcknowledgement(reference){this.calls.push(`readMutationAcknowledgement:${reference.operationDigest}`);const value=this.acknowledgements.get(reference.operationDigest);if(!value)throw new Error('acknowledgement unavailable');return structuredClone(value);}
   async activateVersion({versionId, expectedEtag, owner}) {
     this.calls.push('activateVersion');
+    const spec={versionId,expectedEtag,owner},reference=mockMutationReference('worker-activate-version',spec);
     assert.equal(this.active.etag, expectedEtag);
     const version = this.versions.get(versionId);
     this.active = {...this.active, versionId, deploymentId: 'worker-deploy-candidate',
       configDigest: version.configDigest, etag: 'worker-etag-2', mutationOwner: owner};
-    if (this.interruptAfterActivation) throw new Error('connection interrupted after activation');
-    return structuredClone(this.active);
+    if(this.missingAcknowledgement!=='activate')this.acknowledgements.set(reference.operationDigest,mockAcknowledgement(reference));
+    if (this.interruptAfterActivation) throw interrupted('connection interrupted after activation',reference);
+    return {result:structuredClone(this.active),acknowledgement:mockAcknowledgement(reference),mutationReference:reference};
   }
   async rollbackVersion({versionId, expectedEtag, owner}) {
     this.calls.push('rollbackVersion');
+    const spec={versionId,expectedEtag,owner},reference=mockMutationReference('worker-rollback-version',spec);
     assert.equal(this.active.etag, expectedEtag);
     assert.equal(this.active.mutationOwner, owner);
     if (this.interruptRollback === 'before') {
       this.interruptRollback = null;
-      throw new Error('connection interrupted before rollback');
+      throw interrupted('connection interrupted before rollback',reference);
     }
     const version = this.versions.get(versionId);
     this.active = {...this.active, versionId, deploymentId: 'worker-deploy-rollback',
       configDigest: version.configDigest, etag: 'worker-etag-3', mutationOwner: owner};
+    if(this.missingAcknowledgement!=='rollback')this.acknowledgements.set(reference.operationDigest,mockAcknowledgement(reference));
     if (this.interruptRollback === 'after') {
       this.interruptRollback = null;
-      throw new Error('connection interrupted after rollback');
+      throw interrupted('connection interrupted after rollback',reference);
     }
-    return structuredClone(this.active);
+    return {result:structuredClone(this.active),acknowledgement:mockAcknowledgement(reference),mutationReference:reference};
   }
 }
 
 class PagesClient {
-  constructor({interruptUpdate = null, interruptRestore = null} = {}) {
+  constructor({interruptUpdate = null, interruptRestore = null, missingAcknowledgement = null} = {}) {
     this.calls = [];
     this.interruptUpdate = interruptUpdate;
     this.interruptRestore = interruptRestore;
+    this.missingAcknowledgement = missingAcknowledgement;
+    this.acknowledgements = new Map();
     this.current = {
       projectName: LANE_B_CONTRACT.target.pagesProject,
       configDigest: H('e'), canonicalDeploymentId: 'pages-deploy-old',
@@ -221,25 +242,30 @@ class PagesClient {
   async readProject() { this.calls.push('readProject'); return structuredClone(this.current); }
   async updateProject({configDigest, payload, expectedEtag, owner}) {
     this.calls.push('updateProject'); assert.equal(this.current.etag, expectedEtag);
-    if (this.interruptUpdate === 'before') throw new Error('connection interrupted before Pages update');
+    const spec={configDigest,payload,expectedEtag,owner},reference=mockMutationReference('pages-update-project',spec);
+    if (this.interruptUpdate === 'before') throw interrupted('connection interrupted before Pages update',reference);
     this.current = {...this.current, configDigest, payload: structuredClone(payload), etag: 'pages-etag-2', mutationOwner: owner};
-    if (this.interruptUpdate === 'after') throw new Error('connection interrupted after Pages update');
-    return structuredClone(this.current);
+    if(this.missingAcknowledgement!=='update')this.acknowledgements.set(reference.operationDigest,mockAcknowledgement(reference));
+    if (this.interruptUpdate === 'after') throw interrupted('connection interrupted after Pages update',reference);
+    return {result:structuredClone(this.current),acknowledgement:mockAcknowledgement(reference),mutationReference:reference};
   }
   async restoreProject({configDigest, payload, expectedEtag, owner}) {
     this.calls.push('restoreProject'); assert.equal(this.current.etag, expectedEtag);
     assert.equal(this.current.mutationOwner, owner);
+    const spec={configDigest,payload,expectedEtag,owner},reference=mockMutationReference('pages-restore-project',spec);
     if (this.interruptRestore === 'before') {
       this.interruptRestore = null;
-      throw new Error('connection interrupted before Pages restore');
+      throw interrupted('connection interrupted before Pages restore',reference);
     }
     this.current = {...this.current, configDigest, payload: structuredClone(payload), etag: 'pages-etag-3', mutationOwner: owner};
+    if(this.missingAcknowledgement!=='restore')this.acknowledgements.set(reference.operationDigest,mockAcknowledgement(reference));
     if (this.interruptRestore === 'after') {
       this.interruptRestore = null;
-      throw new Error('connection interrupted after Pages restore');
+      throw interrupted('connection interrupted after Pages restore',reference);
     }
-    return structuredClone(this.current);
+    return {result:structuredClone(this.current),acknowledgement:mockAcknowledgement(reference),mutationReference:reference};
   }
+  async readMutationAcknowledgement(reference){this.calls.push(`readMutationAcknowledgement:${reference.operationDigest}`);const value=this.acknowledgements.get(reference.operationDigest);if(!value)throw new Error('acknowledgement unavailable');return structuredClone(value);}
 }
 
 function safetyVerification({candidateUi = false} = {}) {
@@ -421,7 +447,7 @@ test('candidate binding comes only from a validated candidate and its exact qual
 });
 
 test('reviewed Atmos integration identity is exact while provisional Price placeholders remain unusable', () => {
-  assert.equal(ATMOS_INTEGRATION_CANDIDATE_SHA, 'aa092f28f1a99f965cf95d4dd726291a3110d233');
+  assert.equal(ATMOS_INTEGRATION_CANDIDATE_SHA, '1ad7ffd86f1ed81993ea352d3db53515b376cc00');
   assert.ok(Object.values(LANE_B_CONTRACT.approvedStripePriceIds).every(value => !value.startsWith('price_')));
   assert.equal(LANE_B_CONTRACT.requiredAtmosSourceSha, ATMOS_INTEGRATION_CANDIDATE_SHA);
   assert.equal(LANE_B_CONTRACT.requiredAtmosControllerSha, ATMOS_INTEGRATION_CANDIDATE_SHA);
@@ -444,26 +470,29 @@ test('Worker preparation uploads an inactive version and leaves the old deployme
   assert.equal(receipt.phase, 'prepared');
   assert.equal(receipt.before.versionId, 'worker-old');
   assert.equal(receipt.candidate.versionId, 'worker-candidate');
+  assert.equal(receipt.mutationEvidence.acknowledgement.signature,'mock-signature');
   assert.equal(client.active.versionId, 'worker-old');
   assert.ok(client.calls.includes('uploadVersion'));
   assert.equal(client.calls.includes('activateVersion'), false);
 });
 
 test('ambiguous inactive upload is recovered by its approval-bound exact tag without re-upload', async () => {
-  const client = new WorkerClient({interruptUpload: 'after'});
+  const client = new WorkerClient({interruptUpload: 'after',missingAcknowledgement:'upload'});
   const stored = [];
-  const intent = await prepareWorkerUploadIntent(plan(), client, OPTIONS);
-  stored.push(structuredClone(intent));
-  await assert.rejects(prepareWorkerVersion(plan(), client, {...OPTIONS,
+  const pending = await prepareWorkerVersion(plan(), client, {...OPTIONS,
     storePreparationIntent: async value => stored.push(structuredClone(value)),
-  }));
-  const recovered = await recoverWorkerPreparation(stored.at(-1), client, OPTIONS);
+  });
+  assert.equal(pending.phase,'preparation-ack-pending');
+  assert.equal((await recoverWorkerPreparation(pending,client,OPTIONS)).phase,'preparation-ack-pending');
+  client.acknowledgements.set(pending.pendingMutation.operationDigest,mockAcknowledgement(pending.pendingMutation));
+  const recovered = await recoverWorkerPreparation(pending, client, OPTIONS);
   assert.equal(recovered.phase, 'prepared-after-interruption');
   assert.equal(recovered.uploadTag, stored.at(-1).uploadTag);
   assert.equal(client.calls.filter(call => call === 'uploadVersion').length, 1);
   client.tags.set('duplicate-version', stored.at(-1).uploadTag);
   client.versions.set('duplicate-version', {versionId:'duplicate-version',sourceDigest:H('f'),configDigest:H('1')});
-  await assert.rejects(recoverWorkerPreparation(stored.at(-1), client, OPTIONS), /exactly one tagged version/);
+  const ambiguous={...stored.at(-1),pendingMutation:pending.pendingMutation};
+  await assert.rejects(recoverWorkerPreparation(ambiguous, client, OPTIONS), /exactly one tagged version/);
 });
 
 test('Worker activation uses CAS, verifies purchase-closed mode and emits before/after receipts', async () => {
@@ -482,6 +511,7 @@ test('Worker activation uses CAS, verifies purchase-closed mode and emits before
     },
   });
   assert.equal(receipt.phase, 'activated');
+  assert.equal(receipt.mutationEvidence.acknowledgement.signature,'mock-signature');
   assert.equal(receipt.before.versionId, 'worker-old');
   assert.equal(receipt.after.versionId, 'worker-candidate');
   assert.equal(receipt.verification.purchase.creationBlocked, true);
@@ -556,6 +586,7 @@ test('failed Worker verification rolls code back while retaining the additive sc
   assert.equal(receipt.after.versionId, 'worker-old');
   assert.equal(receipt.schema.action, 'retain-additive');
   assert.equal(receipt.schema.databaseRestoreAttempted, false);
+  assert.equal(receipt.rollbackEvidence.acknowledgement.signature,'mock-signature');
   assert.ok(client.calls.includes('rollbackVersion'));
 });
 
@@ -589,8 +620,8 @@ test('ambiguous Worker rollback is classified and safely recoverable', async () 
   });
   assert.equal(pending.phase, 'rollback-pending');
   const recovered = await recoverWorkerRollback(pending, before, OPTIONS);
-  assert.equal(recovered.phase, 'rolled-back');
-  assert.equal(recovered.after.versionId, 'worker-old');
+  assert.equal(recovered.phase, 'rollback-pending');
+  assert.equal(before.calls.filter(call=>call==='rollbackVersion').length,1);
 });
 
 test('Pages configuration is a separate CAS transaction and verifies old/new UI compatibility', async () => {
@@ -612,6 +643,7 @@ test('Pages configuration is a separate CAS transaction and verifies old/new UI 
     },
   }));
   assert.equal(receipt.phase, 'applied');
+  assert.equal(receipt.mutationEvidence.acknowledgement.signature,'mock-signature');
   assert.equal(receipt.before.configDigest, H('e'));
   assert.equal(receipt.after.configDigest, H('2'));
   assert.deepEqual(receipt.after.payload, pagesPayload(false));
@@ -628,6 +660,7 @@ test('Pages verification failure reverses only an owned configuration mutation',
   assert.equal(receipt.phase, 'rolled-back');
   assert.equal(receipt.after.configDigest, H('e'));
   assert.deepEqual(receipt.after.payload, pagesPayload(true));
+  assert.equal(receipt.restoreEvidence.acknowledgement.signature,'mock-signature');
   assert.ok(client.calls.includes('restoreProject'));
 
   const foreign = new PagesClient();
@@ -689,8 +722,47 @@ test('Pages recovery classifies unchanged, owned desired, foreign, and ambiguous
   }));
   assert.equal(pending.phase, 'rollback-pending');
   const recovered = await recoverPagesConfiguration(pending, restoreBefore, pagesOptions(restoreBefore));
-  assert.equal(recovered.phase, 'rolled-back');
-  assert.deepEqual(recovered.after.payload, pagesPayload(true));
+  assert.equal(recovered.phase, 'rollback-pending');
+  assert.equal(restoreBefore.calls.filter(call=>call==='restoreProject').length,1);
+});
+
+test('missing Worker mutation acknowledgements block state-based success until exact durable evidence exists',async()=>{
+  const activation=new WorkerClient({interruptAfterActivation:true,missingAcknowledgement:'activate'});
+  const prepared=await prepareWorkerVersion(plan(),activation,OPTIONS);
+  const pending=await activatePreparedWorker(prepared,activation,{...OPTIONS,verify:async()=>safetyVerification()});
+  assert.equal(pending.phase,'activation-ack-pending');
+  assert.equal((await recoverWorkerActivation(pending,activation,{...OPTIONS,verify:async()=>safetyVerification()})).phase,'activation-ack-pending');
+  activation.acknowledgements.set(pending.pendingMutation.operationDigest,mockAcknowledgement(pending.pendingMutation));
+  const recovered=await recoverWorkerActivation(pending,activation,{...OPTIONS,verify:async()=>safetyVerification()});
+  assert.equal(recovered.phase,'activated-after-interruption');
+  assert.equal(activation.calls.filter(call=>call==='activateVersion').length,1);
+
+  const rollback=new WorkerClient({interruptRollback:'after',missingAcknowledgement:'rollback'});
+  const rollbackPrepared=await prepareWorkerVersion(plan(),rollback,OPTIONS);
+  const rollbackPending=await activatePreparedWorker(rollbackPrepared,rollback,{...OPTIONS,verify:async()=>{throw new Error('verify');}});
+  assert.equal(rollbackPending.phase,'rollback-ack-pending');
+  assert.equal((await recoverWorkerRollback(rollbackPending,rollback,OPTIONS)).phase,'rollback-ack-pending');
+  rollback.acknowledgements.set(rollbackPending.pendingMutation.operationDigest,mockAcknowledgement(rollbackPending.pendingMutation));
+  assert.equal((await recoverWorkerRollback(rollbackPending,rollback,OPTIONS)).phase,'rolled-back-after-interruption');
+  assert.equal(rollback.calls.filter(call=>call==='rollbackVersion').length,1);
+});
+
+test('missing Pages mutation acknowledgements block state-based success until exact durable evidence exists',async()=>{
+  const update=new PagesClient({interruptUpdate:'after',missingAcknowledgement:'update'}),prepared=await preparePages(update);
+  const pending=await applyPagesConfiguration(prepared,update,pagesOptions(update,{verify:async()=>safetyVerification({candidateUi:true})}));
+  assert.equal(pending.phase,'pages-update-ack-pending');
+  assert.equal((await recoverPagesConfiguration(pending,update,pagesOptions(update,{verify:async()=>safetyVerification({candidateUi:true})}))).phase,'pages-update-ack-pending');
+  update.acknowledgements.set(pending.pendingMutation.operationDigest,mockAcknowledgement(pending.pendingMutation));
+  assert.equal((await recoverPagesConfiguration(pending,update,pagesOptions(update,{verify:async()=>safetyVerification({candidateUi:true})}))).phase,'applied-after-interruption');
+  assert.equal(update.calls.filter(call=>call==='updateProject').length,1);
+
+  const restore=new PagesClient({interruptRestore:'after',missingAcknowledgement:'restore'}),restorePrepared=await preparePages(restore);
+  const restorePending=await applyPagesConfiguration(restorePrepared,restore,pagesOptions(restore,{verify:async()=>{throw new Error('verify');}}));
+  assert.equal(restorePending.phase,'pages-restore-ack-pending');
+  assert.equal((await recoverPagesConfiguration(restorePending,restore,pagesOptions(restore))).phase,'pages-restore-ack-pending');
+  restore.acknowledgements.set(restorePending.pendingMutation.operationDigest,mockAcknowledgement(restorePending.pendingMutation));
+  assert.equal((await recoverPagesConfiguration(restorePending,restore,pagesOptions(restore))).phase,'rolled-back-after-interruption');
+  assert.equal(restore.calls.filter(call=>call==='restoreProject').length,1);
 });
 
 test('production promotion audit hashes the candidate profile policy', () => {

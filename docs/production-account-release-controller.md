@@ -9,11 +9,11 @@ Lane C is built against one explicit owner-blocked Lane B contract in
 `tools/production-account-contract.mjs`:
 
 - contract version: `lane-b-account-contract-v0-provisional`
-- exact reviewed Atmos integration candidate: `aa092f28f1a99f965cf95d4dd726291a3110d233`
-- contract digest: `73df5cd796110345d32cbbe1a4d0a18c3d521ab1a77d53e4bb6823101676d9ef`
+- exact reviewed Atmos integration candidate: `1ad7ffd86f1ed81993ea352d3db53515b376cc00`
+- contract digest: `c91c8cb86378e5034cc0784e2b3217421eb33586375abe5e2d2e1af5a57d0e90`
 - production trust-policy digest: `f2795ab9b504b32fdbdcaa957cde134ac91199ae43a8945a041aa1544601d23c`
-- production profile digest: `a412cbe53092685c70de84151de120bfd117925b0a94ef76d96058f7808c7d22`
-- pipeline digest: `43074aae10dd64e31c1bc08903a707190524c751e1fc15def9da79e4aa0e2ef7`
+- production profile digest: `230c240535ceea84fe13f123a6e0b75d9b8875a4380828c3bef51f68c2ada5f3`
+- pipeline digest: `41f8e642ad996da8cf828152fabfe166ae3c06386d56eb5b6498bf543ac5c61e`
 
 Every normal validation path refuses while the contract is provisional. Tests may pass
 `allowProvisional: true` only to exercise mocked transactions. That switch must never appear
@@ -72,11 +72,20 @@ authorities can be used only by the explicit test factory. Before an adapter can
 - durably creates a sanitized pre-mutation intent as the first entry of an append-only journal.
 
 The lease is re-read immediately before every provider mutation and recovery, and its physical
-resource namespace and fencing token are passed into the adapter call. Every mutation must return a
-signed acknowledgement from the independently configured mutation broker for that exact namespace,
-lease, fence token, operation and target. Activation reloads its immutable prepared receipt from
+resource namespace and fencing token are passed into the adapter call. The production executor
+accepts only module-branded Worker and Pages adapters. Every mutation must return and preserve a
+signed acknowledgement from the independently configured mutation broker for an exact operation
+digest and idempotency key binding the complete mutation specification, physical target, approval,
+request and fence. Activation reloads its immutable prepared receipt from
 durable storage and rereads the exact prepared Worker version before traffic changes. Signed
 approval and lease claims bind the request and input-receipt digests, preventing substitution.
+
+A provider readback is never mutation authority. If the callback fails or returns a missing, invalid
+or wrong-spec acknowledgement after state changes, the journal records the exact pending mutation
+reference and remains `recovery-required`. Recovery may query only that durable signed broker
+acknowledgement and reread state; it never repeats the upload, activation, rollback, Pages update or
+Pages restore. Only matching acknowledgement plus matching provider state can become a completed
+recovery receipt.
 
 Each result is appended as `completed` or `recovery-required`; entries are never replaced. Exact
 completed replays return the recorded result without reacquiring a lease or rerunning the operation,
@@ -114,12 +123,13 @@ Three operations stay independent:
    Persist an approval/request-bound pre-upload snapshot and unique upload tag, upload a new Worker
    version without activation, read it back, and prove the active deployment did not change. If the
    upload outcome is ambiguous, a separate recovery action lists only that exact tag, requires one
-   match and exact version readback, and never re-uploads.
+   match, exact version readback and its exact durable broker acknowledgement, and never re-uploads.
 2. **Account Worker activation.** Re-read the exact pre-change deployment and CAS/ownership
    identity, activate only the prepared version, verify purchase-closed/webhook-servicing and
    old-UI contracts, and write before/after receipts. Verification is structured evidence for the
    old UI, closed purchase creation, portal/webhook servicing, public data and Stripe live mode.
-   An interrupted activation or rollback is resolved by reading and classifying actual state.
+   An interrupted activation or rollback is resolved by querying the exact signed mutation
+   acknowledgement and then reading and classifying actual state; readback alone is insufficient.
    Rollback is permitted only while the candidate version is still owned by this
    transaction. Worker rollback retains the additive D1 schema; it never attempts a database
    restore.
@@ -130,7 +140,8 @@ Three operations stay independent:
    production/preview secret references and analytics D1 identity. Persist the full sanitized
    preimage receipt before mutation; reject the staging D1 identity, staging URLs/resources and
    known test Price IDs; CAS the configuration; and verify both the old UI deployment and exact
-   candidate. Recovery classifies unchanged, owned-desired and foreign state. On failure, reverse
+   candidate. Recovery authenticates the exact update/restore acknowledgement before it classifies
+   unchanged, owned-desired and foreign state. On failure, reverse
    only an owned configuration mutation, reread the entire payload, and retain a recoverable
    receipt if the restore outcome is ambiguous. This transaction never uploads or promotes Pages code.
 
@@ -147,8 +158,8 @@ read/upload/activate/rollback methods. That adapter must:
 - supply a stable ownership/CAS observation derived from a fresh provider read and exclusive
   control-plane lease; do not claim the Pages PATCH API itself provides compare-and-swap;
 - return sanitized identities/digests only—never secret values;
-- stop on an unknown outcome, reread state, and classify it as unchanged, owned candidate, or
-  foreign writer before any recovery;
+- stop on an unknown outcome, persist its exact operation reference, and require a durable
+  broker acknowledgement before a state readback can complete recovery;
 - never overwrite a foreign writer, broaden routes, move `/data*` or `/data-atmos*`, restore D1
   automatically, or treat Pages rollback as configuration rollback.
 
@@ -197,6 +208,6 @@ interrupted activation, Worker rollback with retained additive schema, and Pages
 rollback. These are mocked controller contracts, not live Cloudflare or Stripe receipts.
 The execution-boundary suite additionally covers authenticated success, completed replay, crashes,
 orphaned intents, approval and lease expiry, restart/candidate-independent monotonic fencing, wrong
-prepared receipts, inactive-upload recovery without re-upload, exact Worker readback, signed broker
-acknowledgements, secret-bearing provider failures, concrete command/API adapters and hardened
-append-only receipt storage.
+prepared receipts, inactive-upload recovery without re-upload, exact Worker readback, exact-spec
+signed broker acknowledgements and query-only ambiguous recovery, secret-bearing provider failures,
+concrete command/API adapters and hardened append-only receipt storage.
