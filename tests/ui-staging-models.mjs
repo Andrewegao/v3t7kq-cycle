@@ -4,7 +4,7 @@ import {mkdtempSync,mkdirSync,writeFileSync,realpathSync,readFileSync} from 'nod
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
-import {ACCOUNT_CORE_PROFILE,BASELINE_PROFILE,CORE_RELEASE_PROFILE,CORE_RELEASE_REQUEST,MODELS,GRIDS,variables,displayPaths,digest,canonical,cycleTime,resolveSelectionRequest,resolveWind100BuildPin,validateWind100BuildProfile,profileFor,validateProfile,requireProductionProfile,validateSelection,readSelection,validateCandidateSelection,requireStagingApproval,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt} from '../tools/ui-staging-models.mjs';
+import {ACCOUNT_CORE_PROFILE,BASELINE_PROFILE,CORE_RELEASE_PROFILE,CORE_RELEASE_REQUEST,PRODUCTION_ACCOUNT_PROFILE,MODELS,GRIDS,variables,displayPaths,digest,canonical,cycleTime,resolveSelectionRequest,resolveWind100BuildPin,validateWind100BuildProfile,profileFor,validateProfile,requireProductionProfile,validateSelection,readSelection,validateCandidateSelection,requireStagingApproval,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt} from '../tools/ui-staging-models.mjs';
 import {browserCandidateReady,discardedResponseBody,layerActivationNeeded,matrixProofPlan,pixelDifference,responseBodyOrFallback,responseCaptureNeeded,validateFetchedObject,validateIndependentPointSource} from '../tools/ui-staging-model-browser.mjs';
 import {browserErrorDetail,catalogAdmissionProof,coreCycle,deckSurfaceProof,hiddenDeckSurfaceProof,protocol as coreBrowserProtocol,releaseRosterProof,validateCoreIndex,validateOutsideDomain} from '../tools/ui-staging-core-browser.mjs';
 import {createCandidate,hash,eligibleRun,REPOSITORY,CONTROL_SHA,STAGING_CONTROL_SHA,controlShaFor} from '../tools/ui-candidate.mjs';
@@ -76,6 +76,24 @@ test('Wind100 build flags and receipt are exact while every disabled profile cle
     assert.equal(validateWind100BuildReceipt(profile,{buildProfile:{}},{}),null);
     assert.throws(()=>validateWind100BuildReceipt(profile,receipt,{}),/disabled/);
   }
+});
+test('production account receipt verification reconstructs the exact non-staging build mode',()=>{
+  const conflicting={ATMOS_ROAD_PUBLIC_RELEASE:'1',ATMOS_FUSION_V2_STAGING_PREVIEW_RELEASE:'1',
+    ATMOS_FUSION_V2_MAP_STAGING_RELEASE:'1',VITE_MODEL_EXPANSION_QUALIFICATION:'1',VITE_MODEL_LOCAL_BASE:'bad',
+    VITE_STAGING_MODEL_ADMISSION:'1',VITE_STAGING_MODEL_SELECTION_SHA256:DIGEST,VITE_TC_MODELS:'1',
+    VITE_TC_MODELS_SELECTION_SHA256:DIGEST,VITE_FUSION_V2_PREVIEW:'1',VITE_FUSION_V2_PREVIEW_ORIGIN:'https://staging.invalid',
+    VITE_FUSION_V2_PREVIEW_GENERATION_SHA256:DIGEST,VITE_FUSION_V2_PREVIEW_TARGET_KEY:'bad',
+    VITE_FUSION_V2_PREVIEW_VALID_TIME_MS:'1',VITE_FUSION_V2_MAP:'1',VITE_FUSION_V2_MAP_ORIGIN:'https://staging.invalid',
+    VITE_FUSION_V2_MAP_GENERATION_SHA256:DIGEST};
+  const actual=receiptVerificationEnvironment(PRODUCTION_ACCOUNT_PROFILE,conflicting);
+  assert.equal(actual.ATMOS_PUBLIC_RELEASE,'1');
+  assert.equal(actual.ATMOS_PRODUCTION_ACCOUNT_PROFILE,'production-account-billing-v1');
+  assert.equal(actual.VITE_PLATFORM_ACCOUNT,'1');assert.equal(actual.VITE_PLATFORM_DATA_AUTH,'public');
+  for(const key of ['ATMOS_ROAD_PUBLIC_RELEASE','ATMOS_FUSION_V2_STAGING_PREVIEW_RELEASE','ATMOS_FUSION_V2_MAP_STAGING_RELEASE',
+    'VITE_MODEL_EXPANSION_QUALIFICATION','VITE_STAGING_MODEL_ADMISSION','VITE_TC_MODELS','VITE_FUSION_V2_PREVIEW','VITE_FUSION_V2_MAP'])assert.equal(actual[key],'0');
+  for(const key of ['VITE_MODEL_LOCAL_BASE','VITE_STAGING_MODEL_SELECTION_SHA256','VITE_TC_MODELS_SELECTION_SHA256',
+    'VITE_FUSION_V2_PREVIEW_ORIGIN','VITE_FUSION_V2_PREVIEW_GENERATION_SHA256','VITE_FUSION_V2_PREVIEW_TARGET_KEY',
+    'VITE_FUSION_V2_PREVIEW_VALID_TIME_MS','VITE_FUSION_V2_MAP_ORIGIN','VITE_FUSION_V2_MAP_GENERATION_SHA256'])assert.equal(actual[key],'');
 });
 test('compressed core profile is exact, staging-only, and remains core rather than a selection',()=>{
   assert.equal(STATIC_COMPRESSION_REQUEST,'release-roster-core-br11-v1');
