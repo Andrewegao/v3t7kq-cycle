@@ -5,7 +5,8 @@ import { configurationDigest, STAGING_AI_AUTH_POLICY, STAGING_AI_SERVICE,
 import {LANE_B_CONTRACT, STAGING_PLATFORM_D1_ID} from '../tools/production-account-contract.mjs';
 
 function project(stage = 'staging') {
-  const exactProduction = context => ({compatibility_date: '2026-06-23', compatibility_flags: [], fail_open: false,
+  const exactProduction = context => ({...structuredClone(LANE_B_CONTRACT.pagesRuntime),
+    compatibility_date: '2026-06-23', compatibility_flags: [], fail_open: false,
     ...structuredClone(LANE_B_CONTRACT.pagesBindings[context])});
   return { name: stage === 'staging' ? 'weatherx-platform-staging' : 'atmos-platform', production_branch: 'main', source: null,
     domains: [stage === 'staging' ? 'staging.weatherx.org' : 'weatherx.org'],

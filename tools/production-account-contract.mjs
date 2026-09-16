@@ -69,6 +69,11 @@ export const LANE_B_CONTRACT = deepFreeze({
     subscription: 'price_1UA0Cn39WPddPFCrdPeA2MTN',
     pass: 'price_1UA0Cn39WPddPFCrgulrbJlW',
   },
+  pagesRuntime: {
+    always_use_latest_compatibility_date: false,
+    build_image_major_version: 3,
+    usage_model: 'standard',
+  },
   pagesBindings: {
     production: {
       env_vars: {
@@ -78,12 +83,10 @@ export const LANE_B_CONTRACT = deepFreeze({
         FORECAST_FALLBACK_ACCESS: {type: 'secret_text'},
       },
       d1_databases: {WX_ANALYTICS: {id: PRODUCTION_ANALYTICS_D1_ID}},
-      services: {},
     },
     preview: {
       env_vars: {},
       d1_databases: {WX_ANALYTICS: {id: PRODUCTION_ANALYTICS_D1_ID}},
-      services: {},
     },
   },
   // These are the currently reviewed staging/test Price identifiers. Their
@@ -148,11 +151,15 @@ export function validateProductionPagesConfiguration(payload) {
     const config = payload.deployment_configs[context];
     assert.ok(config && typeof config === 'object' && !Array.isArray(config), `Pages ${context} configuration is required`);
     assert.deepEqual(Object.keys(config).sort(),
-      ['compatibility_date','compatibility_flags','d1_databases','env_vars','fail_open','services'].sort(),
+      ['always_use_latest_compatibility_date','build_image_major_version','compatibility_date',
+        'compatibility_flags','d1_databases','env_vars','fail_open','usage_model'].sort(),
       `Pages ${context} fields differ from the exact runtime schema`);
     assert.equal(config.compatibility_date, '2026-06-23', `Pages ${context} compatibility date changed`);
     assert.deepEqual(config.compatibility_flags, [], `Pages ${context} compatibility flags changed`);
     assert.equal(typeof config.fail_open, 'boolean', `Pages ${context} fail_open is invalid`);
+    for (const [name, value] of Object.entries(LANE_B_CONTRACT.pagesRuntime)) {
+      assert.deepEqual(config[name], value, `Pages ${context} ${name} changed`);
+    }
     const expected = LANE_B_CONTRACT.pagesBindings[context];
     const envVars = config.env_vars ?? {};
     assert.ok(envVars && typeof envVars === 'object' && !Array.isArray(envVars), `Pages ${context} env_vars are invalid`);
@@ -174,15 +181,15 @@ export function validateProductionPagesConfiguration(payload) {
       assert.deepEqual(Object.keys(entry).sort(), ['id'], `Pages ${context}.d1_databases.${name} shape changed`);
       assert.equal(entry.id, approved.id, `Pages ${context}.d1_databases.${name} identity changed`);
     }
-    assert.deepEqual(config.services, expected.services,
-      `Pages ${context} service binding names differ from the exact production allowlist`);
     projection.deployment_configs[context] = {
+      always_use_latest_compatibility_date: config.always_use_latest_compatibility_date,
+      build_image_major_version: config.build_image_major_version,
       compatibility_date: config.compatibility_date,
       compatibility_flags: structuredClone(config.compatibility_flags),
       fail_open: config.fail_open,
+      usage_model: config.usage_model,
       env_vars: structuredClone(config.env_vars),
       d1_databases: structuredClone(config.d1_databases),
-      services: structuredClone(config.services),
     };
   }
   assert.ok(!productionContractCanonical(payload).includes(STAGING_PLATFORM_D1_ID),

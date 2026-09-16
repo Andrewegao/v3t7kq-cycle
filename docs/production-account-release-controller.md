@@ -12,10 +12,10 @@ Lane C is built against one explicit owner-approved Lane B artifact contract in
 
 - contract version: `lane-b-account-contract-v1`
 - exact reviewed Atmos integration candidate: `6fcec22638f6696be71daa2f2e974ebc4b24318e`
-- contract digest: `867dd673e6cfb30b498e20589f4d0bf1527b638b9b76da4824cdffe95d033c7d`
+- contract digest: `0866db6f7a4f2dce8ecb0e8bac6628552878c5d8b14e013f1057c79839f80e8c`
 - production trust-policy digest: `f2795ab9b504b32fdbdcaa957cde134ac91199ae43a8945a041aa1544601d23c`
-- production profile digest: `97d856fb89aabfac66c7a265db5cd166a16581f38cb7835e4f2485073d924440`
-- pipeline digest: `97facaf1a735b2b28a670f0db83570a40a605e566f808be76560f5818ca3ed1c`
+- production profile digest: `69210756c14f4cb394786485290c7d63a4a67af2a508db990a5d3e2d9fd70d51`
+- pipeline digest: `751fd38d6f0b4e6e992ecc00c181c5356ce649818bc4fb0fe5a45c6a02338079`
 
 The contract binds the exact reviewed Atmos source/controller, live Stripe Prices, production
 target, purchase-closed mode, and build receipt. Any contract change invalidates these digests and
@@ -142,9 +142,10 @@ Three operations stay independent:
    restore.
 3. **Pages/service configuration.** In a separate transaction, validate the exact Pages target,
    sanitized before/after configuration digests and payload, accept only the canonical nested
-   `compatibility_date`, `compatibility_flags`, `fail_open`, `env_vars`, `d1_databases` and
-   `services` runtime schema, and exact-allowlist the retained
-   production/preview secret references and analytics D1 identity. Persist the full sanitized
+   `always_use_latest_compatibility_date`, `build_image_major_version`,
+   `compatibility_date`, `compatibility_flags`, `fail_open`, `usage_model`, `env_vars` and
+   `d1_databases` runtime schema, reject any service or other resource binding, and exact-allowlist
+   the retained production/preview secret references and analytics D1 identity. Persist the full sanitized
    preimage receipt before mutation; reject the staging D1 identity, staging URLs/resources and
    known test Price IDs; CAS the configuration; and verify both the old UI deployment and exact
    candidate. Recovery authenticates the exact update/restore acknowledgement before it classifies
