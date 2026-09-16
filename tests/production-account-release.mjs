@@ -4,6 +4,7 @@ import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 
 import {
+  ATMOS_INTEGRATION_CANDIDATE_SHA,
   LANE_B_CONTRACT,
   LANE_B_CONTRACT_DIGEST,
   PRODUCTION_ACCOUNT_APPROVAL,
@@ -31,7 +32,7 @@ import {
   validateProductionCandidateBinding,
   validateProductionReleasePlan,
 } from '../tools/production-account-release.mjs';
-import {POLICY_FILES, publicBuildEnvironment, validatePublicModes} from '../tools/ui-release.mjs';
+import {POLICY_FILES, pipelineDigest, publicBuildEnvironment, validatePublicModes} from '../tools/ui-release.mjs';
 import {controlShaFor, hash, validateCandidate, validateFiles} from '../tools/ui-candidate.mjs';
 
 const H = character => character.repeat(64);
@@ -47,8 +48,8 @@ function pagesPayload(failOpen) {
   return {deployment_configs: {production: context('production'), preview: context('preview')}};
 }
 
-function candidateFixture() {
-  const sourceSha = S('a'), runId = '123';
+function candidateFixture(sourceSha = ATMOS_INTEGRATION_CANDIDATE_SHA) {
+  const runId = '123';
   const raw = [
     ['index.html', Buffer.from('<title>WeatherX</title>')],
     ['_worker.js', Buffer.from('export default {};')],
@@ -301,8 +302,8 @@ test('production account candidate is contract-bound and cannot inherit staging 
     {ok:true,authMode:'public',catalogMode:'serve'}, PRODUCTION_ACCOUNT_PROFILE), /purchase creation closed/);
 });
 
-test('encrypted candidate validation binds the provisional Lane B build receipt exactly', () => {
-  const sourceSha = S('a'), runId = '123';
+test('encrypted candidate validation binds the owner-blocked Lane B build receipt exactly', () => {
+  const sourceSha = ATMOS_INTEGRATION_CANDIDATE_SHA, runId = '123';
   const raw = [
     ['index.html', Buffer.from('<title>WeatherX</title>')],
     ['_worker.js', Buffer.from('export default {};')],
@@ -398,15 +399,21 @@ test('candidate binding comes only from a validated candidate and its exact qual
   assert.throws(() => validateProductionReleasePlan(plan({candidateBinding: {...binding, bindingDigest: H('9')}}), OPTIONS));
 });
 
-test('provisional Price placeholders and controller identity are exact and unusable', () => {
+test('reviewed Atmos integration identity is exact while provisional Price placeholders remain unusable', () => {
   assert.ok(Object.values(LANE_B_CONTRACT.approvedStripePriceIds).every(value => !value.startsWith('price_')));
-  assert.equal(LANE_B_CONTRACT.requiredAtmosControllerSha, '0'.repeat(40));
+  assert.equal(LANE_B_CONTRACT.requiredAtmosSourceSha, ATMOS_INTEGRATION_CANDIDATE_SHA);
+  assert.equal(LANE_B_CONTRACT.requiredAtmosControllerSha, ATMOS_INTEGRATION_CANDIDATE_SHA);
+  assert.equal(CANDIDATE.sourceSha, ATMOS_INTEGRATION_CANDIDATE_SHA);
+  assert.equal(CANDIDATE.controlSha, ATMOS_INTEGRATION_CANDIDATE_SHA);
   assert.throws(() => validateProductionReleasePlan(plan({
     stripe: {priceIds: {subscription: 'price_live_unapproved', pass: 'price_live_unapproved_pass'}},
   }), OPTIONS), /owner-approved/);
   assert.throws(() => validateProductionReleasePlan(plan({
     identities: {controllerSha: S('9')},
   }), OPTIONS));
+  const wrongSource = candidateFixture(S('a'));
+  assert.throws(() => productionCandidateBinding(wrongSource, wrongSource.qualification, {allowProvisional: true}),
+    /exact reviewed Atmos integration candidate/);
 });
 
 test('Worker preparation uploads an inactive version and leaves the old deployment active', async () => {
@@ -634,6 +641,7 @@ test('runbooks preserve G3/G4/G5 sequencing and workflows cannot enable the prov
   }
   assert.match(runbook, new RegExp(LANE_B_CONTRACT_DIGEST));
   assert.match(runbook, new RegExp(profileDigest(PRODUCTION_ACCOUNT_PROFILE)));
+  assert.match(runbook, new RegExp(pipelineDigest(PRODUCTION_ACCOUNT_PROFILE)));
   const workflows = ['ui-staging.yml','ui-release.yml']
     .map(name => readFileSync(new URL(`../.github/workflows/${name}`, import.meta.url), 'utf8')).join('\n');
   assert.doesNotMatch(workflows, /allowProvisional|production-account-billing-v1|PRODUCTION_ACCOUNT_PROFILE/);

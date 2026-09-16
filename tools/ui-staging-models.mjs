@@ -33,7 +33,7 @@ export const STATIC_COMPRESSION_PROFILE=Object.freeze({...CORE_RELEASE_PROFILE,s
 // A distinct, non-promotable profile. Existing defaults never acquire account/billing.
 export const ACCOUNT_CORE_PROFILE=Object.freeze({...CORE_RELEASE_PROFILE,account:true,stagingAccount:ACCOUNT_APPROVAL});
 // Production accounts are a different release policy, never an alias for the staging account
-// profile. Its provisional Lane B digest intentionally changes candidate identity at handoff.
+// profile. Its owner-blocked Lane B digest binds the exact reviewed Atmos integration candidate.
 export const PRODUCTION_ACCOUNT_PROFILE=Object.freeze({...BASELINE_PROFILE,account:true,
   productionAccount:PRODUCTION_ACCOUNT_APPROVAL,accountContractSha256:LANE_B_CONTRACT_DIGEST});
 // TC release flags require account=0. Keep this separate from the existing account-enabled

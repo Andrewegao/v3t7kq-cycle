@@ -34,8 +34,9 @@ explicit approval. Normal data collection, scoring, archive and R2 publication a
 
 The historical production-compatible baseline still explicitly disables account/billing UI and
 experimental model expansion at build time. A separate production account profile now exists as
-a **provisional local G3 contract**, but it is intentionally blocked from workflow selection until
-Lane B replaces its zero controller SHA and provisional contract/receipt. See
+a **provisional local G3 contract** bound to the exact reviewed Atmos integration candidate, but it
+is intentionally blocked from workflow selection until the owner approves the live Stripe offers
+and the contract/receipt is finalized. See
 [Production account release controller](production-account-release-controller.md). Do not relabel
 the staging-only account profile or expose the provisional profile by changing a protected value.
 No UI workflow writes data buckets, Workers, bindings, DNS, accounts, billing or Fusion flags.

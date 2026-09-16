@@ -167,6 +167,8 @@ export function productionCandidateBinding(candidate, qualification, options = {
     qualificationDigest: digest(productionContractCanonical(qualification)),
   };
   assert.equal(fields.contractDigest, LANE_B_CONTRACT_DIGEST);
+  assert.equal(fields.atmosSha, LANE_B_CONTRACT.requiredAtmosSourceSha,
+    'candidate source differs from the exact reviewed Atmos integration candidate');
   assert.equal(fields.controllerSha, LANE_B_CONTRACT.requiredAtmosControllerSha,
     'candidate controller differs from the Lane B contract');
   return Object.freeze({...fields, bindingDigest: digest(productionContractCanonical(fields))});
