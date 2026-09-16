@@ -299,7 +299,17 @@ export function receiptVerificationEnvironment(profile,env=process.env){
   const wind100=resolveWind100BuildPin(profile,env);
   const core=coreReleaseProfile(profile);
   const productionAccount=productionAccountProfile(profile);
-  return {...env,ATMOS_PUBLIC_RELEASE:profile.stagingOnly?'0':'1',ATMOS_STAGING_EXPERIMENT_RELEASE:profile.stagingOnly?'1':'0',
+  const productionAccountEnvironment=productionAccount?{
+    ATMOS_ROAD_PUBLIC_RELEASE:'0',
+    ATMOS_FUSION_V2_STAGING_PREVIEW_RELEASE:'0',ATMOS_FUSION_V2_MAP_STAGING_RELEASE:'0',
+    VITE_MODEL_EXPANSION_QUALIFICATION:'0',VITE_MODEL_LOCAL_BASE:'',
+    VITE_STAGING_MODEL_ADMISSION:'0',VITE_STAGING_MODEL_SELECTION_SHA256:'',
+    VITE_TC_MODELS:'0',VITE_TC_MODELS_SELECTION_SHA256:'',
+    VITE_FUSION_V2_PREVIEW:'0',VITE_FUSION_V2_PREVIEW_ORIGIN:'',VITE_FUSION_V2_PREVIEW_GENERATION_SHA256:'',
+    VITE_FUSION_V2_PREVIEW_TARGET_KEY:'',VITE_FUSION_V2_PREVIEW_VALID_TIME_MS:'',
+    VITE_FUSION_V2_MAP:'0',VITE_FUSION_V2_MAP_ORIGIN:'',VITE_FUSION_V2_MAP_GENERATION_SHA256:'',
+  }:{};
+  return {...env,...productionAccountEnvironment,ATMOS_PUBLIC_RELEASE:profile.stagingOnly?'0':'1',ATMOS_STAGING_EXPERIMENT_RELEASE:profile.stagingOnly?'1':'0',
     ATMOS_STAGING_RELEASE_ROSTER:core?'1':'0',ATMOS_STAGING_ACCOUNT_PROFILE:profile.stagingAccount?'staging-account-v1':'',
     ATMOS_PRODUCTION_ACCOUNT_PROFILE:productionAccount?PRODUCTION_ACCOUNT_APPROVAL:'',
     VITE_PRODUCT:'lab',VITE_APP:'lab',VITE_PLATFORM_ACCOUNT:profile.account?'1':'0',
