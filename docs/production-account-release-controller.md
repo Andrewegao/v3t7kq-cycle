@@ -1,27 +1,26 @@
-# Production account release controller — implementation contract, not activation
+# Production account release controller — UI artifact lane, not mutation activation
 
-Status: local G3 framework only. This document and its code do not authorize a workflow
-dispatch, Cloudflare mutation, D1 migration, Stripe change, Pages deployment, or real charge.
+Status: the exact Lane B account UI artifact contract is final and available through the guarded
+Pages candidate workflow. The separate G3/G4 mutation framework remains local and fail-closed;
+this document and its code do not authorize a Worker mutation, D1 migration, Stripe change,
+purchase-gate opening, or real charge.
 
-## Current hard block
+## Current scope and remaining hard block
 
-Lane C is built against one explicit owner-blocked Lane B contract in
+Lane C is built against one explicit owner-approved Lane B artifact contract in
 `tools/production-account-contract.mjs`:
 
-- contract version: `lane-b-account-contract-v0-provisional`
-- exact reviewed Atmos integration candidate: `0edbbe243589849c3d56c98b24e5d8b7ab96c522`
-- contract digest: `bc8d741bc3536803726b4acd4940d03246f62ba446aff5cd6191e9a339e9eb46`
+- contract version: `lane-b-account-contract-v1`
+- exact reviewed Atmos integration candidate: `6fcec22638f6696be71daa2f2e974ebc4b24318e`
+- contract digest: `867dd673e6cfb30b498e20589f4d0bf1527b638b9b76da4824cdffe95d033c7d`
 - production trust-policy digest: `f2795ab9b504b32fdbdcaa957cde134ac91199ae43a8945a041aa1544601d23c`
-- production profile digest: `a428cf99d4f26297d6c49fc43b30b2988188a968749adeeed81bc084804df80f`
-- pipeline digest: `8ff933231ab097c7666b10681878f96c139f8a0468374343e66b1f3c06a02e88`
+- production profile digest: `97d856fb89aabfac66c7a265db5cd166a16581f38cb7835e4f2485073d924440`
+- pipeline digest: `7e3fa18c6379cfc12d5ff6a4470f82254dd41556d6b214b55946420588636806`
 
-Every normal validation path refuses while the contract is provisional. Tests may pass
-`allowProvisional: true` only to exercise mocked transactions. That switch must never appear
-in a workflow, CLI, or live adapter. The source and controller identities are now bound to the
-exact reviewed Atmos candidate above, but the owner must still approve the exact live Stripe
-offers and Price/Product identities before the contract can become final or enter a live rehearsal.
-Any final contract change invalidates these digests and requires a fresh candidate qualification.
-The reviewed trust policy is also deliberately provisional: its approval-owner, lease-service and
+The contract binds the exact reviewed Atmos source/controller, live Stripe Prices, production
+target, purchase-closed mode, and build receipt. Any contract change invalidates these digests and
+requires a fresh candidate qualification. The reviewed mutation trust policy remains deliberately
+provisional: its approval-owner, lease-service and
 mutation-broker public-key fingerprints and issuer identities are unusable placeholders. Production
 factories cannot be constructed until those exact non-secret trust roots are owner-finalized in
 source, which changes the pipeline digest and requires fresh qualification.
@@ -39,22 +38,21 @@ digest includes both the contract and transaction framework, so any policy, prof
 or transaction-code change invalidates older candidates.
 
 The transaction candidate binding is derived only from that validated encrypted candidate and
-its exact staging qualification receipt. A caller-authored plan cannot mint the binding, and the
-provisional override is never applied implicitly. The provisional Stripe subscription/pass values
-are deliberately invalid identifiers until the owner chooses exact live Prices; arbitrary
-`price_live_*` values are not accepted as substitutes.
+its exact staging qualification receipt. A caller-authored plan cannot mint the binding. The
+approved subscription/pass Prices are literal contract values; arbitrary `price_live_*` values
+are not accepted as substitutes.
 
-The owner-blocked profile is not exposed through a live workflow selector. Adding that selector
-requires a final owner-approved contract and separately reviewed workflow change. This prevents
-a protected-variable typo from turning an unfinished contract into a deployable profile.
+The production account profile is exposed only through the exact protected
+`production-account-billing-v1` selector and exact controller pin. That selector can build,
+qualify, and promote the reviewed Pages artifact; it does not call the mutation executor or grant
+authority to change Worker, D1, Stripe, or the purchase gate.
 
 ## Execution boundary
 
 `tools/production-account-execution.mjs` is the only release-transaction execution boundary. A
 request has an exact action and either `mode=plan` or `mode=execute`. Plan mode forbids mutation
-authorization and never invokes a Cloudflare adapter. It may render the provisional
-contract only as an explicitly blocked preview. The preview currently reports both the provisional
-Lane B contract and missing owner-approved live Stripe Prices.
+authorization and never invokes a Cloudflare adapter. It may render the final artifact contract,
+but execution factories still refuse because the separate production trust policy is provisional.
 
 Execute mode has no provisional override and accepts no caller-supplied clock or lease assertion.
 The production factory accepts only module-branded production authorities; separately branded test
@@ -181,7 +179,7 @@ uses separate receipts and retains additive schema.
 
 1. Freeze the final Lane B contract, exact Atmos/Cycle/controller SHAs, target inventory,
    rollback identities, policy/profile/pipeline/config digests and exclusive lease. Rerun the
-   local transaction suite without the provisional override.
+   local transaction suite against the exact final artifact contract.
 2. Rehearse inactive Worker upload, activation interruption, verification failure, owned
    rollback, foreign-writer refusal, Pages configuration reversal, old/new UI compatibility and
    retained-schema behavior against isolated resources. This is G3 evidence, not production

@@ -48,6 +48,12 @@ function controller(profile = profileFor(process.env.MODEL_SELECTION_SHA256)) {
   assert.equal(git(['rev-parse','HEAD'], CONTROL), controlShaFor(profile), 'unqualified release controller');
   git(['diff','--exit-code','HEAD'], CONTROL);
 }
+export function requireReleaseProfileBinding(candidateProfile,selection=process.env.MODEL_SELECTION_SHA256){
+  const requestedProfile=profileFor(selection);
+  assert.deepEqual(validateProfile(candidateProfile),requestedProfile,
+    'production candidate profile differs from requested release profile');
+  return candidateProfile;
+}
 async function get(url, token, limit = 2 * 1024 * 1024) {
   const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(20000),
     headers: { 'Cache-Control': 'no-cache', ...(token ? { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } : {}) } });
@@ -193,7 +199,7 @@ export function validatePublicModes(origin, health, data, profile=profileFor(),p
     : productionAccountProfile(profile) ? LANE_B_CONTRACT.modes.authMode : 'observe');
   assert.equal(health.billingMode, productionAccountProfile(profile)
     ? LANE_B_CONTRACT.modes.billingMode : profile.account ? 'enabled' : 'disabled');
-  if(productionAccountProfile(profile))assert.equal(
+  if(origin===ORIGINS.production&&productionAccountProfile(profile))assert.equal(
     health.billingPurchaseMode,
     LANE_B_CONTRACT.modes.billingPurchaseMode,
     'production account preparation must keep purchase creation closed',
@@ -624,9 +630,25 @@ async function download() {
   assert.ok(match[0].size_in_bytes < MAX_BYTES*2,'encrypted download exceeds limit');
   const out=resolve(process.env.RUNNER_TEMP,'ui-download'); mkdirSync(out,{mode:0o700});
   run('gh',['run','download',String(r.id),'--repo',REPOSITORY,'--name',name,'--dir',out],{env:{...process.env,GH_TOKEN:process.env.GITHUB_TOKEN}});
-  assert.deepEqual(readdirSync(out).sort(),['candidate.wxui','summary.json']);
+  const downloadedFiles=readdirSync(out).sort();
+  assert.ok(downloadedFiles.every(name=>['account-qualification.json','candidate.wxui','summary.json'].includes(name)),
+    'staging candidate artifact contains an unapproved file');
   assert.ok(statSync(resolve(out,'candidate.wxui')).size<MAX_BYTES*2);
   const c=unseal(readFileSync(resolve(out,'candidate.wxui')),process.env.UI_CANDIDATE_KEY);
+  requireReleaseProfileBinding(c.profile);
+  assert.deepEqual(downloadedFiles,c.profile.account
+    ? ['account-qualification.json','candidate.wxui','summary.json']
+    : ['candidate.wxui','summary.json']);
+  if(c.profile.account){
+    const proofPath=resolve(out,'account-qualification.json'),proofStat=lstatSync(proofPath);
+    assert.ok(proofStat.isFile()&&!proofStat.isSymbolicLink()&&proofStat.size>0&&proofStat.size<=1024*1024,
+      'retained account qualification proof is invalid');
+    const proofBytes=readFileSync(proofPath),proof=JSON.parse(proofBytes);
+    assert.equal(hash(proofBytes),c.qualification?.accountProofSha256,
+      'retained account qualification proof differs from candidate binding');
+    assert.equal(proof.harnessSha256,c.qualification?.accountHarnessSha256,
+      'retained account qualification harness differs from candidate binding');
+  }
   requireProductionProfile(c.profile);
   await auditRun(c); await exactStaging(c);
   save(stateFile(),c); restore(c,resolve(process.env.RUNNER_TEMP,'ui-promote-dist'));

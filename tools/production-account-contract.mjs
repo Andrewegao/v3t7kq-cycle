@@ -1,15 +1,14 @@
-// Owner-blocked Lane B handoff consumed by the Cycle release-safety lane.
+// Final Lane B artifact contract consumed by the Cycle release-safety lane.
 //
-// This file is deliberately the only place where the controller assumes the shape of
-// the not-yet-final Atmos account/billing contract. The reviewed integration candidate
-// is exact, but a production command MUST still refuse this contract while status is
-// provisional and the live Stripe offers remain owner-unapproved.
+// This file is deliberately the only place where the controller assumes the reviewed
+// Atmos account/billing contract. Finalizing this artifact contract does not activate
+// the separate production mutation controller; its trust policy remains fail-closed.
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 
 export const PRODUCTION_ACCOUNT_REQUEST = 'production-account-billing-v1';
 export const PRODUCTION_ACCOUNT_APPROVAL = 'production-account-billing-v1';
-export const ATMOS_INTEGRATION_CANDIDATE_SHA = '0edbbe243589849c3d56c98b24e5d8b7ab96c522';
+export const ATMOS_INTEGRATION_CANDIDATE_SHA = '6fcec22638f6696be71daa2f2e974ebc4b24318e';
 export const PRODUCTION_ANALYTICS_D1_ID = 'e7247173-c23d-4989-b29e-f95939c820fe';
 export const STAGING_PLATFORM_D1_ID = '9501827a-7e4c-4249-806b-d45d5857d9e5';
 
@@ -46,9 +45,9 @@ function deepFreeze(value) {
 
 export const LANE_B_CONTRACT = deepFreeze({
   schemaVersion: 1,
-  contractVersion: 'lane-b-account-contract-v0-provisional',
-  status: 'provisional',
-  blockingReason: 'The owner must approve the exact live Stripe offers and Price/Product identities before live use.',
+  contractVersion: 'lane-b-account-contract-v1',
+  status: 'final',
+  blockingReason: null,
   requiredAtmosSourceSha: ATMOS_INTEGRATION_CANDIDATE_SHA,
   requiredAtmosControllerSha: ATMOS_INTEGRATION_CANDIDATE_SHA,
   target: {
@@ -66,11 +65,9 @@ export const LANE_B_CONTRACT = deepFreeze({
     dataAuthMode: 'public',
     stripeEnvironment: 'live',
   },
-  // Owner approval has not selected live offers. These exact values cannot be
-  // valid Stripe Price IDs and keep even mocked plans visibly non-deployable.
   approvedStripePriceIds: {
-    subscription: 'UNUSABLE_PROVISIONAL_OWNER_APPROVAL_REQUIRED_SUBSCRIPTION',
-    pass: 'UNUSABLE_PROVISIONAL_OWNER_APPROVAL_REQUIRED_PASS',
+    subscription: 'price_1UA0Cn39WPddPFCrdPeA2MTN',
+    pass: 'price_1UA0Cn39WPddPFCrgulrbJlW',
   },
   pagesBindings: {
     production: {
@@ -95,7 +92,7 @@ export const LANE_B_CONTRACT = deepFreeze({
     'price_1U6XNWPKEj1zQ5ScUsQsdCgp',
     'price_1U6et6PKEj1zQ5Sco1gMbGLe',
   ],
-  provisionalBuildReceipt: {
+  buildReceipt: {
     product: 'lab',
     platformAccount: '1',
     platformDataAuth: 'public',

@@ -212,14 +212,16 @@ test('manual staging defaults to protected approval and only explicit none selec
   // The selected profile reaches both build and qualify unchanged. Controller
   // checkout selection is separately bound to literal pins by ui-workflow.mjs.
   assert.equal((staging.match(/^\s+MODEL_SELECTION_SHA256: \$\{\{ needs\.profile\.outputs\.model_selection_sha256 \}\}$/gm)||[]).length,2);
-  assert.equal((staging.match(/^\s+STAGING_WIND100_UI_DYNAMIC: \$\{\{ vars\.STAGING_WIND100_UI_DYNAMIC \}\}$/gm)||[]).length,2);
-  assert.equal((staging.match(/^\s+STAGING_WIND100_UI_DYNAMIC: \$\{\{ needs\.profile\.outputs\.wind100_dynamic \}\}$/gm)||[]).length,1);
+  assert.equal((staging.match(/^\s+STAGING_WIND100_UI_DYNAMIC: \$\{\{ vars\.STAGING_WIND100_UI_DYNAMIC \}\}$/gm)||[]).length,1);
+  assert.equal((staging.match(/^\s+STAGING_WIND100_UI_DYNAMIC: \$\{\{ needs\.profile\.outputs\.wind100_dynamic \}\}$/gm)||[]).length,2);
+  assert.match(staging,/selection === 'production-account-billing-v1'[\s\S]*?STAGING_WIND100_UI_DYNAMIC: ''[\s\S]*?resolveWind100BuildPin\(profileFor\(selection\), windEnvironment\)/);
   assert.match(staging,/wind100_dynamic=\$\{pin\?\.dynamic === true \? 'true' : ''\}/);
   assert.doesNotMatch(production,/STAGING_WIND100_UI_DYNAMIC|VITE_STAGING_WIND100_DYNAMIC/);
   assert.match(staging,/name: ui-staging[\s\S]*?UI_STAGING_MODEL_SELECTION_APPROVED_SHA256: \$\{\{ vars\.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256 \}\}/);
   assert.match(staging,/UI_STAGING_CORE_PROFILE_APPROVED: \$\{\{ vars\.UI_STAGING_CORE_PROFILE_APPROVED \}\}/);
   assert.match(staging,/name: retain failed core browser receipt\s*\n\s*if: \$\{\{ failure\(\) \}\}[\s\S]*?\$\{\{ runner\.temp \}\}\/ui-model-browser\.json/);
-  assert.doesNotMatch(production,/model_selection_sha256|UI_STAGING_MODEL_SELECTION_APPROVED_SHA256|UI_STAGING_CORE_PROFILE_APPROVED|VITE_STAGING_MODEL_ADMISSION|release-roster-core-v1/);
+  assert.doesNotMatch(production,/UI_STAGING_MODEL_SELECTION_APPROVED_SHA256|UI_STAGING_CORE_PROFILE_APPROVED|VITE_STAGING_MODEL_ADMISSION|release-roster-core-v1/);
+  assert.match(production,/release_profile:[\s\S]*?production-account-billing-v1/);
 });
 test('build flags select mutually exclusive production or exact staging-experiment release guards',()=>{
   const body=selection(['icon']),sha=digest(body),profile=profileFor(sha),source={bytes:body};

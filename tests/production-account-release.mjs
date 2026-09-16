@@ -35,7 +35,7 @@ import {
   validateProductionCandidateBinding,
   validateProductionReleasePlan,
 } from '../tools/production-account-release.mjs';
-import {POLICY_FILES, pipelineDigest, publicBuildEnvironment, validatePublicModes} from '../tools/ui-release.mjs';
+import {POLICY_FILES, pipelineDigest, publicBuildEnvironment, requireReleaseProfileBinding, validatePublicModes} from '../tools/ui-release.mjs';
 import {controlShaFor, hash, validateCandidate, validateFiles} from '../tools/ui-candidate.mjs';
 
 const H = character => character.repeat(64);
@@ -70,7 +70,7 @@ function candidateFixture(sourceSha = ATMOS_INTEGRATION_CANDIDATE_SHA) {
     shellFileCount: raw.length,
     shellBytes: raw.reduce((sum, [,bytes]) => sum + bytes.length, 0),
     indexSha256: hash(raw[0][1]),
-    buildProfile: structuredClone(LANE_B_CONTRACT.provisionalBuildReceipt),
+    buildProfile: structuredClone(LANE_B_CONTRACT.buildReceipt),
   };
   const receiptBytes = Buffer.from(JSON.stringify(receipt));
   const files = [...raw, ['health/release.json', receiptBytes]]
@@ -306,6 +306,10 @@ test('production account profile is explicit while the historical baseline stays
   validateProfile(PRODUCTION_ACCOUNT_PROFILE);
   requireProductionProfile(BASELINE_PROFILE);
   requireProductionProfile(PRODUCTION_ACCOUNT_PROFILE);
+  assert.equal(requireReleaseProfileBinding(BASELINE_PROFILE,'none'),BASELINE_PROFILE);
+  assert.equal(requireReleaseProfileBinding(PRODUCTION_ACCOUNT_PROFILE,PRODUCTION_ACCOUNT_REQUEST),PRODUCTION_ACCOUNT_PROFILE);
+  assert.throws(()=>requireReleaseProfileBinding(PRODUCTION_ACCOUNT_PROFILE,'none'),/differs from requested release profile/);
+  assert.throws(()=>requireReleaseProfileBinding(BASELINE_PROFILE,PRODUCTION_ACCOUNT_REQUEST),/differs from requested release profile/);
   assert.equal(PRODUCTION_ACCOUNT_PROFILE.account, true);
   assert.equal(PRODUCTION_ACCOUNT_PROFILE.productionAccount, PRODUCTION_ACCOUNT_APPROVAL);
   assert.equal(PRODUCTION_ACCOUNT_PROFILE.accountContractSha256, LANE_B_CONTRACT_DIGEST);
@@ -316,10 +320,8 @@ test('production account profile is explicit while the historical baseline stays
   assert.equal(PRODUCTION_ACCOUNT_TRUST_POLICY.cloudflare.resourceNamespaces.pages,
     `cloudflare:${LANE_B_CONTRACT.target.cloudflareAccountId}:pages:${LANE_B_CONTRACT.target.pagesProject}`);
   assert.ok(POLICY_FILES.includes('tools/production-account-trust-policy.mjs'));
-  assert.throws(() => resolveSelectionRequest(PRODUCTION_ACCOUNT_REQUEST, undefined, undefined,
-    undefined, undefined, undefined, PRODUCTION_ACCOUNT_APPROVAL), /Lane B contract remains provisional/);
   assert.equal(resolveSelectionRequest(PRODUCTION_ACCOUNT_REQUEST, undefined, undefined,
-    undefined, undefined, undefined, PRODUCTION_ACCOUNT_APPROVAL, OPTIONS), PRODUCTION_ACCOUNT_REQUEST);
+    undefined, undefined, undefined, PRODUCTION_ACCOUNT_APPROVAL), PRODUCTION_ACCOUNT_REQUEST);
 });
 
 test('production account candidate is contract-bound and cannot inherit staging build controls', () => {
@@ -367,7 +369,7 @@ test('encrypted candidate validation binds the owner-blocked Lane B build receip
     shellFileCount: raw.length,
     shellBytes: raw.reduce((sum, [,bytes]) => sum + bytes.length, 0),
     indexSha256: hash(raw[0][1]),
-    buildProfile: structuredClone(LANE_B_CONTRACT.provisionalBuildReceipt),
+    buildProfile: structuredClone(LANE_B_CONTRACT.buildReceipt),
   };
   const receiptBytes = Buffer.from(JSON.stringify(receipt));
   const files = [...raw, ['health/release.json', receiptBytes]]
@@ -433,24 +435,25 @@ test('production Pages configuration rejects staging bindings, URLs and known te
 });
 
 test('candidate binding comes only from a validated candidate and its exact qualification receipt', () => {
-  assert.throws(() => productionCandidateBinding(CANDIDATE, QUALIFICATION), /remains provisional/);
-  const binding = productionCandidateBinding(CANDIDATE, QUALIFICATION, {allowProvisional: true});
-  validateProductionCandidateBinding(binding, CANDIDATE, QUALIFICATION, {allowProvisional: true});
+  const binding = productionCandidateBinding(CANDIDATE, QUALIFICATION);
+  validateProductionCandidateBinding(binding, CANDIDATE, QUALIFICATION);
 
   const changedPolicy = structuredClone(CANDIDATE);
   changedPolicy.pipelineDigest = H('4');
   assert.throws(() => validateProductionCandidateBinding(binding, changedPolicy,
-    changedPolicy.qualification, {allowProvisional: true}), /candidate identity changed/);
+    changedPolicy.qualification), /candidate identity changed/);
   const changedQualification = structuredClone(QUALIFICATION);
   changedQualification.deploymentId = '22345678-1234-1234-1234-123456789abc';
   assert.throws(() => validateProductionCandidateBinding(binding, CANDIDATE,
-    changedQualification, {allowProvisional: true}), /qualification receipt differs/);
+    changedQualification), /qualification receipt differs/);
   assert.throws(() => validateProductionReleasePlan(plan({candidateBinding: {...binding, bindingDigest: H('9')}}), OPTIONS));
 });
 
-test('reviewed Atmos integration identity is exact while provisional Price placeholders remain unusable', () => {
-  assert.equal(ATMOS_INTEGRATION_CANDIDATE_SHA, '0edbbe243589849c3d56c98b24e5d8b7ab96c522');
-  assert.ok(Object.values(LANE_B_CONTRACT.approvedStripePriceIds).every(value => !value.startsWith('price_')));
+test('reviewed Atmos integration identity and owner-approved live Prices are exact', () => {
+  assert.equal(ATMOS_INTEGRATION_CANDIDATE_SHA, '6fcec22638f6696be71daa2f2e974ebc4b24318e');
+  assert.deepEqual(LANE_B_CONTRACT.approvedStripePriceIds, {
+    subscription:'price_1UA0Cn39WPddPFCrdPeA2MTN',pass:'price_1UA0Cn39WPddPFCrgulrbJlW',
+  });
   assert.equal(LANE_B_CONTRACT.requiredAtmosSourceSha, ATMOS_INTEGRATION_CANDIDATE_SHA);
   assert.equal(LANE_B_CONTRACT.requiredAtmosControllerSha, ATMOS_INTEGRATION_CANDIDATE_SHA);
   assert.equal(CANDIDATE.sourceSha, ATMOS_INTEGRATION_CANDIDATE_SHA);
@@ -809,10 +812,10 @@ test('production promotion audit hashes the candidate profile policy', () => {
   assert.doesNotMatch(audit, /pipelineDigest\(\)/);
 });
 
-test('runbooks preserve G3/G4/G5 sequencing and workflows cannot enable the provisional contract', () => {
+test('runbooks preserve G3/G4/G5 sequencing while the UI-only lane cannot enable the provisional mutation controller', () => {
   const runbook = readFileSync(new URL('../docs/production-account-release-controller.md', import.meta.url), 'utf8');
   for (const phrase of ['G3 transaction separation','G3 → G4 → G5 operating order',
-    'purchase creation closed','billingPurchaseMode=closed','separate explicit approval','not activation']) {
+    'purchase creation closed','billingPurchaseMode=closed','separate explicit approval','not mutation activation']) {
     assert.match(runbook, new RegExp(phrase));
   }
   assert.match(runbook, new RegExp(LANE_B_CONTRACT_DIGEST));
@@ -821,5 +824,6 @@ test('runbooks preserve G3/G4/G5 sequencing and workflows cannot enable the prov
   assert.match(runbook, new RegExp(pipelineDigest(PRODUCTION_ACCOUNT_PROFILE)));
   const workflows = ['ui-staging.yml','ui-release.yml']
     .map(name => readFileSync(new URL(`../.github/workflows/${name}`, import.meta.url), 'utf8')).join('\n');
-  assert.doesNotMatch(workflows, /allowProvisional|production-account-billing-v1|PRODUCTION_ACCOUNT_PROFILE/);
+  assert.doesNotMatch(workflows, /allowProvisional|PRODUCTION_ACCOUNT_TRUST_POLICY|production-account-execution/);
+  assert.match(workflows, /production-account-billing-v1/);
 });

@@ -15,6 +15,14 @@ on:
         description: Exact 64-character artifact digest shown in that staging run's summary
         required: true
         type: string
+      release_profile:
+        description: Exact protected candidate profile to promote
+        required: true
+        default: none
+        type: choice
+        options:
+          - none
+          - production-account-billing-v1
 permissions:
   contents: read
   actions: read
@@ -36,6 +44,7 @@ jobs:
       ATMOS_SHA: ${{ inputs.atmos_sha }}
       STAGING_RUN_ID: ${{ inputs.staging_run_id }}
       CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
+      MODEL_SELECTION_SHA256: ${{ inputs.release_profile }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { path: cycle, fetch-depth: 0, persist-credentials: false }
@@ -43,7 +52,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          ref: 25c402db5149daa018e349a34a4beeba1f2dca45
+          ref: ${{ inputs.release_profile == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || '25c402db5149daa018e349a34a4beeba1f2dca45' }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
           path: control
