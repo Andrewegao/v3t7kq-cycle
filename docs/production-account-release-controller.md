@@ -15,7 +15,7 @@ Lane C is built against one explicit owner-approved Lane B artifact contract in
 - contract digest: `0866db6f7a4f2dce8ecb0e8bac6628552878c5d8b14e013f1057c79839f80e8c`
 - production trust-policy digest: `f2795ab9b504b32fdbdcaa957cde134ac91199ae43a8945a041aa1544601d23c`
 - production profile digest: `69210756c14f4cb394786485290c7d63a4a67af2a508db990a5d3e2d9fd70d51`
-- pipeline digest: `751fd38d6f0b4e6e992ecc00c181c5356ce649818bc4fb0fe5a45c6a02338079`
+- pipeline digest: `7d8dd30177df79a5a1eaaa4983aff665878f3a764475e5790ba65aba6dc8f6ab`
 
 The contract binds the exact reviewed Atmos source/controller, live Stripe Prices, production
 target, purchase-closed mode, and build receipt. Any contract change invalidates these digests and
@@ -152,6 +152,11 @@ Three operations stay independent:
    unchanged, owned-desired and foreign state. On failure, reverse
    only an owned configuration mutation, reread the entire payload, and retain a recoverable
    receipt if the restore outcome is ambiguous. This transaction never uploads or promotes Pages code.
+
+   The UI promotion readback separately accepts Cloudflare's provider-returned `value` member only
+   on exact `secret_text` entries, validates its type without logging it, and removes it before applying
+   the secret-free contract above. The reviewed full-project configuration digest still covers the
+   unmodified provider response, so changing a secret value or any other field fails closed.
 
 The final exact-artifact Pages promotion remains the existing G5 mechanism and occurs only after
 these G3/G4 dependencies are qualified and explicitly authorized.

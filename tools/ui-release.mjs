@@ -169,7 +169,7 @@ export function validateProjectSnapshot(stage, p, expectedDigest) {
   assert.equal(p.name, project); assert.equal(p.production_branch, 'main');
   assert.ok(p.source === null || p.source === undefined, 'Git-linked Pages projects cannot bypass staging/manual gates');
   if (stage === 'staging') validateStagingPagesBindings(p);
-  else validateProductionPagesConfiguration({deployment_configs:p.deployment_configs});
+  else validateProductionPagesConfiguration(productionPagesContractFromProvider(p.deployment_configs));
   const observedDigest = configurationDigest(p);
   // The refusal names both digests and the non-sensitive shape of the change (variable names and
   // types, domains, compatibility) so the reviewer can approve without a Cloudflare token; values
@@ -179,6 +179,24 @@ export function validateProjectSnapshot(stage, p, expectedDigest) {
   assert.deepEqual(p.deployment_configs?.production?.compatibility_flags ?? [], [], 'unreviewed compatibility flags');
   assert.equal(p.canonical_deployment?.latest_stage?.status, 'success');
   return p;
+}
+function productionPagesContractFromProvider(deploymentConfigs) {
+  const sanitized = structuredClone(deploymentConfigs);
+  for (const context of ['production','preview']) {
+    const envVars = sanitized?.[context]?.env_vars;
+    if (!envVars || typeof envVars !== 'object' || Array.isArray(envVars)) continue;
+    for (const [name, entry] of Object.entries(envVars)) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry) || !Object.hasOwn(entry, 'value')) continue;
+      assert.deepEqual(Object.keys(entry).sort(), ['type','value'],
+        `Pages ${context}.env_vars.${name} provider secret shape changed`);
+      assert.equal(entry.type, 'secret_text',
+        `Pages ${context}.env_vars.${name} provider value is not protected`);
+      assert.equal(typeof entry.value, 'string',
+        `Pages ${context}.env_vars.${name} provider secret value shape changed`);
+      delete entry.value;
+    }
+  }
+  return {deployment_configs:sanitized};
 }
 async function projectSnapshot(stage) {
   if(stage==='production') requireProductionProfile(candidate().profile);

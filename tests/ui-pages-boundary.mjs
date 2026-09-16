@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { configurationDigest, STAGING_AI_AUTH_POLICY, STAGING_AI_SERVICE,
   stagingEnvVarAllowed, validateProjectSnapshot } from '../tools/ui-release.mjs';
-import {LANE_B_CONTRACT, STAGING_PLATFORM_D1_ID} from '../tools/production-account-contract.mjs';
+import {LANE_B_CONTRACT, STAGING_PLATFORM_D1_ID,
+  validateProductionPagesConfiguration} from '../tools/production-account-contract.mjs';
 
 function project(stage = 'staging') {
   const exactProduction = context => ({...structuredClone(LANE_B_CONTRACT.pagesRuntime),
@@ -82,6 +83,22 @@ test('production keeps its existing resource/config policy, public modes and app
   assert.throws(() => validate(renamed, 'production'), /exact production allowlist/);
   assert.throws(() => validateProjectSnapshot('production', p, '0'.repeat(64)), /configuration changed/);
   assert.throws(() => validateProjectSnapshot('staging', p, configurationDigest(p)));
+});
+test('production API secret values are validated and removed only at the provider readback boundary', () => {
+  const p = project('production');
+  for (const entry of Object.values(p.deployment_configs.production.env_vars)) entry.value = 'provider-secret-fixture';
+  assert.equal(validate(p, 'production'), p);
+  assert.throws(() => validateProductionPagesConfiguration({deployment_configs:p.deployment_configs}),
+    /protected type reference/);
+  for (const mutate of [
+    entry => { entry.value = 1; },
+    entry => { entry.extra = 'unreviewed'; },
+    entry => { entry.type = 'plain_text'; },
+  ]) {
+    const changed = structuredClone(p);
+    mutate(changed.deployment_configs.production.env_vars.AI_ACCESS_CODE);
+    assert.throws(() => validate(changed, 'production'), error => !error.message.includes('provider-secret-fixture'));
+  }
 });
 test('existing exact name/branch/runtime/canonical deployment/config-digest checks still apply', () => {
   for (const change of [p => p.name = 'atmos-platform', p => p.production_branch = 'other',
@@ -175,5 +192,6 @@ test('production validation rejects the staging-only AI profile and bindings', (
   const p = project('production'); Object.assign(p.deployment_configs.production, aiProfile());
   p.deployment_configs.production.env_vars.AI_ACCESS_CODE = { type: 'secret_text' };
   p.deployment_configs.production.services.EXTRA = { service: 'production-worker', environment: 'production' };
-  assert.throws(() => validate(p, 'production'), /staging identifier is forbidden in production/);
+  assert.throws(() => validate(p, 'production'),
+    /provider value is not protected|staging identifier is forbidden in production/);
 });
