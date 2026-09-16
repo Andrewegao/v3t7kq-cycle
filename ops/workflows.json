@@ -263,6 +263,15 @@
       "runbook": "docs/source-checkout-isolation.md"
     },
     {
+      "id": "platform-staging-transaction",
+      "path": ".github/workflows/platform-staging-transaction.yml",
+      "family": "releases",
+      "purpose": "Execute one authorized Atmos backend rehearsal stage against frozen staging identities.",
+      "subsystem": "Platform staging",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/platform-staging-transaction.md"
+    },
+    {
       "id": "staging-consumer-refresh",
       "path": ".github/workflows/staging-consumer-refresh.yml",
       "family": "staging",

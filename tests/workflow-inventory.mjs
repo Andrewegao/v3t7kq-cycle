@@ -158,7 +158,7 @@ test('scheduler CI runs inventory checks and selects all workflow changes and me
   const index = data.jobs.scheduler.steps.findIndex(step => step.name === 'Declared workflow inventory and metadata contracts');
   assert.ok(index > data.jobs.scheduler.steps.findIndex(step => step.run === 'npm ci --prefix scheduler'));
   assert.ok(index > data.jobs.scheduler.steps.findIndex(step => step.run === 'npm ci --ignore-scripts --prefix tools/inventory'));
-  assert.equal(data.jobs.scheduler.steps[index].run.trim(), 'node --test tests/workflow-inventory.mjs tests/workflow-timing.mjs\nnode tools/workflow-inventory.mjs --check');
+  assert.equal(data.jobs.scheduler.steps[index].run.trim(), 'node --test tests/workflow-inventory.mjs tests/workflow-timing.mjs tests/platform-staging-transaction.mjs\nnode tools/workflow-inventory.mjs --check');
   assert.equal(data.jobs.scheduler.steps.find(step => step.run === 'npm run check --prefix scheduler').run, 'npm run check --prefix scheduler');
 });
 

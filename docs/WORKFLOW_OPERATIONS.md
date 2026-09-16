@@ -59,6 +59,13 @@ Price/Product owner decisions still block finalization. Converge the final Lane 
 then review and rehearse the separate Worker upload,
 Worker activation, Pages configuration, and exact-artifact Pages promotion boundaries in order.
 
+## Platform staging backend rehearsal
+
+The protected [platform staging backend transaction](platform-staging-transaction.md) runs one
+authorized stage of the Atmos rehearsal packet per manual dispatch. It accepts only the exact
+current Atmos `master` SHA and exposes no Pages or production operation. Treat every stage as a
+separate approval boundary and retain its append-only intent/result artifact before proceeding.
+
 ## Legacy and historical material
 
 [catalog-promote-existing.yml](../.github/workflows/catalog-promote-existing.yml) is explicitly `legacy-needs-review`: its staging lock differs from the recurring staging publisher, and its checkout has no explicit immutable ref. This index neither disables it nor certifies it. Review its source and writer contract before recommending use.
