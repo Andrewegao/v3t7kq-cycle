@@ -68,7 +68,7 @@ jobs:
         run: npm ci --ignore-scripts --prefix tools/inventory
       - name: Declared workflow inventory and metadata contracts
         run: |
-          node --test tests/workflow-inventory.mjs tests/workflow-timing.mjs tests/platform-staging-transaction.mjs
+          node --test tests/workflow-inventory.mjs tests/workflow-timing.mjs tests/platform-staging-transaction.mjs tests/production-account-audit.mjs
           node tools/workflow-inventory.mjs --check
       - name: Isolated staging forecast evidence policy
         run: node --test tests/fusion-staging-evidence.mjs

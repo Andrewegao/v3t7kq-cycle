@@ -1,0 +1,135 @@
+name: WeatherX production account read-only audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      atmos_sha:
+        description: Exact reviewed Atmos master SHA containing the production account candidate
+        required: true
+        type: string
+      confirm:
+        description: Exact AUDIT-PRODUCTION-ACCOUNT:<atmos_sha>
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weatherx-production-account-read-only-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.repository == 'Andrewegao/v3t7kq-cycle' }}
+    environment:
+      name: production-account-audit
+      url: https://weatherx.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact Cycle audit controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: cycle
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Admit disabled-by-default read-only production audit
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          ATMOS_SHA: ${{ inputs.atmos_sha }}
+          EXACT_CONFIRMATION: ${{ inputs.confirm }}
+          PRODUCTION_ACCOUNT_AUDIT_ENABLED: ${{ vars.PRODUCTION_ACCOUNT_AUDIT_ENABLED }}
+          PRODUCTION_ACCOUNT_AUDIT_CLOUDFLARE_ACCOUNT_ID: ${{ vars.PRODUCTION_ACCOUNT_AUDIT_CLOUDFLARE_ACCOUNT_ID }}
+          STRIPE_AUDIT_KEY_PROVISIONED: ${{ secrets.STRIPE_PRODUCTION_AUDIT_KEY != '' }}
+          CLOUDFLARE_AUDIT_TOKEN_PROVISIONED: ${{ secrets.PLATFORM_PRODUCTION_AUDIT_CLOUDFLARE_API_TOKEN != '' }}
+          ATMOS_SOURCE_KEY_PROVISIONED: ${{ secrets.ATMOS_READONLY_KEY != '' }}
+        run: |
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_REPOSITORY" = Andrewegao/v3t7kq-cycle
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$ATMOS_SHA" = 0edbbe243589849c3d56c98b24e5d8b7ab96c522
+          test "$EXACT_CONFIRMATION" = "AUDIT-PRODUCTION-ACCOUNT:$ATMOS_SHA"
+          test "$PRODUCTION_ACCOUNT_AUDIT_ENABLED" = true
+          test "$PRODUCTION_ACCOUNT_AUDIT_CLOUDFLARE_ACCOUNT_ID" = a89f9a1af485021fbc60a68b163c7c6e
+          test "$STRIPE_AUDIT_KEY_PROVISIONED" = true
+          test "$CLOUDFLARE_AUDIT_TOKEN_PROVISIONED" = true
+          test "$ATMOS_SOURCE_KEY_PROVISIONED" = true
+          mkdir -p "$RUNNER_TEMP/production-account-audit"
+      - name: Checkout the exact reviewed Atmos source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: ${{ inputs.atmos_sha }}
+          fetch-depth: 0
+          ssh-key: ${{ secrets.ATMOS_READONLY_KEY }}
+          path: atmos
+          persist-credentials: false
+      - name: Prove the candidate is current master and inspect its production read target
+        env:
+          ATMOS_SHA: ${{ inputs.atmos_sha }}
+        run: |
+          test "$(git -C atmos rev-parse HEAD)" = "$ATMOS_SHA"
+          test "$(git -C atmos rev-parse origin/master)" = "$ATMOS_SHA"
+          test -z "$(git -C atmos status --porcelain --untracked-files=all)"
+          node cycle/tools/production-account-audit.mjs inspect-config \
+            --config atmos/platform/edge/wrangler.jsonc \
+            --atmos-sha "$ATMOS_SHA" \
+            --output "$RUNNER_TEMP/production-account-audit/candidate.json"
+      - name: Install the candidate's exact locked Wrangler
+        run: npm ci --prefix atmos/platform/edge
+      - name: Capture exhaustive Stripe and sanitized platform snapshots in parallel
+        env:
+          STRIPE_PRODUCTION_AUDIT_KEY: ${{ secrets.STRIPE_PRODUCTION_AUDIT_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.PRODUCTION_ACCOUNT_AUDIT_CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PLATFORM_PRODUCTION_AUDIT_CLOUDFLARE_API_TOKEN }}
+        run: |
+          env -u CLOUDFLARE_ACCOUNT_ID -u CLOUDFLARE_API_TOKEN \
+            node cycle/tools/production-account-audit.mjs collect-stripe \
+            --output "$RUNNER_TEMP/production-account-audit/stripe.json" &
+          stripe_pid=$!
+          env -u STRIPE_PRODUCTION_AUDIT_KEY \
+            node cycle/tools/production-account-audit.mjs collect-platform \
+            --wrangler "$GITHUB_WORKSPACE/atmos/platform/edge/node_modules/wrangler/bin/wrangler.js" \
+            --config "$GITHUB_WORKSPACE/atmos/platform/edge/wrangler.jsonc" \
+            --cwd "$GITHUB_WORKSPACE/atmos/platform/edge" \
+            --output "$RUNNER_TEMP/production-account-audit/platform.json" &
+          platform_pid=$!
+          failed=0
+          wait "$stripe_pid" || failed=1
+          wait "$platform_pid" || failed=1
+          test "$failed" = 0
+      - name: Reconcile every in-scope Stripe object against production D1
+        id: reconcile
+        env:
+          ATMOS_SHA: ${{ inputs.atmos_sha }}
+        run: |
+          subscription_price="$(node -e 'process.stdout.write(require(process.argv[1]).candidatePriceIds.subscription)' "$RUNNER_TEMP/production-account-audit/candidate.json")"
+          pass_price="$(node -e 'process.stdout.write(require(process.argv[1]).candidatePriceIds.pass)' "$RUNNER_TEMP/production-account-audit/candidate.json")"
+          node cycle/tools/production-account-audit.mjs reconcile \
+            --stripe "$RUNNER_TEMP/production-account-audit/stripe.json" \
+            --platform "$RUNNER_TEMP/production-account-audit/platform.json" \
+            --subscription-price "$subscription_price" \
+            --pass-price "$pass_price" \
+            --atmos-sha "$ATMOS_SHA" \
+            --output "$RUNNER_TEMP/production-account-audit/receipt.json"
+      - name: Delete runner-local source snapshots
+        if: ${{ always() }}
+        run: |
+          rm -f "$RUNNER_TEMP/production-account-audit/stripe.json"
+          rm -f "$RUNNER_TEMP/production-account-audit/platform.json"
+          rm -f "$RUNNER_TEMP/production-account-audit/candidate.json"
+      - name: Retain only the redacted deterministic audit receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-account-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/production-account-audit/receipt.json
+          if-no-files-found: error
+          retention-days: 30
