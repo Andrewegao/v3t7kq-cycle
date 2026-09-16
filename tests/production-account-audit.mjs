@@ -95,7 +95,7 @@ test('Stripe collection paginates exhaustively with a restricted live key and pi
 
 test('platform collection executes only fixed SELECT statements against the exact production D1 API', async () => {
   const calls = [];
-  const snapshot = await collectPlatformSnapshot({accountId: 'a'.repeat(32), apiToken: 'cloudflare_audit_fixture_token', fetcher: platformFetch(platformFixture(), calls)});
+  const snapshot = await collectPlatformSnapshot({accountId: ` ${'a'.repeat(32)}\n`, apiToken: ' cloudflare_audit_fixture_token\n', fetcher: platformFetch(platformFixture(), calls)});
   assert.equal(snapshot.databaseId, PRODUCTION_PLATFORM_D1_ID);
   assert.equal(calls.length, 7);
   for (const call of calls) {

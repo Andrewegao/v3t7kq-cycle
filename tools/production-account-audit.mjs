@@ -194,9 +194,11 @@ function normalizePlatformRow(table, value) {
 }
 
 export async function collectPlatformSnapshot({accountId, apiToken, fetcher = fetch} = {}) {
-  assert.match(accountId ?? '', ACCOUNT_ID, 'cloudflare-account-id-invalid');
-  assert.match(apiToken ?? '', API_TOKEN, 'cloudflare-audit-token-invalid');
-  const url = new URL(`/client/v4/accounts/${accountId}/d1/database/${PRODUCTION_PLATFORM_D1_ID}/query`, CLOUDFLARE_ORIGIN);
+  const normalizedAccountId = typeof accountId === 'string' ? accountId.trim() : '';
+  const normalizedApiToken = typeof apiToken === 'string' ? apiToken.trim() : '';
+  assert.match(normalizedAccountId, ACCOUNT_ID, 'cloudflare-account-id-invalid');
+  assert.match(normalizedApiToken, API_TOKEN, 'cloudflare-audit-token-invalid');
+  const url = new URL(`/client/v4/accounts/${normalizedAccountId}/d1/database/${PRODUCTION_PLATFORM_D1_ID}/query`, CLOUDFLARE_ORIGIN);
   const tables = {};
   for (const [table, query] of Object.entries(PLATFORM_QUERIES)) {
     assert.match(query, /^SELECT\b/i, `platform-${table}-query-not-read-only`);
@@ -204,7 +206,7 @@ export async function collectPlatformSnapshot({accountId, apiToken, fetcher = fe
     const response = await fetcher(url, {
       method: 'POST',
       redirect: 'manual',
-      headers: {authorization: `Bearer ${apiToken}`, accept: 'application/json', 'content-type': 'application/json'},
+      headers: {authorization: `Bearer ${normalizedApiToken}`, accept: 'application/json', 'content-type': 'application/json'},
       body: JSON.stringify({sql: query}),
       signal: AbortSignal.timeout(CLOUDFLARE_TIMEOUT_MS),
     });
