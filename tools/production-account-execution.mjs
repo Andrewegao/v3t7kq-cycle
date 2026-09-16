@@ -1,366 +1,143 @@
-// Fail-closed execution boundary for the production account release transaction.
-//
-// This module owns authorization, lease proof, durable intent/result receipts and
-// action dispatch. It deliberately does not own credentials or create a network
-// client. A reviewed command/API adapter must be injected by the caller. The
-// currently provisional Lane B contract can be planned, but the execute path can
-// never opt into the test-only provisional override.
+// Authenticated, fenced and journaled execution boundary for production account release actions.
+// No credential, network client or shell is constructed at module load time.
 import assert from 'node:assert/strict';
-import {createHash, randomUUID} from 'node:crypto';
-import {
-  lstat,
-  mkdir,
-  open,
-  readFile,
-  rename,
-  rm,
-} from 'node:fs/promises';
-import {join, resolve} from 'node:path';
+import {constants as FS} from 'node:fs';
+import {createHash, createPublicKey, verify as verifySignature} from 'node:crypto';
+import {mkdir, open, realpath, readdir} from 'node:fs/promises';
+import {dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
 
 import {LANE_B_CONTRACT} from './production-account-contract.mjs';
 import {
-  activatePreparedWorker,
-  applyPagesConfiguration,
-  preparePagesConfiguration,
-  prepareWorkerVersion,
-  productionReleasePlanDigest,
-  recoverPagesConfiguration,
-  recoverWorkerActivation,
-  recoverWorkerRollback,
-  validateProductionReleasePlan,
+  activatePreparedWorker, applyPagesConfiguration, preparePagesConfiguration, prepareWorkerVersion,
+  productionReleasePlanDigest, recoverPagesConfiguration, recoverWorkerActivation,
+  recoverWorkerRollback, validateProductionReleasePlan,
 } from './production-account-release.mjs';
 
-const DIGEST = /^[a-f0-9]{64}$/;
-const ID = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,159}$/;
-const MAX_AUTHORIZATION_MS = 30 * 60_000;
-const MAX_RECEIPT_BYTES = 2 * 1024 * 1024;
-const CONFIRMATION = 'AUTHORIZE WEATHERX PRODUCTION MUTATION';
+const DIGEST=/^[a-f0-9]{64}$/,UUID=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+const ID=/^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,159}$/;
+const MAX_APPROVAL_MS=30*60_000,MAX_LEASE_MS=10*60_000,MIN_LEASE_REMAINING_MS=60_000,MAX_RECEIPT_BYTES=2*1024*1024;
+const CONFIRMATION='AUTHORIZE WEATHERX PRODUCTION MUTATION';
+const APPROVAL_KIND='weatherx-production-mutation-approval-v2',LEASE_KIND='weatherx-production-exclusive-lease-v2';
+export const PRODUCTION_ACCOUNT_ACTIONS=Object.freeze(['prepare-worker','activate-worker','recover-worker-activation','recover-worker-rollback','prepare-pages','apply-pages','recover-pages']);
+const NEEDS_INPUT=new Set(['activate-worker','recover-worker-activation','recover-worker-rollback','apply-pages','recover-pages']);
+const RECOVERY=new Set(['recover-worker-activation','recover-worker-rollback','recover-pages']);
+const WORKER_MUTATIONS=new Set(['uploadVersion','activateVersion','rollbackVersion']),PAGES_MUTATIONS=new Set(['updateProject','restoreProject']);
+const PRODUCTION_APPROVAL_AUTHORITIES=new WeakSet(),TEST_APPROVAL_AUTHORITIES=new WeakSet();
+const PRODUCTION_LEASE_AUTHORITIES=new WeakSet(),TEST_LEASE_AUTHORITIES=new WeakSet();
 
-export const PRODUCTION_ACCOUNT_ACTIONS = Object.freeze([
-  'prepare-worker',
-  'activate-worker',
-  'recover-worker-activation',
-  'recover-worker-rollback',
-  'prepare-pages',
-  'apply-pages',
-  'recover-pages',
-]);
-
-const MUTATING_ACTIONS = new Set(PRODUCTION_ACCOUNT_ACTIONS);
-const NEEDS_INPUT_RECEIPT = new Set([
-  'activate-worker',
-  'recover-worker-activation',
-  'recover-worker-rollback',
-  'apply-pages',
-  'recover-pages',
-]);
-
-const digest = value => createHash('sha256').update(value).digest('hex');
-
-function canonical(value) {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
-  }
-  assert.ok(value === null || ['string','number','boolean'].includes(typeof value),
-    'execution value is not canonical JSON');
-  if (typeof value === 'number') assert.ok(Number.isFinite(value), 'execution value contains a non-finite number');
-  return JSON.stringify(value);
+export class ProductionExecutionError extends Error { constructor(code,options){super(code,options);this.name='ProductionExecutionError';this.code=code;} }
+const fail=(code,cause)=>{throw new ProductionExecutionError(code,cause?{cause}:undefined);};
+const hash=value=>createHash('sha256').update(value).digest('hex');
+function canonical(value){
+  if(Array.isArray(value))return`[${value.map(canonical).join(',')}]`;
+  if(value&&typeof value==='object')return`{${Object.keys(value).sort().map(key=>`${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
+  assert.ok(value===null||['string','number','boolean'].includes(typeof value),'noncanonical-execution-value');
+  if(typeof value==='number')assert.ok(Number.isFinite(value),'noncanonical-execution-number');return JSON.stringify(value);
 }
+const valueDigest=value=>hash(canonical(value));
+function record(value,message){assert.ok(value&&typeof value==='object'&&!Array.isArray(value),message);return value;}
+function exactKeys(value,names,message){record(value,message);assert.deepEqual(Object.keys(value).sort(),[...names].sort(),message);return value;}
+function timestamp(value,name){assert.match(value??'',/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,`${name}-invalid`);const result=Date.parse(value);assert.ok(Number.isFinite(result)&&new Date(result).toISOString()===value,`${name}-invalid`);return result;}
+const targetDigest=plan=>valueDigest({target:plan.target,identities:plan.identities,candidateBinding:plan.candidateBinding});
+const inputReceiptDigest=request=>request.inputReceipt?.digest??null;
+export function productionExecutionRequestDigest(request){return valueDigest({schemaVersion:request.schemaVersion,kind:request.kind,mode:request.mode,action:request.action,planDigest:productionReleasePlanDigest(request.plan),inputReceiptDigest:inputReceiptDigest(request)});}
 
-function record(value, message) {
-  assert.ok(value && typeof value === 'object' && !Array.isArray(value), message);
-  return value;
+export function validateProductionExecutionRequest(value){
+  const request=exactKeys(value,['schemaVersion','kind','mode','action','plan','inputReceipt','approval'],'execution-request-invalid');
+  assert.equal(request.schemaVersion,2,'execution-request-version-invalid');assert.equal(request.kind,'weatherx-production-account-execution-request-v2','execution-request-kind-invalid');
+  assert.ok(request.mode==='plan'||request.mode==='execute','execution-mode-invalid');assert.ok(PRODUCTION_ACCOUNT_ACTIONS.includes(request.action),'execution-action-invalid');
+  if(NEEDS_INPUT.has(request.action)){exactKeys(request.inputReceipt,['receiptId','digest'],'input-receipt-reference-invalid');assert.match(request.inputReceipt.receiptId??'',ID,'input-receipt-id-invalid');assert.match(request.inputReceipt.digest??'',DIGEST,'input-receipt-digest-invalid');}
+  else assert.equal(request.inputReceipt,null,'input-receipt-unexpected');
+  if(request.mode==='plan')assert.equal(request.approval,null,'plan-approval-forbidden');else exactKeys(request.approval,['payload','signature'],'approval-envelope-invalid');return request;
 }
-
-function exactKeys(value, names, message) {
-  record(value, message);
-  assert.deepEqual(Object.keys(value).sort(), [...names].sort(), message);
-  return value;
+export function productionExecutionApprovalContext(request,plan){return{action:request.action,transactionId:plan.transactionId,leaseOwner:plan.leaseOwner,contractDigest:plan.contractDigest,planDigest:productionReleasePlanDigest(plan),targetDigest:targetDigest(plan),requestDigest:productionExecutionRequestDigest(request),inputReceiptDigest:inputReceiptDigest(request)};}
+function validateApprovalPayload(payload,expected,authority){
+  exactKeys(payload,['schemaVersion','kind','approvalId','issuer','audience','confirmation','action','transactionId','leaseOwner','contractDigest','planDigest','targetDigest','requestDigest','inputReceiptDigest','issuedAt','expiresAt'],'approval-payload-invalid');
+  assert.equal(payload.schemaVersion,2,'approval-version-invalid');assert.equal(payload.kind,APPROVAL_KIND,'approval-kind-invalid');assert.match(payload.approvalId??'',ID,'approval-id-invalid');
+  assert.equal(payload.issuer,authority.issuer,'approval-issuer-invalid');assert.equal(payload.audience,authority.audience,'approval-audience-invalid');assert.equal(payload.confirmation,CONFIRMATION,'approval-confirmation-invalid');
+  for(const[key,value]of Object.entries(expected))assert.equal(payload[key],value,`approval-${key}-mismatch`);
+  const issued=timestamp(payload.issuedAt,'approval-issued-at'),expires=timestamp(payload.expiresAt,'approval-expires-at');assert.ok(expires-issued>0&&expires-issued<=MAX_APPROVAL_MS,'approval-lifetime-invalid');return payload;
 }
-
-function parseTimestamp(value, name) {
-  assert.match(value ?? '', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/, `${name} is invalid`);
-  const milliseconds = Date.parse(value);
-  assert.ok(Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === value, `${name} is invalid`);
-  return milliseconds;
+function approvalAuthority({publicKey,issuer,audience,clock},registry){
+  assert.match(issuer??'',ID,'approval-authority-issuer-invalid');assert.match(audience??'',ID,'approval-authority-audience-invalid');const key=publicKey?.type==='public'?publicKey:createPublicKey(publicKey);assert.equal(key.asymmetricKeyType,'ed25519','approval-key-must-be-ed25519');
+  const authority=Object.freeze({issuer,audience,async authenticate(envelope,expected){exactKeys(envelope,['payload','signature'],'approval-envelope-invalid');const signature=Buffer.from(envelope.signature??'','base64');assert.ok(signature.length===64&&envelope.signature===signature.toString('base64'),'approval-signature-invalid');assert.ok(verifySignature(null,Buffer.from(canonical(envelope.payload)),key,signature),'approval-signature-invalid');return validateApprovalPayload(envelope.payload,expected,authority);},assertCurrent(payload){const now=clock(),issued=timestamp(payload.issuedAt,'approval-issued-at'),expires=timestamp(payload.expiresAt,'approval-expires-at');assert.ok(issued<=now&&expires>now,'approval-not-current');return payload;}});
+  registry.add(authority);return authority;
 }
+export const createEd25519ProductionApprovalAuthority=options=>approvalAuthority({...options,clock:Date.now},PRODUCTION_APPROVAL_AUTHORITIES);
+export const createTestEd25519ProductionApprovalAuthority=options=>approvalAuthority(options,TEST_APPROVAL_AUTHORITIES);
 
-function targetDigest(plan) {
-  return digest(canonical({target: plan.target, identities: plan.identities, candidateBinding: plan.candidateBinding}));
+function validateLease(value,expected,now,prior=null){
+  const lease=exactKeys(value,['schemaVersion','kind','leaseId','issuer','approvalId','leaseOwner','transactionId','action','contractDigest','planDigest','targetDigest','requestDigest','inputReceiptDigest','fencingToken','issuedAt','expiresAt'],'lease-proof-invalid');
+  assert.equal(lease.schemaVersion,2,'lease-version-invalid');assert.equal(lease.kind,LEASE_KIND,'lease-kind-invalid');assert.match(lease.leaseId??'',ID,'lease-id-invalid');assert.match(lease.issuer??'',ID,'lease-issuer-invalid');assert.ok(Number.isSafeInteger(lease.fencingToken)&&lease.fencingToken>0,'lease-fencing-token-invalid');
+  for(const[key,item]of Object.entries(expected))assert.equal(lease[key],item,`lease-${key}-mismatch`);
+  const issued=timestamp(lease.issuedAt,'lease-issued-at'),expires=timestamp(lease.expiresAt,'lease-expires-at');assert.ok(issued<=now&&expires-issued>0&&expires-issued<=MAX_LEASE_MS,'lease-lifetime-invalid');assert.ok(expires-now>=MIN_LEASE_REMAINING_MS,'lease-insufficient-remaining-time');
+  if(prior){assert.equal(lease.leaseId,prior.leaseId,'lease-id-changed');assert.equal(lease.issuer,prior.issuer,'lease-issuer-changed');assert.equal(lease.fencingToken,prior.fencingToken,'lease-fencing-token-changed');assert.ok(expires>=timestamp(prior.expiresAt,'lease-prior-expires-at'),'lease-expiry-regressed');}return lease;
 }
-
-function requestDigest(request) {
-  return digest(canonical({
-    schemaVersion: request.schemaVersion,
-    kind: request.kind,
-    mode: request.mode,
-    action: request.action,
-    planDigest: productionReleasePlanDigest(request.plan),
-    inputReceiptDigest: request.inputReceipt === null ? null : digest(canonical(request.inputReceipt)),
-  }));
+function leaseAuthority({client,clock,issuer},registry){
+  assert.equal(typeof client?.acquire,'function','lease-client-acquire-required');assert.equal(typeof client?.read,'function','lease-client-read-required');
+  assert.match(issuer??'',ID,'lease-authority-issuer-invalid');const fences=new Map();
+  const authority=Object.freeze({async acquire(expected){const bound={...expected,issuer},first=validateLease(await client.acquire(structuredClone(bound)),bound,clock());const prior=fences.get(expected.targetDigest)??0;assert.ok(first.fencingToken>prior,'lease-fencing-token-not-monotonic');fences.set(expected.targetDigest,first.fencingToken);return Object.freeze({proof:structuredClone(first),async recheck(){return validateLease(await client.read(first.leaseId),bound,clock(),first);}});}});registry.add(authority);return authority;
 }
+export const createMonotonicProductionLeaseAuthority=({client,issuer})=>leaseAuthority({client,issuer,clock:Date.now},PRODUCTION_LEASE_AUTHORITIES);
+export const createTestMonotonicProductionLeaseAuthority=(client,clock,issuer='weatherx-independent-lease-service')=>leaseAuthority({client,issuer,clock},TEST_LEASE_AUTHORITIES);
 
-export function validateProductionExecutionRequest(value) {
-  const request = exactKeys(value,
-    ['schemaVersion','kind','mode','action','plan','inputReceipt','authorization'],
-    'invalid production execution request');
-  assert.equal(request.schemaVersion, 1);
-  assert.equal(request.kind, 'weatherx-production-account-execution-request');
-  assert.ok(request.mode === 'plan' || request.mode === 'execute', 'execution mode must be plan or execute');
-  assert.ok(PRODUCTION_ACCOUNT_ACTIONS.includes(request.action), 'invalid production execution action');
-  if (NEEDS_INPUT_RECEIPT.has(request.action)) record(request.inputReceipt, 'input transaction receipt is required');
-  else assert.equal(request.inputReceipt, null, 'input transaction receipt is not accepted for this action');
-  if (request.mode === 'plan') assert.equal(request.authorization, null, 'plan mode cannot carry mutation authorization');
-  return request;
-}
+function blockers(plan){const values=Object.values(plan.stripe?.priceIds??{}),result=[];if(LANE_B_CONTRACT.status!=='final')result.push('lane-b-contract-provisional');if(values.length!==2||values.some(value=>!/^price_[A-Za-z0-9_]{1,250}$/.test(value??'')||/replace|test|provisional|approval|required|unusable/i.test(value)))result.push('owner-approved-live-stripe-prices-required');return result;}
+export function planProductionAccountExecution(value,dependencies){const request=validateProductionExecutionRequest(value);assert.equal(request.mode,'plan','plan-mode-required');const plan=validateProductionReleasePlan(request.plan,{candidate:dependencies?.candidate,qualification:dependencies?.qualification,allowProvisional:true});const blocked=blockers(plan);return Object.freeze({schemaVersion:2,kind:'weatherx-production-account-execution-preview-v2',mode:'plan',action:request.action,executable:blocked.length===0,transactionId:plan.transactionId,leaseOwner:plan.leaseOwner,contractDigest:plan.contractDigest,planDigest:productionReleasePlanDigest(plan),targetDigest:targetDigest(plan),requestDigest:productionExecutionRequestDigest(request),inputReceiptDigest:inputReceiptDigest(request),target:structuredClone(plan.target),identities:structuredClone(plan.identities),modes:structuredClone(plan.modes),stripePriceIds:structuredClone(plan.stripe.priceIds),blockers:blocked});}
 
-export function validateProductionMutationAuthorization(value, request, plan, now = Date.now()) {
-  assert.ok(MUTATING_ACTIONS.has(request.action), 'action is not a production mutation');
-  const authorization = exactKeys(value,
-    ['schemaVersion','kind','confirmation','action','transactionId','leaseOwner','contractDigest','planDigest','targetDigest','issuedAt','expiresAt'],
-    'invalid production mutation authorization');
-  assert.equal(authorization.schemaVersion, 1);
-  assert.equal(authorization.kind, 'weatherx-production-mutation-authorization');
-  assert.equal(authorization.confirmation, CONFIRMATION, 'explicit production mutation confirmation is required');
-  assert.equal(authorization.action, request.action, 'authorization action differs');
-  assert.equal(authorization.transactionId, plan.transactionId, 'authorization transaction differs');
-  assert.equal(authorization.leaseOwner, plan.leaseOwner, 'authorization lease owner differs');
-  assert.equal(authorization.contractDigest, plan.contractDigest, 'authorization contract differs');
-  assert.equal(authorization.planDigest, productionReleasePlanDigest(plan), 'authorization plan differs');
-  assert.equal(authorization.targetDigest, targetDigest(plan), 'authorization target or artifact differs');
-  const issuedAt = parseTimestamp(authorization.issuedAt, 'authorization issuedAt');
-  const expiresAt = parseTimestamp(authorization.expiresAt, 'authorization expiresAt');
-  assert.ok(Number.isSafeInteger(now), 'execution clock is invalid');
-  assert.ok(issuedAt <= now && expiresAt > now, 'production mutation authorization is not currently valid');
-  assert.ok(expiresAt - issuedAt > 0 && expiresAt - issuedAt <= MAX_AUTHORIZATION_MS,
-    'production mutation authorization lifetime is too long');
-  return authorization;
-}
-
-function validateLeaseProof(value, plan, action, now) {
-  const proof = exactKeys(value,
-    ['schemaVersion','kind','held','leaseId','leaseOwner','transactionId','action','planDigest','targetDigest','expiresAt'],
-    'invalid exclusive lease proof');
-  assert.equal(proof.schemaVersion, 1);
-  assert.equal(proof.kind, 'weatherx-production-exclusive-lease-proof');
-  assert.equal(proof.held, true, 'exclusive production lease is not held');
-  assert.match(proof.leaseId ?? '', ID, 'exclusive production lease identity is invalid');
-  assert.equal(proof.leaseOwner, plan.leaseOwner, 'exclusive production lease owner differs');
-  assert.equal(proof.transactionId, plan.transactionId, 'exclusive production lease transaction differs');
-  assert.equal(proof.action, action, 'exclusive production lease action differs');
-  assert.equal(proof.planDigest, productionReleasePlanDigest(plan), 'exclusive production lease plan differs');
-  assert.equal(proof.targetDigest, targetDigest(plan), 'exclusive production lease target differs');
-  assert.ok(parseTimestamp(proof.expiresAt, 'exclusive production lease expiry') > now,
-    'exclusive production lease expired');
-  return proof;
-}
-
-function blockedReasons(plan) {
-  const reasons = [];
-  if (LANE_B_CONTRACT.status !== 'final') reasons.push('lane-b-contract-provisional');
-  const prices = Object.values(plan.stripe?.priceIds ?? {});
-  if (prices.length !== 2 || prices.some(value => !/^price_[A-Za-z0-9_]{1,250}$/.test(value ?? '') ||
-      /replace|test|provisional|approval|required|unusable/i.test(value))) {
-    reasons.push('owner-approved-live-stripe-prices-required');
-  }
-  return reasons;
-}
-
-export function validateProductionInputReceiptBinding(request, plan) {
-  if (!NEEDS_INPUT_RECEIPT.has(request.action)) return;
-  const receipt = record(request.inputReceipt, 'input transaction receipt is required');
-  assert.equal(receipt.transactionId, plan.transactionId, 'input receipt transaction differs from the authorized plan');
-  assert.equal(receipt.leaseOwner, plan.leaseOwner, 'input receipt lease owner differs from the authorized plan');
-  assert.equal(receipt.contractDigest, plan.contractDigest, 'input receipt contract differs from the authorized plan');
-  assert.equal(receipt.planDigest, productionReleasePlanDigest(plan),
-    'input receipt plan digest differs from the authorized plan');
-  assert.deepEqual(receipt.plan, plan, 'input receipt plan differs from the authorized plan');
-}
-
-export function planProductionAccountExecution(value, dependencies) {
-  const request = validateProductionExecutionRequest(value);
-  assert.equal(request.mode, 'plan', 'planProductionAccountExecution accepts plan mode only');
-  const options = {
-    candidate: dependencies?.candidate,
-    qualification: dependencies?.qualification,
-    // The override exists only here, where authorization is forbidden and no adapter
-    // is accepted or called. It provides a useful blocked preview for the provisional contract.
-    allowProvisional: true,
-  };
-  const plan = validateProductionReleasePlan(request.plan, options);
-  validateProductionInputReceiptBinding(request, plan);
-  const blockers = blockedReasons(plan);
-  return Object.freeze({
-    schemaVersion: 1,
-    kind: 'weatherx-production-account-execution-preview',
-    mode: 'plan',
-    action: request.action,
-    executable: blockers.length === 0,
-    transactionId: plan.transactionId,
-    leaseOwner: plan.leaseOwner,
-    contractDigest: plan.contractDigest,
-    planDigest: productionReleasePlanDigest(plan),
-    targetDigest: targetDigest(plan),
-    requestDigest: requestDigest(request),
-    target: structuredClone(plan.target),
-    identities: structuredClone(plan.identities),
-    modes: structuredClone(plan.modes),
-    stripePriceIds: structuredClone(plan.stripe.priceIds),
-    blockers,
+const receiptReference=(receiptId,transaction)=>({receiptId,digest:valueDigest(transaction)});
+async function readAttempt(receipts,id){try{const journal=await receipts.read(id);assert.ok(Array.isArray(journal)&&journal.length>0,'receipt-journal-invalid');journal.forEach((entry,index)=>{exactKeys(entry,['sequence','state','record'],'receipt-entry-invalid');assert.equal(entry.sequence,index,'receipt-sequence-invalid');});return journal;}catch(error){if(error?.code==='receipt-not-found')return null;throw error;}}
+async function loadInputReceipt(request,receipts){if(!NEEDS_INPUT.has(request.action))return null;const journal=await readAttempt(receipts,request.inputReceipt.receiptId);assert.ok(journal,'input-receipt-not-found');const last=journal.at(-1);assert.equal(last.state,'completed','input-receipt-not-completed');const transaction=record(last.record.transaction,'input-receipt-transaction-missing');assert.equal(valueDigest(transaction),request.inputReceipt.digest,'input-receipt-digest-mismatch');return structuredClone(transaction);}
+function bindInput(input,plan){if(!input)return;assert.equal(input.transactionId,plan.transactionId,'input-receipt-transaction-mismatch');assert.equal(input.leaseOwner,plan.leaseOwner,'input-receipt-owner-mismatch');assert.equal(input.contractDigest,plan.contractDigest,'input-receipt-contract-mismatch');assert.equal(input.planDigest,productionReleasePlanDigest(plan),'input-receipt-plan-digest-mismatch');assert.deepEqual(input.plan,plan,'input-receipt-plan-mismatch');}
+function fencedClient(client,methods,session){return new Proxy(client??{},{get(target,property,receiver){if(!methods.has(property))return Reflect.get(target,property,receiver);const operation=Reflect.get(target,property,receiver);assert.equal(typeof operation,'function',`adapter-${String(property)}-missing`);return async specification=>{const proof=await session.recheck();return operation.call(target,{...specification,fence:{leaseId:proof.leaseId,fencingToken:proof.fencingToken,expiresAt:proof.expiresAt}});};}});}
+const stableFailure=error=>error instanceof ProductionExecutionError?error.code:'production-operation-failed';
+const PRODUCTION_OPERATIONS=Object.freeze({
+  async'prepare-worker'(request,d,options,session){return prepareWorkerVersion(request.plan,fencedClient(d.workerClient,WORKER_MUTATIONS,session),options);},
+  async'activate-worker'(_request,d,options,session,input){const client=fencedClient(d.workerClient,WORKER_MUTATIONS,session);assert.deepEqual(await client.readVersion(input.candidate.versionId),input.candidate,'prepared-worker-version-readback-mismatch');return activatePreparedWorker(input,client,{...options,verify:d.verifyWorker});},
+  async'recover-worker-activation'(_request,d,options,session,input){await session.recheck();return recoverWorkerActivation(input,fencedClient(d.workerClient,WORKER_MUTATIONS,session),{...options,verify:d.verifyWorker});},
+  async'recover-worker-rollback'(_request,d,options,session,input){await session.recheck();return recoverWorkerRollback(input,fencedClient(d.workerClient,WORKER_MUTATIONS,session),options);},
+  async'prepare-pages'(request,d,options){return preparePagesConfiguration(request.plan,d.pagesClient,{...options,storeReceipt:async()=>{}});},
+  async'apply-pages'(_request,d,options,session,input){return applyPagesConfiguration(input,fencedClient(d.pagesClient,PAGES_MUTATIONS,session),{...options,verify:d.verifyPages,readStoredReceipt:async()=>structuredClone(input)});},
+  async'recover-pages'(_request,d,options,session,input){await session.recheck();return recoverPagesConfiguration(input,fencedClient(d.pagesClient,PAGES_MUTATIONS,session),{...options,verify:d.verifyPages,readStoredReceipt:async()=>structuredClone(input)});},
+});
+function createExecutor({approvalAuthority:approvals,leaseAuthority:leases,receipts,dependencies,validatePlan,operations}){
+  for(const method of['create','append','read'])assert.equal(typeof receipts?.[method],'function',`receipt-store-${method}-required`);
+  return Object.freeze({async execute(value){const request=validateProductionExecutionRequest(value);assert.equal(request.mode,'execute','execute-mode-required');const options={candidate:dependencies?.candidate,qualification:dependencies?.qualification};const plan=validatePlan(request.plan,options);const expected=productionExecutionApprovalContext(request,plan);const approval=await approvals.authenticate(request.approval,expected);const receiptId=`${plan.transactionId}:${request.action}:${approval.approvalId}`;const existing=await readAttempt(receipts,receiptId);
+    if(existing){assert.equal(existing[0].record.requestDigest,expected.requestDigest,'attempt-replay-request-mismatch');const last=existing.at(-1);if(last.state==='completed')return structuredClone(last.record);fail('ambiguous-intent-recovery-required');}
+    approvals.assertCurrent(approval);const input=await loadInputReceipt(request,receipts);bindInput(input,plan);
+    const session=await leases.acquire({...expected,approvalId:approval.approvalId});const proof=await session.recheck();const intent={schemaVersion:2,kind:'weatherx-production-account-execution-intent-v2',receiptId,state:'intent',action:request.action,approvalId:approval.approvalId,transactionId:plan.transactionId,leaseOwner:plan.leaseOwner,contractDigest:plan.contractDigest,planDigest:expected.planDigest,targetDigest:expected.targetDigest,requestDigest:expected.requestDigest,inputReceiptDigest:expected.inputReceiptDigest,lease:{leaseId:proof.leaseId,issuer:proof.issuer,fencingToken:proof.fencingToken,expiresAt:proof.expiresAt}};
+    await receipts.create(receiptId,{sequence:0,state:'intent',record:intent});
+    try{if(RECOVERY.has(request.action))await session.recheck();const transaction=await operations[request.action](request,dependencies,options,session,input);const completed={schemaVersion:2,kind:'weatherx-production-account-execution-result-v2',receiptId,state:'completed',action:request.action,approvalId:approval.approvalId,requestDigest:expected.requestDigest,inputReceiptDigest:expected.inputReceiptDigest,transaction:structuredClone(transaction),reference:receiptReference(receiptId,transaction)};await receipts.append(receiptId,0,{sequence:1,state:'completed',record:completed});return completed;}
+    catch(error){const recovery={schemaVersion:2,kind:'weatherx-production-account-execution-result-v2',receiptId,state:'recovery-required',action:request.action,approvalId:approval.approvalId,requestDigest:expected.requestDigest,inputReceiptDigest:expected.inputReceiptDigest,failure:{code:stableFailure(error)}};await receipts.append(receiptId,0,{sequence:1,state:'recovery-required',record:recovery}).catch(()=>{});throw new ProductionExecutionError('production-operation-recovery-required');}}
   });
 }
+export function createProductionAccountExecutor(options){assert.ok(PRODUCTION_APPROVAL_AUTHORITIES.has(options?.approvalAuthority),'production-approval-authority-required');assert.ok(PRODUCTION_LEASE_AUTHORITIES.has(options?.leaseAuthority),'production-lease-authority-required');return createExecutor({...options,validatePlan:validateProductionReleasePlan,operations:PRODUCTION_OPERATIONS});}
+export function createTestProductionAccountExecutor(options){assert.equal(options?.testOnly,true,'test-only-executor-marker-required');assert.ok(TEST_APPROVAL_AUTHORITIES.has(options?.approvalAuthority),'test-approval-authority-required');assert.ok(TEST_LEASE_AUTHORITIES.has(options?.leaseAuthority),'test-lease-authority-required');return createExecutor(options);}
 
-function safeFailureReceipt(intent) {
-  return {...intent, phase: 'failed', failure: {code: 'production-operation-failed'}};
+async function ownedDirectory(path){let handle;try{handle=await open(path,FS.O_RDONLY|FS.O_DIRECTORY|FS.O_NOFOLLOW);const details=await handle.stat();assert.ok(details.isDirectory(),'receipt-path-unsafe');assert.equal(details.uid,process.getuid(),'receipt-path-owner-invalid');assert.equal(details.mode&0o777,0o700,'receipt-path-mode-invalid');assert.equal(await realpath(path),path,'receipt-path-not-real');}finally{await handle?.close().catch(()=>{});}}
+async function syncDirectory(path){const handle=await open(path,FS.O_RDONLY|FS.O_DIRECTORY|FS.O_NOFOLLOW);try{await handle.sync();}finally{await handle.close();}}
+async function safeRead(path){let handle;try{handle=await open(path,FS.O_RDONLY|FS.O_NOFOLLOW);const details=await handle.stat();assert.ok(details.isFile()&&details.uid===process.getuid()&&(details.mode&0o777)===0o600&&details.nlink===1&&details.size>0&&details.size<=MAX_RECEIPT_BYTES,'receipt-file-unsafe');return await handle.readFile('utf8');}catch(error){if(error?.code==='ENOENT')fail('receipt-not-found');throw error;}finally{await handle?.close().catch(()=>{});}}
+async function exclusiveWrite(path,body){assert.ok(Buffer.byteLength(body)<=MAX_RECEIPT_BYTES,'receipt-too-large');let handle;try{handle=await open(path,FS.O_WRONLY|FS.O_CREAT|FS.O_EXCL|FS.O_NOFOLLOW,0o600);const details=await handle.stat();assert.ok(details.isFile()&&details.uid===process.getuid()&&(details.mode&0o777)===0o600&&details.nlink===1,'receipt-file-unsafe');await handle.writeFile(body,'utf8');await handle.sync();}finally{await handle?.close().catch(()=>{});}}
+export async function createProductionReceiptStore(directory,{trustedRoot=dirname(resolve(directory))}={}){
+  const requestedRoot=resolve(directory),requestedAnchor=resolve(trustedRoot),rel=relative(requestedAnchor,requestedRoot);assert.ok(rel!==''&&!rel.startsWith(`..${sep}`)&&rel!=='..'&&!isAbsolute(rel),'receipt-root-outside-trusted-root');const anchor=await realpath(requestedAnchor);assert.equal(anchor,requestedAnchor,'receipt-anchor-not-real');const root=resolve(anchor,rel);await ownedDirectory(anchor);let current=anchor;
+  for(const part of rel.split(sep)){const parent=current;current=join(current,part);let created=false;try{await mkdir(current,{mode:0o700});created=true;}catch(error){if(error?.code!=='EEXIST')throw error;}await ownedDirectory(current);if(created)await syncDirectory(parent);}await syncDirectory(root);
+  const attemptPath=id=>{assert.match(id??'',/^[A-Za-z0-9][A-Za-z0-9._:+-]{0,479}$/,'receipt-id-invalid');return join(root,hash(id));};
+  function validateEntry(entry,sequence){exactKeys(entry,['sequence','state','record'],'receipt-entry-invalid');assert.equal(entry.sequence,sequence,'receipt-sequence-invalid');assert.equal(entry.record?.state,entry.state,'receipt-record-state-mismatch');if(sequence===0)assert.equal(entry.state,'intent','receipt-initial-state-invalid');else{assert.equal(sequence,1,'receipt-terminal-sequence-invalid');assert.ok(entry.state==='completed'||entry.state==='recovery-required','receipt-terminal-state-invalid');}return entry;}
+  async function readJournal(id){const folder=attemptPath(id);await ownedDirectory(folder).catch(error=>{if(error?.code==='ENOENT')fail('receipt-not-found');throw error;});const names=(await readdir(folder)).sort();assert.ok(names.length>0,'receipt-journal-empty');assert.deepEqual(names,names.map((_,index)=>`${String(index).padStart(8,'0')}.json`),'receipt-journal-files-invalid');const entries=[];for(const name of names){const envelope=JSON.parse(await safeRead(join(folder,name)));exactKeys(envelope,['receiptId','entry'],'receipt-envelope-invalid');assert.equal(envelope.receiptId,id,'receipt-id-mismatch');entries.push(validateEntry(envelope.entry,entries.length));}return entries;}
+  return Object.freeze({async create(id,entry){validateEntry(entry,0);const folder=attemptPath(id);try{await mkdir(folder,{mode:0o700});}catch(error){if(error?.code==='EEXIST')fail('receipt-attempt-exists');throw error;}await ownedDirectory(folder);await exclusiveWrite(join(folder,'00000000.json'),`${JSON.stringify({receiptId:id,entry},null,2)}\n`);await syncDirectory(folder);await syncDirectory(root);},async append(id,expectedSequence,entry){const journal=await readJournal(id);assert.equal(journal.length-1,expectedSequence,'receipt-sequence-conflict');const folder=attemptPath(id),sequence=expectedSequence+1;validateEntry(entry,sequence);await exclusiveWrite(join(folder,`${String(sequence).padStart(8,'0')}.json`),`${JSON.stringify({receiptId:id,entry},null,2)}\n`);await syncDirectory(folder);},read:readJournal});
 }
 
-async function writeAndRead(receipts, id, value) {
-  assert.equal(typeof receipts?.write, 'function', 'durable receipt writer is required');
-  assert.equal(typeof receipts?.read, 'function', 'durable receipt readback is required');
-  await receipts.write(id, structuredClone(value));
-  const stored = await receipts.read(id);
-  assert.deepEqual(stored, value, `durable receipt ${id} readback differs`);
-  return stored;
+function validateFence(value){exactKeys(value,['leaseId','fencingToken','expiresAt'],'adapter-fence-invalid');assert.match(value.leaseId??'',ID);assert.ok(Number.isSafeInteger(value.fencingToken)&&value.fencingToken>0);timestamp(value.expiresAt,'adapter-fence-expiry');return value;}
+function exactProvider(value,keys,code){try{exactKeys(value,keys,code);const copy=structuredClone(value);return exactKeys(copy,keys,code);}catch{fail(code);}}
+function stableCommand(result){let value;try{value=exactKeys(result,['stdout','stderr','exitCode'],'cloudflare-command-response-invalid');assert.equal(typeof value.stdout,'string');assert.equal(typeof value.stderr,'string');assert.ok(Number.isSafeInteger(value.exitCode));}catch{fail('cloudflare-command-response-invalid');}if(value.exitCode!==0)fail('cloudflare-command-failed');return value.stdout;}
+export function createCloudflareWorkerCommandAdapter({runner,readDeployment,readVersion,wranglerPath,cwd,configPath,environment='production',workerName}){
+  assert.equal(typeof runner,'function','cloudflare-runner-required');assert.equal(typeof readDeployment,'function');assert.equal(typeof readVersion,'function');for(const path of[wranglerPath,cwd,configPath])assert.ok(isAbsolute(path),'cloudflare-command-path-must-be-absolute');assert.equal(environment,'production','cloudflare-environment-invalid');assert.match(workerName??'',ID,'cloudflare-worker-name-invalid');
+  const run=async(args,fence)=>{try{return stableCommand(await runner(process.execPath,[wranglerPath,...args,'--config',configPath,'--env',environment],{cwd,fence:structuredClone(validateFence(fence))}));}catch(error){if(error instanceof ProductionExecutionError)throw error;fail('cloudflare-command-failed');}};
+  const deployment=async()=>{let raw;try{raw=await readDeployment();}catch{fail('worker-deployment-read-failed');}const value=exactProvider(raw,['workerName','versionId','deploymentId','configDigest','etag','mutationOwner'],'worker-deployment-response-invalid');if(value.workerName!==workerName)fail('worker-deployment-target-invalid');try{assert.equal(typeof value.versionId,'string');assert.equal(typeof value.deploymentId,'string');assert.match(value.configDigest??'',DIGEST);assert.equal(typeof value.etag,'string');assert.ok(value.etag.length>0);assert.ok(value.mutationOwner===null||ID.test(value.mutationOwner));}catch{fail('worker-deployment-response-invalid');}return value;};
+  const version=async id=>{let raw;try{raw=await readVersion(id);}catch{fail('worker-version-read-failed');}const value=exactProvider(raw,['versionId','sourceDigest','configDigest'],'worker-version-response-invalid');if(value.versionId!==id)fail('worker-version-target-invalid');try{assert.match(value.versionId??'',UUID);assert.match(value.sourceDigest??'',DIGEST);assert.match(value.configDigest??'',DIGEST);}catch{fail('worker-version-response-invalid');}return value;};
+  return Object.freeze({readDeployment:deployment,readVersion:version,async uploadVersion(spec){exactKeys(spec,['workerName','sourceDigest','configDigest','tag','activate','fence'],'worker-upload-spec-invalid');assert.equal(spec.workerName,workerName);assert.equal(spec.activate,false);const stdout=await run(['versions','upload','--keep-vars','--tag',spec.tag,'--message',`WeatherX ${spec.tag}`],spec.fence);const id=stdout.match(/Worker Version ID:\s*([a-f0-9-]{36})/)?.[1];if(!UUID.test(id??''))fail('worker-upload-version-id-missing');return version(id);},async activateVersion(spec){exactKeys(spec,['workerName','versionId','expectedEtag','owner','fence'],'worker-activate-spec-invalid');assert.equal(spec.workerName,workerName);const before=await deployment();assert.equal(before.etag,spec.expectedEtag,'worker-etag-changed');await run(['versions','deploy',`${spec.versionId}@100%`,'--yes','--message',`WeatherX ${spec.owner}`],spec.fence);return deployment();},async rollbackVersion(spec){exactKeys(spec,['workerName','versionId','expectedEtag','owner','fence'],'worker-rollback-spec-invalid');assert.equal(spec.workerName,workerName);const before=await deployment();assert.equal(before.etag,spec.expectedEtag,'worker-etag-changed');await run(['rollback',spec.versionId,'--yes','--message',`WeatherX rollback ${spec.owner}`],spec.fence);return deployment();}});
 }
-
-async function dispatch(action, request, dependencies, strictOptions) {
-  const input = request.inputReceipt;
-  switch (action) {
-    case 'prepare-worker':
-      return prepareWorkerVersion(request.plan, dependencies.workerClient, strictOptions);
-    case 'activate-worker':
-      return activatePreparedWorker(input, dependencies.workerClient, {...strictOptions, verify: dependencies.verifyWorker});
-    case 'recover-worker-activation':
-      return recoverWorkerActivation(input, dependencies.workerClient, {...strictOptions, verify: dependencies.verifyWorker});
-    case 'recover-worker-rollback':
-      return recoverWorkerRollback(input, dependencies.workerClient, strictOptions);
-    case 'prepare-pages':
-      return preparePagesConfiguration(request.plan, dependencies.pagesClient, {
-        ...strictOptions,
-        storeReceipt: receipt => writeAndRead(dependencies.receipts,
-          `${request.plan.transactionId}:pages-preimage`, receipt),
-      });
-    case 'apply-pages':
-      return applyPagesConfiguration(input, dependencies.pagesClient, {
-        ...strictOptions,
-        verify: dependencies.verifyPages,
-        readStoredReceipt: () => dependencies.receipts.read(`${request.plan.transactionId}:pages-preimage`),
-      });
-    case 'recover-pages':
-      return recoverPagesConfiguration(input, dependencies.pagesClient, {
-        ...strictOptions,
-        verify: dependencies.verifyPages,
-        readStoredReceipt: () => dependencies.receipts.read(`${request.plan.transactionId}:pages-preimage`),
-      });
-    default:
-      assert.fail('unreachable production execution action');
-  }
+export function createCloudflarePagesApiAdapter({projectName,readProject,patchProject}){
+  assert.match(projectName??'',ID,'cloudflare-pages-project-invalid');assert.equal(typeof readProject,'function');assert.equal(typeof patchProject,'function');const read=async()=>{let raw;try{raw=await readProject();}catch{fail('pages-project-read-failed');}const value=exactProvider(raw,['projectName','configDigest','canonicalDeploymentId','etag','mutationOwner','payload'],'pages-project-response-invalid');if(value.projectName!==projectName)fail('pages-project-target-invalid');try{assert.match(value.configDigest??'',DIGEST);assert.equal(typeof value.canonicalDeploymentId,'string');assert.equal(typeof value.etag,'string');assert.ok(value.etag.length>0);assert.ok(value.mutationOwner===null||ID.test(value.mutationOwner));record(value.payload,'pages-project-payload-invalid');}catch{fail('pages-project-response-invalid');}return value;};
+  const mutate=async(spec,kind)=>{exactKeys(spec,['projectName','payload','configDigest','expectedEtag','owner','fence'],`pages-${kind}-spec-invalid`);assert.equal(spec.projectName,projectName);validateFence(spec.fence);const before=await read();assert.equal(before.etag,spec.expectedEtag,'pages-etag-changed');let raw;try{raw=await patchProject({projectName,payload:structuredClone(spec.payload),fence:structuredClone(spec.fence)});}catch{fail('pages-patch-failed');}const response=exactProvider(raw,['acceptedProject'],'pages-patch-response-invalid');if(response.acceptedProject!==projectName)fail('pages-patch-target-invalid');return read();};return Object.freeze({readProject:read,updateProject:spec=>mutate(spec,'update'),restoreProject:spec=>mutate(spec,'restore')});
 }
-
-export async function executeProductionAccountTransaction(value, dependencies, now = Date.now()) {
-  const request = validateProductionExecutionRequest(value);
-  assert.equal(request.mode, 'execute', 'executeProductionAccountTransaction accepts execute mode only');
-  assert.ok(Number.isSafeInteger(now), 'execution clock is invalid');
-
-  // No caller-supplied options are spread here. In particular, the provisional
-  // override used by unit tests and plan mode cannot reach a mutation path.
-  const strictOptions = {candidate: dependencies?.candidate, qualification: dependencies?.qualification};
-  const plan = validateProductionReleasePlan(request.plan, strictOptions);
-  validateProductionInputReceiptBinding(request, plan);
-  const authorization = validateProductionMutationAuthorization(request.authorization, request, plan, now);
-  assert.equal(typeof dependencies?.lease?.assertHeld, 'function', 'exclusive production lease verifier is required');
-  const lease = validateLeaseProof(await dependencies.lease.assertHeld({
-    leaseOwner: plan.leaseOwner,
-    transactionId: plan.transactionId,
-    action: request.action,
-    planDigest: productionReleasePlanDigest(plan),
-    targetDigest: targetDigest(plan),
-    target: structuredClone(plan.target),
-  }), plan, request.action, now);
-
-  const receiptId = `${plan.transactionId}:${request.action}`;
-  const intent = {
-    schemaVersion: 1,
-    kind: 'weatherx-production-account-execution-receipt',
-    receiptId,
-    phase: 'authorized-pre-mutation',
-    action: request.action,
-    transactionId: plan.transactionId,
-    leaseOwner: plan.leaseOwner,
-    contractDigest: plan.contractDigest,
-    planDigest: productionReleasePlanDigest(plan),
-    targetDigest: targetDigest(plan),
-    requestDigest: requestDigest(request),
-    authorization: {
-      kind: authorization.kind,
-      action: authorization.action,
-      issuedAt: authorization.issuedAt,
-      expiresAt: authorization.expiresAt,
-    },
-    lease: structuredClone(lease),
-  };
-  await writeAndRead(dependencies.receipts, receiptId, intent);
-  try {
-    const transaction = await dispatch(request.action, request, dependencies, strictOptions);
-    const completed = {...intent, phase: 'completed', transaction: structuredClone(transaction)};
-    await writeAndRead(dependencies.receipts, receiptId, completed);
-    return completed;
-  } catch (error) {
-    const failed = safeFailureReceipt(intent);
-    await writeAndRead(dependencies.receipts, receiptId, failed);
-    throw new Error('production account transaction failed; inspect the sanitized durable receipt', {cause: error});
-  }
-}
-
-async function assertSafeDirectory(path) {
-  await mkdir(path, {recursive: true, mode: 0o700});
-  const stat = await lstat(path);
-  assert.ok(stat.isDirectory() && !stat.isSymbolicLink(), 'receipt directory must be a real directory');
-}
-
-export function createProductionReceiptStore(directory) {
-  const root = resolve(directory);
-  const pathFor = id => {
-    assert.match(id ?? '', /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,319}$/, 'invalid receipt identity');
-    return join(root, `${digest(id)}.json`);
-  };
-  return Object.freeze({
-    async write(id, value) {
-      record(value, 'receipt value is required');
-      const body = `${JSON.stringify({receiptId: id, value}, null, 2)}\n`;
-      assert.ok(Buffer.byteLength(body) <= MAX_RECEIPT_BYTES, 'receipt exceeds size limit');
-      await assertSafeDirectory(root);
-      const destination = pathFor(id);
-      const current = await lstat(destination).catch(() => null);
-      assert.ok(!current || (current.isFile() && !current.isSymbolicLink() && current.nlink === 1),
-        'receipt destination is unsafe');
-      const temporary = join(root, `.${digest(id)}.${randomUUID()}.tmp`);
-      let handle;
-      try {
-        handle = await open(temporary, 'wx', 0o600);
-        await handle.writeFile(body, 'utf8');
-        await handle.sync();
-        await handle.close();
-        handle = undefined;
-        await rename(temporary, destination);
-      } finally {
-        await handle?.close().catch(() => {});
-        await rm(temporary, {force: true}).catch(() => {});
-      }
-    },
-    async read(id) {
-      await assertSafeDirectory(root);
-      const path = pathFor(id);
-      const stat = await lstat(path).catch(() => null);
-      assert.ok(stat?.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && stat.size > 0 &&
-        stat.size <= MAX_RECEIPT_BYTES, 'durable receipt is missing or unsafe');
-      const envelope = JSON.parse(await readFile(path, 'utf8'));
-      exactKeys(envelope, ['receiptId','value'], 'invalid durable receipt envelope');
-      assert.equal(envelope.receiptId, id, 'durable receipt identity differs');
-      return envelope.value;
-    },
-  });
-}
-
-export const PRODUCTION_MUTATION_CONFIRMATION = CONFIRMATION;
+export const PRODUCTION_MUTATION_CONFIRMATION=CONFIRMATION,PRODUCTION_APPROVAL_KIND=APPROVAL_KIND,PRODUCTION_LEASE_KIND=LEASE_KIND;
