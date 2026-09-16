@@ -183,6 +183,15 @@ export function validateProjectSnapshot(stage, p, expectedDigest) {
 function productionPagesContractFromProvider(deploymentConfigs) {
   const sanitized = structuredClone(deploymentConfigs);
   for (const context of ['production','preview']) {
+    const config = sanitized?.[context];
+    if (config && typeof config === 'object' && !Array.isArray(config)
+      && Object.hasOwn(config, 'wrangler_config_hash')) {
+      assert.ok(config.wrangler_config_hash === null
+        || (typeof config.wrangler_config_hash === 'string'
+          && /^[a-f0-9]{64}$/.test(config.wrangler_config_hash)),
+      `Pages ${context}.wrangler_config_hash provider metadata is invalid`);
+      delete config.wrangler_config_hash;
+    }
     const envVars = sanitized?.[context]?.env_vars;
     if (!envVars || typeof envVars !== 'object' || Array.isArray(envVars)) continue;
     for (const [name, entry] of Object.entries(envVars)) {

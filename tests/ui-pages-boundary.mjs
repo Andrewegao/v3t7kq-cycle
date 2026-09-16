@@ -87,6 +87,7 @@ test('production keeps its existing resource/config policy, public modes and app
 test('production API secret values are validated and removed only at the provider readback boundary', () => {
   const p = project('production');
   for (const entry of Object.values(p.deployment_configs.production.env_vars)) entry.value = 'provider-secret-fixture';
+  p.deployment_configs.preview.wrangler_config_hash = 'a'.repeat(64);
   assert.equal(validate(p, 'production'), p);
   assert.throws(() => validateProductionPagesConfiguration({deployment_configs:p.deployment_configs}),
     /protected type reference/);
@@ -98,6 +99,18 @@ test('production API secret values are validated and removed only at the provide
     const changed = structuredClone(p);
     mutate(changed.deployment_configs.production.env_vars.AI_ACCESS_CODE);
     assert.throws(() => validate(changed, 'production'), error => !error.message.includes('provider-secret-fixture'));
+  }
+});
+test('production provider readback accepts only bounded Wrangler configuration metadata', () => {
+  for (const value of [null, 'a'.repeat(64)]) {
+    const p = project('production');
+    p.deployment_configs.preview.wrangler_config_hash = value;
+    assert.equal(validate(p, 'production'), p);
+  }
+  for (const value of ['', 'A'.repeat(64), 'a'.repeat(63), 'a'.repeat(65), 1, false, {}, []]) {
+    const p = project('production');
+    p.deployment_configs.preview.wrangler_config_hash = value;
+    assert.throws(() => validate(p, 'production'), /wrangler_config_hash provider metadata is invalid/);
   }
 });
 test('existing exact name/branch/runtime/canonical deployment/config-digest checks still apply', () => {
