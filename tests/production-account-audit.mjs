@@ -118,6 +118,7 @@ test('platform collection fails closed on Cloudflare errors and any reported wri
   await assert.rejects(() => collectPlatformSnapshot({accountId: 'a'.repeat(32), apiToken: CLOUDFLARE_TOKEN, fetcher: denied}), /platform-users-http-403/);
   const wrote = async () => new Response(JSON.stringify({success: true, errors: [], result: [{success: true, results: [], meta: {changed_db: true, changes: 1, rows_written: 1}}]}), {status: 200});
   await assert.rejects(() => collectPlatformSnapshot({accountId: 'a'.repeat(32), apiToken: CLOUDFLARE_TOKEN, fetcher: wrote}), /platform-users-changed-database/);
+  await assert.rejects(() => collectPlatformSnapshot({accountId: 'a'.repeat(32), apiToken: 'token\nwith-control', fetcher: wrote}), /cloudflare-audit-token-control-character/);
 });
 
 test('a complete matching live Stripe and platform inventory produces a clear deterministic receipt', async () => {
