@@ -239,6 +239,15 @@ function assertWorkerCandidate(snapshot, receipt) {
   return snapshot;
 }
 
+function assertUploadedWorkerCandidate(candidate, before, plan) {
+  record(candidate, 'Worker upload did not return a version identity');
+  assert.match(candidate.versionId ?? '', ID, 'invalid uploaded Worker version identity');
+  assert.notEqual(candidate.versionId, before.versionId, 'inactive upload reused the active Worker version');
+  assert.equal(candidate.sourceDigest, plan.desired.worker.sourceDigest, 'uploaded Worker source digest changed');
+  assert.equal(candidate.configDigest, plan.desired.worker.configDigest, 'uploaded Worker config digest changed');
+  return candidate;
+}
+
 function workerReceiptBase(plan, before, candidate) {
   return {
     schemaVersion: 1,
@@ -295,6 +304,7 @@ function validateWorkerPreparationIntent(intent, options = {}) {
   const keys = ['schemaVersion','kind','transactionId','leaseOwner','contractDigest','planDigest',
     'approvalId','requestDigest','uploadTag','before','plan'];
   if (Object.hasOwn(intent, 'pendingMutation')) keys.push('pendingMutation');
+  if (Object.hasOwn(intent, 'acknowledgedMutation')) keys.push('acknowledgedMutation');
   exactKeys(intent, keys, 'invalid Worker preparation intent');
   assert.equal(intent.schemaVersion, 1);
   assert.equal(intent.kind, 'weatherx-account-worker-preparation-intent');
@@ -346,22 +356,18 @@ export async function completeWorkerPreparation(intent, client, options = {}) {
     const matches = await client.listVersionsByTag(intent.uploadTag);
     assert.ok(Array.isArray(matches), 'Worker tagged-version listing is invalid');
     if (matches.length !== 1) throw error;
-    const candidate = await client.readVersion(matches[0].versionId);
+    const candidate = assertUploadedWorkerCandidate(await client.readVersion(matches[0].versionId), intent.before, plan);
     const unchanged = assertWorkerBefore(await client.readDeployment(), plan);
     assert.equal(unchanged.etag, intent.before.etag, 'inactive upload changed the active Worker deployment');
-    const acknowledgement = await durableMutationAcknowledgement(client, reference);
+    const acknowledgement = await durableMutationAcknowledgement(client, reference,
+      error?.mutationAcknowledgement ? {reference, acknowledgement:error.mutationAcknowledgement} : null);
     const receipt = {...workerReceiptBase(plan, intent.before, candidate), uploadTag: intent.uploadTag,
       preparationApprovalId: intent.approvalId, preparationRequestDigest: intent.requestDigest};
     return acknowledgement
       ? {...receipt, phase:'prepared-after-interruption', mutationEvidence:{reference:structuredClone(reference),acknowledgement}}
       : pendingMutation(receipt, 'preparation-ack-pending', reference);
   }
-  const candidate = outcome.result;
-  record(candidate, 'Worker upload did not return a version identity');
-  assert.match(candidate.versionId ?? '', ID, 'invalid uploaded Worker version identity');
-  assert.notEqual(candidate.versionId, intent.before.versionId, 'inactive upload reused the active Worker version');
-  assert.equal(candidate.sourceDigest, plan.desired.worker.sourceDigest, 'uploaded Worker source digest changed');
-  assert.equal(candidate.configDigest, plan.desired.worker.configDigest, 'uploaded Worker config digest changed');
+  const candidate = assertUploadedWorkerCandidate(outcome.result, intent.before, plan);
   assert.deepEqual(await client.readVersion(candidate.versionId), candidate, 'uploaded Worker version readback differs');
   const unchanged = assertWorkerBefore(await client.readDeployment(), plan);
   assert.equal(unchanged.etag, intent.before.etag, 'inactive upload changed the active Worker deployment');
@@ -380,7 +386,7 @@ export async function prepareWorkerVersion(value, client, options = {}) {
 export async function recoverWorkerPreparation(intent, client, options = {}) {
   if (intent.kind === 'weatherx-account-worker-transaction-receipt') {
     validatePreparedReceipt(intent, options, ['preparation-ack-pending']);
-    const acknowledgement = await durableMutationAcknowledgement(client, intent.pendingMutation);
+    const acknowledgement = await durableMutationAcknowledgement(client, intent.pendingMutation, intent.acknowledgedMutation);
     if (!acknowledgement) return structuredClone(intent);
     const current = assertWorkerBefore(await client.readDeployment(), intent.plan);
     assert.equal(current.etag, intent.before.etag, 'active Worker changed during preparation recovery');
@@ -400,12 +406,9 @@ export async function recoverWorkerPreparation(intent, client, options = {}) {
   const summary = exactKeys(matches[0], ['versionId','tag'], 'Worker tagged-version summary is invalid');
   assert.equal(summary.tag, intent.uploadTag, 'Worker tagged-version listing returned a different tag');
   assert.match(summary.versionId ?? '', ID, 'Worker tagged-version identity is invalid');
-  const candidate = await client.readVersion(summary.versionId);
-  record(candidate, 'Worker preparation recovery readback is missing');
+  const candidate = assertUploadedWorkerCandidate(await client.readVersion(summary.versionId), intent.before, plan);
   assert.equal(candidate.versionId, summary.versionId, 'Worker preparation recovery version changed');
-  assert.equal(candidate.sourceDigest, plan.desired.worker.sourceDigest, 'recovered Worker source digest changed');
-  assert.equal(candidate.configDigest, plan.desired.worker.configDigest, 'recovered Worker config digest changed');
-  const acknowledgement = await durableMutationAcknowledgement(client, intent.pendingMutation);
+  const acknowledgement = await durableMutationAcknowledgement(client, intent.pendingMutation, intent.acknowledgedMutation);
   const receipt = {...workerReceiptBase(plan, intent.before, candidate), uploadTag: intent.uploadTag,
     preparationApprovalId: intent.approvalId, preparationRequestDigest: intent.requestDigest};
   return acknowledgement
@@ -445,8 +448,17 @@ function mutationOutcome(value, message) {
   return value;
 }
 
-async function durableMutationAcknowledgement(client, reference) {
-  if (!reference || typeof client?.readMutationAcknowledgement !== 'function') return null;
+async function durableMutationAcknowledgement(client, reference, acknowledgedMutation = null) {
+  if (!reference) return null;
+  if (acknowledgedMutation && typeof client?.authenticateMutationAcknowledgement === 'function') {
+    try {
+      assert.deepEqual(acknowledgedMutation.reference, reference,
+        'stored mutation acknowledgement reference changed');
+      return record(client.authenticateMutationAcknowledgement(structuredClone(acknowledgedMutation)),
+        'stored mutation acknowledgement is invalid');
+    } catch {}
+  }
+  if (typeof client?.readMutationAcknowledgement !== 'function') return null;
   try {
     const acknowledgement = await client.readMutationAcknowledgement(structuredClone(reference));
     return record(acknowledgement, 'durable mutation acknowledgement is invalid');
@@ -486,7 +498,8 @@ async function rollbackOwnedWorker(receipt, client, failureCode) {
     const observed = await client.readDeployment();
     const reference = rollbackError?.mutationReference;
     if (workerRestored(observed, receipt)) {
-      const acknowledgement = await durableMutationAcknowledgement(client, reference);
+      const acknowledgement = await durableMutationAcknowledgement(client, reference,
+        rollbackError?.mutationAcknowledgement ? {reference, acknowledgement:rollbackError.mutationAcknowledgement} : null);
       if (acknowledgement) return {...rolledBackWorkerReceipt(receipt, observed, failureCode,
         'rolled-back-after-interruption'), rollbackEvidence:{reference:structuredClone(reference),acknowledgement}};
       return pendingMutation({...receipt,failure:stableFailure(failureCode)},'rollback-ack-pending',reference,observed);
@@ -531,7 +544,7 @@ async function verifyActiveWorker(receipt, client, verify, phase, {rollbackOnFai
 export async function recoverWorkerRollback(receipt, client, options = {}) {
   validatePreparedReceipt(receipt, options, ['rollback-pending','rollback-ack-pending']);
   assert.equal(typeof client?.readDeployment, 'function', 'Worker client is missing readDeployment');
-  const acknowledgement = await durableMutationAcknowledgement(client, receipt.pendingMutation);
+  const acknowledgement = await durableMutationAcknowledgement(client, receipt.pendingMutation, receipt.acknowledgedMutation);
   if (!acknowledgement) return structuredClone(receipt);
   const current = await client.readDeployment();
   if (workerRestored(current, receipt)) {
@@ -553,7 +566,7 @@ export async function recoverWorkerActivation(receipt, client, options = {}) {
     return {...receipt, phase: 'interrupted-before-activation', after: structuredClone(current)};
   }
   if (receipt.phase==='activation-ack-pending') {
-    const acknowledgement=await durableMutationAcknowledgement(client,receipt.pendingMutation);
+    const acknowledgement=await durableMutationAcknowledgement(client,receipt.pendingMutation,receipt.acknowledgedMutation);
     if(!acknowledgement)return structuredClone(receipt);
     const recovered={...receipt,mutationEvidence:{reference:structuredClone(receipt.pendingMutation),acknowledgement}};
     delete recovered.pendingMutation;return verifyActiveWorker(recovered,client,options.verify,'activated-after-interruption',{rollbackOnFailure:false});
@@ -581,7 +594,8 @@ export async function activatePreparedWorker(receipt, client, options = {}) {
     const observed = await client.readDeployment();
     if (foreignWorker(observed, receipt)) throw new Error('foreign writer changed the Worker during interrupted activation', {cause: error});
     if (observed.versionId === receipt.before.versionId) throw error;
-    const reference=error?.mutationReference,acknowledgement=await durableMutationAcknowledgement(client,reference);
+    const reference=error?.mutationReference,acknowledgement=await durableMutationAcknowledgement(client,reference,
+      error?.mutationAcknowledgement?{reference,acknowledgement:error.mutationAcknowledgement}:null);
     if(!acknowledgement)return pendingMutation(receipt,'activation-ack-pending',reference,observed);
     return verifyActiveWorker({...receipt,mutationEvidence:{reference:structuredClone(reference),acknowledgement}}, client, options.verify, 'activated-after-interruption');
   }
@@ -704,7 +718,8 @@ async function rollbackPagesConfiguration(receipt, client, failureCode) {
     const observed = await client.readProject();
     const observedState = pagesState(observed, receipt);
     if (observedState === 'before') {
-      const reference=restoreError?.mutationReference,acknowledgement=await durableMutationAcknowledgement(client,reference);
+      const reference=restoreError?.mutationReference,acknowledgement=await durableMutationAcknowledgement(client,reference,
+        restoreError?.mutationAcknowledgement?{reference,acknowledgement:restoreError.mutationAcknowledgement}:null);
       if(acknowledgement)return {...receipt, phase:'rolled-back-after-interruption',after:structuredClone(observed),
         failure:stableFailure(failureCode),restoreEvidence:{reference:structuredClone(reference),acknowledgement}};
       return pendingMutation({...receipt,failure:stableFailure(failureCode)},'pages-restore-ack-pending',reference,observed);
@@ -773,7 +788,8 @@ export async function applyPagesConfiguration(receipt, client, options = {}) {
       throw new Error('foreign writer changed Pages configuration during interrupted mutation', {cause: error});
     }
     if (observedState === 'before') throw error;
-    const reference=error?.mutationReference,acknowledgement=await durableMutationAcknowledgement(client,reference);
+    const reference=error?.mutationReference,acknowledgement=await durableMutationAcknowledgement(client,reference,
+      error?.mutationAcknowledgement?{reference,acknowledgement:error.mutationAcknowledgement}:null);
     if(!acknowledgement)return pendingMutation(receipt,'pages-update-ack-pending',reference,observed);
     return verifyPagesConfiguration({...receipt,mutationEvidence:{reference:structuredClone(reference),acknowledgement}}, client, options, 'applied-after-interruption');
   }
@@ -788,7 +804,7 @@ export async function recoverPagesConfiguration(receipt, client, options = {}) {
   const state = pagesState(current, receipt);
   if (state === 'foreign') throw new Error('foreign writer changed Pages configuration; refusing recovery overwrite');
   if (receipt.phase === 'rollback-pending'||receipt.phase === 'pages-restore-ack-pending') {
-    const acknowledgement=await durableMutationAcknowledgement(client,receipt.pendingMutation);
+    const acknowledgement=await durableMutationAcknowledgement(client,receipt.pendingMutation,receipt.acknowledgedMutation);
     if(!acknowledgement)return structuredClone(receipt);
     assert.equal(state,'before','acknowledged Pages restore does not match provider readback');
     const recovered={...receipt,phase:'rolled-back-after-interruption',after:structuredClone(current),
@@ -800,7 +816,7 @@ export async function recoverPagesConfiguration(receipt, client, options = {}) {
   }
   assert.equal(typeof options.verify, 'function', 'Pages compatibility verification callback is required');
   if(receipt.phase!=='pages-update-ack-pending')throw new Error('Pages desired state has no acknowledgement-bound recovery receipt');
-  const acknowledgement=await durableMutationAcknowledgement(client,receipt.pendingMutation);
+  const acknowledgement=await durableMutationAcknowledgement(client,receipt.pendingMutation,receipt.acknowledgedMutation);
   if(!acknowledgement)return structuredClone(receipt);
   const recovered={...receipt,mutationEvidence:{reference:structuredClone(receipt.pendingMutation),acknowledgement}};
   delete recovered.pendingMutation;return verifyPagesConfiguration(recovered, client, options, 'applied-after-interruption',{rollbackOnFailure:false});

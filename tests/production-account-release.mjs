@@ -194,6 +194,7 @@ class WorkerClient {
   async readVersion(versionId) { this.calls.push(`readVersion:${versionId}`); return structuredClone(this.versions.get(versionId)); }
   async listVersionsByTag(tag) { this.calls.push(`listVersionsByTag:${tag}`); return [...this.tags.entries()].filter(([,value]) => value === tag).map(([versionId]) => ({versionId,tag})); }
   async readMutationAcknowledgement(reference){this.calls.push(`readMutationAcknowledgement:${reference.operationDigest}`);const value=this.acknowledgements.get(reference.operationDigest);if(!value)throw new Error('acknowledgement unavailable');return structuredClone(value);}
+  authenticateMutationAcknowledgement(evidence){assert.deepEqual(evidence.acknowledgement,mockAcknowledgement(evidence.reference));return structuredClone(evidence.acknowledgement);}
   async activateVersion({versionId, expectedEtag, owner}) {
     this.calls.push('activateVersion');
     const spec={versionId,expectedEtag,owner},reference=mockMutationReference('worker-activate-version',spec);
@@ -266,6 +267,7 @@ class PagesClient {
     return {result:structuredClone(this.current),acknowledgement:mockAcknowledgement(reference),mutationReference:reference};
   }
   async readMutationAcknowledgement(reference){this.calls.push(`readMutationAcknowledgement:${reference.operationDigest}`);const value=this.acknowledgements.get(reference.operationDigest);if(!value)throw new Error('acknowledgement unavailable');return structuredClone(value);}
+  authenticateMutationAcknowledgement(evidence){assert.deepEqual(evidence.acknowledgement,mockAcknowledgement(evidence.reference));return structuredClone(evidence.acknowledgement);}
 }
 
 function safetyVerification({candidateUi = false} = {}) {
@@ -485,6 +487,9 @@ test('ambiguous inactive upload is recovered by its approval-bound exact tag wit
   assert.equal(pending.phase,'preparation-ack-pending');
   assert.equal((await recoverWorkerPreparation(pending,client,OPTIONS)).phase,'preparation-ack-pending');
   client.acknowledgements.set(pending.pendingMutation.operationDigest,mockAcknowledgement(pending.pendingMutation));
+  const taggedVersion=client.versions.get('worker-candidate');client.versions.set('worker-candidate',{...taggedVersion,sourceDigest:H('9')});
+  await assert.rejects(recoverWorkerPreparation({...stored.at(-1),pendingMutation:pending.pendingMutation},client,OPTIONS),/uploaded Worker source digest changed/);
+  client.versions.set('worker-candidate',taggedVersion);
   const recovered = await recoverWorkerPreparation(pending, client, OPTIONS);
   assert.equal(recovered.phase, 'prepared-after-interruption');
   assert.equal(recovered.uploadTag, stored.at(-1).uploadTag);
@@ -763,6 +768,25 @@ test('missing Pages mutation acknowledgements block state-based success until ex
   restore.acknowledgements.set(restorePending.pendingMutation.operationDigest,mockAcknowledgement(restorePending.pendingMutation));
   assert.equal((await recoverPagesConfiguration(restorePending,restore,pagesOptions(restore))).phase,'rolled-back-after-interruption');
   assert.equal(restore.calls.filter(call=>call==='restoreProject').length,1);
+});
+
+test('persisted authenticated acknowledgements recover all five mutations without another mutation or broker query',async()=>{
+  const withAck=receipt=>({...receipt,acknowledgedMutation:{reference:structuredClone(receipt.pendingMutation),acknowledgement:mockAcknowledgement(receipt.pendingMutation)}});
+
+  const upload=new WorkerClient({interruptUpload:'after',missingAcknowledgement:'upload'}),uploadPending=await prepareWorkerVersion(plan(),upload,OPTIONS),uploadQueries=upload.calls.filter(call=>call.startsWith('readMutationAcknowledgement:')).length;
+  assert.equal((await recoverWorkerPreparation(withAck(uploadPending),upload,OPTIONS)).phase,'prepared-after-interruption');assert.equal(upload.calls.filter(call=>call==='uploadVersion').length,1);assert.equal(upload.calls.filter(call=>call.startsWith('readMutationAcknowledgement:')).length,uploadQueries);
+
+  const activation=new WorkerClient({interruptAfterActivation:true,missingAcknowledgement:'activate'}),activationPrepared=await prepareWorkerVersion(plan(),activation,OPTIONS),activationPending=await activatePreparedWorker(activationPrepared,activation,{...OPTIONS,verify:async()=>safetyVerification()}),activationQueries=activation.calls.filter(call=>call.startsWith('readMutationAcknowledgement:')).length;
+  assert.equal((await recoverWorkerActivation(withAck(activationPending),activation,{...OPTIONS,verify:async()=>safetyVerification()})).phase,'activated-after-interruption');assert.equal(activation.calls.filter(call=>call==='activateVersion').length,1);assert.equal(activation.calls.filter(call=>call.startsWith('readMutationAcknowledgement:')).length,activationQueries);
+
+  const rollback=new WorkerClient({interruptRollback:'after',missingAcknowledgement:'rollback'}),rollbackPrepared=await prepareWorkerVersion(plan(),rollback,OPTIONS),rollbackPending=await activatePreparedWorker(rollbackPrepared,rollback,{...OPTIONS,verify:async()=>{throw new Error('verify');}}),rollbackQueries=rollback.calls.filter(call=>call.startsWith('readMutationAcknowledgement:')).length;
+  assert.equal((await recoverWorkerRollback(withAck(rollbackPending),rollback,OPTIONS)).phase,'rolled-back-after-interruption');assert.equal(rollback.calls.filter(call=>call==='rollbackVersion').length,1);assert.equal(rollback.calls.filter(call=>call.startsWith('readMutationAcknowledgement:')).length,rollbackQueries);
+
+  const update=new PagesClient({interruptUpdate:'after',missingAcknowledgement:'update'}),updatePrepared=await preparePages(update),updatePending=await applyPagesConfiguration(updatePrepared,update,pagesOptions(update,{verify:async()=>safetyVerification({candidateUi:true})})),updateQueries=update.calls.filter(call=>call.startsWith('readMutationAcknowledgement:')).length;
+  assert.equal((await recoverPagesConfiguration(withAck(updatePending),update,pagesOptions(update,{verify:async()=>safetyVerification({candidateUi:true})}))).phase,'applied-after-interruption');assert.equal(update.calls.filter(call=>call==='updateProject').length,1);assert.equal(update.calls.filter(call=>call.startsWith('readMutationAcknowledgement:')).length,updateQueries);
+
+  const restore=new PagesClient({interruptRestore:'after',missingAcknowledgement:'restore'}),restorePrepared=await preparePages(restore),restorePending=await applyPagesConfiguration(restorePrepared,restore,pagesOptions(restore,{verify:async()=>{throw new Error('verify');}})),restoreQueries=restore.calls.filter(call=>call.startsWith('readMutationAcknowledgement:')).length;
+  assert.equal((await recoverPagesConfiguration(withAck(restorePending),restore,pagesOptions(restore))).phase,'rolled-back-after-interruption');assert.equal(restore.calls.filter(call=>call==='restoreProject').length,1);assert.equal(restore.calls.filter(call=>call.startsWith('readMutationAcknowledgement:')).length,restoreQueries);
 });
 
 test('production promotion audit hashes the candidate profile policy', () => {
