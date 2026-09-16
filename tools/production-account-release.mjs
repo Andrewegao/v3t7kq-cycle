@@ -559,17 +559,20 @@ export async function recoverWorkerActivation(receipt, client, options = {}) {
   validatePreparedReceipt(receipt, options, ['prepared','prepared-after-interruption','activation-ack-pending']);
   assert.equal(typeof options.verify, 'function', 'Worker verification callback is required');
   assert.equal(typeof client?.readDeployment, 'function', 'Worker client is missing readDeployment');
+  if (receipt.phase==='activation-ack-pending') {
+    const acknowledgement=await durableMutationAcknowledgement(client,receipt.pendingMutation,receipt.acknowledgedMutation);
+    if(!acknowledgement)return structuredClone(receipt);
+    const current=await client.readDeployment();
+    if(foreignWorker(current,receipt))throw new Error('foreign writer changed the Worker; refusing recovery overwrite');
+    if(current.versionId===receipt.before.versionId){assertWorkerBefore(current,receipt.plan);return structuredClone(receipt);}
+    const recovered={...receipt,mutationEvidence:{reference:structuredClone(receipt.pendingMutation),acknowledgement}};
+    delete recovered.pendingMutation;delete recovered.acknowledgedMutation;return verifyActiveWorker(recovered,client,options.verify,'activated-after-interruption',{rollbackOnFailure:false});
+  }
   const current = await client.readDeployment();
   if (foreignWorker(current, receipt)) throw new Error('foreign writer changed the Worker; refusing recovery overwrite');
   if (current.versionId === receipt.before.versionId) {
     assertWorkerBefore(current, receipt.plan);
     return {...receipt, phase: 'interrupted-before-activation', after: structuredClone(current)};
-  }
-  if (receipt.phase==='activation-ack-pending') {
-    const acknowledgement=await durableMutationAcknowledgement(client,receipt.pendingMutation,receipt.acknowledgedMutation);
-    if(!acknowledgement)return structuredClone(receipt);
-    const recovered={...receipt,mutationEvidence:{reference:structuredClone(receipt.pendingMutation),acknowledgement}};
-    delete recovered.pendingMutation;return verifyActiveWorker(recovered,client,options.verify,'activated-after-interruption',{rollbackOnFailure:false});
   }
   throw new Error('Worker activation state requires its acknowledgement-bound recovery receipt');
 }
@@ -800,24 +803,31 @@ export async function recoverPagesConfiguration(receipt, client, options = {}) {
   validatePagesReceipt(receipt, options, ['prepared','rollback-pending','pages-update-ack-pending','pages-restore-ack-pending']);
   await requireStoredPagesPreimage(receipt, options);
   assert.equal(typeof client?.readProject, 'function', 'Pages client is missing readProject');
-  const current = await client.readProject();
-  const state = pagesState(current, receipt);
-  if (state === 'foreign') throw new Error('foreign writer changed Pages configuration; refusing recovery overwrite');
   if (receipt.phase === 'rollback-pending'||receipt.phase === 'pages-restore-ack-pending') {
     const acknowledgement=await durableMutationAcknowledgement(client,receipt.pendingMutation,receipt.acknowledgedMutation);
     if(!acknowledgement)return structuredClone(receipt);
-    assert.equal(state,'before','acknowledged Pages restore does not match provider readback');
+    const current=await client.readProject(),state=pagesState(current,receipt);
+    if(state==='foreign')throw new Error('foreign writer changed Pages configuration; refusing recovery overwrite');
+    if(state==='desired')return structuredClone(receipt);
     const recovered={...receipt,phase:'rolled-back-after-interruption',after:structuredClone(current),
       restoreEvidence:{reference:structuredClone(receipt.pendingMutation),acknowledgement}};
-    delete recovered.pendingMutation;return recovered;
+    delete recovered.pendingMutation;delete recovered.acknowledgedMutation;return recovered;
   }
+  if(receipt.phase==='pages-update-ack-pending'){
+    const acknowledgement=await durableMutationAcknowledgement(client,receipt.pendingMutation,receipt.acknowledgedMutation);
+    if(!acknowledgement)return structuredClone(receipt);
+    const current=await client.readProject(),state=pagesState(current,receipt);
+    if(state==='foreign')throw new Error('foreign writer changed Pages configuration; refusing recovery overwrite');
+    if(state==='before')return structuredClone(receipt);
+    assert.equal(typeof options.verify,'function','Pages compatibility verification callback is required');
+    const recovered={...receipt,mutationEvidence:{reference:structuredClone(receipt.pendingMutation),acknowledgement}};
+    delete recovered.pendingMutation;delete recovered.acknowledgedMutation;return verifyPagesConfiguration(recovered,client,options,'applied-after-interruption',{rollbackOnFailure:false});
+  }
+  const current = await client.readProject();
+  const state = pagesState(current, receipt);
+  if (state === 'foreign') throw new Error('foreign writer changed Pages configuration; refusing recovery overwrite');
   if (state === 'before') {
     return {...receipt, phase: 'interrupted-before-mutation', after: structuredClone(current)};
   }
-  assert.equal(typeof options.verify, 'function', 'Pages compatibility verification callback is required');
-  if(receipt.phase!=='pages-update-ack-pending')throw new Error('Pages desired state has no acknowledgement-bound recovery receipt');
-  const acknowledgement=await durableMutationAcknowledgement(client,receipt.pendingMutation,receipt.acknowledgedMutation);
-  if(!acknowledgement)return structuredClone(receipt);
-  const recovered={...receipt,mutationEvidence:{reference:structuredClone(receipt.pendingMutation),acknowledgement}};
-  delete recovered.pendingMutation;return verifyPagesConfiguration(recovered, client, options, 'applied-after-interruption',{rollbackOnFailure:false});
+  throw new Error('Pages desired state has no acknowledgement-bound recovery receipt');
 }
