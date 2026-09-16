@@ -15,7 +15,7 @@ Lane C is built against one explicit owner-approved Lane B artifact contract in
 - contract digest: `0866db6f7a4f2dce8ecb0e8bac6628552878c5d8b14e013f1057c79839f80e8c`
 - production trust-policy digest: `f2795ab9b504b32fdbdcaa957cde134ac91199ae43a8945a041aa1544601d23c`
 - production profile digest: `69210756c14f4cb394786485290c7d63a4a67af2a508db990a5d3e2d9fd70d51`
-- pipeline digest: `7d8dd30177df79a5a1eaaa4983aff665878f3a764475e5790ba65aba6dc8f6ab`
+- pipeline digest: `dfad52eae715fefb03fd7abc6f478feee4c0692637e43f2ab9bc7ba85fa7a2b9`
 
 The contract binds the exact reviewed Atmos source/controller, live Stripe Prices, production
 target, purchase-closed mode, and build receipt. Any contract change invalidates these digests and
@@ -154,9 +154,11 @@ Three operations stay independent:
    receipt if the restore outcome is ambiguous. This transaction never uploads or promotes Pages code.
 
    The UI promotion readback separately accepts Cloudflare's provider-returned `value` member only
-   on exact `secret_text` entries, validates its type without logging it, and removes it before applying
-   the secret-free contract above. The reviewed full-project configuration digest still covers the
-   unmodified provider response, so changing a secret value or any other field fails closed.
+   on exact `secret_text` entries and accepts `wrangler_config_hash` only when it is null or a
+   lowercase 64-character digest. It validates those fields without logging secret values and removes
+   the provider-only metadata before applying the secret-free contract above. The reviewed raw
+   production-project configuration digest still covers the unmodified production response, so
+   changing a production secret value or any other reviewed production field fails closed.
 
 The final exact-artifact Pages promotion remains the existing G5 mechanism and occurs only after
 these G3/G4 dependencies are qualified and explicitly authorized.
