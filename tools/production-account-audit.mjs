@@ -19,7 +19,9 @@ const CLOUDFLARE_ORIGIN = 'https://api.cloudflare.com';
 const CLOUDFLARE_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 const CLOUDFLARE_TIMEOUT_MS = 60_000;
 const ACCOUNT_ID = /^[a-f0-9]{32}$/;
-const API_TOKEN = /^[A-Za-z0-9_-]{20,255}$/;
+// Cloudflare documents legacy 40-character tokens and current prefixed,
+// checksummed credentials with a total API value length of 40–80 characters.
+const API_TOKEN = /^[\x21-\x7e]{40,80}$/;
 const ID = /^[A-Za-z0-9_-]{1,255}$/;
 const SHA = /^[a-f0-9]{40}$/;
 const PRICE = /^price_[A-Za-z0-9_]{1,250}$/;
