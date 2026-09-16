@@ -6,9 +6,9 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `08c7cc4be843a9f2a3073987936a709e4fd5115b64ba1a57d1ce5fb73c51e410`.
+Source digest (registry and workflow bytes): `72bd5d1072f0df2cb0d81643b7ee011a61787640616c2cd76b8b914bbb21d0ff`.
 
-52 workflows. Ordering and output are deterministic; no API request or clock is used.
+53 workflows. Ordering and output are deterministic; no API request or clock is used.
 
 | Workflow | Family / subsystem | Lifecycle | Purpose | Runbook |
 | --- | --- | --- | --- | --- |
@@ -36,6 +36,7 @@ Source digest (registry and workflow bytes): `08c7cc4be843a9f2a3073987936a709e4f
 | [nam-hi-diagnostic](#nam-hi-diagnostic) | staging / Experimental models | diagnostic | Diagnose a bounded NAM-HI acquisition without broadening publication authority. | [guide](../docs/nam-hi-cloud-diagnostic.md) |
 | [platform-staging-transaction](#platform-staging-transaction) | releases / Platform staging | manual-supported | Execute one authorized Atmos backend rehearsal stage against frozen staging identities. | [guide](../docs/platform-staging-transaction.md) |
 | [point-route-activate](#point-route-activate) | releases / Production point routes | manual-supported | Activate reviewed point routes with ownership-aware rollback. | [guide](../docs/point-route-activation.md) |
+| [production-account-audit](#production-account-audit) | control-plane / Production account safety | diagnostic | Reconcile exhaustive live Stripe inventory against sanitized production account state without mutation. | [guide](../docs/production-account-audit.md) |
 | [publish-current-model-production](#publish-current-model-production) | models / Component publication | recurring | Qualify and publish one authenticated collector result independently of sibling models. | [guide](../docs/current-model-artifact-handoff.md) |
 | [qualify-bake-throughput](#qualify-bake-throughput) | models / Bake qualification | diagnostic | Qualify full-grid GFS frame throughput and runner memory without provider or publication access. | [guide](../docs/bake-throughput-qualification.md) |
 | [resume-model-publication](#resume-model-publication) | models / Publication recovery | manual-supported | Recover publication from the explicitly reviewed retained run without recollecting models. | [guide](../docs/resume-model-publication.md) |
@@ -686,6 +687,32 @@ Checkout declarations (not a claim of approval or checkout success):
 | [point-route / Checkout exact reviewed source](../.github/workflows/point-route-activate.yml#L59) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmosphere_sha }}</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
+
+
+## production-account-audit
+
+[.github/workflows/production-account-audit.yml](../.github/workflows/production-account-audit.yml#L1) · <code>WeatherX production account read-only audit</code>
+
+Declared triggers: [workflow_dispatch](../.github/workflows/production-account-audit.yml#L5); input names <code>["atmos_sha","confirm"]</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-production-account-read-only-audit","cancel-in-progress":false}</code>.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [audit](../.github/workflows/production-account-audit.yml#L24) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"production-account-audit","url":"https://weatherx.org"}</code> | <code>30</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+
+Declared job conditions (additional step/helper checks may apply):
+
+- [audit](../.github/workflows/production-account-audit.yml#L24): <code>${{ github.event_name == 'workflow_dispatch' &amp;&amp; github.ref == 'refs/heads/main' &amp;&amp; github.repository == 'Andrewegao/v3t7kq-cycle' }}</code>
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [audit / Checkout exact Cycle audit controller](../.github/workflows/production-account-audit.yml#L31) | caller repository (implicit) | <code>${{ github.sha }}</code> |
+| [audit / Checkout the exact reviewed Atmos source](../.github/workflows/production-account-audit.yml#L65) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmos_sha }}</code> |
+
+Variable references (declared names only; values and activation unknown): [PRODUCTION_ACCOUNT_AUDIT_CLOUDFLARE_ACCOUNT_ID](../.github/workflows/production-account-audit.yml#L48), [PRODUCTION_ACCOUNT_AUDIT_ENABLED](../.github/workflows/production-account-audit.yml#L47).
 
 
 ## publish-current-model-production

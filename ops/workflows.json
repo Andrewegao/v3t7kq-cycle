@@ -200,6 +200,15 @@
       "runbook": "docs/point-route-activation.md"
     },
     {
+      "id": "production-account-audit",
+      "path": ".github/workflows/production-account-audit.yml",
+      "family": "control-plane",
+      "purpose": "Reconcile exhaustive live Stripe inventory against sanitized production account state without mutation.",
+      "subsystem": "Production account safety",
+      "lifecycle": "diagnostic",
+      "runbook": "docs/production-account-audit.md"
+    },
+    {
       "id": "publish-current-model-production",
       "path": ".github/workflows/publish-current-model-production.yml",
       "family": "models",
