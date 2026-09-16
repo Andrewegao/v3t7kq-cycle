@@ -6,9 +6,9 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `320cbdbff17cd728a8033876e666783e2c7c538fdb1aec4cf6e0963ec27f8e4a`.
+Source digest (registry and workflow bytes): `08c7cc4be843a9f2a3073987936a709e4fd5115b64ba1a57d1ce5fb73c51e410`.
 
-51 workflows. Ordering and output are deterministic; no API request or clock is used.
+52 workflows. Ordering and output are deterministic; no API request or clock is used.
 
 | Workflow | Family / subsystem | Lifecycle | Purpose | Runbook |
 | --- | --- | --- | --- | --- |
@@ -34,6 +34,7 @@ Source digest (registry and workflow bytes): `320cbdbff17cd728a8033876e666783e2c
 | [hydrology](#hydrology) | archives / Hydrology | manual-supported | Prepare hydrology artifacts through the explicit staging path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [model-inputs](#model-inputs) | staging / Experimental models | manual-supported | Collect isolated experimental model inputs with bounded provider concurrency. | [guide](../docs/MODEL_CLOUD_INPUTS.md) |
 | [nam-hi-diagnostic](#nam-hi-diagnostic) | staging / Experimental models | diagnostic | Diagnose a bounded NAM-HI acquisition without broadening publication authority. | [guide](../docs/nam-hi-cloud-diagnostic.md) |
+| [platform-staging-transaction](#platform-staging-transaction) | releases / Platform staging | manual-supported | Execute one authorized Atmos backend rehearsal stage against frozen staging identities. | [guide](../docs/platform-staging-transaction.md) |
 | [point-route-activate](#point-route-activate) | releases / Production point routes | manual-supported | Activate reviewed point routes with ownership-aware rollback. | [guide](../docs/point-route-activation.md) |
 | [publish-current-model-production](#publish-current-model-production) | models / Component publication | recurring | Qualify and publish one authenticated collector result independently of sibling models. | [guide](../docs/current-model-artifact-handoff.md) |
 | [qualify-bake-throughput](#qualify-bake-throughput) | models / Bake qualification | diagnostic | Qualify full-grid GFS frame throughput and runner memory without provider or publication access. | [guide](../docs/bake-throughput-qualification.md) |
@@ -633,6 +634,32 @@ Checkout declarations (not a claim of approval or checkout success):
 | [diagnose / Checkout only the approved read-only scientific source](../.github/workflows/nam-hi-diagnostic.yml#L34) | <code>weatherx-hq/atmos</code> | <code>77487534a6ff0a17bf4e5d55f9ab5c06938138d4</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
+
+
+## platform-staging-transaction
+
+[.github/workflows/platform-staging-transaction.yml](../.github/workflows/platform-staging-transaction.yml#L1) · <code>WeatherX platform staging transaction</code>
+
+Declared triggers: [workflow_dispatch](../.github/workflows/platform-staging-transaction.yml#L5); input names <code>["atmos_sha","stage","confirm","rollback_target_version_id","rollback_expected_current_version_id"]</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-platform-staging-transaction","cancel-in-progress":false}</code>.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [transact](../.github/workflows/platform-staging-transaction.yml#L37) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"platform-staging","url":"https://staging.weatherx.org"}</code> | <code>30</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+
+Declared job conditions (additional step/helper checks may apply):
+
+- [transact](../.github/workflows/platform-staging-transaction.yml#L37): <code>${{ github.event_name == 'workflow_dispatch' &amp;&amp; github.ref == 'refs/heads/main' &amp;&amp; github.repository == 'Andrewegao/v3t7kq-cycle' }}</code>
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [transact / Checkout exact Cycle control revision](../.github/workflows/platform-staging-transaction.yml#L44) | caller repository (implicit) | <code>${{ github.sha }}</code> |
+| [transact / Checkout exact Atmos candidate](../.github/workflows/platform-staging-transaction.yml#L70) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmos_sha }}</code> |
+
+Variable references (declared names only; values and activation unknown): [PLATFORM_STAGING_CLOUDFLARE_ACCOUNT_ID](../.github/workflows/platform-staging-transaction.yml#L66), [PLATFORM_STAGING_TRANSACTIONS_ENABLED](../.github/workflows/platform-staging-transaction.yml#L65).
 
 
 ## point-route-activate

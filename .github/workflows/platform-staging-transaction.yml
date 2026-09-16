@@ -1,0 +1,155 @@
+name: WeatherX platform staging transaction
+
+on:
+  workflow_dispatch:
+    inputs:
+      atmos_sha:
+        description: Exact 40-character SHA currently at weatherx-hq/atmos master
+        required: true
+        type: string
+      stage:
+        description: Execute exactly one backend staging stage
+        required: true
+        type: choice
+        options: [configuration, backup, migration, worker-deploy, worker-rollback]
+      confirm:
+        description: Exact RUN-STAGING:<stage>:<atmos_sha>
+        required: true
+        type: string
+      rollback_target_version_id:
+        description: Last-good Worker version (worker-rollback only)
+        required: false
+        type: string
+      rollback_expected_current_version_id:
+        description: Exact current Worker version (worker-rollback only)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weatherx-platform-staging-transaction
+  cancel-in-progress: false
+
+jobs:
+  transact:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.repository == 'Andrewegao/v3t7kq-cycle' }}
+    environment:
+      name: platform-staging
+      url: https://staging.weatherx.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact Cycle control revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: cycle
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Admit protected main-only staging dispatch
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          ATMOS_SHA: ${{ inputs.atmos_sha }}
+          TRANSACTION_STAGE: ${{ inputs.stage }}
+          EXACT_CONFIRMATION: ${{ inputs.confirm }}
+          ROLLBACK_TARGET_VERSION_ID: ${{ inputs.rollback_target_version_id }}
+          ROLLBACK_EXPECTED_CURRENT_VERSION_ID: ${{ inputs.rollback_expected_current_version_id }}
+          PLATFORM_STAGING_TRANSACTIONS_ENABLED: ${{ vars.PLATFORM_STAGING_TRANSACTIONS_ENABLED }}
+          PLATFORM_STAGING_CLOUDFLARE_ACCOUNT_ID: ${{ vars.PLATFORM_STAGING_CLOUDFLARE_ACCOUNT_ID }}
+          PLATFORM_STAGING_TOKEN_PROVISIONED: ${{ secrets.PLATFORM_STAGING_CLOUDFLARE_API_TOKEN != '' }}
+          ATMOS_SOURCE_KEY_PROVISIONED: ${{ secrets.ATMOS_READONLY_KEY != '' }}
+        run: node cycle/tools/platform-staging-transaction.mjs prepare --output-dir "$RUNNER_TEMP/platform-staging-transaction"
+      - name: Checkout exact Atmos candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: ${{ inputs.atmos_sha }}
+          fetch-depth: 0
+          ssh-key: ${{ secrets.ATMOS_READONLY_KEY }}
+          persist-credentials: false
+          path: atmos
+      - name: Prove candidate is the current Atmos master and source is clean
+        env:
+          ATMOS_SHA: ${{ inputs.atmos_sha }}
+        run: |
+          [[ "$ATMOS_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git -C atmos rev-parse HEAD)" = "$ATMOS_SHA"
+          test "$(git -C atmos rev-parse origin/master)" = "$ATMOS_SHA"
+          test -z "$(git -C atmos status --porcelain --untracked-files=all)"
+      - name: Install the candidate's locked Wrangler without cloud credentials
+        run: npm ci --prefix atmos/platform/edge
+      - name: Verify the candidate staging packet without cloud credentials
+        run: node --test atmos/ops/release/test-staging-rehearsal.mjs
+      - name: Capture exact staging inventory for the plan
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.PLATFORM_STAGING_CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PLATFORM_STAGING_CLOUDFLARE_API_TOKEN }}
+        run: |
+          node atmos/ops/release/staging-rehearsal.mjs inventory \
+            --source-root "$GITHUB_WORKSPACE/atmos" \
+            --candidate "${{ inputs.atmos_sha }}" \
+            --output "$RUNNER_TEMP/platform-staging-transaction/inventory-before.json"
+      - name: Build an exact non-mutating staging plan
+        run: |
+          node atmos/ops/release/staging-rehearsal.mjs plan \
+            --source-root "$GITHUB_WORKSPACE/atmos" \
+            --candidate "${{ inputs.atmos_sha }}" \
+            --lease "$RUNNER_TEMP/platform-staging-transaction/lease.json" \
+            --inventory "$RUNNER_TEMP/platform-staging-transaction/inventory-before.json" \
+            --work-dir "$RUNNER_TEMP/platform-staging-transaction/work" \
+            --output "$RUNNER_TEMP/platform-staging-transaction/plan.json"
+      - name: Capture fresh expected-current staging state
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.PLATFORM_STAGING_CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PLATFORM_STAGING_CLOUDFLARE_API_TOKEN }}
+        run: |
+          node atmos/ops/release/staging-rehearsal.mjs inventory \
+            --source-root "$GITHUB_WORKSPACE/atmos" \
+            --candidate "${{ inputs.atmos_sha }}" \
+            --output "$RUNNER_TEMP/platform-staging-transaction/inventory-current.json"
+      - name: Authorize the selected stage for ten minutes
+        env:
+          TRANSACTION_STAGE: ${{ inputs.stage }}
+        run: |
+          expires_at="$(node cycle/tools/platform-staging-transaction.mjs authorization-expiry)"
+          node atmos/ops/release/staging-rehearsal.mjs authorize \
+            --plan "$RUNNER_TEMP/platform-staging-transaction/plan.json" \
+            --lease "$RUNNER_TEMP/platform-staging-transaction/lease.json" \
+            --stage "$TRANSACTION_STAGE" \
+            --current-inventory "$RUNNER_TEMP/platform-staging-transaction/inventory-current.json" \
+            --authorization-id "gh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${TRANSACTION_STAGE}" \
+            --expires-at "$expires_at" \
+            --arguments "$RUNNER_TEMP/platform-staging-transaction/stage-arguments.json" \
+            --output "$RUNNER_TEMP/platform-staging-transaction/authorization.json"
+      - name: Execute exactly one authorized backend staging stage
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.PLATFORM_STAGING_CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PLATFORM_STAGING_CLOUDFLARE_API_TOKEN }}
+          TRANSACTION_STAGE: ${{ inputs.stage }}
+        run: |
+          confirmation="$(node -e "const a=require(process.argv[1]); process.stdout.write('staging:'+a.stage+':'+a.authorizationId+':'+a.planSha256.slice(0,12))" "$RUNNER_TEMP/platform-staging-transaction/authorization.json")"
+          node atmos/ops/release/staging-rehearsal.mjs run \
+            --plan "$RUNNER_TEMP/platform-staging-transaction/plan.json" \
+            --lease "$RUNNER_TEMP/platform-staging-transaction/lease.json" \
+            --stage "$TRANSACTION_STAGE" \
+            --current-inventory "$RUNNER_TEMP/platform-staging-transaction/inventory-current.json" \
+            --authorization "$RUNNER_TEMP/platform-staging-transaction/authorization.json" \
+            --confirm "$confirmation" \
+            --receipt "$RUNNER_TEMP/platform-staging-transaction/stage-intent.json"
+      - name: Retain append-only staging transaction evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: platform-staging-${{ inputs.stage }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/platform-staging-transaction
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 6
