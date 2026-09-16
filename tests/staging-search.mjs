@@ -224,15 +224,24 @@ test('gate refuses local/unreviewed execution, foreign credentials and weather w
     `staging-candidates/${'a'.repeat(64)}/search/../weather.json`]) assert.throws(() => allowedSearchKey(path));
 });
 
-test('V4 source proof binds an exact protected descendant and nine-file reader closure', () => {
-  assert.equal(Object.keys(SEARCH_V4_READER_CLOSURE).length, 9);
-  assert.equal(SEARCH_V4_READER_CLOSURE['app/src/chrome/Search.tsx'],
-    '0a24339be80ca6f964624e7b554639d31014e67dc73acae63f094aaf03489faf');
+test('V4 source proof binds the reviewed fac2 descendant and ten-file reader closure', () => {
+  assert.deepEqual(SEARCH_V4_READER_CLOSURE, {
+    'app/src/chrome/Search.tsx': 'ccc1d445d69cebc9494444f43491d79ab3633d1fb8c73ba149ef0f9b991f701e',
+    'app/src/chrome/searchIndex.ts': '6a3fcfdca59107060e59380ce1b5fc26bc56a200d13634698db3ee08be3f9400',
+    'app/src/chrome/searchCompose.ts': 'f5892709df1c93acc608f71be1bb534e8bc9bac5e0708493bc5315a7933297f3',
+    'app/src/chrome/searchNormalize.ts': '08a7619586b832a532a4465436f0d06400b309db9a5aac3ee2409441d85f8b5c',
+    'app/src/chrome/searchIntent.ts': '06daf588a5cf65c8c4981eac5395d3700b9043967338f8fa2f72e939d5517595',
+    'app/src/chrome/searchShape.ts': '014802f8bb9f00bc662899384c85e22c1c5e1b51940501e14272bcce4490fc9e',
+    'app/src/chrome/searchLedger.ts': '77c088ec01def39e24024f60130b6ed5e4887b802d25906022fe687385bedbc1',
+    'app/src/chrome/searchSources.ts': '06dcd924ad857c32a027a02dfd735d6a33eb77d6398b3ee4daae4640437e1c38',
+    'app/src/data/gazetteer.ts': '095c2ad3c8a46154a52e777285c82cd332859bc162c6c646be771de48586b128',
+    'app/src/lib/boundedResponse.ts': '5260d0cc1035b1f350f321bd91e17af9ddd097cb556c49986f3a545245fa40c2',
+  });
   const env = { STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA: UI_SHA };
   const evidence = { head: UI_SHA, clean: true, includesSearchV4Base: true,
     files: { ...SEARCH_V4_READER_CLOSURE } };
   assert.deepEqual(validateV4SourceEvidence(env, evidence), {
-    uiSourceSha: UI_SHA, searchV4BaseSha: ATMOS_SHA, files: 9,
+    uiSourceSha: UI_SHA, searchV4BaseSha: ATMOS_SHA, files: 10,
   });
   for (const mutate of [
     value => { value.head = ATMOS_SHA; },
@@ -247,6 +256,19 @@ test('V4 source proof binds an exact protected descendant and nine-file reader c
     assert.throws(() => validateV4SourceEvidence(env, bad));
   }
   assert.throws(() => validateV4SourceEvidence({}, evidence));
+});
+
+test('fac2 operator record identifies the exact local-only review and closure', () => {
+  const review = readFileSync(new URL('../docs/staging-search-reader-review-fac2fc164420.md', import.meta.url), 'utf8');
+  assert.match(review, /local compatibility evidence only/i);
+  assert.ok(review.includes('6121d1695a18465fefb11b239b53caddb5e1977b'));
+  assert.ok(review.includes('fac2fc164420d4d31870a410c9a877d16ad76fb0'));
+  assert.ok(review.includes(ATMOS_SHA));
+  for (const [path, digest] of Object.entries(SEARCH_V4_READER_CLOSURE)) {
+    assert.ok(review.includes(`\`${path}\``), `operator record omits ${path}`);
+    assert.ok(review.includes(`\`${digest}\``), `operator record omits ${path} digest`);
+  }
+  assert.match(review, /No protected variable, workflow, Cloudflare\/R2 object, deployment, branch push/);
 });
 
 test('V2 activation accepts only the approved canonical V4 staging release', async () => {
