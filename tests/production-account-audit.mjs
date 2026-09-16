@@ -51,10 +51,10 @@ function platformFixture(overrides = {}) {
   };
 }
 
-function platformRunner(rows, calls = []) {
-  return async (command, args, options) => {
-    calls.push({command, args, options});
-    const query = args.at(-1);
+function platformFetch(rows, calls = []) {
+  return async (url, options) => {
+    calls.push({url: String(url), options});
+    const query = JSON.parse(options.body).sql;
     const table = query.includes('FROM users') ? 'users'
       : query.includes('FROM subscriptions') ? 'subscriptions'
       : query.includes('FROM entitlements') ? 'entitlements'
@@ -63,14 +63,14 @@ function platformRunner(rows, calls = []) {
       : query.includes('FROM stripe_checkout_attempts') ? 'checkoutAttempts'
       : query.includes('FROM webhook_events') ? 'webhookReview' : null;
     assert.ok(table, query);
-    return {stdout: JSON.stringify([{success: true, results: rows[table]}]), stderr: ''};
+    return new Response(JSON.stringify({success: true, errors: [], messages: [], result: [{success: true, results: rows[table], meta: {changed_db: false, changes: 0, rows_written: 0}}]}), {status: 200, headers: {'content-type': 'application/json'}});
   };
 }
 
 async function snapshots({stripe = stripeFixture(), platform = platformFixture()} = {}) {
   return {
     stripeSnapshot: await collectStripeSnapshot({apiKey: 'rk_live_fixture_key', fetcher: stripeFetch(stripe)}),
-    platformSnapshot: await collectPlatformSnapshot({wranglerPath: '/repo/node_modules/wrangler/bin/wrangler.js', configPath: '/repo/wrangler.jsonc', cwd: '/repo', runner: platformRunner(platform)}),
+    platformSnapshot: await collectPlatformSnapshot({accountId: 'a'.repeat(32), apiToken: 'cloudflare_audit_fixture_token', fetcher: platformFetch(platform)}),
   };
 }
 
@@ -93,23 +93,30 @@ test('Stripe collection paginates exhaustively with a restricted live key and pi
   await assert.rejects(() => listAllStripe('charges', {apiKey: 'rk_live_read_only', fetcher}), /not-allowlisted/);
 });
 
-test('platform collection executes only fixed SELECT statements against the exact production database', async () => {
+test('platform collection executes only fixed SELECT statements against the exact production D1 API', async () => {
   const calls = [];
-  const snapshot = await collectPlatformSnapshot({wranglerPath: '/repo/node_modules/wrangler/bin/wrangler.js', configPath: '/repo/wrangler.jsonc', cwd: '/repo', runner: platformRunner(platformFixture(), calls)});
+  const snapshot = await collectPlatformSnapshot({accountId: 'a'.repeat(32), apiToken: 'cloudflare_audit_fixture_token', fetcher: platformFetch(platformFixture(), calls)});
   assert.equal(snapshot.databaseId, PRODUCTION_PLATFORM_D1_ID);
   assert.equal(calls.length, 7);
   for (const call of calls) {
-    assert.equal(call.args[0], 'd1');
-    assert.equal(call.args[1], 'execute');
-    assert.equal(call.args[2], PRODUCTION_PLATFORM_D1_ID);
-    assert.ok(call.args.includes('--remote'));
-    assert.ok(call.args.includes('production'));
-    assert.match(call.args.at(-1), /^SELECT\b/);
-    assert.doesNotMatch(call.args.at(-1), /\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)\b/i);
-    assert.deepEqual(Object.keys(call.options.env).sort(), Object.keys(call.options.env).filter(name => ['PATH', 'HOME', 'CI', 'NO_COLOR', 'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN'].includes(name)).sort());
-    assert.equal(call.options.env.STRIPE_PRODUCTION_AUDIT_KEY, undefined);
+    assert.equal(new URL(call.url).origin, 'https://api.cloudflare.com');
+    assert.equal(new URL(call.url).pathname, `/client/v4/accounts/${'a'.repeat(32)}/d1/database/${PRODUCTION_PLATFORM_D1_ID}/query`);
+    assert.equal(call.options.method, 'POST');
+    assert.equal(call.options.redirect, 'manual');
+    assert.equal(call.options.headers.authorization, 'Bearer cloudflare_audit_fixture_token');
+    const body = JSON.parse(call.options.body);
+    assert.deepEqual(Object.keys(body), ['sql']);
+    assert.match(body.sql, /^SELECT\b/);
+    assert.doesNotMatch(body.sql, /\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)\b/i);
   }
   assert.doesNotMatch(JSON.stringify(snapshot), /email|checkout_url|idempotency/i);
+});
+
+test('platform collection fails closed on Cloudflare errors and any reported write', async () => {
+  const denied = async () => new Response(JSON.stringify({success: false, errors: [{code: 9109, message: 'Unauthorized'}], result: null}), {status: 403});
+  await assert.rejects(() => collectPlatformSnapshot({accountId: 'a'.repeat(32), apiToken: 'cloudflare_audit_fixture_token', fetcher: denied}), /platform-users-http-403/);
+  const wrote = async () => new Response(JSON.stringify({success: true, errors: [], result: [{success: true, results: [], meta: {changed_db: true, changes: 1, rows_written: 1}}]}), {status: 200});
+  await assert.rejects(() => collectPlatformSnapshot({accountId: 'a'.repeat(32), apiToken: 'cloudflare_audit_fixture_token', fetcher: wrote}), /platform-users-changed-database/);
 });
 
 test('a complete matching live Stripe and platform inventory produces a clear deterministic receipt', async () => {
