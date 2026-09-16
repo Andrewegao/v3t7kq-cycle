@@ -9,7 +9,7 @@ import {
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { receiptVerificationEnvironment, validateWind100BuildReceipt } from './ui-release.mjs';
-import { profileFor } from './ui-staging-models.mjs';
+import { profileFor, productionAccountProfile } from './ui-staging-models.mjs';
 
 const ROOT=resolve(fileURLToPath(new URL('..',import.meta.url)));
 const CONTROL=resolve(ROOT,'../control');
@@ -40,7 +40,14 @@ export function runProfileCompatibilityPreflight({controllerRoot=CONTROL,runnerT
     const dist=resolve(work,'dist'),output=resolve(dist,'health/release.json');
     mkdirSync(resolve(dist,'health'),{recursive:true,mode:0o700});
     writeFileSync(resolve(dist,'index.html'),'<title>WeatherX profile preflight</title>\n',{flag:'wx',mode:0o600});
-    const profile=profileFor(env.MODEL_SELECTION_SHA256),subprocessEnv=childEnvironment(env,profile);
+    const profile=profileFor(env.MODEL_SELECTION_SHA256);
+    // The production account receipt is intentionally inseparable from Vite-emitted chunk
+    // evidence. A synthetic preflight artifact must not forge that evidence; the exact pinned
+    // controller is exercised by its CI and the real build verifies it before encryption.
+    if(productionAccountProfile(profile))return {
+      profile:env.MODEL_SELECTION_SHA256,productionArtifactEvidence:'required-after-build',wind100:null,
+    };
+    const subprocessEnv=childEnvironment(env,profile);
     const options={env:subprocessEnv,encoding:'utf8',stdio:['ignore','pipe','pipe'],timeout:10_000,maxBuffer:MAX_RECEIPT_BYTES};
     execFileSync(process.execPath,[script,dist,output],options);
     execFileSync(process.execPath,[script,'--verify',dist,output],options);

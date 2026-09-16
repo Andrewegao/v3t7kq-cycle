@@ -1,6 +1,6 @@
 // Pure release-transaction framework. It has no Cloudflare, GitHub, Wrangler, Stripe,
 // filesystem, or network client. Callers must inject a reviewed adapter and the default
-// validation path refuses the provisional Lane B contract.
+// mutation execution remains subject to the separate fail-closed production trust policy.
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 

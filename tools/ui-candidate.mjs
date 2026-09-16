@@ -167,7 +167,7 @@ export function validateCandidate(candidate) {
   validateCompressionFiles(candidate.files,staticCompressionProfile(candidate.profile));
   const receipt = JSON.parse(Buffer.from(candidate.files.find(f => f.path === 'health/release.json').base64, 'base64'));
   if(productionAccountProfile(candidate.profile)){
-    assert.deepEqual(receipt.buildProfile,LANE_B_CONTRACT.provisionalBuildReceipt,
+    assert.deepEqual(receipt.buildProfile,LANE_B_CONTRACT.buildReceipt,
       'production account build receipt differs from the Lane B contract');
   }else if(candidate.profile.account){
     const expected={product:'lab',platformAccount:'1',platformDataAuth:'public'};
