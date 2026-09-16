@@ -12,7 +12,7 @@ Lane C is built against one explicit owner-blocked Lane B contract in
 - exact reviewed Atmos integration candidate: `64065f12326077dca3d8a11316b0151b10ba4d0b`
 - contract digest: `e4d460c5e58223ff2ae0e5cf277ab7348cda8935e833e9ec986957cfd4b8de2c`
 - production profile digest: `1a9cac5a307a4e97ee240709725a9d4a255b7480a7d585a65543b2bdcf87e931`
-- pipeline digest: `60264a9774dc02b5492fb1ee9ee2592a73b2149c6eae17d45f9a86eb2986c6e3`
+- pipeline digest: `6751e43d49d02dc36a6fd17b444aba1b2810be1e9ae28cc694cc91e295905199`
 
 Every normal validation path refuses while the contract is provisional. Tests may pass
 `allowProvisional: true` only to exercise mocked transactions. That switch must never appear
@@ -42,6 +42,34 @@ are deliberately invalid identifiers until the owner chooses exact live Prices; 
 The owner-blocked profile is not exposed through a live workflow selector. Adding that selector
 requires a final owner-approved contract and separately reviewed workflow change. This prevents
 a protected-variable typo from turning an unfinished contract into a deployable profile.
+
+## Execution boundary
+
+`tools/production-account-execution.mjs` is the only release-transaction execution boundary. A
+request has an exact action and either `mode=plan` or `mode=execute`. Plan mode forbids mutation
+authorization and never invokes a Cloudflare adapter. It may render the provisional
+contract only as an explicitly blocked preview. The preview currently reports both the provisional
+Lane B contract and missing owner-approved live Stripe Prices.
+
+Execute mode has no provisional override. Before it can call an injected adapter, it independently:
+
+- validates the final contract, candidate, staging qualification, target, artifact and rollback
+  identities;
+- requires an action-specific authorization containing the exact plan and target digests and the
+  literal `AUTHORIZE WEATHERX PRODUCTION MUTATION`, with a maximum 30-minute lifetime;
+- obtains a fresh action/transaction/target-bound exclusive-lease proof; and
+- durably writes and reads back a sanitized pre-mutation intent receipt.
+
+Every result is written and read back as a separate completed receipt. Failures persist only a safe
+failure code; arbitrary provider output and secret values never enter the receipt. Pages preimages
+use their own durable receipt identity. The filesystem store uses bounded, mode-0600 JSON envelopes,
+atomic replacement, canonical hashed filenames and symlink refusal.
+
+Live Stripe Product and Price IDs are non-secret inputs carried by the release plan, not credentials
+or source defaults. They must be exact valid live Price IDs, must equal the final owner-approved Lane
+B contract, and remain blocked while the contract contains placeholders. Providing an ID does not
+make it approved: finalizing the contract changes its digest and requires a newly bound candidate and
+staging qualification.
 
 ## G3 transaction separation
 
@@ -76,8 +104,9 @@ these G3/G4 dependencies are qualified and explicitly authorized.
 
 ## Required adapter behavior
 
-`tools/production-account-release.mjs` is intentionally pure and performs no network access. A
-future Cloudflare adapter must implement the injected read/upload/activate/rollback methods and:
+`tools/production-account-release.mjs` is intentionally pure and performs no network access. The
+execution boundary accepts a reviewed Cloudflare adapter implementing the injected
+read/upload/activate/rollback methods. That adapter must:
 
 - use Workers versions/deployments so upload and activation are separate;
 - supply a stable ownership/CAS observation derived from a fresh provider read and exclusive
@@ -123,10 +152,13 @@ Run with Node 22:
 
 ```sh
 node --test tests/production-account-release.mjs
-node --test tests/ui-*.mjs tests/production-account-release.mjs
+node --test tests/production-account-execution.mjs tests/production-account-release.mjs
+node --test tests/ui-*.mjs tests/production-account-execution.mjs tests/production-account-release.mjs
 ```
 
 The transaction suite covers wrong target/digest, known staging/test identifiers, purchase-open
 refusal, exact candidate invalidation, inactive upload, old-UI compatibility, CAS/foreign writer,
 interrupted activation, Worker rollback with retained additive schema, and Pages configuration
 rollback. These are mocked controller contracts, not live Cloudflare or Stripe receipts.
+The execution-boundary suite additionally covers blocked planning, no-authorization refusal,
+action/target/expiry-bound authorization, input-receipt separation and durable receipt storage.
