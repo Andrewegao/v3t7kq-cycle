@@ -72,6 +72,8 @@ jobs:
           node tools/workflow-inventory.mjs --check
       - name: Isolated staging forecast evidence policy
         run: node --test tests/fusion-staging-evidence.mjs
+      - name: Production fusion evidence safety contracts
+        run: node --test tests/fusion-production-evidence.mjs
       - run: npm run check --prefix scheduler
       - name: Late-failure bake diagnostic retention contract
         run: |

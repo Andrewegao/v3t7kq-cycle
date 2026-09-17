@@ -69,3 +69,15 @@ test('gap output is bounded, secret-free, and immutable', async t => {
     for (const [key, value] of Object.entries(previous)) value === undefined ? delete process.env[key] : process.env[key] = value;
   }
 });
+
+test('infrastructure preflight installs pinned Python dependencies before the platform check', async () => {
+  const workflow = await readFile(new URL('../.github/workflows/fusion-infra.yml', import.meta.url), 'utf8');
+  const setup = workflow.indexOf('actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065');
+  const dependencies = workflow.indexOf('Pillow==12.2.0 numpy==2.4.6 eccodes==2.47.0');
+  const platformCheck = workflow.indexOf('npm run check --prefix platform/edge');
+  const deploy = workflow.indexOf('npx wrangler deploy --env "$TARGET" -c wrangler.fusion-archive.jsonc');
+  assert.ok(setup > 0);
+  assert.ok(setup < dependencies);
+  assert.ok(dependencies < platformCheck);
+  assert.ok(platformCheck < deploy);
+});
