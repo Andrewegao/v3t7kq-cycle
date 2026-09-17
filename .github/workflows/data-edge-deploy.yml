@@ -57,7 +57,7 @@ jobs:
       - name: Install publisher contract Python dependencies
         timeout-minutes: 2
         # Same pins as the reviewed Atmos data requirements; no live data collection.
-        run: python -m pip install --disable-pip-version-check Pillow==12.2.0 numpy==2.4.6
+        run: python -m pip install --disable-pip-version-check Pillow==12.2.0 numpy==2.4.6 eccodes==2.47.0
       - name: Install locked edge dependencies
         working-directory: atmos/platform/edge
         run: npm ci
