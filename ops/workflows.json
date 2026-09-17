@@ -131,7 +131,7 @@
       "id": "fusion-infra",
       "path": ".github/workflows/fusion-infra.yml",
       "family": "control-plane",
-      "purpose": "Provision the selected fusion infrastructure through explicit deployment guards.",
+      "purpose": "Deploy the exact isolated Fusion archive or complete infrastructure pair through explicit scope guards.",
       "subsystem": "Fusion infrastructure",
       "lifecycle": "manual-supported",
       "runbook": "docs/WORKFLOW_OPERATIONS.md"
@@ -140,7 +140,7 @@
       "id": "fusion-issue",
       "path": ".github/workflows/fusion-issue.yml",
       "family": "maintenance",
-      "purpose": "Issue the selected fusion candidate under existing qualification rules.",
+      "purpose": "Record source-bound Fusion forecasts with canary/full completeness and exact archive readback.",
       "subsystem": "Fusion issuance",
       "lifecycle": "recurring",
       "runbook": "docs/WORKFLOW_OPERATIONS.md"
@@ -473,9 +473,9 @@
       "id": "fusion-staging-evidence",
       "path": ".github/workflows/fusion-staging-evidence.yml",
       "family": "staging",
-      "purpose": "Record isolated prospective forecast evidence and matched references; retain explicit gaps without calibration.",
+      "purpose": "Manually diagnose isolated staging forecast evidence without relying on an aging fixed catalog.",
       "subsystem": "Fusion evidence",
-      "lifecycle": "recurring",
+      "lifecycle": "manual-supported",
       "runbook": "docs/FUSION_STAGING_EVIDENCE.md"
     }
   ]

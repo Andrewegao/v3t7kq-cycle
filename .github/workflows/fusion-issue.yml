@@ -1,6 +1,17 @@
 name: WeatherX fusion issuance
 on:
   workflow_dispatch:
+    inputs:
+      scope:
+        description: Record one station first, or the complete frozen network
+        type: choice
+        options: [canary, full]
+        default: canary
+        required: true
+      confirmation:
+        description: Enter RECORD FUSION EVIDENCE
+        type: string
+        required: true
   schedule:
     - cron: '23 */6 * * *'
 permissions:
@@ -11,112 +22,91 @@ concurrency:
   cancel-in-progress: false
 jobs:
   record:
-    if: ${{ github.ref == 'refs/heads/main' && vars.FUSION_FEEDBACK_ENABLED == 'true' }}
+    if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || vars.FUSION_ISSUANCE_ENABLED == 'true') }}
     environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      ENGINE_SHA: ${{ vars.FUSION_ENGINE_SHA }}
+      FUSION_CALIBRATION_RUNTIME_ENABLED: 'false'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: Andrewegao/atmos
-          ref: ${{ vars.FUSION_ENGINE_SHA }}
-          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: cycle
           persist-credentials: false
-      - name: Require the reviewed immutable engine
-        env:
-          ENGINE_SHA: ${{ vars.FUSION_ENGINE_SHA }}
-        run: |
-          [[ "$ENGINE_SHA" =~ ^[a-f0-9]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$ENGINE_SHA"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22 }
-      - run: npm ci --prefix app
-      - name: Feedback contract tests and CLI types
-        run: |
-          cd app
-          npx tsc -p ../ops/fusion/tsconfig.json --noEmit
-          npx vitest run src/fusion/feedback.test.ts
-      - name: Read source-bound candidate from the successful evaluation run
-        if: ${{ vars.FUSION_SHADOW_RUN != '' }}
+      - name: Require an explicit canary or complete-network run
         env:
-          GH_TOKEN: ${{ github.token }}
-          EVALUATION_RUN_ID: ${{ vars.FUSION_SHADOW_RUN }}
-          EXPECTED_CANDIDATE_ID: ${{ vars.FUSION_SHADOW_CANDIDATE }}
+          EVENT_NAME: ${{ github.event_name }}
+          SCOPE: ${{ inputs.scope }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          SCHEDULE_ENABLED: ${{ vars.FUSION_ISSUANCE_ENABLED }}
         run: |
-          bash ops/fusion/download-evaluation.sh
-          install -d -m 700 "$RUNNER_TEMP/weatherx-fusion-evidence"
-          install -m 600 feedback-evidence/candidate.json "$RUNNER_TEMP/weatherx-fusion-evidence/candidate.json"
-          rm -rf -- feedback-evidence
-          test -z "$(git status --porcelain --untracked-files=normal)"
-      - name: Append prospective forecasts and independent first-seen truth
+          [[ "$ENGINE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          if [ "$EVENT_NAME" = 'workflow_dispatch' ]; then
+            test "$CONFIRMATION" = 'RECORD FUSION EVIDENCE'
+            case "$SCOPE" in canary) stations=1 ;; full) stations=64 ;; *) exit 1 ;; esac
+          else
+            test "$SCHEDULE_ENABLED" = 'true'
+            stations=64
+          fi
+          echo "EXPECTED_STATIONS=$stations" >> "$GITHUB_ENV"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: ${{ env.ENGINE_SHA }}
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: atmos
+          persist-credentials: false
+      - name: Verify exact clean engine and evidence policy
+        run: |
+          test "$(git -C atmos rev-parse HEAD)" = "$ENGINE_SHA"
+          test -z "$(git -C atmos status --porcelain)"
+          node --test cycle/tests/fusion-production-evidence.mjs
+          npm ci --prefix atmos/app
+          atmos/app/node_modules/.bin/tsx --test atmos/ops/fusion/test-collection-provenance.ts atmos/ops/fusion/test-signed-origin.ts
+          atmos/app/node_modules/.bin/tsc -p atmos/ops/fusion/tsconfig.json --noEmit
+      - name: Append prospective forecasts and independent observations
         id: collect
+        working-directory: atmos
         env:
           FUSION_ISSUANCE_KEY: ${{ secrets.FUSION_ISSUANCE_KEY }}
-          FUSION_CALIBRATION_RUNTIME_ENABLED: ${{ vars.FUSION_CALIBRATION_RUNTIME_ENABLED || 'false' }}
-          SHADOW_CANDIDATE: ${{ runner.temp }}/weatherx-fusion-evidence/candidate.json
         run: |
-          candidate_args=()
-          if [ -f "$SHADOW_CANDIDATE" ]; then candidate_args=(--candidate "$SHADOW_CANDIDATE"); fi
-          app/node_modules/.bin/tsx ops/fusion/cli.ts collect --publish --out feedback-output "${candidate_args[@]}"
-      - name: Validate the compact issuance receipt
+          app/node_modules/.bin/tsx ops/fusion/cli.ts collect --publish --max-stations "$EXPECTED_STATIONS" --out "$RUNNER_TEMP/fusion-production-evidence"
+      - name: Require every requested station and direct observation receipt
         id: receipt
+        run: node cycle/tools/fusion-production-evidence.mjs receipt "$RUNNER_TEMP/fusion-production-evidence"
+      - name: Read back every immutable issued forecast byte for byte
+        id: readback
+        working-directory: atmos
         env:
-          EXPECTED_ENGINE_SHA: ${{ vars.FUSION_ENGINE_SHA }}
+          FUSION_ARCHIVE_READ_KEY: ${{ secrets.FUSION_ARCHIVE_READ_KEY }}
         run: |
-          node --input-type=module <<'NODE'
-          // BEGIN WEATHERX COMPACT ISSUANCE RECEIPT VALIDATION
-          import { readFileSync } from 'node:fs';
-          const value = JSON.parse(readFileSync('feedback-output/collection-receipt.json', 'utf8'));
-          const expectedKeys = ['schemaVersion', 'sourceGitSha', 'sourceTreeClean', 'generatedAt', 'releaseId',
-            'verifyRunId', 'issued', 'failed', 'truthCount', 'baselineId', 'networkSha256', 'published'];
-          const integers = ['issued', 'failed', 'truthCount'];
-          if (!value || typeof value !== 'object' || Array.isArray(value) ||
-              JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(expectedKeys.sort()) ||
-              !/^[a-f0-9]{40}$/.test(process.env.EXPECTED_ENGINE_SHA ?? '') ||
-              value.schemaVersion !== 1 || value.sourceGitSha !== process.env.EXPECTED_ENGINE_SHA ||
-              value.sourceTreeClean !== true || value.published !== true ||
-              typeof value.generatedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T.*Z$/.test(value.generatedAt) ||
-              !Number.isFinite(Date.parse(value.generatedAt)) ||
-              typeof value.releaseId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/.test(value.releaseId) ||
-              typeof value.verifyRunId !== 'string' || !/^\d{10}$/.test(value.verifyRunId) ||
-              typeof value.baselineId !== 'string' ||
-              !(value.baselineId === 'builtin-v1' || /^[a-f0-9]{64}$/.test(value.baselineId)) ||
-              typeof value.networkSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.networkSha256) ||
-              integers.some((key) => !Number.isSafeInteger(value[key]) || value[key] < 0) || value.issued < 1) {
-            throw new Error('Invalid compact issuance receipt');
-          }
-          // END WEATHERX COMPACT ISSUANCE RECEIPT VALIDATION
-          NODE
+          app/node_modules/.bin/tsx ops/fusion/cli.ts verify-readback --collection "$RUNNER_TEMP/fusion-production-evidence" --archive-origin https://weatherx.org --out "$RUNNER_TEMP/fusion-production-readback"
+          READBACK_RECEIPT="$RUNNER_TEMP/fusion-production-readback/readback-receipt.json" node ../cycle/tools/fusion-production-evidence.mjs readback "$RUNNER_TEMP/fusion-production-evidence"
       - name: Record a bounded issuance gap
         if: ${{ failure() || cancelled() }}
         env:
           COLLECT_OUTCOME: ${{ steps.collect.outcome }}
           RECEIPT_OUTCOME: ${{ steps.receipt.outcome }}
-          JOB_STATUS: ${{ job.status }}
+          READBACK_OUTCOME: ${{ steps.readback.outcome }}
+        run: node cycle/tools/fusion-production-evidence.mjs gap "$RUNNER_TEMP/fusion-production-evidence"
+      - name: Summarize the bounded result
+        if: ${{ always() }}
         run: |
-          mkdir -p feedback-output
-          node --input-type=module <<'NODE'
-          import { writeFileSync } from 'node:fs';
-          const value = {
-            schemaVersion: 1,
-            kind: 'fusion-issuance-gap',
-            recordedAt: new Date().toISOString(),
-            githubRunId: process.env.GITHUB_RUN_ID ?? 'unknown',
-            githubRunAttempt: process.env.GITHUB_RUN_ATTEMPT ?? 'unknown',
-            eventName: process.env.GITHUB_EVENT_NAME ?? 'unknown',
-            jobStatus: process.env.JOB_STATUS || 'unknown',
-            collectOutcome: process.env.COLLECT_OUTCOME || 'not-reached',
-            receiptOutcome: process.env.RECEIPT_OUTCOME || 'not-reached',
-          };
-          writeFileSync('feedback-output/issuance-gap.json', `${JSON.stringify(value)}\n`, { flag: 'wx', mode: 0o600 });
-          NODE
-      - name: Keep compact collection receipt (never full private replay inputs)
+          if [ -f "$RUNNER_TEMP/fusion-production-evidence/run-status.json" ]; then
+            node -e "const v=require(process.argv[1]); console.log('### Fusion evidence\n\n- Status: '+v.status+'\n- Stations: '+(v.stations ?? 'gap')+'\n- Read back: '+(v.readbackVerified ?? 'gap')+'\n- Calibration: disabled')" "$RUNNER_TEMP/fusion-production-evidence/run-status.json" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Keep only bounded receipts, never private forecast bodies
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: fusion-issuance-receipt
+          name: fusion-production-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            feedback-output/collection-receipt.json
-            feedback-output/issuance-gap.json
+            ${{ runner.temp }}/fusion-production-evidence/collection-receipt.json
+            ${{ runner.temp }}/fusion-production-evidence/collection-status.json
+            ${{ runner.temp }}/fusion-production-evidence/run-status.json
+            ${{ runner.temp }}/fusion-production-readback/readback-receipt.json
           if-no-files-found: error
           retention-days: 90

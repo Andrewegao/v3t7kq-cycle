@@ -38,7 +38,7 @@ test('receipt never presents partial or missing stations as complete, or unclean
 test('workflow has no production environment, deployment, candidate fit, control key, or accuracy publication',async()=>{
   const text=await readFile(new URL('../.github/workflows/fusion-staging-evidence.yml',import.meta.url),'utf8');
   assert.match(text,/environment: staging/);assert.match(text,/FUSION_CALIBRATION_RUNTIME_ENABLED: 'false'/);
-  assert.match(text,/FUSION_STAGING_EVIDENCE_ENABLED/);assert.match(text,/--days 7/);assert.match(text,/run-status.json/);assert.match(text,/snapshot.json/);
+  assert.doesNotMatch(text,/schedule:|FUSION_STAGING_EVIDENCE_ENABLED/);assert.match(text,/--days 7/);assert.match(text,/run-status.json/);assert.match(text,/snapshot.json/);
   assert.match(text,/--origin "\$READ_ORIGIN" --archive-origin "\$ARCHIVE_ORIGIN" --control-origin "\$CONTROL_ORIGIN"/);
   assert.doesNotMatch(text,/environment: production|FUSION_PROMOTION_KEY|wrangler deploy|cli\.ts (?:promote|build|evaluate|rollback)/);
   assert.ok(text.indexOf("directObservation(canonicalObservationUrl")<text.indexOf('cli.ts collect --publish'));
