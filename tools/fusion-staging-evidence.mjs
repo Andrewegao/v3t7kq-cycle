@@ -35,7 +35,7 @@ export function collectionSummary(receipt, engine) {
   assert.equal(receipt.observationAcquisitions?.length, 64, 'Every station needs an independent observation receipt');
   const stationIds = new Set();
   for (const acquisition of receipt.observationAcquisitions) {
-    assert.deepEqual(Object.keys(acquisition).sort(), ['stationId','icao','source','requestUrl','requestedAt','receivedAt','responseBytes','responseSha256'].sort());
+    assert.deepEqual(Object.keys(acquisition).sort(), ['stationId','icao','source','requestUrl','requestedAt','receivedAt','responseBytes','responseSha256','acceptedTruths'].sort());
     assert.match(acquisition.stationId, /^M:[A-Z0-9]{3,8}$/);
     assert.ok(!stationIds.has(acquisition.stationId), 'Observation station receipt is duplicated');
     stationIds.add(acquisition.stationId);
@@ -51,6 +51,8 @@ export function collectionSummary(receipt, engine) {
     assert.ok(Number.isFinite(requestedAt) && Number.isFinite(receivedAt) && receivedAt >= requestedAt);
     assert.ok(Number.isSafeInteger(acquisition.responseBytes) && acquisition.responseBytes > 0 && acquisition.responseBytes <= 4 * 1024 * 1024);
     assert.match(acquisition.responseSha256, /^[a-f0-9]{64}$/);
+    assert.ok(Number.isSafeInteger(acquisition.acceptedTruths) && acquisition.acceptedTruths > 0,
+      'Observation receipt has no accepted truths');
   }
   return { schemaVersion: 1, kind: 'fusion-staging-collection', recordedAt: receipt.generatedAt,
     sourceGitSha: engine, issued: receipt.issued, failed: receipt.failed, observations: receipt.truthCount,
