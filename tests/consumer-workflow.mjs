@@ -128,10 +128,13 @@ assert.match(ci, /node tests\/consumer-workflow\.mjs/);
 assert.match(ci, /node --test tests\/consumer-refresh\*\.mjs/);
 assert.doesNotMatch(legacy, /CLOUDFLARE_WORKERS_API_TOKEN|consumer-refresh/,
   'existing catalog cutover workflow keeps its dedicated data-edge-only authority');
-// This narrow repair intentionally does not change either reviewed legacy file.
-// A future intentional cutover redesign must review and update these pins explicitly.
+assert.match(legacy,
+  /actions\/setup-python@[a-f0-9]{40} # v5[\s\S]*?python-version: '3\.12'[\s\S]*?Pillow==12\.2\.0/,
+  'the catalog cutover installs the exact publisher-contract image dependency before release gates');
+// The catalog cutover's reviewed bytes include the Python/Pillow setup required by
+// Atmos's complete publisher contract. Future changes must review and update this pin explicitly.
 assert.equal(createHash('sha256').update(legacy).digest('hex'),
-  '01f1f999cc424172d8064e71a015d56c2bc32577c5bbbcefbae6ef0118273905',
+  '36ee481c27bfe65d0f9924bca69c80e7bdbe49cc4fc0aa2c7f5c7b54cab94b02',
   'legacy bootstrap/shadow/serve workflow remains byte-for-byte unchanged');
 assert.equal(createHash('sha256').update(await readFile(
   new URL('../scheduler/test-production-cutover-contract.mjs', import.meta.url),
