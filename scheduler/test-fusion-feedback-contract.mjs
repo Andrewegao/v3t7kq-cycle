@@ -24,6 +24,8 @@ assert.match(issue, /canary\) stations=1/);
 assert.match(issue, /full\) stations=64/);
 assert.match(issue, /FUSION_CALIBRATION_RUNTIME_ENABLED: 'false'/);
 assert.match(issue, /verify-readback/);
+assert.match(issue, /--publish-manifest/);
+assert.match(issue, /EXPECTED_STATIONS" = 64/);
 assert.match(issue, /fusion-production-evidence\.mjs receipt/);
 assert.match(issue, /fusion-production-evidence\.mjs readback/);
 assert.match(issue, /vars\.FUSION_ISSUANCE_ENABLED == 'true'/);
@@ -37,6 +39,7 @@ assert.match(issue, /failure\(\) \|\| cancelled\(\)/);
 assert.match(issue, /collection-status\.json/);
 assert.match(issue, /run-status\.json/);
 assert.match(issue, /readback-receipt\.json/);
+assert.match(issue, /manifest-receipt\.json/);
 assert.match(issue, /if-no-files-found: error/);
 
 assert.match(evaluate, /secrets\.FUSION_ARCHIVE_READ_KEY/);
