@@ -27,7 +27,8 @@ const readback = count => { const values = records(count); return { schemaVersio
   generatedAt: '2026-09-17T00:00:03.000Z', records: values, recordsSha256: productionReceiptHash(values), recordCount: count }; };
 const manifest = source => ({ schemaVersion: 1, kind: 'fusion-commercial-archive-manifest-receipt', sourceGitSha: engine,
   generatedAt: '2026-09-17T00:00:04.000Z', manifestId: 'd'.repeat(64), archiveCatalogId: 'e'.repeat(64),
-  archiveCatalogRevision: 1, recordCount: 64, recordsSha256: source.recordsSha256 });
+  archiveCatalogRevision: 1, recordCount: 64, recordsSha256: productionReceiptHash(source.records.map(
+    ({ stationId, issueId, issuedAt, key }) => ({ stationId, issueId, issuedAt, key }))) });
 
 test('one-station canary and full collection require complete source-bound observations', () => {
   assert.equal(validateProductionCollection(collection(1), engine, 1).status, 'complete');
