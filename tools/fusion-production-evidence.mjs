@@ -108,7 +108,9 @@ export function validateProductionManifest(receipt, engineSha, readback) {
   assert.equal(receipt.kind, 'fusion-commercial-archive-manifest-receipt');
   assert.equal(receipt.sourceGitSha, engineSha);
   assert.equal(receipt.recordCount, 64);
-  assert.equal(receipt.recordsSha256, readback.recordsSha256);
+  const manifestRecords = readback.records.map(({ stationId, issueId, issuedAt, key }) =>
+    ({ stationId, issueId, issuedAt, key }));
+  assert.equal(receipt.recordsSha256, productionReceiptHash(manifestRecords));
   assert.match(receipt.manifestId, SHA64);
   assert.match(receipt.archiveCatalogId, SHA64);
   assert.ok(Number.isSafeInteger(receipt.archiveCatalogRevision) && receipt.archiveCatalogRevision >= 1);
