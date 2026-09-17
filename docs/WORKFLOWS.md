@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `43c0ea5479b18a6e57f2640124e5ae4751f61bb7529b6d3cf4404ac050c1f144`.
+Source digest (registry and workflow bytes): `0cbbb79986116f038572a4eaa38d0a61fb8eb0a7723edb127bc3a78eb8c46e5b`.
 
 53 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -26,10 +26,10 @@ Source digest (registry and workflow bytes): `43c0ea5479b18a6e57f2640124e5ae4751
 | [data-edge-deploy](#data-edge-deploy) | releases / Production data edge | manual-supported | Deploy the selected production data-edge phase under its explicit guards. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [data-reader-refresh](#data-reader-refresh) | releases / Production data reader | manual-supported | Refresh the production data reader with compatible fallback recovery. | [guide](../docs/data-reader-refresh.md) |
 | [fusion-evaluate](#fusion-evaluate) | maintenance / Fusion evaluation | manual-supported | Evaluate retained fusion inputs through the existing guarded evaluation path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
-| [fusion-infra](#fusion-infra) | control-plane / Fusion infrastructure | manual-supported | Provision the selected fusion infrastructure through explicit deployment guards. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
-| [fusion-issue](#fusion-issue) | maintenance / Fusion issuance | recurring | Issue the selected fusion candidate under existing qualification rules. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
+| [fusion-infra](#fusion-infra) | control-plane / Fusion infrastructure | manual-supported | Deploy the exact isolated Fusion archive or complete infrastructure pair through explicit scope guards. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
+| [fusion-issue](#fusion-issue) | maintenance / Fusion issuance | recurring | Record source-bound Fusion forecasts with canary/full completeness and exact archive readback. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [fusion-promote](#fusion-promote) | maintenance / Fusion promotion | manual-supported | Promote a qualified fusion candidate through the guarded controller. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
-| [fusion-staging-evidence](#fusion-staging-evidence) | staging / Fusion evidence | recurring | Record isolated prospective forecast evidence and matched references; retain explicit gaps without calibration. | [guide](../docs/FUSION_STAGING_EVIDENCE.md) |
+| [fusion-staging-evidence](#fusion-staging-evidence) | staging / Fusion evidence | manual-supported | Manually diagnose isolated staging forecast evidence without relying on an aging fixed catalog. | [guide](../docs/FUSION_STAGING_EVIDENCE.md) |
 | [gdacs-feed-release](#gdacs-feed-release) | releases / Hazard feed | manual-supported | Release the isolated GDACS route through guarded verification and recovery. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [hydrology](#hydrology) | archives / Hydrology | manual-supported | Prepare hydrology artifacts through the explicit staging path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [model-inputs](#model-inputs) | staging / Experimental models | manual-supported | Collect isolated experimental model inputs with bounded provider concurrency. | [guide](../docs/MODEL_CLOUD_INPUTS.md) |
@@ -442,50 +442,51 @@ Variable references (declared names only; values and activation unknown): [FUSIO
 
 [.github/workflows/fusion-infra.yml](../.github/workflows/fusion-infra.yml#L1) · <code>WeatherX fusion infrastructure</code>
 
-Declared triggers: [workflow_dispatch](../.github/workflows/fusion-infra.yml#L4); input names <code>["target","confirmation"]</code>.
+Declared triggers: [workflow_dispatch](../.github/workflows/fusion-infra.yml#L4); input names <code>["target","component","confirmation"]</code>.
 
 Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-fusion-infrastructure-${{ inputs.target }}","cancel-in-progress":false}</code>.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [deploy](../.github/workflows/fusion-infra.yml#L21) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"${{ inputs.target }}"}</code> | <code>20</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [deploy](../.github/workflows/fusion-infra.yml#L27) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"${{ inputs.target }}"}</code> | <code>20</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [deploy](../.github/workflows/fusion-infra.yml#L21): <code>${{ github.ref == 'refs/heads/main' }}</code>
+- [deploy](../.github/workflows/fusion-infra.yml#L27): <code>${{ github.ref == 'refs/heads/main' }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [deploy / step 1](../.github/workflows/fusion-infra.yml#L27) | <code>Andrewegao/atmos</code> | <code>${{ vars.FUSION_ENGINE_SHA }}</code> |
+| [deploy / step 1](../.github/workflows/fusion-infra.yml#L36) | <code>weatherx-hq/atmos</code> | <code>${{ env.ENGINE_SHA }}</code> |
 
-Variable references (declared names only; values and activation unknown): [FUSION_ENGINE_SHA](../.github/workflows/fusion-infra.yml#L30).
+Variable references (declared names only; values and activation unknown): [FUSION_ENGINE_SHA](../.github/workflows/fusion-infra.yml#L33).
 
 
 ## fusion-issue
 
 [.github/workflows/fusion-issue.yml](../.github/workflows/fusion-issue.yml#L1) · <code>WeatherX fusion issuance</code>
 
-Declared triggers: [workflow_dispatch](../.github/workflows/fusion-issue.yml#L3); [schedule](../.github/workflows/fusion-issue.yml#L5) <code>["23 */6 * * *"]</code>.
+Declared triggers: [workflow_dispatch](../.github/workflows/fusion-issue.yml#L4); input names <code>["scope","confirmation"]</code>; [schedule](../.github/workflows/fusion-issue.yml#L16) <code>["23 */6 * * *"]</code>.
 
 Workflow permissions: <code>{"contents":"read","actions":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-fusion-issuance","cancel-in-progress":false}</code>.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [record](../.github/workflows/fusion-issue.yml#L14) ← no needs | <code>ubuntu-latest</code> | <code>production</code> | <code>45</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [record](../.github/workflows/fusion-issue.yml#L25) ← no needs | <code>ubuntu-latest</code> | <code>production</code> | <code>45</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [record](../.github/workflows/fusion-issue.yml#L14): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; vars.FUSION_FEEDBACK_ENABLED == 'true' }}</code>
+- [record](../.github/workflows/fusion-issue.yml#L25): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; (github.event_name == 'workflow_dispatch' &#124;&#124; vars.FUSION_ISSUANCE_ENABLED == 'true') }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [record / step 1](../.github/workflows/fusion-issue.yml#L19) | <code>Andrewegao/atmos</code> | <code>${{ vars.FUSION_ENGINE_SHA }}</code> |
+| [record / step 1](../.github/workflows/fusion-issue.yml#L33) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [record / step 4](../.github/workflows/fusion-issue.yml#L55) | <code>weatherx-hq/atmos</code> | <code>${{ env.ENGINE_SHA }}</code> |
 
-Variable references (declared names only; values and activation unknown): [FUSION_CALIBRATION_RUNTIME_ENABLED](../.github/workflows/fusion-issue.yml#L55), [FUSION_ENGINE_SHA](../.github/workflows/fusion-issue.yml#L22), [FUSION_FEEDBACK_ENABLED](../.github/workflows/fusion-issue.yml#L14), [FUSION_SHADOW_CANDIDATE](../.github/workflows/fusion-issue.yml#L44), [FUSION_SHADOW_RUN](../.github/workflows/fusion-issue.yml#L40).
+Variable references (declared names only; values and activation unknown): [FUSION_ENGINE_SHA](../.github/workflows/fusion-issue.yml#L30), [FUSION_ISSUANCE_ENABLED](../.github/workflows/fusion-issue.yml#L25).
 
 
 ## fusion-promote
@@ -517,26 +518,26 @@ Variable references (declared names only; values and activation unknown): [FUSIO
 
 [.github/workflows/fusion-staging-evidence.yml](../.github/workflows/fusion-staging-evidence.yml#L1) · <code>WeatherX staging forecast evidence</code>
 
-Declared triggers: [workflow_dispatch](../.github/workflows/fusion-staging-evidence.yml#L3); [schedule](../.github/workflows/fusion-staging-evidence.yml#L5) <code>["33 */6 * * *"]</code>.
+Declared triggers: [workflow_dispatch](../.github/workflows/fusion-staging-evidence.yml#L3).
 
 Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-fusion-staging-evidence","cancel-in-progress":false}</code>.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [record](../.github/workflows/fusion-staging-evidence.yml#L13) ← no needs | <code>ubuntu-latest</code> | <code>staging</code> | <code>45</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [record](../.github/workflows/fusion-staging-evidence.yml#L11) ← no needs | <code>ubuntu-latest</code> | <code>staging</code> | <code>45</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [record](../.github/workflows/fusion-staging-evidence.yml#L13): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; (github.event_name == 'workflow_dispatch' &#124;&#124; vars.FUSION_STAGING_EVIDENCE_ENABLED == 'true') }}</code>
+- [record](../.github/workflows/fusion-staging-evidence.yml#L11): <code>${{ github.ref == 'refs/heads/main' }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [record / step 1](../.github/workflows/fusion-staging-evidence.yml#L21) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [record / step 4](../.github/workflows/fusion-staging-evidence.yml#L29) | <code>weatherx-hq/atmos</code> | <code>${{ env.ENGINE_SHA }}</code> |
+| [record / step 1](../.github/workflows/fusion-staging-evidence.yml#L19) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [record / step 4](../.github/workflows/fusion-staging-evidence.yml#L27) | <code>weatherx-hq/atmos</code> | <code>${{ env.ENGINE_SHA }}</code> |
 
-Variable references (declared names only; values and activation unknown): [FUSION_STAGING_ENGINE_SHA](../.github/workflows/fusion-staging-evidence.yml#L18), [FUSION_STAGING_EVIDENCE_ENABLED](../.github/workflows/fusion-staging-evidence.yml#L13).
+Variable references (declared names only; values and activation unknown): [FUSION_STAGING_ENGINE_SHA](../.github/workflows/fusion-staging-evidence.yml#L16).
 
 
 ## gdacs-feed-release

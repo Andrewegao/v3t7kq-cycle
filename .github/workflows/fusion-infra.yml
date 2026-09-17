@@ -7,8 +7,14 @@ on:
         options: [staging, production]
         default: staging
         required: true
+      component:
+        description: Deploy only the append-only archive, or the complete isolated pair
+        type: choice
+        options: [archive, all]
+        default: archive
+        required: true
       confirmation:
-        description: Enter DEPLOY ISOLATED FUSION STAGING or DEPLOY ISOLATED FUSION PRODUCTION
+        description: Enter the exact deployment phrase required by the validation step
         type: string
         required: true
 permissions:
@@ -23,40 +29,45 @@ jobs:
       name: ${{ inputs.target }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      ENGINE_SHA: ${{ vars.FUSION_ENGINE_SHA }}
+      FUSION_INFRA_COMPONENT: ${{ inputs.component }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: Andrewegao/atmos
-          ref: ${{ vars.FUSION_ENGINE_SHA }}
+          repository: weatherx-hq/atmos
+          ref: ${{ env.ENGINE_SHA }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
       - name: Require the reviewed immutable engine
-        env:
-          ENGINE_SHA: ${{ vars.FUSION_ENGINE_SHA }}
         run: |
           [[ "$ENGINE_SHA" =~ ^[a-f0-9]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$ENGINE_SHA"
+          test -z "$(git status --porcelain)"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22 }
       - run: npm ci --prefix app
       - name: Feedback contract tests and CLI types
         run: |
-          cd app
-          npx tsc -p ../ops/fusion/tsconfig.json --noEmit
-          npx vitest run src/fusion/feedback.test.ts
-      - name: Validate confirmation and preprovisioned isolated resources
+          app/node_modules/.bin/tsx --test ops/fusion/test-signed-origin.ts ops/fusion/test-collection-provenance.ts
+          app/node_modules/.bin/tsc -p ops/fusion/tsconfig.json --noEmit
+      - name: Validate the exact deployment scope
         env:
           TARGET: ${{ inputs.target }}
+          COMPONENT: ${{ inputs.component }}
           CONFIRMATION: ${{ inputs.confirmation }}
         run: |
-          case "$TARGET" in
-            staging) test "$CONFIRMATION" = 'DEPLOY ISOLATED FUSION STAGING' ;;
-            production) test "$CONFIRMATION" = 'DEPLOY ISOLATED FUSION PRODUCTION' ;;
+          case "$TARGET:$COMPONENT" in
+            staging:archive) test "$CONFIRMATION" = 'DEPLOY FUSION ARCHIVE STAGING' ;;
+            production:archive) test "$CONFIRMATION" = 'DEPLOY FUSION ARCHIVE PRODUCTION' ;;
+            staging:all) test "$CONFIRMATION" = 'DEPLOY ISOLATED FUSION STAGING' ;;
+            production:all) test "$CONFIRMATION" = 'DEPLOY ISOLATED FUSION PRODUCTION' ;;
             *) exit 1 ;;
           esac
       - run: npm ci --prefix platform/edge
       - run: npm run check --prefix platform/edge
-      - name: Provision scoped keys for preprovisioned isolated fusion buckets
+      - name: Provision scoped keys only for an explicitly requested complete pair
+        if: ${{ inputs.component == 'all' }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.FUSION_DEPLOY_API_TOKEN }}
           TARGET: ${{ inputs.target }}
@@ -64,15 +75,34 @@ jobs:
           FUSION_ARCHIVE_READ_KEY: ${{ secrets.FUSION_ARCHIVE_READ_KEY }}
           FUSION_PROMOTION_KEY: ${{ secrets.FUSION_PROMOTION_KEY }}
         run: node ops/fusion/provision.mjs
-      - name: Deploy only isolated fusion Workers, with learning disabled
+      - name: Deploy the isolated archive
         working-directory: platform/edge
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.FUSION_DEPLOY_API_TOKEN }}
           TARGET: ${{ inputs.target }}
-        run: |
-          npx wrangler deploy --env "$TARGET" -c wrangler.fusion-archive.jsonc
-          npx wrangler deploy --env "$TARGET" -c wrangler.fusion-control.jsonc
-      - name: Verify isolated storage and fail-closed control
+        run: npx wrangler deploy --env "$TARGET" -c wrangler.fusion-archive.jsonc
+      - name: Deploy the controller only for an explicitly requested complete pair
+        if: ${{ inputs.component == 'all' }}
+        working-directory: platform/edge
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.FUSION_DEPLOY_API_TOKEN }}
+          TARGET: ${{ inputs.target }}
+        run: npx wrangler deploy --env "$TARGET" -c wrangler.fusion-control.jsonc
+      - name: Verify the production archive with read-only authority
+        if: ${{ inputs.component == 'archive' && inputs.target == 'production' }}
+        env:
+          TARGET: ${{ inputs.target }}
+          FUSION_ARCHIVE_READ_KEY: ${{ secrets.FUSION_ARCHIVE_READ_KEY }}
+        run: app/node_modules/.bin/tsx ops/fusion/smoke.ts
+      - name: Verify the staging archive with discovery and read-only authority
+        if: ${{ inputs.component == 'archive' && inputs.target == 'staging' }}
+        env:
+          TARGET: ${{ inputs.target }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.FUSION_DEPLOY_API_TOKEN }}
+          FUSION_ARCHIVE_READ_KEY: ${{ secrets.FUSION_ARCHIVE_READ_KEY }}
+        run: app/node_modules/.bin/tsx ops/fusion/smoke.ts
+      - name: Verify the complete isolated pair
+        if: ${{ inputs.component == 'all' }}
         env:
           TARGET: ${{ inputs.target }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.FUSION_DEPLOY_API_TOKEN }}
@@ -82,7 +112,7 @@ jobs:
         run: app/node_modules/.bin/tsx ops/fusion/smoke.ts
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: fusion-infrastructure-proof
+          name: fusion-infrastructure-proof-${{ inputs.target }}-${{ inputs.component }}
           path: feedback-output/infrastructure-proof.json
           if-no-files-found: error
           retention-days: 90
