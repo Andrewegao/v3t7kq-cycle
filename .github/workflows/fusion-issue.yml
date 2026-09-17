@@ -82,8 +82,15 @@ jobs:
         working-directory: atmos
         env:
           FUSION_ARCHIVE_READ_KEY: ${{ secrets.FUSION_ARCHIVE_READ_KEY }}
+          FUSION_ISSUANCE_KEY: ${{ secrets.FUSION_ISSUANCE_KEY }}
         run: |
-          app/node_modules/.bin/tsx ops/fusion/cli.ts verify-readback --collection "$RUNNER_TEMP/fusion-production-evidence" --archive-origin https://weatherx.org --out "$RUNNER_TEMP/fusion-production-readback"
+          manifest_args=()
+          if [ "$EXPECTED_STATIONS" = 64 ]; then manifest_args+=(--publish-manifest); fi
+          app/node_modules/.bin/tsx ops/fusion/cli.ts verify-readback --collection "$RUNNER_TEMP/fusion-production-evidence" --archive-origin https://weatherx.org --out "$RUNNER_TEMP/fusion-production-readback" "${manifest_args[@]}"
+          if [ "$EXPECTED_STATIONS" = 64 ]; then
+            test -f "$RUNNER_TEMP/fusion-production-readback/manifest-receipt.json"
+            export MANIFEST_RECEIPT="$RUNNER_TEMP/fusion-production-readback/manifest-receipt.json"
+          fi
           READBACK_RECEIPT="$RUNNER_TEMP/fusion-production-readback/readback-receipt.json" node ../cycle/tools/fusion-production-evidence.mjs readback "$RUNNER_TEMP/fusion-production-evidence"
       - name: Record a bounded issuance gap
         if: ${{ failure() || cancelled() }}
@@ -108,5 +115,6 @@ jobs:
             ${{ runner.temp }}/fusion-production-evidence/collection-status.json
             ${{ runner.temp }}/fusion-production-evidence/run-status.json
             ${{ runner.temp }}/fusion-production-readback/readback-receipt.json
+            ${{ runner.temp }}/fusion-production-readback/manifest-receipt.json
           if-no-files-found: error
           retention-days: 90

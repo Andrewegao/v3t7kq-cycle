@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `da949ab7103b6e90cd8e4be47e19b7df096ab6c75c3e4bf76067b116bae5b528`.
+Source digest (registry and workflow bytes): `8aef702b2daf32a4981a60adabb05c0d5ed5867e1cefa2433a2681f030e7479c`.
 
 53 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -27,7 +27,7 @@ Source digest (registry and workflow bytes): `da949ab7103b6e90cd8e4be47e19b7df09
 | [data-reader-refresh](#data-reader-refresh) | releases / Production data reader | manual-supported | Refresh the production data reader with compatible fallback recovery. | [guide](../docs/data-reader-refresh.md) |
 | [fusion-evaluate](#fusion-evaluate) | maintenance / Fusion evaluation | manual-supported | Evaluate retained fusion inputs through the existing guarded evaluation path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [fusion-infra](#fusion-infra) | control-plane / Fusion infrastructure | manual-supported | Deploy the exact isolated Fusion archive or complete infrastructure pair through explicit scope guards. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
-| [fusion-issue](#fusion-issue) | maintenance / Fusion issuance | recurring | Record source-bound Fusion forecasts with canary/full completeness and exact archive readback. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
+| [fusion-issue](#fusion-issue) | maintenance / Fusion issuance | recurring | Record source-bound Fusion forecasts with canary/full completeness, exact archive readback, and a complete-network archive manifest. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [fusion-promote](#fusion-promote) | maintenance / Fusion promotion | manual-supported | Promote a qualified fusion candidate through the guarded controller. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [fusion-staging-evidence](#fusion-staging-evidence) | staging / Fusion evidence | manual-supported | Manually diagnose isolated staging forecast evidence without relying on an aging fixed catalog. | [guide](../docs/FUSION_STAGING_EVIDENCE.md) |
 | [gdacs-feed-release](#gdacs-feed-release) | releases / Hazard feed | manual-supported | Release the isolated GDACS route through guarded verification and recovery. | [guide](../docs/WORKFLOW_OPERATIONS.md) |

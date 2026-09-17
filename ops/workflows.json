@@ -140,7 +140,7 @@
       "id": "fusion-issue",
       "path": ".github/workflows/fusion-issue.yml",
       "family": "maintenance",
-      "purpose": "Record source-bound Fusion forecasts with canary/full completeness and exact archive readback.",
+      "purpose": "Record source-bound Fusion forecasts with canary/full completeness, exact archive readback, and a complete-network archive manifest.",
       "subsystem": "Fusion issuance",
       "lifecycle": "recurring",
       "runbook": "docs/WORKFLOW_OPERATIONS.md"

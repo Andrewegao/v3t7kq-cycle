@@ -101,6 +101,22 @@ export function validateProductionReadback(receipt, engineSha, expectedStations)
     status: 'complete', calibrationEnabled: false };
 }
 
+export function validateProductionManifest(receipt, engineSha, readback) {
+  assert.ok(exactKeys(receipt, ['schemaVersion','kind','sourceGitSha','generatedAt','manifestId','archiveCatalogId',
+    'archiveCatalogRevision','recordCount','recordsSha256']));
+  assert.equal(receipt.schemaVersion, 1);
+  assert.equal(receipt.kind, 'fusion-commercial-archive-manifest-receipt');
+  assert.equal(receipt.sourceGitSha, engineSha);
+  assert.equal(receipt.recordCount, 64);
+  assert.equal(receipt.recordsSha256, readback.recordsSha256);
+  assert.match(receipt.manifestId, SHA64);
+  assert.match(receipt.archiveCatalogId, SHA64);
+  assert.ok(Number.isSafeInteger(receipt.archiveCatalogRevision) && receipt.archiveCatalogRevision >= 1);
+  assert.ok(Number.isFinite(Date.parse(receipt.generatedAt)));
+  return { manifestId: receipt.manifestId, archiveCatalogId: receipt.archiveCatalogId,
+    archiveCatalogRevision: receipt.archiveCatalogRevision };
+}
+
 export async function main(mode, directory) {
   const root = resolve(directory);
   await mkdir(root, { recursive: true });
@@ -111,8 +127,13 @@ export async function main(mode, directory) {
     await writeFile(resolve(root, 'collection-status.json'), JSON.stringify(collection) + '\n', { flag: 'wx', mode: 0o600 });
   } else if (mode === 'readback') {
     const source = resolve(process.env.READBACK_RECEIPT ?? '');
-    const readback = validateProductionReadback(JSON.parse(await readFile(source, 'utf8')), engineSha, expectedStations);
-    await writeFile(resolve(root, 'run-status.json'), JSON.stringify(readback) + '\n', { flag: 'wx', mode: 0o600 });
+    const receipt = JSON.parse(await readFile(source, 'utf8'));
+    const readback = validateProductionReadback(receipt, engineSha, expectedStations);
+    const manifest = expectedStations === 64
+      ? validateProductionManifest(JSON.parse(await readFile(resolve(process.env.MANIFEST_RECEIPT ?? ''), 'utf8')), engineSha, receipt)
+      : null;
+    await writeFile(resolve(root, 'run-status.json'), JSON.stringify({ ...readback, ...(manifest ? { archiveManifest: manifest } : {}) }) + '\n',
+      { flag: 'wx', mode: 0o600 });
   } else if (mode === 'gap') {
     const outcomes = Object.fromEntries(['COLLECT','RECEIPT','READBACK'].map(key => {
       const value = process.env[`${key}_OUTCOME`];

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { main, productionReceiptHash, validateProductionCollection, validateProductionReadback } from '../tools/fusion-production-evidence.mjs';
+import { main, productionReceiptHash, validateProductionCollection, validateProductionManifest, validateProductionReadback } from '../tools/fusion-production-evidence.mjs';
 
 const engine = 'a'.repeat(40);
 const observations = count => Array.from({ length: count }, (_, index) => {
@@ -25,6 +25,9 @@ const records = count => Array.from({ length: count }, (_, index) => {
 });
 const readback = count => { const values = records(count); return { schemaVersion: 1, kind: 'fusion-archive-readback', sourceGitSha: engine,
   generatedAt: '2026-09-17T00:00:03.000Z', records: values, recordsSha256: productionReceiptHash(values), recordCount: count }; };
+const manifest = source => ({ schemaVersion: 1, kind: 'fusion-commercial-archive-manifest-receipt', sourceGitSha: engine,
+  generatedAt: '2026-09-17T00:00:04.000Z', manifestId: 'd'.repeat(64), archiveCatalogId: 'e'.repeat(64),
+  archiveCatalogRevision: 1, recordCount: 64, recordsSha256: source.recordsSha256 });
 
 test('one-station canary and full collection require complete source-bound observations', () => {
   assert.equal(validateProductionCollection(collection(1), engine, 1).status, 'complete');
@@ -36,6 +39,18 @@ test('one-station canary and full collection require complete source-bound obser
     { ...collection(1), observationAcquisitions: [{ ...observations(1)[0], acceptedTruths: 0 }] },
     { ...collection(1), truthCount: 1 },
   ]) assert.throws(() => validateProductionCollection(value, engine, 1));
+});
+
+test('the complete network alone publishes a coherent archive manifest receipt', () => {
+  const source = readback(64);
+  assert.deepEqual(validateProductionManifest(manifest(source), engine, source), {
+    manifestId: 'd'.repeat(64), archiveCatalogId: 'e'.repeat(64), archiveCatalogRevision: 1,
+  });
+  for (const candidate of [
+    { ...manifest(source), recordCount: 63 },
+    { ...manifest(source), recordsSha256: 'f'.repeat(64) },
+    { ...manifest(source), archiveCatalogRevision: 0 },
+  ]) assert.throws(() => validateProductionManifest(candidate, engine, source));
 });
 
 test('readback binds every station to exact catalogs and model runs', () => {
