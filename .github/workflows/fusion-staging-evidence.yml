@@ -63,7 +63,7 @@ jobs:
         run: node cycle/tools/fusion-staging-evidence.mjs receipt "$RUNNER_TEMP/fusion-staging-evidence"
       - name: Pull only the staging archive for matching
         id: pull
-        if: ${{ !cancelled() && steps.collect.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.receipt.outcome == 'success' }}
         working-directory: atmos
         env:
           FUSION_ARCHIVE_READ_KEY: ${{ secrets.FUSION_ARCHIVE_READ_KEY }}
