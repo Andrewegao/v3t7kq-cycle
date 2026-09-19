@@ -44,13 +44,13 @@ jobs:
     timeout-minutes: 210
     env:
       CATALOG_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || vars.CATALOG_DEFAULT_TARGET || 'staging' }}
-      ATMOS_SHA: 7a50f19714f22e04dc610a5aa33d311b7d1dc673
+      ATMOS_SHA: 18faa9b33084623ef2486a57134de2e8c8974b0c
       MODEL: ${{ matrix.model }}
     steps:
       - name: qualify production source and select schema-1 point reuse before credentials
         id: point_reuse
         env:
-          APPROVED_SHA: ${{ vars.CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA }}
+          APPROVED_SHA: ${{ vars.CURRENT_RUN_CATALOG_BAKE_ATMOS_SHA }}
           POINT_REUSE_MODEL: ${{ vars.CURRENT_RUN_POINT_REUSE_MODEL }}
         run: |
           test "$CATALOG_TARGET" = staging || test "$CATALOG_TARGET" = production
@@ -72,14 +72,14 @@ jobs:
         with:
           repository: weatherx-hq/atmos
           # Qualified fast-lane source, independent of experimental app master.
-          ref: 7a50f19714f22e04dc610a5aa33d311b7d1dc673
+          ref: 18faa9b33084623ef2486a57134de2e8c8974b0c
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: atmos
           persist-credentials: false
       - name: Verify approved immutable component collector
         working-directory: atmos
         run: |
-          test "$(git rev-parse HEAD)" = "7a50f19714f22e04dc610a5aa33d311b7d1dc673"
+          test "$(git rev-parse HEAD)" = "18faa9b33084623ef2486a57134de2e8c8974b0c"
           git diff --exit-code HEAD
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22 }
@@ -135,6 +135,7 @@ jobs:
           COMPONENT_ID: ${{ matrix.model }}
           ALLOW_MISSING_COMPONENT: ${{ inputs.bootstrap_missing && '1' || '0' }}
           HYDRATE_MISSING_FROM_RELEASE: ${{ inputs.bootstrap_missing && '1' || '0' }}
+          COMPONENT_MANIFEST_OUTPUT: ${{ runner.temp }}/active-${{ matrix.model }}-component.json
           CATALOG_R2_REMOTE: weatherx:weatherx-data-production
           COMPONENT_R2_REMOTE: weatherx:weatherx-components-production
           RCLONE_CONFIG_WEATHERX_TYPE: s3
@@ -184,6 +185,7 @@ jobs:
           REUSE_ACTIVE_MAP_OBJECTS: '0'
           PACK_COMPONENT_OBJECTS: '0'
           POINT_COMPONENT_PUBLISH_METRICS_FILE: ${{ runner.temp }}/point-publication-cost.json
+          ACTIVE_COMPONENT_MANIFEST_FILE: ${{ runner.temp }}/active-${{ matrix.model }}-component.json
           LIVE: https://weatherx.org
           CATALOG_R2_REMOTE: weatherx:weatherx-data-production
           COMPONENT_R2_REMOTE: weatherx:weatherx-components-production

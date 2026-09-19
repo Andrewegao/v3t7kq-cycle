@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `44da3ce4209f05faf3ee88a9ccaf3c536bc9dca08bc228bb3e25c26e0237bed9`.
+Source digest (registry and workflow bytes): `07744f3831ebbdc0a3b5af57f21d4c64dc97aa615cf033fc17268e4a45207fd0`.
 
 53 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -164,9 +164,9 @@ Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [model / Checkout WeatherX](../.github/workflows/catalog-bake.yml#L70) | <code>weatherx-hq/atmos</code> | <code>7a50f19714f22e04dc610a5aa33d311b7d1dc673</code> |
+| [model / Checkout WeatherX](../.github/workflows/catalog-bake.yml#L70) | <code>weatherx-hq/atmos</code> | <code>18faa9b33084623ef2486a57134de2e8c8974b0c</code> |
 
-Variable references (declared names only; values and activation unknown): [CATALOG_DEFAULT_TARGET](../.github/workflows/catalog-bake.yml#L36), [CATALOG_GITHUB_FALLBACK_DISABLED](../.github/workflows/catalog-bake.yml#L34), [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/catalog-bake.yml#L53), [CURRENT_RUN_POINT_REUSE_MODEL](../.github/workflows/catalog-bake.yml#L54).
+Variable references (declared names only; values and activation unknown): [CATALOG_DEFAULT_TARGET](../.github/workflows/catalog-bake.yml#L36), [CATALOG_GITHUB_FALLBACK_DISABLED](../.github/workflows/catalog-bake.yml#L34), [CURRENT_RUN_CATALOG_BAKE_ATMOS_SHA](../.github/workflows/catalog-bake.yml#L53), [CURRENT_RUN_POINT_REUSE_MODEL](../.github/workflows/catalog-bake.yml#L54).
 
 
 ## catalog-bootstrap
