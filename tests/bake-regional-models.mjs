@@ -163,7 +163,7 @@ test('fast-lane publisher shares exact approved source and reuse switch without 
   const script=policy.split('        run: |\n')[1];
   assert.ok(catalog.indexOf('id: point_reuse')<catalog.indexOf('secrets.ATMOS_DEPLOY_KEY'));
   assert.match(policy,/vars.CURRENT_RUN_POINT_REUSE_MODEL/);
-  assert.match(policy,/vars.CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA/);
+  assert.match(policy,/vars.CURRENT_RUN_CATALOG_BAKE_ATMOS_SHA/);
   const directory=mkdtempSync(join(tmpdir(),'catalog-point-reuse-policy-'));
   let attempt=0;
   const good={...process.env,GITHUB_REPOSITORY:'Andrewegao/v3t7kq-cycle',GITHUB_REF:'refs/heads/main',
@@ -194,6 +194,10 @@ test('fast-lane publisher shares exact approved source and reuse switch without 
   for(const flag of ['REUSE_ACTIVE_MAP_COMPONENT','REUSE_ACTIVE_MAP_OBJECTS','PACK_COMPONENT_OBJECTS']){
     assert.match(catalog,new RegExp(`${flag}: '0'`));
   }
+  assert.equal((catalog.match(/COMPONENT_MANIFEST_OUTPUT:/g)||[]).length,1);
+  assert.equal((catalog.match(/ACTIVE_COMPONENT_MANIFEST_FILE:/g)||[]).length,1);
+  assert.match(catalog,/COMPONENT_MANIFEST_OUTPUT: \$\{\{ runner\.temp \}\}\/active-\$\{\{ matrix\.model \}\}-component\.json/);
+  assert.match(catalog,/ACTIVE_COMPONENT_MANIFEST_FILE: \$\{\{ runner\.temp \}\}\/active-\$\{\{ matrix\.model \}\}-component\.json/);
   assert.match(catalog,/group: weatherx-component-\$\{\{/);
 });
 
