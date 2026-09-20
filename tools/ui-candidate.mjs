@@ -10,7 +10,10 @@ import {LANE_B_CONTRACT} from './production-account-contract.mjs';
 import {validateCompressionFiles} from './ui-static-compression.mjs';
 
 export const CONTROL_SHA = '25c402db5149daa018e349a34a4beeba1f2dca45';
-export const STAGING_CONTROL_SHA = 'fac2fc164420d4d31870a410c9a877d16ad76fb0';
+// Reviewed staging controller after the resilient hazard-fallback contract landed. This stays
+// behind the candidate source so qualification executes trusted code while accepting the
+// structured direct-source degradation that the composed scheduled snapshot was built for.
+export const STAGING_CONTROL_SHA = 'a56ff55a5100a911917b62e6388e6ecaaad82b31';
 // Exact reviewed Atmos controller containing the TC release guard and browser harness.
 // Candidate source must both descend from this commit and equal origin/master.
 export const TC_CONTROL_SHA = 'f23664837274fc06a4a94b9bb0fc8d7fa1ee8c58';
