@@ -227,7 +227,9 @@ test('workflow carries protected account approval without enabling or altering p
   assert.match(staging,/APPROVED_ACCOUNT_PROFILE: \$\{\{ vars\.UI_STAGING_ACCOUNT_PROFILE_APPROVED \}\}/);
   assert.match(staging,/UI_STAGING_ACCOUNT_PROFILE_APPROVED: \$\{\{ vars\.UI_STAGING_ACCOUNT_PROFILE_APPROVED \}\}/);
   assert.match(staging,/default: approved/);
+  assert.match(staging,/VITE_PRO_PROTO: \$\{\{ needs\.profile\.outputs\.model_selection_sha256 == 'release-roster-core-account-v1' && '1' \|\| '0' \}\}/);
   assert.doesNotMatch(prod,/staging-account-v1|release-roster-core-account-v1|UI_STAGING_ACCOUNT_PROFILE_APPROVED/);
+  assert.doesNotMatch(prod,/VITE_PRO_PROTO/);
   assert.match(read('tools/ui-release.mjs'),/publicModes\(ORIGINS\[stage\],c\.profile,'preflight'\)/);
   assert.match(read('tools/ui-release.mjs'),/publicModes\(ORIGINS\.staging,c\.profile,'candidate'\)/);
   assert.match(read('tools/ui-release.mjs'),/publicModes\(ORIGINS\[stage\],c\.profile,phase\)/);
