@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `cf0dc5aa883bb9d1f3b69020f9650e047f3844b93a7933484e81985a49504138`.
+Source digest (registry and workflow bytes): `6151a3631befb83b53d64e82d85a66ce8115b44c3379483bf5eda6bb533285b2`.
 
 53 workflows. Ordering and output are deterministic; no API request or clock is used.
 
