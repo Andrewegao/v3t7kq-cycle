@@ -156,7 +156,9 @@ export function deckSurfaceProof(expected){
     &&event.data.renderedGeneration===current.overlayGeneration);
   if(!currentDraw)return false;
   const snapshot=api.deckSnapshot(),summary=snapshot.filter(layer=>layer.id===expected.deck);
-  const layers=api.map.__deck?.layerManager?.getLayers?.(),matchesLayer=layers?.filter(layer=>layer.id===expected.deck),layer=matchesLayer?.[0];
+  // MapLibre 6 no longer exposes a stable private Deck layer manager. Use the app's read-only
+  // rendered-layer diagnostic so the proof inspects the same completed Deck tree as the app.
+  const layers=api.deckRenderedLayers?.(),matchesLayer=layers?.filter(layer=>layer.id===expected.deck),layer=matchesLayer?.[0];
   if(summary.length!==1||summary[0].opacity<.8||matchesLayer?.length!==1||!layer?.isLoaded||layer.props?.visible===false||layer.props?.opacity<.8
     ||!layer.props.image||!layer.props.image2||layer.state?.props?.image!==layer.props.image||layer.state?.props?.image2!==layer.props.image2
     ||!layer.state?.imageTexture||!layer.state?.imageTexture2||!layer.getSubLayers?.().some(child=>child.state?.model))return false;
@@ -180,7 +182,7 @@ export function hiddenDeckSurfaceProof(expected){
     &&Number.isInteger(event.data.renderedGeneration)&&event.data.renderedGeneration===event.data.overlayGeneration);
   if(!draw||current?.overlayGeneration!==draw.data.renderedGeneration||current.model!==manifest.model||current.run!==manifest.init_time
     ||current.base!==manifest.base||current.cursor!==state.cursorMs||current.swap!=='idle')return false;
-  const summary=api.deckSnapshot().filter(layer=>layer.id===expected.deck),layers=api.map.__deck?.layerManager?.getLayers?.()??[];
+  const summary=api.deckSnapshot().filter(layer=>layer.id===expected.deck),layers=api.deckRenderedLayers?.()??[];
   const actual=layers.filter(layer=>layer.id===expected.deck);if(summary.some(layer=>layer.opacity>0)||actual.some(layer=>layer.props?.visible!==false&&layer.props?.opacity>0))return false;
   if(expected.field==='wind'&&state.layers.wind?.visible!==false)return false;
   if(expected.field==='temp'&&state.layers.temp?.opacity!==0)return false;
