@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { createCipheriv, createHash } from 'node:crypto';
 import { gate, FREEZE_UNTIL, REPOSITORY, hash, createCandidate, validateCandidate, readTree,
-  validateFiles, safePath, seal, unseal, restore, eligibleRun } from '../tools/ui-candidate.mjs';
+  validateFiles, safePath, seal, unseal, restore, eligibleRun, MAX_GROUND_FILES } from '../tools/ui-candidate.mjs';
 import { configurationDigest, pipelineDigest, POLICY_FILES } from '../tools/ui-release.mjs';
 import { CORE_RELEASE_PROFILE } from '../tools/ui-staging-models.mjs';
 
@@ -77,6 +77,15 @@ test('ground files remain artifact-authenticated but outside the shell timing re
   const changed=structuredClone(c),tile=changed.files.find(file=>file.path==='basemap-ground/0/0/0.jpg');
   tile.base64=Buffer.from('changed-ground').toString('base64');tile.bytes=14;tile.sha256=hash(Buffer.from('changed-ground'));
   assert.throws(()=>validateCandidate(changed),'ground bytes remain bound by artifactDigest');
+});
+test('the canonical retained ground pyramid has a dedicated bounded file budget',()=>{
+  const required=['index.html','_worker.js','_routes.json','health/release.json'].map(path=>fileRecord(path,''));
+  const ground=[];
+  for(let z=0;z<=5;z++)for(let x=0;x<2**z;x++)for(let y=0;y<2**z;y++)
+    ground.push(fileRecord(`basemap-ground/${z}/${x}/${y}.jpg`,''));
+  assert.equal(ground.length,MAX_GROUND_FILES);
+  assert.doesNotThrow(()=>validateFiles([...required,...ground]));
+  assert.throws(()=>validateFiles([...required,...ground,ground[0]]),/retained ground file limit/);
 });
 test('encryption is randomized and authenticates contents, header, IV and key',()=>{
   const {c}=fixture(), blob=seal(c,key);assert.ok(!blob.equals(seal(c,key)));
