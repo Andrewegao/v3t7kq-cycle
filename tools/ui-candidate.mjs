@@ -21,15 +21,28 @@ export const REPOSITORY = 'Andrewegao/v3t7kq-cycle';
 export const FREEZE_UNTIL = '2026-08-31T11:00:00Z';
 export const MAX_BYTES = 96 * 1024 * 1024;
 export const MAX_FILES = 5000;
+// The retained z0-z5 basemap pyramid is a separately reviewed, fixed-shape package.
+// Keep it outside the ordinary shell budget so adding application chunks cannot make
+// an unchanged ground pyramid consume the shell's safety allowance.
+export const MAX_GROUND_FILES = 1365;
 // The staging-only compression manifest authenticates at most 512 sidecars.
 // They do not consume the ordinary shell budget; the combined byte cap remains.
 const MAX_COMPRESSION_SIDECARS = 512;
+function retainedGroundTile(path) {
+  const match = /^basemap-ground\/([0-5])\/(0|[1-9]\d*)\/(0|[1-9]\d*)\.jpg$/.exec(path);
+  if (!match) return false;
+  const z = Number(match[1]), edge = 2 ** z;
+  return Number(match[2]) < edge && Number(match[3]) < edge;
+}
 function fileBudget(profile) {
   const compressed = staticCompressionProfile(profile);
   const ordinaryLimit = MAX_FILES;
-  let ordinary = 0, sidecars = 0, manifests = 0;
+  let ordinary = 0, ground = 0, sidecars = 0, manifests = 0;
   return path => {
-    if (compressed && /^__wx_encoded\/[a-f0-9]{64}\.br$/.test(path)) {
+    if (retainedGroundTile(path)) {
+      assert.ok(++ground <= MAX_GROUND_FILES,
+        `artifact exceeds retained ground file limit (${MAX_GROUND_FILES}): ${path}`);
+    } else if (compressed && /^__wx_encoded\/[a-f0-9]{64}\.br$/.test(path)) {
       assert.ok(++sidecars <= MAX_COMPRESSION_SIDECARS, 'artifact exceeds compression sidecar file limit (512)');
     } else if (compressed && path === 'static-compression-manifest.json') {
       assert.ok(++manifests <= 1, 'artifact exceeds compression manifest file limit (1)');
@@ -125,7 +138,9 @@ export function readTree(root, profile = PROFILE) {
 export function validateFiles(files, profile = PROFILE) {
   const compressed = staticCompressionProfile(profile), countFile = fileBudget(profile);
   const ordinaryLimit=MAX_FILES;
-  assert.ok(Array.isArray(files) && files.length > 0 && files.length <= ordinaryLimit + (compressed ? MAX_COMPRESSION_SIDECARS + 1 : 0), 'invalid file inventory');
+  assert.ok(Array.isArray(files) && files.length > 0
+    && files.length <= ordinaryLimit + MAX_GROUND_FILES + (compressed ? MAX_COMPRESSION_SIDECARS + 1 : 0),
+  'invalid file inventory');
   const seen = new Set(); let total = 0;
   for (const file of files) {
     safePath(file.path);
