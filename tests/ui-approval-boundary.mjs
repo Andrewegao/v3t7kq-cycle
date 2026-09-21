@@ -91,6 +91,16 @@ test('retained ground-package approval is scoped to staging and never production
   assert.doesNotMatch(workflows['ui-release.yml'], /WX_GROUND_QUALIFICATION_SCOPE/);
 });
 
+test('both staging jobs use the reviewed post-MapLibre proof without moving production pins', () => {
+  const staging = workflows['ui-staging.yml'];
+  const updated = '4dafd26387d5917604deb7379a8d45a994fc5b67';
+  assert.equal(staging.split(updated).length - 1, 2);
+  assert.doesNotMatch(staging, /7a148ba5854b46729ddff04a5f41ae7d85233559/);
+  assert.equal(staging.split('6fcec22638f6696be71daa2f2e974ebc4b24318e').length - 1, 2);
+  assert.equal(staging.split('25c402db5149daa018e349a34a4beeba1f2dca45').length - 1, 2);
+  assert.doesNotMatch(workflows['ui-release.yml'], new RegExp(updated));
+});
+
 test('runtime gate rejects every nonmanual event and every unprotected ref', () => {
   const env = { GITHUB_REPOSITORY: REPOSITORY, GITHUB_EVENT_NAME: 'workflow_dispatch',
     GITHUB_REF: 'refs/heads/main', UI_RELEASES_ENABLED: 'true', UI_ISOLATION_APPROVED: 'true',
