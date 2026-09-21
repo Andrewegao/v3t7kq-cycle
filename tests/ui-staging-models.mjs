@@ -450,8 +450,8 @@ test('core surface proof rejects stale model props and binds a completed current
   const bounds={getWest:()=>-120,getEast:()=>-80,getNorth:()=>50,getSouth:()=>20};
   const state={manifest:{model:'hrrr',init_time:init,base,grid:{width:2,height:2}},cursorMs,layers:{temp:{visible:true}}};
   globalThis.document={body:{dataset:{} }};
-  globalThis.window={__atmos:{store:{getState:()=>state},map:{isMoving:()=>false,getBounds:()=>bounds,getZoom:()=>4,getBearing:()=>0,getPitch:()=>0,getContainer:()=>({clientWidth:1440,clientHeight:900}),__deck:{layerManager:{getLayers:()=>[layer]}}},
-    deckSnapshot:()=>[{id:'temp-raster',opacity:layer.props.opacity}],temperatureHandoffDiagnostics:()=>({selectedPrimary:'temp',previewMounted:false}),
+  globalThis.window={__atmos:{store:{getState:()=>state},map:{isMoving:()=>false,getBounds:()=>bounds,getZoom:()=>4,getBearing:()=>0,getPitch:()=>0,getContainer:()=>({clientWidth:1440,clientHeight:900})},
+    deckRenderedLayers:()=>[layer],deckSnapshot:()=>[{id:'temp-raster',opacity:layer.props.opacity}],temperatureHandoffDiagnostics:()=>({selectedPrimary:'temp',previewMounted:false}),
     renderCausalDiagnostics:()=>({enabled:true,errors:0,events})}};
   const expected={afterSequence:20,manifest:{model:'hrrr',init,base},cursorMs,field:'temp',deck:'temp-raster',camera:'[-120,-80,50,20,4,0,0,1440,900]'};
   assert.ok(deckSurfaceProof(expected));
@@ -477,6 +477,7 @@ test('core browser uses causal generations and a fixed camera instead of timing 
   assert.match(source,/devprobes=1&rendercausal=1/);assert.match(source,/const \{expected\}=await exactDeckPaint/);
   assert.match(source,/page\.waitForFunction\(deckSurfaceProof/);
   assert.match(source,/stableScreenshot\(page,deckSurfaceProof,expected,clip,'ON'\)/);assert.match(source,/stableScreenshot\(page,hiddenDeckSurfaceProof,hiddenExpected,clip,'OFF'\)/);
+  assert.match(source,/api\.deckRenderedLayers\?\.\(\)/);assert.doesNotMatch(source,/map\.__deck/);
   assert.match(source,/map\.on\('movestart',hold\);map\.on\('move',hold\)/);assert.doesNotMatch(source,/waitForTimeout\(250\)/);
 });
 test('core browser retains the failing script and stack without relaxing the zero-error gate',()=>{
