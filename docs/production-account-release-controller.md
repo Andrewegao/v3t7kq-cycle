@@ -15,7 +15,7 @@ Lane C is built against one explicit owner-approved Lane B artifact contract in
 - contract digest: `0866db6f7a4f2dce8ecb0e8bac6628552878c5d8b14e013f1057c79839f80e8c`
 - production trust-policy digest: `f2795ab9b504b32fdbdcaa957cde134ac91199ae43a8945a041aa1544601d23c`
 - production profile digest: `69210756c14f4cb394786485290c7d63a4a67af2a508db990a5d3e2d9fd70d51`
-- pipeline digest: `dfad52eae715fefb03fd7abc6f478feee4c0692637e43f2ab9bc7ba85fa7a2b9`
+- pipeline digest: `ef76022291ec63ddb3c2d4aea67deea4b8493730c87880b3a966b231511edcc8`
 
 The contract binds the exact reviewed Atmos source/controller, live Stripe Prices, production
 target, purchase-closed mode, and build receipt. Any contract change invalidates these digests and

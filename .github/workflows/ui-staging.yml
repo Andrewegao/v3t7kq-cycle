@@ -100,6 +100,9 @@ jobs:
       STAGING_WIND100_UI_DYNAMIC: ${{ needs.profile.outputs.wind100_dynamic }}
       VITE_FUSION_CALIBRATION_ENABLED: ${{ vars.FUSION_CALIBRATION_RUNTIME_ENABLED == 'true' && '1' || '0' }}
       VITE_PLATFORM_ACCOUNT: '0'
+      # This local onboarding/account prototype is admitted only by the exact
+      # non-promotable staging-account profile. Every other selector compiles it out.
+      VITE_PRO_PROTO: ${{ needs.profile.outputs.model_selection_sha256 == 'release-roster-core-account-v1' && '1' || '0' }}
       VITE_MODEL_EXPANSION_QUALIFICATION: '0'
       VITE_MODEL_LOCAL_BASE: ''
       VITE_STAGING_MODEL_ADMISSION: '0'
