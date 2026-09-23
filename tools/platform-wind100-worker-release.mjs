@@ -76,6 +76,24 @@ export function disabledPreviousConfig(config, liveBindings) {
   return previous;
 }
 
+export function assertPreflightVersions(config, latestSettings, activeVersionDetails) {
+  // /settings can describe the most recently uploaded version even after a rollback.
+  // The deployed version, rather than that draft, must still have Wind100 disabled.
+  const activeSettings = { ...activeVersionDetails.resources?.script_runtime,
+    bindings: activeVersionDetails.resources?.bindings };
+  const disabled = disabledPreviousConfig(config, activeSettings.bindings);
+  assertSettings(disabled, activeSettings);
+  const latestFlag = latestSettings.bindings?.filter(binding =>
+    binding.name === 'PRODUCTION_WIND100_DYNAMIC_ENABLED') ?? [];
+  assert.ok(latestFlag.length <= 1, 'duplicate latest Wind100 flag');
+  if (latestFlag.length === 1 && latestFlag[0].type === 'plain_text' && latestFlag[0].text === '1') {
+    // Only the exact reviewed candidate can be left as an inactive latest upload.
+    assertSettings(config, latestSettings);
+  } else {
+    assertSettings(disabled, latestSettings);
+  }
+}
+
 function context(env) {
   assert.equal(env.GITHUB_ACTIONS, 'true');
   assert.equal(env.GITHUB_REPOSITORY, 'Andrewegao/v3t7kq-cycle');
@@ -164,16 +182,18 @@ export async function main(command, env = process.env) {
     return { status };
   }
   assert.equal(command, 'release');
+  const previous = await current(env.PLATFORM_EDGE_TOKEN);
+  const activeDetails = await api(`/versions/${previous}`, env.PLATFORM_EDGE_TOKEN);
+  assert.equal(activeDetails.id, previous);
   const liveSettings = await api('/settings', env.PLATFORM_EDGE_TOKEN);
-  const beforeConfig = disabledPreviousConfig(ctx.config, liveSettings.bindings);
-  try { assertSettings(beforeConfig, liveSettings); }
+  try { assertPreflightVersions(ctx.config, liveSettings, activeDetails); }
   catch (error) {
     if (error.message === 'live bindings differ from reviewed configuration') {
-      console.error(`Binding preflight (names/count only): ${JSON.stringify(bindingDrift(beforeConfig, liveSettings.bindings))}`);
+      console.error(`Binding preflight (names/count only): ${JSON.stringify(bindingDrift(ctx.config, liveSettings.bindings))}`);
     }
     throw error;
   }
-  const previous = await current(env.PLATFORM_EDGE_TOKEN);
+  assert.equal(await current(env.PLATFORM_EDGE_TOKEN), previous, 'active Worker changed during preflight');
   const receipt = { schemaVersion: 1, kind: 'weatherx-platform-wind100-worker-release',
     sourceSha: SOURCE, controllerSha: env.GITHUB_SHA, runId: env.GITHUB_RUN_ID,
     attempt: env.GITHUB_RUN_ATTEMPT, previous, status: 'preflight-passed' };
