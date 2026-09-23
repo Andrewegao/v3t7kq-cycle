@@ -62,7 +62,7 @@ test('protected proof denies adjacent deletion and other actions, then cleans di
   });
   assert.equal(objects.size, 0);
   assert.equal(attempts.filter(([role, command]) => role === 'temporary'
-    && command === 'DeleteObjectCommand').length, 2);
+    && command === 'DeleteObjectCommand').length, 3);
 });
 
 test('an overbroad temporary credential fails the proof and still removes disposable objects', async () => {
