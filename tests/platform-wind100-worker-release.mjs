@@ -3,13 +3,15 @@ import test from 'node:test';
 import { bindingDrift, disabledPreviousConfig, uploadedVersion, validateLiveSelector, validateReleaseConfig }
   from '../tools/platform-wind100-worker-release.mjs';
 
-const config = { env: { production: { name: 'weatherx-platform-edge-production',
+const config = { compatibility_date: '2026-08-15', compatibility_flags: ['nodejs_compat'],
+  env: { production: { name: 'weatherx-platform-edge-production',
   vars: { APP_ORIGIN: 'https://weatherx.org', AUTH_MODE: 'observe', BILLING_MODE: 'enabled',
     BILLING_PURCHASE_MODE: 'closed', PRODUCTION_WIND100_DYNAMIC_ENABLED: '1' },
   routes: [{ pattern: 'weatherx.org/api/platform/production-wind100/*' }] } } };
 
 test('one-time Worker release requires the reviewed production route and closed purchases', () => {
   assert.equal(validateReleaseConfig(config).vars.PRODUCTION_WIND100_DYNAMIC_ENABLED, '1');
+  assert.equal(validateReleaseConfig(config).compatibility_date, '2026-08-15');
   for (const [key, value] of [
     ['PRODUCTION_WIND100_DYNAMIC_ENABLED', '0'],
     ['BILLING_PURCHASE_MODE', 'public'],
@@ -21,6 +23,9 @@ test('one-time Worker release requires the reviewed production route and closed 
   const noRoute = structuredClone(config);
   noRoute.env.production.routes = [];
   assert.throws(() => validateReleaseConfig(noRoute));
+  const noInheritedDate = structuredClone(config);
+  delete noInheritedDate.compatibility_date;
+  assert.throws(() => validateReleaseConfig(noInheritedDate));
 });
 
 test('candidate version and live selector are exact and reject unrelated releases', () => {

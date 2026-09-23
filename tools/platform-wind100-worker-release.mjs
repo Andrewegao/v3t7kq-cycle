@@ -18,6 +18,8 @@ const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
 export function validateReleaseConfig(config) {
   const production = config?.env?.production;
+  assert.equal(config?.compatibility_date, '2026-08-15');
+  assert.deepEqual(config?.compatibility_flags, ['nodejs_compat']);
   assert.equal(production?.name, WORKER);
   assert.equal(production.vars?.APP_ORIGIN, 'https://weatherx.org');
   assert.equal(production.vars?.AUTH_MODE, 'observe');
@@ -25,7 +27,9 @@ export function validateReleaseConfig(config) {
   assert.equal(production.vars?.BILLING_PURCHASE_MODE, 'closed');
   assert.equal(production.vars?.PRODUCTION_WIND100_DYNAMIC_ENABLED, '1');
   assert.ok(production.routes?.some(row => row.pattern === 'weatherx.org/api/platform/production-wind100/*'));
-  return production;
+  // Wrangler inherits these top-level runtime settings into every environment.
+  return { ...production, compatibility_date: config.compatibility_date,
+    compatibility_flags: config.compatibility_flags };
 }
 
 export function uploadedVersion(output) {
