@@ -43,7 +43,8 @@ function fixture({ adjacentAllowed = false, adjacentDeniedStatus = 403,
       const jwt = Buffer.from(this.credentials.sessionToken, 'base64').toString().slice(4);
       const claims = JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url'));
       if (!Key.startsWith(claims.paths.prefixPaths[0]) && !adjacentAllowed)
-        throw Object.assign(new Error('denied'), { $metadata: { httpStatusCode: adjacentDeniedStatus } });
+        throw Object.assign(new Error('denied'), { name: 'InvalidRequest',
+          $metadata: { httpStatusCode: adjacentDeniedStatus } });
       objects.delete(Key);
       return {};
     }
@@ -81,6 +82,7 @@ test('an unexpected denial status is classified without exposing the SDK respons
     assert.equal(error.scopeStep, 'temporary-adjacent-delete-denial');
     assert.equal(error.scopeFailure, 'wrong-denial-status');
     assert.equal(error.scopeStatus, 401);
+    assert.equal(error.scopeCode, 'InvalidRequest');
     assert.match(error.message, /must return AccessDenied/);
     return true;
   });
