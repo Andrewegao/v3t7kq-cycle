@@ -54,6 +54,11 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: atmos/platform/edge/package-lock.json
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Install exact Python test dependencies used by Atmos platform CI
+        run: python3 -m pip install pillow==12.2.0 numpy==2.4.6 eccodes==2.47.0 requests==2.34.2
       - name: Install locked Worker dependencies
         working-directory: atmos/platform/edge
         run: npm ci --ignore-scripts
