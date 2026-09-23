@@ -18,6 +18,9 @@ async function denied(client, command, label) {
     if (error?.$metadata?.httpStatusCode === 403) return;
     const failure = new Error(`${label} must return AccessDenied, not another error`);
     failure.scopeFailure = 'wrong-denial-status';
+    const status = error?.$metadata?.httpStatusCode;
+    failure.scopeStatus = Number.isInteger(status) && status >= 400 && status <= 599
+      ? status : 'unavailable';
     throw failure;
   }
   const failure = new Error(`${label} was unexpectedly permitted`);
@@ -119,7 +122,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     // No SDK error body, headers, assertion values, or credential material goes to the log.
     const reason = ['wrong-denial-status', 'unexpectedly-permitted']
       .includes(error?.scopeFailure) ? ` (${error.scopeFailure})` : '';
-    console.error(`production Wind100 credential scope preflight failed at ${error?.scopeStep ?? 'setup'}${reason}`);
+    const status = error?.scopeFailure === 'wrong-denial-status'
+      ? ` [http-${error.scopeStatus}]` : '';
+    console.error(`production Wind100 credential scope preflight failed at ${error?.scopeStep ?? 'setup'}${reason}${status}`);
     process.exitCode = 1;
   }
 }
