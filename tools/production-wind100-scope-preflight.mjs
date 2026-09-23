@@ -54,38 +54,55 @@ export async function proveScope(env, sdk) {
     credentials: scopedDeleteCredentials(parent, first) });
   const send = (client, command) => client.send(command,
     { abortSignal: AbortSignal.timeout(30_000) });
+  const check = async (step, operation) => {
+    try { return await operation(); }
+    catch (error) { error.scopeStep = step; throw error; }
+  };
   let created = false;
   try {
     // Planning must read both buckets; deletion must be unable to read the data bucket.
     for (const bucket of [DATA, COMPONENTS])
-      await send(reader, new sdk.ListObjectsV2Command({ Bucket: bucket, MaxKeys: 1 }));
-    await denied(writer, new sdk.ListObjectsV2Command({ Bucket: DATA, MaxKeys: 1 }),
-      'cleanup delete parent on production data bucket');
+      await check(bucket === DATA ? 'reader-data-list' : 'reader-components-list',
+        () => send(reader, new sdk.ListObjectsV2Command({ Bucket: bucket, MaxKeys: 1 })));
+    await check('delete-parent-data-denial', () => denied(writer,
+      new sdk.ListObjectsV2Command({ Bucket: DATA, MaxKeys: 1 }),
+      'cleanup delete parent on production data bucket'));
 
     const body = Buffer.from('WeatherX disposable credential-scope proof\n');
-    await send(writer, new sdk.PutObjectCommand({ Bucket: COMPONENTS, Key: ownKey, Body: body }));
+    await check('put-own-disposable', () => send(writer,
+      new sdk.PutObjectCommand({ Bucket: COMPONENTS, Key: ownKey, Body: body })));
     created = true;
-    await send(writer, new sdk.PutObjectCommand({ Bucket: COMPONENTS, Key: adjacentKey, Body: body }));
-    await denied(reader, new sdk.PutObjectCommand({ Bucket: COMPONENTS, Key: ownKey, Body: body }),
-      'cleanup reader write');
-    await denied(reader, new sdk.DeleteObjectCommand({ Bucket: COMPONENTS, Key: adjacentKey }),
-      'cleanup reader delete');
-    await denied(temporary, new sdk.DeleteObjectCommand({ Bucket: COMPONENTS, Key: adjacentKey }),
-      'temporary delete outside its prefix');
-    await denied(temporary, new sdk.GetObjectCommand({ Bucket: COMPONENTS, Key: ownKey }),
-      'temporary read inside its prefix');
-    await denied(temporary, new sdk.PutObjectCommand({ Bucket: COMPONENTS, Key: ownKey, Body: body }),
-      'temporary write inside its prefix');
-    await denied(temporary, new sdk.ListObjectsV2Command({ Bucket: COMPONENTS, Prefix: first }),
-      'temporary list inside its prefix');
-    await send(temporary, new sdk.DeleteObjectCommand({ Bucket: COMPONENTS, Key: ownKey }));
+    await check('put-adjacent-disposable', () => send(writer,
+      new sdk.PutObjectCommand({ Bucket: COMPONENTS, Key: adjacentKey, Body: body })));
+    await check('reader-write-denial', () => denied(reader,
+      new sdk.PutObjectCommand({ Bucket: COMPONENTS, Key: ownKey, Body: body }),
+      'cleanup reader write'));
+    await check('reader-delete-denial', () => denied(reader,
+      new sdk.DeleteObjectCommand({ Bucket: COMPONENTS, Key: adjacentKey }),
+      'cleanup reader delete'));
+    await check('temporary-adjacent-delete-denial', () => denied(temporary,
+      new sdk.DeleteObjectCommand({ Bucket: COMPONENTS, Key: adjacentKey }),
+      'temporary delete outside its prefix'));
+    await check('temporary-read-denial', () => denied(temporary,
+      new sdk.GetObjectCommand({ Bucket: COMPONENTS, Key: ownKey }),
+      'temporary read inside its prefix'));
+    await check('temporary-write-denial', () => denied(temporary,
+      new sdk.PutObjectCommand({ Bucket: COMPONENTS, Key: ownKey, Body: body }),
+      'temporary write inside its prefix'));
+    await check('temporary-list-denial', () => denied(temporary,
+      new sdk.ListObjectsV2Command({ Bucket: COMPONENTS, Prefix: first }),
+      'temporary list inside its prefix'));
+    await check('temporary-own-delete', () => send(temporary,
+      new sdk.DeleteObjectCommand({ Bucket: COMPONENTS, Key: ownKey })));
     return { ok: true, readBuckets: 2, readerMutationDenied: true, parentDataBucketDenied: true,
       adjacentDeleteDenied: true, otherActionsDenied: true, scopedDeleteSucceeded: true };
   } finally {
     // Only uniquely named disposable objects can be touched by this workflow.
     if (created) {
-      await send(writer, new sdk.DeleteObjectCommand({ Bucket: COMPONENTS, Key: ownKey }));
-      await send(writer, new sdk.DeleteObjectCommand({ Bucket: COMPONENTS, Key: adjacentKey }));
+      await check('cleanup-own-disposable', () => send(writer,
+        new sdk.DeleteObjectCommand({ Bucket: COMPONENTS, Key: ownKey })));
+      await check('cleanup-adjacent-disposable', () => send(writer,
+        new sdk.DeleteObjectCommand({ Bucket: COMPONENTS, Key: adjacentKey })));
     }
     reader.destroy?.(); writer.destroy?.(); temporary.destroy?.();
   }
@@ -95,9 +112,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   try {
     const sdk = await import('../staging-controller/node_modules/@aws-sdk/client-s3/dist-cjs/index.js');
     console.log(JSON.stringify(await proveScope(process.env, sdk)));
-  } catch {
+  } catch (error) {
     // No SDK error body, headers, assertion values, or credential material goes to the log.
-    console.error('production Wind100 credential scope preflight failed');
+    console.error(`production Wind100 credential scope preflight failed at ${error?.scopeStep ?? 'setup'}`);
     process.exitCode = 1;
   }
 }
