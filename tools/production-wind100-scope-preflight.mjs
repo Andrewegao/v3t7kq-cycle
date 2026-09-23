@@ -21,6 +21,10 @@ async function denied(client, command, label) {
     const status = error?.$metadata?.httpStatusCode;
     failure.scopeStatus = Number.isInteger(status) && status >= 400 && status <= 599
       ? status : 'unavailable';
+    const safeCodes = new Set(['InvalidArgument', 'InvalidRequest', 'InvalidToken',
+      'ExpiredToken', 'InvalidAccessKeyId', 'SignatureDoesNotMatch', 'Unauthorized',
+      'BadRequest', 'NotImplemented', 'AccessDenied']);
+    failure.scopeCode = safeCodes.has(error?.name) ? error.name : 'other';
     throw failure;
   }
   const failure = new Error(`${label} was unexpectedly permitted`);
@@ -123,7 +127,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     const reason = ['wrong-denial-status', 'unexpectedly-permitted']
       .includes(error?.scopeFailure) ? ` (${error.scopeFailure})` : '';
     const status = error?.scopeFailure === 'wrong-denial-status'
-      ? ` [http-${error.scopeStatus}]` : '';
+      ? ` [http-${error.scopeStatus}, ${error.scopeCode}]` : '';
     console.error(`production Wind100 credential scope preflight failed at ${error?.scopeStep ?? 'setup'}${reason}${status}`);
     process.exitCode = 1;
   }
