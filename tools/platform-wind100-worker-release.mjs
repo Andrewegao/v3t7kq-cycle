@@ -5,7 +5,7 @@ import { execFileSync, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { activeVersion, assertSettings } from './consumer-refresh.mjs';
+import { activeVersion, assertSettings, expectedBindings, normalizedBindings } from './consumer-refresh.mjs';
 
 const exec = promisify(execFile);
 const ACCOUNT = 'a89f9a1af485021fbc60a68b163c7c6e';
@@ -41,6 +41,19 @@ export function validateLiveSelector(value) {
   assert.equal(value.runId, '2026092312');
   assert.match(value.selectionSha256 ?? '', /^[a-f0-9]{64}$/);
   return value;
+}
+
+export function bindingDrift(config, liveBindings) {
+  // Never log binding values or unexpected names: either may contain private data.
+  const expected = expectedBindings(config);
+  const actual = normalizedBindings(liveBindings);
+  const byName = new Map(actual.map(binding => [binding.name, binding]));
+  const expectedNames = new Set(expected.map(binding => binding.name));
+  return {
+    missingOrChangedExpectedNames: expected.filter(binding =>
+      JSON.stringify(binding) !== JSON.stringify(byName.get(binding.name))).map(binding => binding.name),
+    unexpectedCount: actual.filter(binding => !expectedNames.has(binding.name)).length,
+  };
 }
 
 function context(env) {
@@ -133,7 +146,14 @@ export async function main(command, env = process.env) {
   assert.equal(command, 'release');
   const beforeConfig = structuredClone(ctx.config);
   beforeConfig.vars.PRODUCTION_WIND100_DYNAMIC_ENABLED = '0';
-  assertSettings(beforeConfig, await api('/settings', env.PLATFORM_EDGE_TOKEN));
+  const liveSettings = await api('/settings', env.PLATFORM_EDGE_TOKEN);
+  try { assertSettings(beforeConfig, liveSettings); }
+  catch (error) {
+    if (error.message === 'live bindings differ from reviewed configuration') {
+      console.error(`Binding preflight (names/count only): ${JSON.stringify(bindingDrift(beforeConfig, liveSettings.bindings))}`);
+    }
+    throw error;
+  }
   const previous = await current(env.PLATFORM_EDGE_TOKEN);
   const receipt = { schemaVersion: 1, kind: 'weatherx-platform-wind100-worker-release',
     sourceSha: SOURCE, controllerSha: env.GITHUB_SHA, runId: env.GITHUB_RUN_ID,
