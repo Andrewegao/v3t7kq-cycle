@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Manual, disposable-object proof of the dedicated production Wind100 cleanup boundary.
 import assert from 'node:assert/strict';
-import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { COMPONENTS, DATA } from './production-wind100.mjs';
@@ -18,40 +18,6 @@ function safeResult(error) {
   const status = error?.$metadata?.httpStatusCode;
   return { status: Number.isInteger(status) && status >= 400 && status <= 599
     ? status : 'unavailable', code: SAFE_CODES.has(error?.name) ? error.name : 'other' };
-}
-
-async function probeClaimShapes(sdk, config, parent, temporary, ownKey) {
-  const encoded = Buffer.from(temporary.sessionToken, 'base64').toString('utf8');
-  assert.ok(encoded.startsWith('jwt/'));
-  const [header, payload] = encoded.slice(4).split('.');
-  const baseline = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-  const results = {};
-  for (const [label, omit] of [
-    ['without-actions', ['actions']],
-    ['without-paths', ['paths']],
-    ['scope-only', ['actions', 'paths']],
-    ['actions-only', ['scope']],
-    ['actions-only-no-paths', ['scope', 'paths']],
-  ]) {
-    const claims = { ...baseline };
-    for (const field of omit) delete claims[field];
-    const unsigned = `${header}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}`;
-    const jwt = `${unsigned}.${createHmac('sha256', parent.secretAccessKey)
-      .update(unsigned).digest('base64url')}`;
-    const client = new sdk.S3Client({ ...config, credentials: {
-      accessKeyId: parent.accessKeyId,
-      secretAccessKey: createHash('sha256').update(jwt).digest('hex'),
-      sessionToken: Buffer.from(`jwt/${jwt}`).toString('base64'),
-    } });
-    try {
-      // Each random, absent key is beneath the invocation's disposable prefix.
-      await client.send(new sdk.DeleteObjectCommand({ Bucket: COMPONENTS,
-        Key: `${ownKey}-${label}-absent` }), { abortSignal: AbortSignal.timeout(30_000) });
-      results[label] = 'accepted';
-    } catch (error) { results[label] = safeResult(error); }
-    finally { client.destroy?.(); }
-  }
-  return results;
 }
 
 async function denied(client, command, label) {
@@ -131,14 +97,8 @@ export async function proveScope(env, sdk) {
       'cleanup reader delete'));
     // A random absent object proves this signed credential can delete inside its prefix.
     // The out-of-prefix check below can then distinguish a bad token from scope denial.
-    try {
-      await check('temporary-own-prefix-probe', () => send(temporary,
-        new sdk.DeleteObjectCommand({ Bucket: COMPONENTS, Key: `${ownKey}-absent` })));
-    } catch (error) {
-      // Diagnostic variants are never accepted as proof and never reach a real object.
-      error.claimProbe = await probeClaimShapes(sdk, config, parent, temporaryCredentials, ownKey);
-      throw error;
-    }
+    await check('temporary-own-prefix-probe', () => send(temporary,
+      new sdk.DeleteObjectCommand({ Bucket: COMPONENTS, Key: `${ownKey}-absent` })));
     await check('temporary-adjacent-delete-denial', () => denied(temporary,
       new sdk.DeleteObjectCommand({ Bucket: COMPONENTS, Key: adjacentKey }),
       'temporary delete outside its prefix'));
@@ -177,8 +137,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
       .includes(error?.scopeFailure) ? ` (${error.scopeFailure})` : '';
     const status = error?.scopeFailure === 'wrong-denial-status'
       ? ` [http-${error.scopeStatus}, ${error.scopeCode}]` : '';
-    const claims = error?.claimProbe ? ` claim-shapes=${JSON.stringify(error.claimProbe)}` : '';
-    console.error(`production Wind100 credential scope preflight failed at ${error?.scopeStep ?? 'setup'}${reason}${status}${claims}`);
+    console.error(`production Wind100 credential scope preflight failed at ${error?.scopeStep ?? 'setup'}${reason}${status}`);
     process.exitCode = 1;
   }
 }

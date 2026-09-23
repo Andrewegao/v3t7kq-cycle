@@ -14,7 +14,7 @@ const env = {
 const forbidden = () => Object.assign(new Error('AccessDenied'), { $metadata: { httpStatusCode: 403 } });
 
 function fixture({ adjacentAllowed = false, adjacentDeniedStatus = 403,
-  readerDataDenied = false, fullClaimsInvalid = false } = {}) {
+  readerDataDenied = false } = {}) {
   const objects = new Set(), attempts = [];
   class Command { constructor(input) { this.input = input; } }
   class ListObjectsV2Command extends Command {}
@@ -42,7 +42,7 @@ function fixture({ adjacentAllowed = false, adjacentDeniedStatus = 403,
       if (!(command instanceof DeleteObjectCommand)) throw forbidden();
       const jwt = Buffer.from(this.credentials.sessionToken, 'base64').toString().slice(4);
       const claims = JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url'));
-      if (fullClaimsInvalid && claims.actions && claims.scope)
+      if (claims.scope)
         throw Object.assign(new Error('invalid argument'), { name: 'InvalidArgument',
           $metadata: { httpStatusCode: 400 } });
       if (claims.paths && !Key.startsWith(claims.paths.prefixPaths[0]) && !adjacentAllowed)
@@ -96,22 +96,6 @@ test('failed reader boundary reports only the fixed operation label', async () =
   const { sdk, objects } = fixture({ readerDataDenied: true });
   await assert.rejects(proveScope(env, sdk), error => {
     assert.equal(error.scopeStep, 'reader-data-list');
-    return true;
-  });
-  assert.equal(objects.size, 0);
-});
-
-test('claim-shape diagnostics remain fail-closed and report only fixed results', async () => {
-  const { sdk, objects } = fixture({ fullClaimsInvalid: true });
-  await assert.rejects(proveScope(env, sdk), error => {
-    assert.equal(error.scopeStep, 'temporary-own-prefix-probe');
-    assert.deepEqual(error.claimProbe, {
-      'without-actions': 'accepted',
-      'without-paths': { status: 400, code: 'InvalidArgument' },
-      'scope-only': 'accepted',
-      'actions-only': 'accepted',
-      'actions-only-no-paths': 'accepted',
-    });
     return true;
   });
   assert.equal(objects.size, 0);

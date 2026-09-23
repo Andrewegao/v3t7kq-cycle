@@ -21,6 +21,11 @@ protected run.
 The derived credential follows Cloudflare's documented local-signing model for
 [temporary R2 credentials](https://developers.cloudflare.com/r2/api/s3/temporary-credentials/),
 which supports action and path restrictions under the parent token's bucket permissions.
+On 2026-09-23, the protected disposable-object probe observed R2 reject JWTs that
+combined a broad `scope` claim with `actions` (`400 InvalidArgument`), while an
+`actions: ["DeleteObject"]` claim with the same prefix restriction was accepted.
+The signer therefore omits `scope`; the complete denial and allowed-operation
+checks above remain required before publication.
 
 The workflow never reads or changes the Wind100 pointer, catalog snapshots, production Pages,
 the account Worker, or live forecast components. The separate first-publication and retention

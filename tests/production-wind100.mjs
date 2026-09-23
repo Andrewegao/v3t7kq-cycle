@@ -339,6 +339,7 @@ test('cleanup mints a 15-minute DeleteObject-only credential for one exact compo
   assert.equal(credential.secretAccessKey, hash(jwt));
   const claims = JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url'));
   assert.equal(claims.bucket, COMPONENTS);
+  assert.equal(Object.hasOwn(claims, 'scope'), false);
   assert.deepEqual(claims.actions, ['DeleteObject']);
   assert.deepEqual(claims.paths.prefixPaths, [prefix]);
   assert.equal(claims.exp - claims.iat, 900);
@@ -380,6 +381,7 @@ test('cleanup adapter refuses broad secrets and routes deletion through scoped s
   const claims = JSON.parse(Buffer.from(Buffer.from(sessions[0].sessionToken, 'base64')
     .toString().slice(4).split('.')[1], 'base64url'));
   assert.deepEqual(claims.paths.prefixPaths, [`${COMPONENT_PREFIX}35834279562-1/`]);
+  assert.equal(Object.hasOwn(claims, 'scope'), false);
   assert.deepEqual(claims.actions, ['DeleteObject']);
   await assert.rejects(client.delete('components/point-ecmwf/unrelated/component.json'));
   assert.equal(deletes.length, 1);
