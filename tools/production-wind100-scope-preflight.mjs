@@ -66,6 +66,10 @@ export async function proveScope(env, sdk) {
     await send(writer, new sdk.PutObjectCommand({ Bucket: COMPONENTS, Key: ownKey, Body: body }));
     created = true;
     await send(writer, new sdk.PutObjectCommand({ Bucket: COMPONENTS, Key: adjacentKey, Body: body }));
+    await denied(reader, new sdk.PutObjectCommand({ Bucket: COMPONENTS, Key: ownKey, Body: body }),
+      'cleanup reader write');
+    await denied(reader, new sdk.DeleteObjectCommand({ Bucket: COMPONENTS, Key: adjacentKey }),
+      'cleanup reader delete');
     await denied(temporary, new sdk.DeleteObjectCommand({ Bucket: COMPONENTS, Key: adjacentKey }),
       'temporary delete outside its prefix');
     await denied(temporary, new sdk.GetObjectCommand({ Bucket: COMPONENTS, Key: ownKey }),
@@ -75,7 +79,7 @@ export async function proveScope(env, sdk) {
     await denied(temporary, new sdk.ListObjectsV2Command({ Bucket: COMPONENTS, Prefix: first }),
       'temporary list inside its prefix');
     await send(temporary, new sdk.DeleteObjectCommand({ Bucket: COMPONENTS, Key: ownKey }));
-    return { ok: true, readBuckets: 2, parentDataBucketDenied: true,
+    return { ok: true, readBuckets: 2, readerMutationDenied: true, parentDataBucketDenied: true,
       adjacentDeleteDenied: true, otherActionsDenied: true, scopedDeleteSucceeded: true };
   } finally {
     // Only uniquely named disposable objects can be touched by this workflow.

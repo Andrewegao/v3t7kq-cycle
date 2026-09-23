@@ -53,7 +53,7 @@ function fixture({ adjacentAllowed = false } = {}) {
 test('protected proof denies adjacent deletion and other actions, then cleans disposable objects', async () => {
   const { sdk, objects, attempts } = fixture();
   assert.deepEqual(await proveScope(env, sdk), {
-    ok: true, readBuckets: 2, parentDataBucketDenied: true,
+    ok: true, readBuckets: 2, readerMutationDenied: true, parentDataBucketDenied: true,
     adjacentDeleteDenied: true, otherActionsDenied: true, scopedDeleteSucceeded: true,
   });
   assert.equal(objects.size, 0);

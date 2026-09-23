@@ -10,7 +10,8 @@ the read token is Object Read only on `weatherx-data-production` and
 
 The job lists at most one object in each bucket with the reader and proves that the delete
 parent cannot list the production data bucket. It creates two uniquely named disposable
-objects in the production components bucket, derives the same 15-minute, prefix-restricted
+objects in the production components bucket, proves the reader cannot write or delete them,
+and derives the same 15-minute, prefix-restricted
 `DeleteObject` credential used by retention, and proves adjacent-prefix deletion plus read,
 write, and list operations are denied. It cleans up both disposable objects on the success and
 failure paths and logs only the boolean result. If any check or cleanup fails, do not set the
