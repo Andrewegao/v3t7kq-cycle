@@ -6,9 +6,9 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `79f0e728d640725b8b34f3214b3592a00d4d835a2af2369a65bfbc677e128037`.
+Source digest (registry and workflow bytes): `2a1742ebfb751c2dc79b27c913730dcf7083524dd0dbf20c28eb6a480f465743`.
 
-55 workflows. Ordering and output are deterministic; no API request or clock is used.
+56 workflows. Ordering and output are deterministic; no API request or clock is used.
 
 | Workflow | Family / subsystem | Lifecycle | Purpose | Runbook |
 | --- | --- | --- | --- | --- |
@@ -39,6 +39,7 @@ Source digest (registry and workflow bytes): `79f0e728d640725b8b34f3214b3592a00d
 | [production-account-audit](#production-account-audit) | control-plane / Production account safety | diagnostic | Reconcile exhaustive live Stripe inventory against sanitized production account state without mutation. | [guide](../docs/production-account-audit.md) |
 | [production-wind100-recurring](#production-wind100-recurring) | models / Native wind | recurring | Publish a guarded production-only native wind point candidate under dedicated approval. | [guide](../docs/production-wind100-retention.md) |
 | [production-wind100-retention](#production-wind100-retention) | maintenance / Native wind | manual-supported | Plan or approve bounded cleanup of journal-proven retired production wind components. | [guide](../docs/production-wind100-retention.md) |
+| [production-wind100-scope-preflight](#production-wind100-scope-preflight) | control-plane / Native wind | diagnostic | Prove dedicated cleanup token permissions with disposable production objects before Wind100 publication. | [guide](../docs/production-wind100-credential-scope.md) |
 | [publish-current-model-production](#publish-current-model-production) | models / Component publication | recurring | Qualify and publish one authenticated collector result independently of sibling models. | [guide](../docs/current-model-artifact-handoff.md) |
 | [qualify-bake-throughput](#qualify-bake-throughput) | models / Bake qualification | diagnostic | Qualify full-grid GFS frame throughput and runner memory without provider or publication access. | [guide](../docs/bake-throughput-qualification.md) |
 | [resume-model-publication](#resume-model-publication) | models / Publication recovery | manual-supported | Recover publication from the explicitly reviewed retained run without recollecting models. | [guide](../docs/resume-model-publication.md) |
@@ -767,6 +768,31 @@ Checkout declarations (not a claim of approval or checkout success):
 | [retention / step 2](../.github/workflows/production-wind100-retention.yml#L33) | <code>weatherx-hq/atmos</code> | <code>9174329db6ca8527569e67f14ef70406dedefb69</code> |
 
 Variable references (declared names only; values and activation unknown): [PRODUCTION_WIND100_GC_APPROVED_PLAN_SHA256](../.github/workflows/production-wind100-retention.yml#L28), [PRODUCTION_WIND100_GC_CALL_ENABLED](../.github/workflows/production-wind100-retention.yml#L17), [PRODUCTION_WIND100_GC_CONTROLLER_SHA256](../.github/workflows/production-wind100-retention.yml#L27), [PRODUCTION_WIND100_GC_ENABLED](../.github/workflows/production-wind100-retention.yml#L25), [PRODUCTION_WIND100_GC_EXECUTE_ENABLED](../.github/workflows/production-wind100-retention.yml#L26), [PRODUCTION_WIND100_R2_ACCOUNT_ID](../.github/workflows/production-wind100-retention.yml#L29).
+
+
+## production-wind100-scope-preflight
+
+[.github/workflows/production-wind100-scope-preflight.yml](../.github/workflows/production-wind100-scope-preflight.yml#L1) · <code>prove production Wind100 cleanup credential scope</code>
+
+Declared triggers: <code>workflow_dispatch</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-production-wind100-scope-preflight","cancel-in-progress":false}</code>.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [scope](../.github/workflows/production-wind100-scope-preflight.yml#L11) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"data-production-wind100-cleanup","url":"https://weatherx.org"}</code> | <code>10</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+
+Declared job conditions (additional step/helper checks may apply):
+
+- [scope](../.github/workflows/production-wind100-scope-preflight.yml#L11): <code>${{ github.ref == 'refs/heads/main' }}</code>
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [scope / step 1](../.github/workflows/production-wind100-scope-preflight.yml#L20) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+
+Variable references (declared names only; values and activation unknown): [PRODUCTION_WIND100_R2_ACCOUNT_ID](../.github/workflows/production-wind100-scope-preflight.yml#L18).
 
 
 ## publish-current-model-production

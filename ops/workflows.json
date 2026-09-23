@@ -495,6 +495,15 @@
       "subsystem": "Native wind",
       "lifecycle": "manual-supported",
       "runbook": "docs/production-wind100-retention.md"
+    },
+    {
+      "id": "production-wind100-scope-preflight",
+      "path": ".github/workflows/production-wind100-scope-preflight.yml",
+      "family": "control-plane",
+      "purpose": "Prove dedicated cleanup token permissions with disposable production objects before Wind100 publication.",
+      "subsystem": "Native wind",
+      "lifecycle": "diagnostic",
+      "runbook": "docs/production-wind100-credential-scope.md"
     }
   ]
 }
