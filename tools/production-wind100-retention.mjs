@@ -155,7 +155,7 @@ export function scopedDeleteCredentials(parent, prefix, nowSeconds = Math.floor(
   assert.ok(typeof parent.secretAccessKey === 'string' && parent.secretAccessKey.length >= 32);
   assert.match(prefix ?? '', /^components\/point-ecmwf\/prod-wind100-recurring-point-ecmwf-[1-9]\d{0,19}-[1-9]\d{0,5}\/$/);
   assert.ok(Number.isSafeInteger(nowSeconds) && nowSeconds > 0);
-  const claims = { bucket: COMPONENTS, scope: 'object-read-write', actions: ['DeleteObject'],
+  const claims = { bucket: COMPONENTS, actions: ['DeleteObject'],
     paths: { prefixPaths: [prefix], objectPaths: [] }, sub: ACCOUNT, iss: parent.accessKeyId,
     aud: new URL(endpoint).host, iat: nowSeconds, exp: nowSeconds + 900 };
   const unsigned = `${base64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))}.${base64url(JSON.stringify(claims))}`;
