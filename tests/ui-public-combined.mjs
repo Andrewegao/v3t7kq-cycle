@@ -25,20 +25,20 @@ function fixture(){
   const receipt={buildProfile:{...LANE_B_CONTRACT.buildReceipt,wind100:'production-native-dynamic-v1',localeBeta:'ru-kk-public-beta-v1'}};
   return {receipt,files,sidecar};
 }
-test('distinct combined profile remains fail-closed until exact source is pinned',()=>{
+test('distinct combined profile requires its exact reviewed source and protected approvals',()=>{
   assert.deepEqual(profileFor(PUBLIC_COMBINED_REQUEST),PUBLIC_COMBINED_PROFILE);
   validateProfile(PUBLIC_COMBINED_PROFILE);
   assert.equal(publicCombinedProfile(PUBLIC_COMBINED_PROFILE),true);
   assert.equal(publicLocaleBetaProfile(PUBLIC_COMBINED_PROFILE),true);
   assert.equal(accountServingProductionProfile(PUBLIC_COMBINED_PROFILE),true);
-  assert.equal(PUBLIC_COMBINED_ATMOS_SHA,'0'.repeat(40));
-  assert.throws(assertPublicCombinedReady,/exact reviewed Atmos/);
-  assert.throws(()=>controlShaFor(PUBLIC_COMBINED_PROFILE),/exact reviewed Atmos/);
-  assert.throws(()=>requireUiProductionProfile(PUBLIC_COMBINED_PROFILE),/exact reviewed Atmos/);
+  assert.equal(PUBLIC_COMBINED_ATMOS_SHA,'b9db38dd22eed1da56c6c4dd4140480da7e89153');
+  assert.equal(assertPublicCombinedReady(),PUBLIC_COMBINED_ATMOS_SHA);
+  assert.equal(controlShaFor(PUBLIC_COMBINED_PROFILE),PUBLIC_COMBINED_ATMOS_SHA);
+  assert.deepEqual(requireUiProductionProfile(PUBLIC_COMBINED_PROFILE),PUBLIC_COMBINED_PROFILE);
   const approvals={approvedPublicLocaleBeta:PUBLIC_LOCALE_BETA_APPROVAL,approvedPublicCombined:PUBLIC_COMBINED_APPROVAL};
   assert.throws(()=>resolveSelectionRequest(PUBLIC_COMBINED_REQUEST,undefined,undefined,undefined,undefined,undefined,undefined,approvals),/protected production account/);
   assert.throws(()=>resolveSelectionRequest(PUBLIC_COMBINED_REQUEST,undefined,undefined,undefined,undefined,undefined,PRODUCTION_ACCOUNT_APPROVAL,{approvedPublicLocaleBeta:PUBLIC_LOCALE_BETA_APPROVAL}),/protected combined/);
-  assert.throws(()=>resolveSelectionRequest(PUBLIC_COMBINED_REQUEST,undefined,undefined,undefined,undefined,undefined,PRODUCTION_ACCOUNT_APPROVAL,approvals),/exact reviewed Atmos/);
+  assert.equal(resolveSelectionRequest(PUBLIC_COMBINED_REQUEST,undefined,undefined,undefined,undefined,undefined,PRODUCTION_ACCOUNT_APPROVAL,approvals),PUBLIC_COMBINED_REQUEST);
   assert.throws(()=>requireStagingApproval({profile:PUBLIC_COMBINED_PROFILE},{}));
   assert.ok(POLICY_FILES.includes('tools/ui-public-combined.mjs'));
   assert.ok(POLICY_FILES.includes('docs/ui-public-combined.md'));
@@ -66,13 +66,13 @@ test('exact sidecar and receipt authenticate intro, account chunks and billing-o
   assert.throws(()=>validateCombinedBuild(receipt,tamper(s=>{s.intro.chunks[0].sha256='b'.repeat(64);})),/Expected values/);
   assert.throws(()=>validateCombinedBuild(receipt,tamper((s,f)=>{f.splice(1,1);})),/Expected values/);
 });
-test('protected workflows contain combined choice, zero pins and approval',()=>{
+test('protected workflows contain combined choice, exact pins and approval',()=>{
   const staging=readFileSync(new URL('../.github/workflows/ui-staging.yml',import.meta.url),'utf8');
   const release=readFileSync(new URL('../.github/workflows/ui-release.yml',import.meta.url),'utf8');
   assert.match(staging,/APPROVED_PUBLIC_COMBINED: \$\{\{ vars.UI_PUBLIC_COMBINED_PROFILE_APPROVED \}\}/);
   assert.match(staging,/UI_PUBLIC_COMBINED_PROFILE_APPROVED: \$\{\{ vars.UI_PUBLIC_COMBINED_PROFILE_APPROVED \}\}/);
   assert.match(staging,/production-account-ru-kk-wind100-intro-v1/);
   assert.match(release,/production-account-ru-kk-wind100-intro-v1/);
-  for(const workflow of [staging,release])assert.match(workflow,/production-account-ru-kk-wind100-intro-v1'\) && '0000000000000000000000000000000000000000'/);
+  for(const workflow of [staging,release])assert.ok(workflow.includes(`production-account-ru-kk-wind100-intro-v1') && '${PUBLIC_COMBINED_ATMOS_SHA}'`));
   assert.doesNotMatch(release,/WX_GROUND_QUALIFICATION_SCOPE/);
 });
