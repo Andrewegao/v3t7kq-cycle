@@ -80,6 +80,7 @@ test('an unexpected denial status is classified without exposing the SDK respons
   await assert.rejects(proveScope(env, sdk), error => {
     assert.equal(error.scopeStep, 'temporary-adjacent-delete-denial');
     assert.equal(error.scopeFailure, 'wrong-denial-status');
+    assert.equal(error.scopeStatus, 401);
     assert.match(error.message, /must return AccessDenied/);
     return true;
   });
