@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bindingDrift, disabledPreviousConfig, uploadedVersion, validateLiveSelector, validateReleaseConfig }
+import { assertPreflightVersions, bindingDrift, disabledPreviousConfig, uploadedVersion, validateLiveSelector, validateReleaseConfig }
   from '../tools/platform-wind100-worker-release.mjs';
 
 const config = { compatibility_date: '2026-08-15', compatibility_flags: ['nodejs_compat'],
@@ -68,4 +68,19 @@ test('prior Worker preflight accepts only absent or exact disabled Wind100 flag'
     { name: flagName, type: 'plain_text', text: '0' },
     { name: flagName, type: 'plain_text', text: '0' },
   ]));
+});
+
+test('rollback preflight checks the active disabled version even if latest draft has flag one', () => {
+  const reviewed = validateReleaseConfig(config);
+  const bindings = vars => Object.entries(vars).map(([name, text]) => ({ name, text, type: 'plain_text' }));
+  const disabled = { ...reviewed.vars }; delete disabled.PRODUCTION_WIND100_DYNAMIC_ENABLED;
+  const active = { resources: { script_runtime: { compatibility_date: reviewed.compatibility_date,
+    compatibility_flags: reviewed.compatibility_flags }, bindings: bindings(disabled) } };
+  const latest = { compatibility_date: reviewed.compatibility_date,
+    compatibility_flags: reviewed.compatibility_flags, bindings: bindings(reviewed.vars) };
+  assert.doesNotThrow(() => assertPreflightVersions(reviewed, latest, active));
+  assert.throws(() => assertPreflightVersions(reviewed, latest,
+    { ...active, resources: { ...active.resources, bindings: bindings(reviewed.vars) } }));
+  assert.throws(() => assertPreflightVersions(reviewed,
+    { ...latest, bindings: bindings({ ...reviewed.vars, APP_ORIGIN: 'https://unexpected.invalid' }) }, active));
 });

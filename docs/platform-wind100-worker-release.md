@@ -13,6 +13,12 @@ route created by that run; a lost route-create response requires manual review
 instead of speculative deletion. The separate route receipt is retained with the
 Worker receipt.
 
+Cloudflare's top-level settings can show the latest uploaded draft after a rollback.
+The preflight reads the actual active version and requires its Wind100 flag to be
+absent or `0`; it allows a latest draft with `1` only when every setting matches
+the reviewed candidate. This prevents a prior inactive upload from blocking a
+safe retry without treating that draft as deployed.
+
 Dispatch `platform-wind100-worker-release.yml` on Cycle main with confirmation
 `RELEASE-PRODUCTION-WIND100-WORKER`. Approve only that run's protected `production`
 environment after checking its run ID and source. The workflow runs the complete Worker
