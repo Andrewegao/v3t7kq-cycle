@@ -20,7 +20,7 @@ export const PUBLIC_COMBINED_ACCOUNT_SOURCES = Object.freeze({
 });
 export const PUBLIC_COMBINED_SIDECAR = 'assets/weatherx-production-account-build-v1.json';
 // Replace only with the final reviewed, pushed Atmos master commit.
-export const PUBLIC_COMBINED_ATMOS_SHA = '0000000000000000000000000000000000000000';
+export const PUBLIC_COMBINED_ATMOS_SHA = 'b9db38dd22eed1da56c6c4dd4140480da7e89153';
 
 export function assertPublicCombinedReady() {
   assert.match(PUBLIC_COMBINED_ATMOS_SHA, /^[a-f0-9]{40}$/);
