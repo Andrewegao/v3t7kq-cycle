@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { uploadedVersion, validateLiveSelector, validateReleaseConfig }
+import { bindingDrift, uploadedVersion, validateLiveSelector, validateReleaseConfig }
   from '../tools/platform-wind100-worker-release.mjs';
 
 const config = { env: { production: { name: 'weatherx-platform-edge-production',
@@ -32,4 +32,18 @@ test('candidate version and live selector are exact and reject unrelated release
     selectionSha256: 'a'.repeat(64) };
   assert.equal(validateLiveSelector(selector), selector);
   assert.throws(() => validateLiveSelector({ ...selector, catalogId: 'another-run' }));
+});
+
+test('binding diagnostic names reviewed mismatches without disclosing live values', () => {
+  const reviewed = { vars: { APP_ORIGIN: 'https://weatherx.org', AUTH_MODE: 'observe' },
+    secrets: { required: ['SESSION_KEY'] } };
+  const actual = [
+    { name: 'APP_ORIGIN', type: 'plain_text', text: 'https://weatherx.org' },
+    { name: 'AUTH_MODE', type: 'plain_text', text: 'private-value' },
+    { name: 'SURPRISE_SECRET', type: 'secret_text' },
+  ];
+  const result = bindingDrift(reviewed, actual);
+  assert.deepEqual(result, { missingOrChangedExpectedNames: ['AUTH_MODE', 'SESSION_KEY'], unexpectedCount: 1 });
+  assert.ok(!JSON.stringify(result).includes('private-value'));
+  assert.ok(!JSON.stringify(result).includes('SURPRISE_SECRET'));
 });

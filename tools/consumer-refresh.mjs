@@ -51,7 +51,7 @@ export function normalizedBindings(bindings) {
     }
   }));
 }
-function expectedBindings(config) {
+export function expectedBindings(config) {
   return normalizedBindings([
     ...Object.entries(config.vars ?? {}).map(([name,text])=>({name,text,type:'plain_text'})),
     ...(config.secrets?.required ?? []).map(name=>({name,type:'secret_text'})),
