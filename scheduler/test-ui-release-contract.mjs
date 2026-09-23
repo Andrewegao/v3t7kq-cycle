@@ -10,7 +10,7 @@ const [bake, ui, staging, backfill] = await Promise.all([
 ]);
 const workflowDirectory = new URL('../.github/workflows/', import.meta.url);
 const workflowNames = (await readdir(workflowDirectory)).filter((name) => name.endsWith('.yml'));
-const localDataWorkflows = new Set(['collect-core-model.yml', 'collect-regional-model.yml', 'publish-current-model-production.yml', 'staging-wind100-recurring.yml']);
+const localDataWorkflows = new Set(['collect-core-model.yml', 'collect-regional-model.yml', 'publish-current-model-production.yml', 'staging-wind100-recurring.yml', 'production-wind100-recurring.yml']);
 function validateUse(line, workflowName) {
   const local = line.match(/^    uses: \.\/\.github\/workflows\/([a-z0-9-]+\.yml)$/);
   if (local && ((workflowName === 'bake.yml' && localDataWorkflows.has(local[1])) ||
@@ -30,7 +30,9 @@ for (const bad of ['    uses: ./.github/workflows/unknown.yml', '    uses: ./.gi
   assert.throws(() => validateUse(bad, 'bake.yml'));
 }
 validateUse('    uses: ./.github/workflows/staging-wind100-recurring.yml', 'bake.yml');
+validateUse('    uses: ./.github/workflows/production-wind100-recurring.yml', 'bake.yml');
 validateUse('    uses: ./.github/workflows/staging-wind100-recurring.yml', 'staging-wind100-preflight.yml');
+assert.throws(() => validateUse('    uses: ./.github/workflows/production-wind100-recurring.yml', 'ui-release.yml'));
 assert.throws(() => validateUse('    uses: ./.github/workflows/collect-core-model.yml', 'staging-wind100-preflight.yml'));
 assert.throws(() => validateUse('    uses: ./.github/workflows/staging-wind100-recurring.yml@main', 'staging-wind100-preflight.yml'));
 assert.throws(() => validateUse('    uses: ./.github/workflows/staging-wind100-recurring.yml', 'ui-release.yml'));
