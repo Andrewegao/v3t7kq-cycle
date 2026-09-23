@@ -178,6 +178,13 @@ export function validateQualification(value, request, now = Date.now(), policy =
   return q;
 }
 
+export function bindPointIntegrityInvocation(integrity, invocation) {
+  assert.match(invocation ?? '', INVOCATION);
+  assert.equal(integrity?.invocation, undefined,
+    'the shared point qualifier must leave invocation binding to its caller');
+  return { ...integrity, invocation };
+}
+
 function validateComponent(manifest, receipt, q, invocation, now) {
   const artifact = `prod-wind100-recurring-point-ecmwf-${invocation}`;
   const rootPrefix = `components/point-ecmwf/${artifact}/`;
@@ -571,12 +578,13 @@ export async function main(command, env = process.env, argv = process.argv.slice
   if (command === 'source') { gate(env, 'none', policy); return verifySource(argv[0]); }
   if (command === 'qualify') {
     const request = gate(env, 'none', policy);
-    const integrity = await qualifyPointPacks({ stageRoot: argv[2], pointRoot: argv[3], model: 'ecmwf',
+    const pointIntegrity = await qualifyPointPacks({ stageRoot: argv[2], pointRoot: argv[3], model: 'ecmwf',
       policy: readIntegrityPolicy(), structuralReport: privateJson(env, argv[4]),
       sourceEvidence: privateJson(env, argv[1]), augmentationReceipt: privateJson(env, argv[5]),
       inputHandoff: privateJson(env, argv[6]), inputManifest: privateJson(env, argv[7]), request: {
         ...request, inputSha256: env.WIND100_INPUT_SHA256,
       } });
+    const integrity = bindPointIntegrityInvocation(pointIntegrity, request.invocation);
     assert.deepEqual(verifySource(argv[0]), privateJson(env, argv[1]));
     const result = { schemaVersion: 1, kind: 'weatherx-production-native-wind100-qualification',
       targetOrigin: ORIGIN, invocation: request.invocation, sourceSha: policy.sourceSha,
