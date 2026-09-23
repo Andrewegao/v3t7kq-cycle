@@ -31,7 +31,7 @@ test('distinct combined profile requires its exact reviewed source and protected
   assert.equal(publicCombinedProfile(PUBLIC_COMBINED_PROFILE),true);
   assert.equal(publicLocaleBetaProfile(PUBLIC_COMBINED_PROFILE),true);
   assert.equal(accountServingProductionProfile(PUBLIC_COMBINED_PROFILE),true);
-  assert.equal(PUBLIC_COMBINED_ATMOS_SHA,'b9db38dd22eed1da56c6c4dd4140480da7e89153');
+  assert.equal(PUBLIC_COMBINED_ATMOS_SHA,'14e1e2579c2ebe0c0e0236c53623a491f110cce3');
   assert.equal(assertPublicCombinedReady(),PUBLIC_COMBINED_ATMOS_SHA);
   assert.equal(controlShaFor(PUBLIC_COMBINED_PROFILE),PUBLIC_COMBINED_ATMOS_SHA);
   assert.deepEqual(requireUiProductionProfile(PUBLIC_COMBINED_PROFILE),PUBLIC_COMBINED_PROFILE);
@@ -73,6 +73,6 @@ test('protected workflows contain combined choice, exact pins and approval',()=>
   assert.match(staging,/UI_PUBLIC_COMBINED_PROFILE_APPROVED: \$\{\{ vars.UI_PUBLIC_COMBINED_PROFILE_APPROVED \}\}/);
   assert.match(staging,/production-account-ru-kk-wind100-intro-v1/);
   assert.match(release,/production-account-ru-kk-wind100-intro-v1/);
-  for(const workflow of [staging,release])assert.ok(workflow.includes(`production-account-ru-kk-wind100-intro-v1') && '${PUBLIC_COMBINED_ATMOS_SHA}'`));
+  for(const workflow of [staging,release])assert.ok(workflow.includes(`production-account-ru-kk-wind100-intro-v1' && '${PUBLIC_COMBINED_ATMOS_SHA}'`));
   assert.doesNotMatch(release,/WX_GROUND_QUALIFICATION_SCOPE/);
 });
