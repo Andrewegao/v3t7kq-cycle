@@ -30,6 +30,8 @@ async function probeClaimShapes(sdk, config, parent, temporary, ownKey) {
     ['without-actions', ['actions']],
     ['without-paths', ['paths']],
     ['scope-only', ['actions', 'paths']],
+    ['actions-only', ['scope']],
+    ['actions-only-no-paths', ['scope', 'paths']],
   ]) {
     const claims = { ...baseline };
     for (const field of omit) delete claims[field];
