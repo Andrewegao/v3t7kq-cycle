@@ -90,6 +90,10 @@ export async function proveScope(env, sdk) {
     await check('reader-delete-denial', () => denied(reader,
       new sdk.DeleteObjectCommand({ Bucket: COMPONENTS, Key: adjacentKey }),
       'cleanup reader delete'));
+    // A random absent object proves this signed credential can delete inside its prefix.
+    // The out-of-prefix check below can then distinguish a bad token from scope denial.
+    await check('temporary-own-prefix-probe', () => send(temporary,
+      new sdk.DeleteObjectCommand({ Bucket: COMPONENTS, Key: `${ownKey}-absent` })));
     await check('temporary-adjacent-delete-denial', () => denied(temporary,
       new sdk.DeleteObjectCommand({ Bucket: COMPONENTS, Key: adjacentKey }),
       'temporary delete outside its prefix'));
