@@ -6,9 +6,9 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `2a1742ebfb751c2dc79b27c913730dcf7083524dd0dbf20c28eb6a480f465743`.
+Source digest (registry and workflow bytes): `38172d0efe54cf949c8a4662fd6257a9c5c0455a325b2445b4e6c768abb014df`.
 
-56 workflows. Ordering and output are deterministic; no API request or clock is used.
+57 workflows. Ordering and output are deterministic; no API request or clock is used.
 
 | Workflow | Family / subsystem | Lifecycle | Purpose | Runbook |
 | --- | --- | --- | --- | --- |
@@ -35,6 +35,7 @@ Source digest (registry and workflow bytes): `2a1742ebfb751c2dc79b27c913730dcf70
 | [model-inputs](#model-inputs) | staging / Experimental models | manual-supported | Collect isolated experimental model inputs with bounded provider concurrency. | [guide](../docs/MODEL_CLOUD_INPUTS.md) |
 | [nam-hi-diagnostic](#nam-hi-diagnostic) | staging / Experimental models | diagnostic | Diagnose a bounded NAM-HI acquisition without broadening publication authority. | [guide](../docs/nam-hi-cloud-diagnostic.md) |
 | [platform-staging-transaction](#platform-staging-transaction) | releases / Platform staging | manual-supported | Execute one authorized Atmos backend rehearsal stage against frozen staging identities. | [guide](../docs/platform-staging-transaction.md) |
+| [platform-wind100-worker-release](#platform-wind100-worker-release) | releases / Production platform | manual-supported | Release the exact reviewed production platform Worker for the qualified Wind100 selector. | [guide](../docs/platform-wind100-worker-release.md) |
 | [point-route-activate](#point-route-activate) | releases / Production point routes | manual-supported | Activate reviewed point routes with ownership-aware rollback. | [guide](../docs/point-route-activation.md) |
 | [production-account-audit](#production-account-audit) | control-plane / Production account safety | diagnostic | Reconcile exhaustive live Stripe inventory against sanitized production account state without mutation. | [guide](../docs/production-account-audit.md) |
 | [production-wind100-recurring](#production-wind100-recurring) | models / Native wind | recurring | Publish a guarded production-only native wind point candidate under dedicated approval. | [guide](../docs/production-wind100-retention.md) |
@@ -667,6 +668,32 @@ Checkout declarations (not a claim of approval or checkout success):
 | [transact / Checkout exact Atmos candidate](../.github/workflows/platform-staging-transaction.yml#L70) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmos_sha }}</code> |
 
 Variable references (declared names only; values and activation unknown): [PLATFORM_STAGING_CLOUDFLARE_ACCOUNT_ID](../.github/workflows/platform-staging-transaction.yml#L66), [PLATFORM_STAGING_TRANSACTIONS_ENABLED](../.github/workflows/platform-staging-transaction.yml#L65).
+
+
+## platform-wind100-worker-release
+
+[.github/workflows/platform-wind100-worker-release.yml](../.github/workflows/platform-wind100-worker-release.yml#L1) · <code>WeatherX production Wind100 Worker release</code>
+
+Declared triggers: [workflow_dispatch](../.github/workflows/platform-wind100-worker-release.yml#L5); input names <code>["confirm"]</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-production-data-edge","cancel-in-progress":false}</code>.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [release](../.github/workflows/platform-wind100-worker-release.yml#L17) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"production","url":"https://weatherx.org"}</code> | <code>30</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+
+Declared job conditions (additional step/helper checks may apply):
+
+- [release](../.github/workflows/platform-wind100-worker-release.yml#L17): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; github.event_name == 'workflow_dispatch' }}</code>
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [release / step 2](../.github/workflows/platform-wind100-worker-release.yml#L32) | caller repository (implicit) | <code>${{ github.sha }}</code> |
+| [release / step 3](../.github/workflows/platform-wind100-worker-release.yml#L37) | <code>weatherx-hq/atmos</code> | <code>7497b9815f1f5ca657cda8ed24ad5894afa267e0</code> |
+
+Variable references (declared names only; values and activation unknown): none detected.
 
 
 ## point-route-activate

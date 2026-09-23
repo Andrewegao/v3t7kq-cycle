@@ -504,6 +504,15 @@
       "subsystem": "Native wind",
       "lifecycle": "diagnostic",
       "runbook": "docs/production-wind100-credential-scope.md"
+    },
+    {
+      "id": "platform-wind100-worker-release",
+      "path": ".github/workflows/platform-wind100-worker-release.yml",
+      "family": "releases",
+      "purpose": "Release the exact reviewed production platform Worker for the qualified Wind100 selector.",
+      "subsystem": "Production platform",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/platform-wind100-worker-release.md"
     }
   ]
 }
