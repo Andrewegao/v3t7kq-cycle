@@ -109,7 +109,7 @@ export function controllerDigest(root = ROOT) {
 export function gate(env, phase = 'none', policy = readProductionPolicy(), digest = controllerDigest()) {
   assert.ok(['none', 'metadata', 'component'].includes(phase));
   assert.equal(policy.retentionProfileStatus, 'verified-pointer-ancestry-gc-v1',
-    'recurring production Wind100 is unavailable until reviewed pointer-ancestry GC exists');
+    'recurring production Wind100 requires reviewed pointer-ancestry GC');
   assert.equal(env.GITHUB_ACTIONS, 'true'); assert.equal(env.RUNNER_ENVIRONMENT, 'github-hosted');
   assert.equal(env.GITHUB_REPOSITORY, REPOSITORY); assert.equal(env.GITHUB_REF, 'refs/heads/main');
   assert.ok(['schedule', 'workflow_dispatch'].includes(env.GITHUB_EVENT_NAME));
@@ -118,6 +118,8 @@ export function gate(env, phase = 'none', policy = readProductionPolicy(), diges
   assert.equal(env.PRODUCTION_WIND100_ENABLED, 'true');
   assert.equal(env.PRODUCTION_WIND100_APPROVED_SOURCE_SHA, policy.sourceSha);
   assert.equal(env.PRODUCTION_WIND100_CONTROLLER_SHA256, digest);
+  assert.equal(env.PRODUCTION_WIND100_GC_READY_SHA256, digest,
+    'production Wind100 retention resources require an exact reviewed controller digest');
   assert.equal(env.PRODUCTION_WIND100_R2_ACCOUNT_ID, ACCOUNT);
   assert.equal(env.ATMOS_SHA, policy.sourceSha); assert.equal(env.CORE_ATMOS_SHA, policy.coreSourceSha);
   assert.equal(env.MODEL_ID, 'ecmwf');

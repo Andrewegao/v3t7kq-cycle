@@ -13,8 +13,10 @@ import {accountQualificationRequired,runAccountQualification,readAccountProof,ac
 import { controlShaFor, TC_CONTROL_SHA, REPOSITORY, MAX_BYTES, gate, hash, createCandidate, validateCandidate,
   readTree, validateFiles, seal, unseal, restore, eligibleRun } from './ui-candidate.mjs';
 import { packBuild, unpackBuild, eligibleBuild } from './ui-build-transfer.mjs';
-import {profileFor,validateProfile,selectionProfile,coreReleaseProfile,productionAccountProfile,tcGuidanceProfile,canonical as profileCanonical,readSelection,readTcSelection,requireProductionProfile,requireStagingApproval,resolveWind100BuildPin,SELECTION_ASSET,TC_SELECTION_ASSET,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt} from './ui-staging-models.mjs';
+import {profileFor,validateProfile,selectionProfile,coreReleaseProfile,publicLocaleBetaProfile,publicCombinedProfile,accountServingProductionProfile,tcGuidanceProfile,canonical as profileCanonical,readSelection,readTcSelection,requireUiProductionProfile,requireStagingApproval,resolveWind100BuildPin,SELECTION_ASSET,TC_SELECTION_ASSET,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt} from './ui-staging-models.mjs';
 import {LANE_B_CONTRACT,PRODUCTION_ACCOUNT_APPROVAL,validateProductionPagesConfiguration} from './production-account-contract.mjs';
+import {assertPublicLocaleBetaReady} from './ui-public-locale-beta.mjs';
+import {assertPublicCombinedReady,PUBLIC_COMBINED_WIND100_RECEIPT} from './ui-public-combined.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONTROL = resolve(ROOT, '../control');
@@ -27,12 +29,12 @@ const SAFE_CATALOG_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
 const CORE_CATALOG_MODELS = ['ecmwf','gfs'];
 export const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workflows/ui-staging-tc.yml', '.github/workflows/ui-release.yml',
   'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh',
-  'tools/ui-release-profile-preflight.mjs',
+  'tools/ui-release-profile-preflight.mjs','tools/ui-public-locale-beta.mjs','tools/ui-public-combined.mjs',
   'tools/production-account-contract.mjs','tools/production-account-trust-policy.mjs','tools/production-account-release.mjs','tools/production-account-execution.mjs',
   'tools/ui-staging-models.mjs','tools/ui-staging-model-browser.mjs','tools/ui-staging-core-browser.mjs','tools/ui-staging-tc-proof.mjs','tools/ui-staging-preflight.mjs',
   'tools/ui-staging-account-proof.mjs',
   'tools/ui-static-compression.mjs','tools/ui-static-compression-wire.mjs',
-  'tools/ui-production-ground.mjs','docs/production-ground-review-20260907.md'];
+  'tools/ui-production-ground.mjs','docs/production-ground-review-20260907.md','docs/ui-public-locale-beta.md','docs/ui-public-combined.md'];
 const run = (command, args, options = {}) => execFileSync(command, args, { stdio: 'inherit', ...options });
 const git = (args, cwd = ROOT) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore','pipe','pipe'] }).trim();
 export const pipelineDigest = (profile=profileFor(),root=ROOT) => hash(POLICY_FILES.map(p => `${p}\0${hash(readFileSync(resolve(root,p)))}`)
@@ -208,7 +210,7 @@ function productionPagesContractFromProvider(deploymentConfigs) {
   return {deployment_configs:sanitized};
 }
 async function projectSnapshot(stage) {
-  if(stage==='production') requireProductionProfile(candidate().profile);
+  if(stage==='production') requireUiProductionProfile(candidate().profile);
   const { project } = target(stage);
   const payload = await json(`https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/pages/projects/${project}`, process.env.CLOUDFLARE_API_TOKEN);
   assert.equal(payload.success, true);
@@ -218,22 +220,22 @@ export function validatePublicModes(origin, health, data, profile=profileFor(),p
   assert.ok(Object.values(ORIGINS).includes(origin));
   assert.ok(['preflight','candidate','rollback'].includes(phase), 'unknown UI verification phase');
   validateProfile(profile);
-  if(origin===ORIGINS.production)requireProductionProfile(profile);
+  if(origin===ORIGINS.production)requireUiProductionProfile(profile);
   // Staging has public/cacheable weather reads; production's reviewed platform
   // remains observe while its separate data Worker owns the public data routes.
   assert.equal(health.ok, true);
   assert.equal(health.authMode, origin === ORIGINS.staging ? 'public'
-    : productionAccountProfile(profile) ? LANE_B_CONTRACT.modes.authMode : 'observe');
-  assert.equal(health.billingMode, productionAccountProfile(profile)
+    : accountServingProductionProfile(profile) ? LANE_B_CONTRACT.modes.authMode : 'observe');
+  assert.equal(health.billingMode, accountServingProductionProfile(profile)
     ? LANE_B_CONTRACT.modes.billingMode : profile.account ? 'enabled' : 'disabled');
-  if(origin===ORIGINS.production&&productionAccountProfile(profile))assert.equal(
+  if(origin===ORIGINS.production&&accountServingProductionProfile(profile))assert.equal(
     health.billingPurchaseMode,
     LANE_B_CONTRACT.modes.billingPurchaseMode,
     'production account preparation must keep purchase creation closed',
   );
   assert.equal(data.ok, true); assert.equal(data.catalogMode, 'serve');
   if (origin === ORIGINS.production) assert.equal(data.authMode,
-    productionAccountProfile(profile) ? LANE_B_CONTRACT.modes.dataAuthMode : 'public');
+    accountServingProductionProfile(profile) ? LANE_B_CONTRACT.modes.dataAuthMode : 'public');
   if (origin === ORIGINS.staging) {
     assert.equal(data.authMode, 'public');
     assert.equal(data.dataSource, 'shared');
@@ -300,7 +302,7 @@ export async function publicModes(origin,profile=profileFor(),phase='candidate')
 async function preflight(stage) {
   // Artifact authority is checked before even a read-only production CF API call.
   const c=candidate();
-  if(stage==='production') { requireProductionProfile(c.profile); verifyProductionGround(c.files); }
+  if(stage==='production') { requireUiProductionProfile(c.profile); verifyProductionGround(c.files); }
   else requireStagingApproval(c,process.env);
   gate(process.env); controller();
   await projectSnapshot(stage); await publicModes(ORIGINS[stage],c.profile,'preflight');
@@ -319,13 +321,19 @@ function sourceIdentity(profile) {
   assert.equal(git(['rev-parse','HEAD'], SOURCE), process.env.ATMOS_SHA);
   assert.equal(git(['rev-parse','origin/master'], SOURCE), process.env.ATMOS_SHA, 'stage the exact current-master source');
   git(['diff','--exit-code','HEAD'], SOURCE);
+  if(publicCombinedProfile(profile))assert.equal(process.env.ATMOS_SHA,assertPublicCombinedReady(),
+    'combined production Lab source must equal the reviewed master SHA');
+  else if(publicLocaleBetaProfile(profile))assert.equal(process.env.ATMOS_SHA,assertPublicLocaleBetaReady(),
+    'public RU/KK beta source must equal the reviewed master SHA');
   if (requiredSourceGuard(profile)) git(['merge-base','--is-ancestor',requiredSourceGuard(profile),'HEAD'], SOURCE);
 }
 export function receiptVerificationEnvironment(profile,env=process.env){
   validateProfile(profile);
   const wind100=resolveWind100BuildPin(profile,env);
   const core=coreReleaseProfile(profile);
-  const productionAccount=productionAccountProfile(profile);
+  const productionAccount=accountServingProductionProfile(profile);
+  const publicLocaleBeta=publicLocaleBetaProfile(profile);
+  const publicCombined=publicCombinedProfile(profile);
   const productionAccountEnvironment=productionAccount?{
     ATMOS_ROAD_PUBLIC_RELEASE:'0',
     ATMOS_FUSION_V2_STAGING_PREVIEW_RELEASE:'0',ATMOS_FUSION_V2_MAP_STAGING_RELEASE:'0',
@@ -339,6 +347,11 @@ export function receiptVerificationEnvironment(profile,env=process.env){
   return {...env,...productionAccountEnvironment,ATMOS_PUBLIC_RELEASE:profile.stagingOnly?'0':'1',ATMOS_STAGING_EXPERIMENT_RELEASE:profile.stagingOnly?'1':'0',
     ATMOS_STAGING_RELEASE_ROSTER:core?'1':'0',ATMOS_STAGING_ACCOUNT_PROFILE:profile.stagingAccount?'staging-account-v1':'',
     ATMOS_PRODUCTION_ACCOUNT_PROFILE:productionAccount?PRODUCTION_ACCOUNT_APPROVAL:'',
+    ATMOS_PUBLIC_LOCALE_BETA_RELEASE:publicLocaleBeta?'1':'0',VITE_LOCALE_BETA:publicLocaleBeta?'1':'0',
+    ATMOS_PUBLIC_WIND100_RELEASE:publicCombined?'1':'0',VITE_PRODUCTION_WIND100:publicCombined?'1':'0',
+    VITE_ACCOUNT_INTRO:publicCombined?'1':'0',
+    ATMOS_STAGING_LOCALE_BETA_RELEASE:'0',VITE_PRO_PROTO:'0',
+    ...(publicLocaleBeta?{VITE_PRO_BILLING:'0'}:{}),
     VITE_PRODUCT:'lab',VITE_APP:'lab',VITE_PLATFORM_ACCOUNT:profile.account?'1':'0',
     VITE_PLATFORM_DATA_AUTH:profile.account?'public':'',VITE_STAGING_WIND100:wind100?'1':'',
     VITE_STAGING_WIND100_DYNAMIC:wind100?.dynamic===true?'1':'',
@@ -347,7 +360,7 @@ export function receiptVerificationEnvironment(profile,env=process.env){
 }
 export function publicBuildEnvironment(profile,selection,env=process.env) {
   validateProfile(profile);
-  const selected=selectionProfile(profile),core=coreReleaseProfile(profile),productionAccount=productionAccountProfile(profile);
+  const selected=selectionProfile(profile),core=coreReleaseProfile(profile),productionAccount=accountServingProductionProfile(profile);
   if (selected) {
     assert.ok(Buffer.isBuffer(selection?.bytes), 'staging experiment selection bytes are required');
     assert.equal(hash(selection.bytes),profile.modelSelectionSha256,'staging experiment selection differs from profile');
@@ -368,6 +381,11 @@ export function publicBuildEnvironment(profile,selection,env=process.env) {
 }
 export function validateWind100BuildReceipt(profile,receipt,env=process.env){
   const expected=resolveWind100BuildPin(profile,env),actual=receipt?.buildProfile?.wind100;
+  if(publicCombinedProfile(profile)){
+    assert.equal(expected,null,'combined production Wind100 cannot use a staging catalog pin');
+    assert.equal(actual,PUBLIC_COMBINED_WIND100_RECEIPT,'production native Wind100 receipt differs');
+    return null;
+  }
   if(!expected){assert.equal(actual,undefined,'staging Wind100 receipt must be absent while disabled');return null;}
   assert.deepEqual(actual,expected,'staging Wind100 receipt differs from protected approval');
   return expected;
@@ -578,7 +596,7 @@ async function deploy(stage) {
 async function verify(stage) {
   const c=candidate();
   const phase=process.env.RELEASE_GUARD_PHASE==='rollback'?'rollback':'candidate';
-  if(stage==='production')requireProductionProfile(c.profile);
+  if(stage==='production')requireUiProductionProfile(c.profile);
   else if(phase!=='rollback')requireStagingApproval(c,process.env);
   if(phase!=='rollback')candidateWind100(c,process.env);
   controller(); await projectSnapshot(stage); await publicModes(ORIGINS[stage],c.profile,phase);
@@ -686,7 +704,7 @@ async function download() {
     assert.equal(proof.harnessSha256,c.qualification?.accountHarnessSha256,
       'retained account qualification harness differs from candidate binding');
   }
-  requireProductionProfile(c.profile);
+  requireUiProductionProfile(c.profile);
   await auditRun(c); await exactStaging(c);
   save(stateFile(),c); restore(c,resolve(process.env.RUNNER_TEMP,'ui-promote-dist'));
 }

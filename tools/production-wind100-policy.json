@@ -14,5 +14,5 @@
   "maximumComponentPrefixObjects": 50000,
   "freshnessHours": 30,
   "minimumForecastLeaseHours": 6,
-  "retentionProfileStatus": "unavailable-until-pointer-ancestry-gc"
+  "retentionProfileStatus": "verified-pointer-ancestry-gc-v1"
 }

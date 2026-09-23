@@ -1,10 +1,13 @@
 # Production native Wind100 retention
 
-The recurring publisher is still unavailable: its policy remains
-`unavailable-until-pointer-ancestry-gc`, and the production gate refuses it
-before credentials or writes are used. The new cleanup workflow is also
-default-disabled. Neither feature can be enabled by a repository variable
-alone.
+The reviewed code policy is `verified-pointer-ancestry-gc-v1`, but the
+recurring publisher remains disabled by protected resources. Its gate requires
+both `PRODUCTION_WIND100_CONTROLLER_SHA256` and the separate
+`PRODUCTION_WIND100_GC_READY_SHA256` to equal the digest of the exact Cycle
+controller, including the cleanup workflow, implementation, and this policy.
+The latter is an owner attestation after the real dry run and credential-scope
+review below, not a test for the presence of another environment's secrets.
+The cleanup workflow is separately default-disabled.
 
 Every successful pointer transition now writes an immutable journal record
 *before* compare-and-swap. The record is named by the SHA-256 of the proposed
@@ -39,12 +42,16 @@ needs access to the production data and component buckets for planning.
 
 The staging point publication measured about 4,140 objects per run. Four
 ECMWF runs per day approach the 50,000-object cap within roughly three days
-without cleanup. Before changing `retentionProfileStatus` to
-`verified-pointer-ancestry-gc-v1`, provision the dedicated publisher and
-cleanup tokens, protected `data-production-wind100` and
+without cleanup. Before setting the protected
+`PRODUCTION_WIND100_GC_READY_SHA256` to the reviewed current controller digest,
+provision the dedicated publisher and cleanup tokens, protected `data-production-wind100` and
 `data-production-wind100-cleanup` environments, enablement variables and
 controller digests. Verify the real R2 temporary credential denies adjacent
-prefixes and non-delete actions, then run a dry run against actual production
-candidate metadata. Exercise a stalled scheduler and partial cleanup before
-approving execution. A code-reviewed policy change plus new controller digest
-is required to enable the recurring writer.
+prefixes and non-delete actions using a controlled disposable object; review
+the fault-injection tests for scheduler stalls and partial cleanup. The first
+publication creates the production pointer, so a live retention dry run is
+impossible before that first run. Enable one guarded writer run, then disable
+the writer and run a real R2 dry run against its journal/pointer before enabling
+the recurring schedule or approving any deletion. Set the protected writer
+enablement and both exact digest variables only after the pre-first-run checks;
+a later code or workflow change invalidates the old attestation automatically.

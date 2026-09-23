@@ -4,9 +4,11 @@ import assert from 'node:assert/strict';
 import { createHash, createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
-import {BASELINE_PROFILE,validateProfile,validateCandidateSelection,validateCandidateTcSelection,requireProductionProfile,
-  productionAccountProfile,staticCompressionProfile,tcGuidanceProfile,validateWind100BuildProfile} from './ui-staging-models.mjs';
+import {BASELINE_PROFILE,validateProfile,validateCandidateSelection,validateCandidateTcSelection,requireUiProductionProfile,
+  productionAccountProfile,publicLocaleBetaProfile,publicCombinedProfile,staticCompressionProfile,tcGuidanceProfile,validateWind100BuildProfile} from './ui-staging-models.mjs';
 import {LANE_B_CONTRACT} from './production-account-contract.mjs';
+import {PUBLIC_LOCALE_BETA_ATMOS_SHA,PUBLIC_LOCALE_BETA_RECEIPT,assertPublicLocaleBetaReady} from './ui-public-locale-beta.mjs';
+import {PUBLIC_COMBINED_ATMOS_SHA,assertPublicCombinedReady,validateCombinedBuild} from './ui-public-combined.mjs';
 import {validateCompressionFiles} from './ui-static-compression.mjs';
 
 export const CONTROL_SHA = '25c402db5149daa018e349a34a4beeba1f2dca45';
@@ -55,6 +57,8 @@ export const hash = value => createHash('sha256').update(value).digest('hex');
 export const PROFILE = BASELINE_PROFILE;
 export function controlShaFor(profile = PROFILE) {
   validateProfile(profile);
+  if(publicCombinedProfile(profile)) return assertPublicCombinedReady();
+  if(publicLocaleBetaProfile(profile)) return assertPublicLocaleBetaReady();
   if(productionAccountProfile(profile)) return LANE_B_CONTRACT.requiredAtmosControllerSha;
   return tcGuidanceProfile(profile) ? TC_CONTROL_SHA : profile.stagingOnly ? STAGING_CONTROL_SHA : CONTROL_SHA;
 }
@@ -184,7 +188,16 @@ export function validateCandidate(candidate) {
   validateCandidateTcSelection(candidate);
   validateCompressionFiles(candidate.files,staticCompressionProfile(candidate.profile));
   const receipt = JSON.parse(Buffer.from(candidate.files.find(f => f.path === 'health/release.json').base64, 'base64'));
-  if(productionAccountProfile(candidate.profile)){
+  if(publicCombinedProfile(candidate.profile)){
+    assertPublicCombinedReady();
+    assert.equal(candidate.sourceSha,PUBLIC_COMBINED_ATMOS_SHA,'combined production Lab source differs from reviewed pin');
+    validateCombinedBuild(receipt,candidate.files);
+  }else if(publicLocaleBetaProfile(candidate.profile)){
+    assertPublicLocaleBetaReady();
+    assert.equal(candidate.sourceSha,PUBLIC_LOCALE_BETA_ATMOS_SHA,'public RU/KK beta source differs from reviewed pin');
+    assert.deepEqual(receipt.buildProfile,{...LANE_B_CONTRACT.buildReceipt,localeBeta:PUBLIC_LOCALE_BETA_RECEIPT},
+      'public RU/KK beta build receipt differs from the approved account beta profile');
+  }else if(productionAccountProfile(candidate.profile)){
     assert.deepEqual(receipt.buildProfile,LANE_B_CONTRACT.buildReceipt,
       'production account build receipt differs from the Lane B contract');
   }else if(candidate.profile.account){
@@ -248,7 +261,7 @@ export function restore(candidate, root) {
 }
 
 export function eligibleRun(run, artifacts, { runId, sourceSha, digest, pipelineDigest, candidate }, now = Date.now()) {
-  requireProductionProfile(candidate.profile);
+  requireUiProductionProfile(candidate.profile);
   assert.match(runId, ID); assert.match(sourceSha, SHA); assert.match(digest, DIGEST);
   assert.equal(String(run.id), runId); assert.equal(run.repository?.full_name, REPOSITORY);
   assert.equal(run.path, '.github/workflows/ui-staging.yml');

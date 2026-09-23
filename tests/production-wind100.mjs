@@ -22,6 +22,7 @@ const env = () => ({ GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted'
   WIND100_PRODUCTION_ENVIRONMENT: 'data-production-wind100', PRODUCTION_WIND100_ENABLED: 'true',
   PRODUCTION_WIND100_APPROVED_SOURCE_SHA: readProductionPolicy().sourceSha,
   PRODUCTION_WIND100_CONTROLLER_SHA256: controllerDigest(),
+  PRODUCTION_WIND100_GC_READY_SHA256: controllerDigest(),
   PRODUCTION_WIND100_R2_ACCOUNT_ID: 'a89f9a1af485021fbc60a68b163c7c6e',
   ATMOS_SHA: readProductionPolicy().sourceSha, CORE_ATMOS_SHA: readProductionPolicy().coreSourceSha,
   MODEL_ID: 'ecmwf' });
@@ -85,11 +86,16 @@ function memoryIo(f) {
 
 test('protected production gate requires dedicated approval and never accepts staging or broad credentials', () => {
   const approved = env();
-  const readyPolicy = { ...readProductionPolicy(), retentionProfileStatus: 'verified-pointer-ancestry-gc-v1' };
-  assert.throws(() => gate(approved), /unavailable until reviewed pointer-ancestry GC/);
+  const readyPolicy = readProductionPolicy();
+  assert.equal(readyPolicy.retentionProfileStatus, 'verified-pointer-ancestry-gc-v1');
   assert.equal(gate(approved, 'none', readyPolicy).invocation, request.invocation);
+  assert.throws(() => gate(approved, 'none',
+    { ...readyPolicy, retentionProfileStatus: 'unavailable-until-pointer-ancestry-gc' }),
+  /requires reviewed pointer-ancestry GC/);
   for (const change of [
     { PRODUCTION_WIND100_ENABLED: '' }, { WIND100_PRODUCTION_ENVIRONMENT: 'production' },
+    { PRODUCTION_WIND100_GC_READY_SHA256: '' },
+    { PRODUCTION_WIND100_GC_READY_SHA256: sha('f') },
     { GITHUB_WORKFLOW_REF: 'Andrewegao/v3t7kq-cycle/.github/workflows/staging-wind100.yml@refs/heads/main' },
     { PRODUCTION_WIND100_CONTROLLER_SHA256: sha('f') },
     { R2_PRODUCTION_ACCESS_KEY_ID: 'broad' }, { STAGING_R2_WRITE_ACCESS_KEY_ID: 'staging' },

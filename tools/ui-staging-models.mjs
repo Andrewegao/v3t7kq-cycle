@@ -10,8 +10,10 @@ import {
   PRODUCTION_ACCOUNT_REQUEST,
   assertLaneBContractReady,
 } from './production-account-contract.mjs';
+import {PUBLIC_LOCALE_BETA_REQUEST,PUBLIC_LOCALE_BETA_APPROVAL,assertPublicLocaleBetaReady} from './ui-public-locale-beta.mjs';
+import {PUBLIC_COMBINED_REQUEST,PUBLIC_COMBINED_APPROVAL,PUBLIC_COMBINED_WIND100_RECEIPT,assertPublicCombinedReady} from './ui-public-combined.mjs';
 
-export {PRODUCTION_ACCOUNT_APPROVAL,PRODUCTION_ACCOUNT_REQUEST};
+export {PRODUCTION_ACCOUNT_APPROVAL,PRODUCTION_ACCOUNT_REQUEST,PUBLIC_LOCALE_BETA_REQUEST,PUBLIC_LOCALE_BETA_APPROVAL};
 
 export const STAGING_ORIGIN='https://staging.weatherx.org';
 export const SELECTION_ASSET='assets/staging-model-selection.json';
@@ -36,6 +38,10 @@ export const ACCOUNT_CORE_PROFILE=Object.freeze({...CORE_RELEASE_PROFILE,account
 // profile. Its owner-blocked Lane B digest binds the exact reviewed Atmos integration candidate.
 export const PRODUCTION_ACCOUNT_PROFILE=Object.freeze({...BASELINE_PROFILE,account:true,
   productionAccount:PRODUCTION_ACCOUNT_APPROVAL,accountContractSha256:LANE_B_CONTRACT_DIGEST});
+export const PUBLIC_LOCALE_BETA_PROFILE=Object.freeze({...PRODUCTION_ACCOUNT_PROFILE,
+  publicLocaleBeta:PUBLIC_LOCALE_BETA_APPROVAL});
+export const PUBLIC_COMBINED_PROFILE=Object.freeze({...PUBLIC_LOCALE_BETA_PROFILE,
+  productionWind100Intro:PUBLIC_COMBINED_WIND100_RECEIPT});
 // TC release flags require account=0. Keep this separate from the existing account-enabled
 // staging profile and qualify it only as an isolated, non-deployed build artifact.
 export const TC_RELEASE_PROFILE=Object.freeze({...CORE_RELEASE_PROFILE,tcGuidance:TC_APPROVAL,tcSelectionSha256:TC_SELECTION_SHA256});
@@ -87,8 +93,23 @@ export function resolveWind100BuildPin(profile,env={}){
   return dynamic==='true'?Object.freeze({...pin,dynamic:true}):pin;
 }
 export function resolveSelectionRequest(requested='approved',approved,approvedCore,approvedStaticCompression,approvedAccount,approvedTc,approvedProductionAccount,options={}){
-  assert.ok(requested==='approved'||requested==='none'||requested===CORE_RELEASE_REQUEST||requested===STATIC_COMPRESSION_REQUEST||requested===ACCOUNT_CORE_REQUEST||requested===TC_RELEASE_REQUEST||requested===PRODUCTION_ACCOUNT_REQUEST||HASH.test(requested??''),'invalid staging selection request');
+  assert.ok(requested==='approved'||requested==='none'||requested===CORE_RELEASE_REQUEST||requested===STATIC_COMPRESSION_REQUEST||requested===ACCOUNT_CORE_REQUEST||requested===TC_RELEASE_REQUEST||requested===PRODUCTION_ACCOUNT_REQUEST||requested===PUBLIC_LOCALE_BETA_REQUEST||requested===PUBLIC_COMBINED_REQUEST||HASH.test(requested??''),'invalid staging selection request');
   if(requested==='none')return 'none';
+  if(requested===PUBLIC_COMBINED_REQUEST){
+    assert.equal(approvedProductionAccount,PRODUCTION_ACCOUNT_APPROVAL,'protected production account profile approval required');
+    assert.equal(options.approvedPublicLocaleBeta,PUBLIC_LOCALE_BETA_APPROVAL,'protected public RU/KK beta profile approval required');
+    assert.equal(options.approvedPublicCombined,PUBLIC_COMBINED_APPROVAL,'protected combined public profile approval required');
+    assertLaneBContractReady(options);
+    assertPublicCombinedReady();
+    return PUBLIC_COMBINED_REQUEST;
+  }
+  if(requested===PUBLIC_LOCALE_BETA_REQUEST){
+    assert.equal(approvedProductionAccount,PRODUCTION_ACCOUNT_APPROVAL,'protected production account profile approval required');
+    assert.equal(options.approvedPublicLocaleBeta,PUBLIC_LOCALE_BETA_APPROVAL,'protected public RU/KK beta profile approval required');
+    assertLaneBContractReady(options);
+    assertPublicLocaleBetaReady();
+    return PUBLIC_LOCALE_BETA_REQUEST;
+  }
   if(requested===TC_RELEASE_REQUEST){
     assert.equal(approvedCore,CORE_RELEASE_REQUEST,'protected staging core profile approval required');
     assert.equal(approvedTc,TC_APPROVAL,'protected staging TC profile approval required');
@@ -124,6 +145,8 @@ export function profileFor(selection='none'){
   if(selection===undefined||selection==='none')return BASELINE_PROFILE;
   if(selection===TC_RELEASE_REQUEST)return TC_RELEASE_PROFILE;
   if(selection===PRODUCTION_ACCOUNT_REQUEST)return PRODUCTION_ACCOUNT_PROFILE;
+  if(selection===PUBLIC_LOCALE_BETA_REQUEST)return PUBLIC_LOCALE_BETA_PROFILE;
+  if(selection===PUBLIC_COMBINED_REQUEST)return PUBLIC_COMBINED_PROFILE;
   if(selection===CORE_RELEASE_REQUEST)return CORE_RELEASE_PROFILE;
   if(selection===ACCOUNT_CORE_REQUEST)return ACCOUNT_CORE_PROFILE;
   if(selection===STATIC_COMPRESSION_REQUEST)return STATIC_COMPRESSION_PROFILE;
@@ -131,6 +154,8 @@ export function profileFor(selection='none'){
 }
 export function validateProfile(profile){
   if(profile?.tcGuidance!==undefined||profile?.tcSelectionSha256!==undefined){assert.deepEqual(profile,TC_RELEASE_PROFILE);return profile;}
+  if(profile?.productionWind100Intro!==undefined){assert.deepEqual(profile,PUBLIC_COMBINED_PROFILE);return profile;}
+  if(profile?.publicLocaleBeta!==undefined){assert.deepEqual(profile,PUBLIC_LOCALE_BETA_PROFILE);return profile;}
   if(profile?.productionAccount!==undefined||profile?.accountContractSha256!==undefined){assert.deepEqual(profile,PRODUCTION_ACCOUNT_PROFILE);return profile;}
   if(profile?.stagingAccount!==undefined){assert.deepEqual(profile,ACCOUNT_CORE_PROFILE);return profile;}
   if(profile?.staticCompression!==undefined){assert.deepEqual(profile,STATIC_COMPRESSION_PROFILE);return profile;}
@@ -142,7 +167,10 @@ export function validateProfile(profile){
 // means "no regional models": the seven regional packs ride the immutable data release and the app
 // admits them from the release-carried data/model-roster.json (data admission), never from a UI
 // build flag or a staging selection. Only a hash-pinned staging experiment remains profile-gated.
-export function productionAccountProfile(profile){validateProfile(profile);return profile.productionAccount===PRODUCTION_ACCOUNT_APPROVAL;}
+export function productionAccountProfile(profile){validateProfile(profile);return profile.productionAccount===PRODUCTION_ACCOUNT_APPROVAL&&profile.publicLocaleBeta===undefined;}
+export function publicLocaleBetaProfile(profile){validateProfile(profile);return profile.publicLocaleBeta===PUBLIC_LOCALE_BETA_APPROVAL;}
+export function publicCombinedProfile(profile){validateProfile(profile);return profile.productionWind100Intro===PUBLIC_COMBINED_WIND100_RECEIPT;}
+export function accountServingProductionProfile(profile){return productionAccountProfile(profile)||publicLocaleBetaProfile(profile);}
 export function profileDigest(profile){return digest(Buffer.from(canonical(validateProfile(profile))));}
 export function requireProductionProfile(profile){
   validateProfile(profile);
@@ -150,6 +178,18 @@ export function requireProductionProfile(profile){
     JSON.stringify(profile)===JSON.stringify(BASELINE_PROFILE)||JSON.stringify(profile)===JSON.stringify(PRODUCTION_ACCOUNT_PROFILE),
   'staging experiment cannot enter production');
   return profile;
+}
+export function requireUiProductionProfile(profile){
+  validateProfile(profile);
+  if(publicCombinedProfile(profile)){
+    assertPublicCombinedReady();
+    return profile;
+  }
+  if(publicLocaleBetaProfile(profile)){
+    assertPublicLocaleBetaReady();
+    return profile;
+  }
+  return requireProductionProfile(profile);
 }
 export function cycleTime(init,now=Date.now()){
   assert.match(init??'',/^\d{8}(00|06|12|18)$/);const iso=`${init.slice(0,4)}-${init.slice(4,6)}-${init.slice(6,8)}T${init.slice(8)}:00:00.000Z`,time=Date.parse(iso);
@@ -236,6 +276,18 @@ export function requireStagingApproval(candidate,env,now=Date.now(),options={}){
   if(productionAccountProfile(expected)){
     assert.equal(env.UI_PRODUCTION_ACCOUNT_PROFILE_APPROVED,PRODUCTION_ACCOUNT_APPROVAL,'protected production account profile approval required');
     assertLaneBContractReady(options);
+  }
+  if(publicCombinedProfile(expected)){
+    assert.equal(env.UI_PUBLIC_COMBINED_PROFILE_APPROVED,PUBLIC_COMBINED_APPROVAL,'protected combined public profile approval required');
+    assert.equal(env.UI_PUBLIC_LOCALE_BETA_PROFILE_APPROVED,PUBLIC_LOCALE_BETA_APPROVAL,'protected public RU/KK beta profile approval required');
+    assert.equal(env.UI_PRODUCTION_ACCOUNT_PROFILE_APPROVED,PRODUCTION_ACCOUNT_APPROVAL,'protected production account profile approval required');
+    assertLaneBContractReady(options);
+    assertPublicCombinedReady();
+  }else if(publicLocaleBetaProfile(expected)){
+    assert.equal(env.UI_PUBLIC_LOCALE_BETA_PROFILE_APPROVED,PUBLIC_LOCALE_BETA_APPROVAL,'protected public RU/KK beta profile approval required');
+    assert.equal(env.UI_PRODUCTION_ACCOUNT_PROFILE_APPROVED,PRODUCTION_ACCOUNT_APPROVAL,'protected production account profile approval required');
+    assertLaneBContractReady(options);
+    assertPublicLocaleBetaReady();
   }
   if(tcGuidanceProfile(expected))assert.equal(env.UI_STAGING_TC_PROFILE_APPROVED,TC_APPROVAL,'protected staging TC profile approval required');
   if(staticCompressionProfile(expected))assert.equal(env.UI_STAGING_STATIC_COMPRESSION_APPROVED,'static-br11-v1','protected staging static compression approval required');
