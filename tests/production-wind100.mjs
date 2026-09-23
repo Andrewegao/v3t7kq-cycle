@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   COMPONENTS, COMPONENT_PREFIX, DATA, ORIGIN, POINTER_KEY, POINTER_KIND, SELECTION_KIND,
-  activateCandidate, controllerDigest, createStorage, findQualifiedInput, gate, hash,
+  activateCandidate, bindPointIntegrityInvocation, controllerDigest, createStorage, findQualifiedInput, gate, hash,
   nextPointer, pointerEntry, publishCandidate, readProductionPolicy, recurringPrefixCapacity,
   rollbackToPrior, validatePointer, validateQualification, validateSelection,
 } from '../tools/production-wind100.mjs';
@@ -124,6 +124,18 @@ test('production provenance and lease reject staging receipts, expired runs, and
     value => { value.integrity.freshUntil = '2026-09-23T23:00:00Z'; },
   ]) { const q = structuredClone(f.qualification); mutate(q); assert.throws(() => validateQualification(q, request, now)); }
   assert.throws(() => validateQualification(f.qualification, request, Date.parse('2026-09-24T01:00:00Z')));
+});
+
+test('binds shared point integrity to this protected production invocation', () => {
+  const f = fixture();
+  const unbound = structuredClone(f.qualification.integrity);
+  delete unbound.invocation;
+  assert.throws(() => validateQualification({ ...f.qualification, integrity: unbound }, request, now));
+  const integrity = bindPointIntegrityInvocation(unbound, request.invocation);
+  assert.equal(validateQualification({ ...f.qualification, integrity }, request, now).invocation,
+    request.invocation);
+  assert.throws(() => bindPointIntegrityInvocation(unbound, 'untrusted-invocation'));
+  assert.throws(() => bindPointIntegrityInvocation(f.qualification.integrity, request.invocation));
 });
 
 test('immutable production metadata is verified before bounded CAS activation and safe prior rollback', async () => {
