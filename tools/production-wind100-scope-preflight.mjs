@@ -15,11 +15,14 @@ async function denied(client, command, label) {
   try {
     await client.send(command, { abortSignal: AbortSignal.timeout(30_000) });
   } catch (error) {
-    assert.equal(error?.$metadata?.httpStatusCode, 403,
-      `${label} must return AccessDenied, not another error`);
-    return;
+    if (error?.$metadata?.httpStatusCode === 403) return;
+    const failure = new Error(`${label} must return AccessDenied, not another error`);
+    failure.scopeFailure = 'wrong-denial-status';
+    throw failure;
   }
-  assert.fail(`${label} was unexpectedly permitted`);
+  const failure = new Error(`${label} was unexpectedly permitted`);
+  failure.scopeFailure = 'unexpectedly-permitted';
+  throw failure;
 }
 
 export async function proveScope(env, sdk) {
@@ -114,7 +117,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     console.log(JSON.stringify(await proveScope(process.env, sdk)));
   } catch (error) {
     // No SDK error body, headers, assertion values, or credential material goes to the log.
-    console.error(`production Wind100 credential scope preflight failed at ${error?.scopeStep ?? 'setup'}`);
+    const reason = ['wrong-denial-status', 'unexpectedly-permitted']
+      .includes(error?.scopeFailure) ? ` (${error.scopeFailure})` : '';
+    console.error(`production Wind100 credential scope preflight failed at ${error?.scopeStep ?? 'setup'}${reason}`);
     process.exitCode = 1;
   }
 }

@@ -13,7 +13,8 @@ const env = {
 };
 const forbidden = () => Object.assign(new Error('AccessDenied'), { $metadata: { httpStatusCode: 403 } });
 
-function fixture({ adjacentAllowed = false, readerDataDenied = false } = {}) {
+function fixture({ adjacentAllowed = false, adjacentDeniedStatus = 403,
+  readerDataDenied = false } = {}) {
   const objects = new Set(), attempts = [];
   class Command { constructor(input) { this.input = input; } }
   class ListObjectsV2Command extends Command {}
@@ -41,7 +42,8 @@ function fixture({ adjacentAllowed = false, readerDataDenied = false } = {}) {
       if (!(command instanceof DeleteObjectCommand)) throw forbidden();
       const jwt = Buffer.from(this.credentials.sessionToken, 'base64').toString().slice(4);
       const claims = JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url'));
-      if (!Key.startsWith(claims.paths.prefixPaths[0]) && !adjacentAllowed) throw forbidden();
+      if (!Key.startsWith(claims.paths.prefixPaths[0]) && !adjacentAllowed)
+        throw Object.assign(new Error('denied'), { $metadata: { httpStatusCode: adjacentDeniedStatus } });
       objects.delete(Key);
       return {};
     }
@@ -67,6 +69,18 @@ test('an overbroad temporary credential fails the proof and still removes dispos
   await assert.rejects(proveScope(env, sdk), error => {
     assert.match(error.message, /temporary delete outside its prefix was unexpectedly permitted/);
     assert.equal(error.scopeStep, 'temporary-adjacent-delete-denial');
+    assert.equal(error.scopeFailure, 'unexpectedly-permitted');
+    return true;
+  });
+  assert.equal(objects.size, 0);
+});
+
+test('an unexpected denial status is classified without exposing the SDK response', async () => {
+  const { sdk, objects } = fixture({ adjacentDeniedStatus: 401 });
+  await assert.rejects(proveScope(env, sdk), error => {
+    assert.equal(error.scopeStep, 'temporary-adjacent-delete-denial');
+    assert.equal(error.scopeFailure, 'wrong-denial-status');
+    assert.match(error.message, /must return AccessDenied/);
     return true;
   });
   assert.equal(objects.size, 0);
