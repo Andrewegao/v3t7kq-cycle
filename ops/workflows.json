@@ -477,6 +477,24 @@
       "subsystem": "Fusion evidence",
       "lifecycle": "manual-supported",
       "runbook": "docs/FUSION_STAGING_EVIDENCE.md"
+    },
+    {
+      "id": "production-wind100-recurring",
+      "path": ".github/workflows/production-wind100-recurring.yml",
+      "family": "models",
+      "purpose": "Publish a guarded production-only native wind point candidate under dedicated approval.",
+      "subsystem": "Native wind",
+      "lifecycle": "recurring",
+      "runbook": "docs/production-wind100-retention.md"
+    },
+    {
+      "id": "production-wind100-retention",
+      "path": ".github/workflows/production-wind100-retention.yml",
+      "family": "maintenance",
+      "purpose": "Plan or approve bounded cleanup of journal-proven retired production wind components.",
+      "subsystem": "Native wind",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/production-wind100-retention.md"
     }
   ]
 }

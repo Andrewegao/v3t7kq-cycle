@@ -9,7 +9,7 @@ import {
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { receiptVerificationEnvironment, validateWind100BuildReceipt } from './ui-release.mjs';
-import { profileFor, productionAccountProfile } from './ui-staging-models.mjs';
+import { profileFor, accountServingProductionProfile } from './ui-staging-models.mjs';
 
 const ROOT=resolve(fileURLToPath(new URL('..',import.meta.url)));
 const CONTROL=resolve(ROOT,'../control');
@@ -17,6 +17,8 @@ const MAX_RECEIPT_BYTES=64*1024;
 const RECEIPT_ENV_KEYS=[
   'ATMOS_PUBLIC_RELEASE','ATMOS_STAGING_EXPERIMENT_RELEASE','ATMOS_STAGING_RELEASE_ROSTER',
   'ATMOS_STAGING_ACCOUNT_PROFILE','VITE_PRODUCT','VITE_APP','VITE_PLATFORM_ACCOUNT',
+  'ATMOS_PUBLIC_LOCALE_BETA_RELEASE','VITE_LOCALE_BETA','ATMOS_STAGING_LOCALE_BETA_RELEASE','VITE_PRO_PROTO','VITE_PRO_BILLING',
+  'ATMOS_PUBLIC_WIND100_RELEASE','VITE_PRODUCTION_WIND100','VITE_ACCOUNT_INTRO',
   'VITE_PLATFORM_DATA_AUTH','VITE_STAGING_WIND100','VITE_STAGING_WIND100_DYNAMIC',
   'VITE_STAGING_WIND100_CATALOG_ID','VITE_STAGING_WIND100_RUN_ID',
   'VITE_STAGING_WIND100_SELECTION_SHA256',
@@ -44,7 +46,7 @@ export function runProfileCompatibilityPreflight({controllerRoot=CONTROL,runnerT
     // The production account receipt is intentionally inseparable from Vite-emitted chunk
     // evidence. A synthetic preflight artifact must not forge that evidence; the exact pinned
     // controller is exercised by its CI and the real build verifies it before encryption.
-    if(productionAccountProfile(profile))return {
+    if(accountServingProductionProfile(profile))return {
       profile:env.MODEL_SELECTION_SHA256,productionArtifactEvidence:'required-after-build',wind100:null,
     };
     const subprocessEnv=childEnvironment(env,profile);

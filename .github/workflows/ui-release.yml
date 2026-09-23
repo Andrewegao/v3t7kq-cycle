@@ -23,6 +23,8 @@ on:
         options:
           - none
           - production-account-billing-v1
+          - production-account-ru-kk-beta-v1
+          - production-account-ru-kk-wind100-intro-v1
 permissions:
   contents: read
   actions: read
@@ -52,7 +54,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          ref: ${{ inputs.release_profile == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || '25c402db5149daa018e349a34a4beeba1f2dca45' }}
+          ref: ${{ (inputs.release_profile == 'production-account-ru-kk-beta-v1' || inputs.release_profile == 'production-account-ru-kk-wind100-intro-v1') && 'b9db38dd22eed1da56c6c4dd4140480da7e89153' || inputs.release_profile == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || '25c402db5149daa018e349a34a4beeba1f2dca45' }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
           path: control

@@ -6,13 +6,14 @@ import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CONTROL_SHA, STAGING_CONTROL_SHA } from '../tools/ui-candidate.mjs';
 const root=new URL('../',import.meta.url);
+const COMBINED_ATMOS_SHA='b9db38dd22eed1da56c6c4dd4140480da7e89153';
 const read=p=>readFileSync(new URL(p,root),'utf8');
 const staging=read('.github/workflows/ui-staging.yml'), prod=read('.github/workflows/ui-release.yml'), source=read('tools/ui-release.mjs'), candidate=read('tools/ui-candidate.mjs');
 test('compressed profile is an explicit staging request using the unchanged input and default',()=>{
   assert.match(staging,/model_selection_sha256:\n\s+description:.*release-roster-core-br11-v1/);
   assert.match(staging,/model_selection_sha256:[\s\S]*?default: approved/);
   assert.match(staging,/APPROVED_STATIC_COMPRESSION: \$\{\{ vars\.UI_STAGING_STATIC_COMPRESSION_APPROVED \}\}/);
-  assert.match(staging,/resolveSelectionRequest\(process\.env\.REQUESTED_SELECTION,process\.env\.APPROVED_SELECTION,process\.env\.APPROVED_CORE_PROFILE,process\.env\.APPROVED_STATIC_COMPRESSION,process\.env\.APPROVED_ACCOUNT_PROFILE,undefined,process\.env\.APPROVED_PRODUCTION_ACCOUNT_PROFILE\)/);
+  assert.match(staging,/resolveSelectionRequest\(process\.env\.REQUESTED_SELECTION,process\.env\.APPROVED_SELECTION,process\.env\.APPROVED_CORE_PROFILE,process\.env\.APPROVED_STATIC_COMPRESSION,process\.env\.APPROVED_ACCOUNT_PROFILE,undefined,process\.env\.APPROVED_PRODUCTION_ACCOUNT_PROFILE,\{approvedPublicLocaleBeta:process\.env\.APPROVED_PUBLIC_LOCALE_BETA,approvedPublicCombined:process\.env\.APPROVED_PUBLIC_COMBINED\}\)/);
   assert.doesNotMatch(prod,/UI_STAGING_STATIC_COMPRESSION_APPROVED|release-roster-core-br11-v1|static-br11-v1/);
 });
 test('staging private checkouts use the current Atmos repository owner',()=>{
@@ -35,14 +36,14 @@ test('staging workflow leaves release-mode activation to the exact-profile contr
   assert.match(source,/publicBuildEnvironment\(profile,selection/);
   assert.match(source,/merge-base','--is-ancestor',requiredSourceGuard\(profile\),'HEAD'/);
   assert.doesNotMatch(prod,/ATMOS_STAGING_EXPERIMENT_RELEASE|ATMOS_STAGING_RELEASE_ROSTER|VITE_STAGING_MODEL_ADMISSION|UI_STAGING_CORE_PROFILE_APPROVED/);
-  const stagedController="ref: ${{ needs.profile.outputs.model_selection_sha256 == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || needs.profile.outputs.model_selection_sha256 == 'none' && '"
+  const stagedController="ref: ${{ (needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' || needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-intro-v1') && '" + COMBINED_ATMOS_SHA + "' || needs.profile.outputs.model_selection_sha256 == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || needs.profile.outputs.model_selection_sha256 == 'none' && '"
     + CONTROL_SHA + "' || '" + STAGING_CONTROL_SHA + "' }}";
   assert.equal(staging.split(stagedController).length-1,2);
   assert.match(STAGING_CONTROL_SHA,/^[a-f0-9]{40}$/);
-  assert.equal((staging.match(/ref: \$\{\{ needs\.profile\.outputs\.model_selection_sha256/g)||[]).length,2);
+  assert.equal((staging.match(/ref: \$\{\{ \(needs\.profile\.outputs\.model_selection_sha256/g)||[]).length,2);
   assert.match(candidate,/export const CONTROL_SHA = '25c402db5149daa018e349a34a4beeba1f2dca45'/);
   assert.equal(STAGING_CONTROL_SHA,'4dafd26387d5917604deb7379a8d45a994fc5b67');
-  assert.match(prod,/ref: \$\{\{ inputs\.release_profile == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' \|\| '25c402db5149daa018e349a34a4beeba1f2dca45' \}\}/);
+  assert.ok(prod.includes("production-account-ru-kk-wind100-intro-v1') && '" + COMBINED_ATMOS_SHA + "' || inputs.release_profile == 'production-account-billing-v1'"));
   assert.match(prod,/repository: weatherx-hq\/atmos/);
   assert.doesNotMatch(prod,/ref: a58eff158b56ef2ba25189d2b859315b00893a14/);
   assert.doesNotMatch(prod,/STAGING_CONTROL_SHA|stagingOnly/);
@@ -77,13 +78,13 @@ test('staging Wind100 pin comes only from protected profile outputs and producti
     assert.match(build,new RegExp(`STAGING_WIND100_UI_${suffix}: \\\$\\{\\{ needs\\.profile\\.outputs\\.wind100_${suffix.toLowerCase()} \\}\\}`));
     assert.match(qualify,new RegExp(`STAGING_WIND100_UI_${suffix}: \\\$\\{\\{ needs\\.profile\\.outputs\\.wind100_${suffix.toLowerCase()} \\}\\}`));
   }
-  assert.match(profile,/selection === 'production-account-billing-v1'[\s\S]*?STAGING_WIND100_UI_ENABLED: ''[\s\S]*?resolveWind100BuildPin\(profileFor\(selection\), windEnvironment\)/,
+  assert.match(profile,/\['production-account-billing-v1', 'production-account-ru-kk-beta-v1', 'production-account-ru-kk-wind100-intro-v1'\]\.includes\(selection\)[\s\S]*?STAGING_WIND100_UI_ENABLED: ''[\s\S]*?resolveWind100BuildPin\(profileFor\(selection\), windEnvironment\)/,
     'the production-account profile must clear ambient staging-only Wind100 approvals');
   assert.match(source,/validateWind100BuildReceipt\(c\.profile,JSON\.parse\(bytes\),process\.env\)/,
     'the deployed live release receipt must be compared with the current protected tuple');
   assert.match(source,/if\(wind100\)Object\.assign\(c\.qualification,\{wind100\}\)/);
   assert.match(source,/assert\.deepEqual\(c\.qualification\?\.wind100,wind100\?\?undefined/);
-  assert.doesNotMatch(prod,/WIND100|wind100/);
+  assert.doesNotMatch(prod,/STAGING_WIND100_UI_|VITE_STAGING_WIND100/);
 });
 test('guard upload adapter preserves args and disables rebundling without invoking a real CLI',()=>{
   const temp=mkdtempSync(resolve(tmpdir(),'wx-ui-adapter-test-'));

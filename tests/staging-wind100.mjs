@@ -266,7 +266,7 @@ test('bake staging-only pilot can start only the fresh ECMWF collector and recur
   const jobs = Object.fromEntries(starts.map((match, index) => [match[1],
     jobsSource.slice(match.index, starts[index + 1]?.index)]));
   assert.deepEqual(Object.keys(jobs), [
-    'core-ecmwf', 'staging-wind100',
+    'core-ecmwf', 'staging-wind100', 'production-wind100',
     'core-gfs', 'core-hrrr', 'core-aifs',
     'regional-icon', 'regional-hrdps', 'regional-arome-antilles', 'regional-hrrr-ak',
     'regional-nam', 'regional-nam-hi', 'regional-nam-ak',

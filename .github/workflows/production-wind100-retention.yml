@@ -1,0 +1,73 @@
+name: inspect or clean retired production Wind100 point components
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Inspect an immutable plan without deleting objects
+        type: boolean
+        required: true
+        default: true
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-production-native-wind100-retention
+  cancel-in-progress: false
+jobs:
+  retention:
+    if: ${{ github.ref == 'refs/heads/main' && vars.PRODUCTION_WIND100_GC_CALL_ENABLED == 'true' }}
+    environment:
+      name: data-production-wind100-cleanup
+      url: https://weatherx.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      WIND100_GC_ENVIRONMENT: data-production-wind100-cleanup
+      PRODUCTION_WIND100_GC_ENABLED: ${{ vars.PRODUCTION_WIND100_GC_ENABLED }}
+      PRODUCTION_WIND100_GC_EXECUTE_ENABLED: ${{ vars.PRODUCTION_WIND100_GC_EXECUTE_ENABLED }}
+      PRODUCTION_WIND100_GC_CONTROLLER_SHA256: ${{ vars.PRODUCTION_WIND100_GC_CONTROLLER_SHA256 }}
+      PRODUCTION_WIND100_GC_APPROVED_PLAN_SHA256: ${{ vars.PRODUCTION_WIND100_GC_APPROVED_PLAN_SHA256 }}
+      PRODUCTION_WIND100_R2_ACCOUNT_ID: ${{ vars.PRODUCTION_WIND100_R2_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: 9174329db6ca8527569e67f14ef70406dedefb69
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: atmos
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Verify pinned source and controller dependencies
+        run: |
+          set -euo pipefail
+          test "$(git -C cycle rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C atmos rev-parse HEAD)" = 9174329db6ca8527569e67f14ef70406dedefb69
+          git -C cycle diff --exit-code HEAD
+          git -C atmos diff --exit-code HEAD
+          npm ci --ignore-scripts --prefix cycle/staging-controller
+      - name: Produce dry-run deletion plan for review
+        if: ${{ inputs.dry_run == true }}
+        env:
+          PRODUCTION_WIND100_GC_READ_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_WIND100_GC_READ_ACCESS_KEY_ID }}
+          PRODUCTION_WIND100_GC_READ_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_WIND100_GC_READ_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          node cycle/tools/production-wind100-retention.mjs dry-run "$GITHUB_WORKSPACE/atmos" > "$RUNNER_TEMP/production-wind100-retention-plan.json"
+          node -e 'const p=JSON.parse(require("node:fs").readFileSync(process.argv[1]));console.log(JSON.stringify({planSha256:p.planSha256,pointerSha256:p.pointerSha256,candidates:p.candidates.map(x=>x.catalogId),objects:p.totalObjects}))' "$RUNNER_TEMP/production-wind100-retention-plan.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ inputs.dry_run == true }}
+        with:
+          name: production-wind100-retention-plan
+          path: ${{ runner.temp }}/production-wind100-retention-plan.json
+          retention-days: 7
+          if-no-files-found: error
+      - name: Delete only an approved, still-retired plan with per-prefix temporary credentials
+        if: ${{ inputs.dry_run == false }}
+        env:
+          PRODUCTION_WIND100_GC_READ_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_WIND100_GC_READ_ACCESS_KEY_ID }}
+          PRODUCTION_WIND100_GC_READ_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_WIND100_GC_READ_SECRET_ACCESS_KEY }}
+          PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID }}
+          PRODUCTION_WIND100_GC_DELETE_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_WIND100_GC_DELETE_SECRET_ACCESS_KEY }}
+        run: node cycle/tools/production-wind100-retention.mjs execute "$GITHUB_WORKSPACE/atmos"

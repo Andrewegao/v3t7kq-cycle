@@ -36,6 +36,8 @@ on:
       - ".github/workflows/staging-place-renewal.yml"
       - ".github/workflows/staging-wind100.yml"
       - ".github/workflows/staging-wind100-recurring.yml"
+      - ".github/workflows/production-wind100-recurring.yml"
+      - ".github/workflows/production-wind100-retention.yml"
       - ".github/workflows/staging-wind100-preflight.yml"
       - ".github/workflows/staging-search-reader.yml"
       - ".github/workflows/staging-data-activate.yml"
@@ -99,6 +101,8 @@ jobs:
           python3 tests/staging-place-collect.py
           python3 tests/staging-consumer-reuse.py
           node --test tests/model-inputs*.mjs
+      - name: Production Wind100 isolated publisher and selector contracts
+        run: node --test tests/production-wind100.mjs
       - name: Consumer refresh workflow safety contract
         run: |
           node tests/consumer-workflow.mjs

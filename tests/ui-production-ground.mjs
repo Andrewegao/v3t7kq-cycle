@@ -24,6 +24,6 @@ test('production approval is fingerprinted and checked before any Cloudflare pre
  assert.ok(POLICY_FILES.includes('docs/production-ground-review-20260907.md'));
  const source=readFileSync(new URL('../tools/ui-release.mjs',import.meta.url),'utf8');
  const preflight=source.slice(source.indexOf('async function preflight(stage)'),source.indexOf('export function requiredSourceGuard'));
- assert.match(preflight,/stage==='production'[\s\S]*?requireProductionProfile\(c.profile\);\s*verifyProductionGround\(c.files\)/);
+ assert.match(preflight,/stage==='production'[\s\S]*?requireUiProductionProfile\(c.profile\);\s*verifyProductionGround\(c.files\)/);
  assert.ok(preflight.indexOf('verifyProductionGround(c.files)')<preflight.indexOf('await projectSnapshot(stage)'));
 });
