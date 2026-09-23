@@ -12,7 +12,7 @@ export const PUBLIC_COMBINED_ACCOUNT_SOURCES = Object.freeze({
   'client.ts': 'a06ec9e7d56551dae4fbf07ae552cf296365e5749d5c7e9f47b080f481588f1a',
   'pointSeriesContract.ts': '8a3ae4af11d87a37e954891bbdb43b0907c591c65ca902852bc5a13e2af7d36e',
   'session.ts': '9896c3b9382f5a64e2bad0d43c298c2a4af670cb3e645874d08629caf343e6b3',
-  'PlatformAccount.tsx': '9e947610b7bd356c72693cd9a7f95f464c146c52139ff2ae3908a21c6a175840',
+  'PlatformAccount.tsx': '2a4c2f8feb2bd8017c7f7104ecc3a7dfdc0ec89daa208c1f79a32526f68b1bae',
   'accountEntry.ts': 'b997aaabe8dc9efa6d8b7b15e385c257ba0e1a33a42456ed55a0c3fc9b51e386',
   'accountDoor.ts': '14acf20279baf760cbf5a6890dfcb66d7330b5a353a69f80e802ec34f3d22bcf',
   'PlatformAccountBoundary.tsx': '796337fb0db7a6bb0d9cbbc56b3820a26e263b9107b8f296f8fa0b0a8e9c9580',
