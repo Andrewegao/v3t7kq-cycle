@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bindingDrift, uploadedVersion, validateLiveSelector, validateReleaseConfig }
+import { bindingDrift, disabledPreviousConfig, uploadedVersion, validateLiveSelector, validateReleaseConfig }
   from '../tools/platform-wind100-worker-release.mjs';
 
 const config = { env: { production: { name: 'weatherx-platform-edge-production',
@@ -46,4 +46,21 @@ test('binding diagnostic names reviewed mismatches without disclosing live value
   assert.deepEqual(result, { missingOrChangedExpectedNames: ['AUTH_MODE', 'SESSION_KEY'], unexpectedCount: 1 });
   assert.ok(!JSON.stringify(result).includes('private-value'));
   assert.ok(!JSON.stringify(result).includes('SURPRISE_SECRET'));
+});
+
+test('prior Worker preflight accepts only absent or exact disabled Wind100 flag', () => {
+  const flagName = 'PRODUCTION_WIND100_DYNAMIC_ENABLED';
+  const current = { vars: { APP_ORIGIN: 'https://weatherx.org', [flagName]: '1' } };
+  assert.deepEqual(disabledPreviousConfig(current, []),
+    { vars: { APP_ORIGIN: 'https://weatherx.org' } });
+  assert.equal(disabledPreviousConfig(current,
+    [{ name: flagName, type: 'plain_text', text: '0' }]).vars[flagName], '0');
+  for (const binding of [
+    { name: flagName, type: 'plain_text', text: '1' },
+    { name: flagName, type: 'secret_text' },
+  ]) assert.throws(() => disabledPreviousConfig(current, [binding]));
+  assert.throws(() => disabledPreviousConfig(current, [
+    { name: flagName, type: 'plain_text', text: '0' },
+    { name: flagName, type: 'plain_text', text: '0' },
+  ]));
 });
