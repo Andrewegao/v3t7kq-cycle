@@ -1,0 +1,32 @@
+# Manual, protected credential qualification. Never publishes weather data or enables cleanup.
+name: prove production Wind100 cleanup credential scope
+on: workflow_dispatch
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-production-wind100-scope-preflight
+  cancel-in-progress: false
+jobs:
+  scope:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    environment:
+      name: data-production-wind100-cleanup
+      url: https://weatherx.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PRODUCTION_WIND100_R2_ACCOUNT_ID: ${{ vars.PRODUCTION_WIND100_R2_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Install locked R2 client without lifecycle scripts
+        run: npm ci --ignore-scripts --prefix staging-controller
+      - name: Prove reader and short-lived delete scope using disposable objects
+        env:
+          PRODUCTION_WIND100_GC_READ_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_WIND100_GC_READ_ACCESS_KEY_ID }}
+          PRODUCTION_WIND100_GC_READ_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_WIND100_GC_READ_SECRET_ACCESS_KEY }}
+          PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID }}
+          PRODUCTION_WIND100_GC_DELETE_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_WIND100_GC_DELETE_SECRET_ACCESS_KEY }}
+        run: node tools/production-wind100-scope-preflight.mjs
