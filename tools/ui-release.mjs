@@ -262,8 +262,12 @@ export function standaloneWeatherFeedVerificationRequired(stage, phase) {
   // approved capabilities and therefore never adds a candidate-only feed probe.
   return phase === 'preflight' && stage === 'production';
 }
-function verifyWeatherFeeds(stage) {
-  run('node', [resolve(CONTROL,'ops/release/verify-weather-feeds.mjs'), ORIGINS[stage]]);
+function verifyWeatherFeeds(stage, profile) {
+  if (stage === 'production' && publicCombinedProfile(profile)) {
+    // The current production Pages artifact predates USGS. Prove all its existing
+    // feeds now; the pinned full verifier remains mandatory after candidate deploy.
+    run('node', [resolve(ROOT,'tools/ui-weather-feed-baseline.mjs'), ORIGINS[stage]]);
+  } else run('node', [resolve(CONTROL,'ops/release/verify-weather-feeds.mjs'), ORIGINS[stage]]);
 }
 export async function publicModes(origin,profile=profileFor(),phase='candidate') {
   assert.ok(Object.values(ORIGINS).includes(origin));
@@ -306,7 +310,7 @@ async function preflight(stage) {
   else requireStagingApproval(c,process.env);
   gate(process.env); controller();
   await projectSnapshot(stage); await publicModes(ORIGINS[stage],c.profile,'preflight');
-  if (standaloneWeatherFeedVerificationRequired(stage, 'preflight')) verifyWeatherFeeds(stage);
+  if (standaloneWeatherFeedVerificationRequired(stage, 'preflight')) verifyWeatherFeeds(stage,c.profile);
 }
 export function requiredSourceGuard(profile) {
   validateProfile(profile);
