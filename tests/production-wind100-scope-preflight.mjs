@@ -13,7 +13,7 @@ const env = {
 };
 const forbidden = () => Object.assign(new Error('AccessDenied'), { $metadata: { httpStatusCode: 403 } });
 
-function fixture({ adjacentAllowed = false } = {}) {
+function fixture({ adjacentAllowed = false, readerDataDenied = false } = {}) {
   const objects = new Set(), attempts = [];
   class Command { constructor(input) { this.input = input; } }
   class ListObjectsV2Command extends Command {}
@@ -28,6 +28,7 @@ function fixture({ adjacentAllowed = false } = {}) {
       const { Bucket, Key } = command.input;
       attempts.push([role, command.constructor.name, Bucket, Key]);
       if (role === 'reader') {
+        if (readerDataDenied && Bucket === 'weatherx-data-production') throw forbidden();
         if (command instanceof ListObjectsV2Command) return { Contents: [] };
         throw forbidden();
       }
@@ -63,6 +64,19 @@ test('protected proof denies adjacent deletion and other actions, then cleans di
 
 test('an overbroad temporary credential fails the proof and still removes disposable objects', async () => {
   const { sdk, objects } = fixture({ adjacentAllowed: true });
-  await assert.rejects(proveScope(env, sdk), /temporary delete outside its prefix was unexpectedly permitted/);
+  await assert.rejects(proveScope(env, sdk), error => {
+    assert.match(error.message, /temporary delete outside its prefix was unexpectedly permitted/);
+    assert.equal(error.scopeStep, 'temporary-adjacent-delete-denial');
+    return true;
+  });
+  assert.equal(objects.size, 0);
+});
+
+test('failed reader boundary reports only the fixed operation label', async () => {
+  const { sdk, objects } = fixture({ readerDataDenied: true });
+  await assert.rejects(proveScope(env, sdk), error => {
+    assert.equal(error.scopeStep, 'reader-data-list');
+    return true;
+  });
   assert.equal(objects.size, 0);
 });
