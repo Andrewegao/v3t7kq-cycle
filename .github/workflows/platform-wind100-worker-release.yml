@@ -65,10 +65,16 @@ jobs:
       - name: Run complete Worker checks and production config gate
         working-directory: atmos/platform/edge
         run: |
-          node --test "$GITHUB_WORKSPACE/cycle/tests/platform-wind100-worker-release.mjs"
+          node --test "$GITHUB_WORKSPACE/cycle/tests/platform-wind100-worker-release.mjs" "$GITHUB_WORKSPACE/cycle/tests/platform-wind100-route.mjs"
           npm run check
           node scripts/verify-config.mjs production
           npx wrangler deploy --dry-run --env production
+      - name: Attach only the reviewed production Wind100 route
+        id: attach_route
+        env:
+          DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
+          ROUTE_RECEIPT: ${{ runner.temp }}/platform-wind100-release/route-receipt.json
+        run: node cycle/tools/platform-wind100-route.mjs attach
       - name: Upload one inactive version, activate it, and verify live Wind100
         id: release_worker
         env:
@@ -81,11 +87,17 @@ jobs:
           PLATFORM_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
           RECEIPT: ${{ runner.temp }}/platform-wind100-release/receipt.json
         run: node cycle/tools/platform-wind100-worker-release.mjs recover
+      - name: Remove only this run's route if the Worker release failed
+        if: ${{ always() && (steps.attach_route.outcome == 'failure' || steps.release_worker.outcome == 'failure' || steps.release_worker.outcome == 'cancelled') }}
+        env:
+          DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
+          ROUTE_RECEIPT: ${{ runner.temp }}/platform-wind100-release/route-receipt.json
+        run: node cycle/tools/platform-wind100-route.mjs recover
       - name: Retain non-sensitive release and rollback evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: platform-wind100-worker-release-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/platform-wind100-release/receipt.json
+          path: ${{ runner.temp }}/platform-wind100-release/*.json
           if-no-files-found: ignore
           retention-days: 30
