@@ -56,6 +56,22 @@ export function bindingDrift(config, liveBindings) {
   };
 }
 
+export function disabledPreviousConfig(config, liveBindings) {
+  const previous = structuredClone(config);
+  const flagName = 'PRODUCTION_WIND100_DYNAMIC_ENABLED';
+  const matches = liveBindings.filter(binding => binding.name === flagName);
+  assert.ok(matches.length <= 1, 'duplicate production Wind100 flag');
+  if (matches.length === 0) {
+    // Older live versions omit the optional flag; the Worker treats absence as disabled.
+    delete previous.vars[flagName];
+  } else {
+    assert.deepEqual(matches[0], { name: flagName, type: 'plain_text', text: '0' },
+      'live production Wind100 flag is not disabled');
+    previous.vars[flagName] = '0';
+  }
+  return previous;
+}
+
 function context(env) {
   assert.equal(env.GITHUB_ACTIONS, 'true');
   assert.equal(env.GITHUB_REPOSITORY, 'Andrewegao/v3t7kq-cycle');
@@ -144,9 +160,8 @@ export async function main(command, env = process.env) {
     return { status };
   }
   assert.equal(command, 'release');
-  const beforeConfig = structuredClone(ctx.config);
-  beforeConfig.vars.PRODUCTION_WIND100_DYNAMIC_ENABLED = '0';
   const liveSettings = await api('/settings', env.PLATFORM_EDGE_TOKEN);
+  const beforeConfig = disabledPreviousConfig(ctx.config, liveSettings.bindings);
   try { assertSettings(beforeConfig, liveSettings); }
   catch (error) {
     if (error.message === 'live bindings differ from reviewed configuration') {
