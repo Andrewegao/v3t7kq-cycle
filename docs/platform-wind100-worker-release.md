@@ -5,6 +5,14 @@ This one-time manual workflow deploys only the production platform Worker from A
 already have passed its protected publication and retention dry run. The release does not
 deploy Pages, publish data, change secrets, deploy Stripe, or enable purchases.
 
+The guarded job checks the exact source and Worker first, attaches only the reviewed
+`weatherx.org/api/platform/production-wind100/*` route, then uploads and activates
+one candidate version. Cloudflare version activation does not attach new routes.
+If live verification fails, it restores the previous version and removes only the
+route created by that run; a lost route-create response requires manual review
+instead of speculative deletion. The separate route receipt is retained with the
+Worker receipt.
+
 Dispatch `platform-wind100-worker-release.yml` on Cycle main with confirmation
 `RELEASE-PRODUCTION-WIND100-WORKER`. Approve only that run's protected `production`
 environment after checking its run ID and source. The workflow runs the complete Worker

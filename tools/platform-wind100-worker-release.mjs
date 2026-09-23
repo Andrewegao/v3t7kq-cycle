@@ -129,12 +129,12 @@ async function verifyLive(candidate, token) {
       assert.equal(await current(token), candidate, 'candidate is not the active Worker');
       const health = await fetch('https://weatherx.org/api/platform/health',
         { redirect: 'error', signal: AbortSignal.timeout(10_000), cache: 'no-store' });
-      assert.equal(health.status, 200);
+      assert.equal(health.status, 200, `health returned HTTP ${health.status}`);
       assert.deepEqual(await health.json(), { ok: true, authMode: 'observe',
         billingMode: 'enabled', billingPurchaseMode: 'closed' });
       const selector = await fetch('https://weatherx.org/api/platform/production-wind100/current',
         { redirect: 'error', signal: AbortSignal.timeout(10_000), cache: 'no-store' });
-      assert.equal(selector.status, 200);
+      assert.equal(selector.status, 200, `Wind100 selector returned HTTP ${selector.status}`);
       validateLiveSelector(await selector.json());
       return;
     } catch (error) {
@@ -203,6 +203,7 @@ export async function main(command, env = process.env) {
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename)) {
   main(process.argv[2]).then(result => console.log(JSON.stringify(result))).catch(error => {
-    console.error(`Platform Wind100 Worker release refused: ${error.message}`); process.exitCode = 1;
+    console.error(`Platform Wind100 Worker release refused: ${error.message}${error.cause?.message ? ` (${error.cause.message})` : ''}`);
+    process.exitCode = 1;
   });
 }
