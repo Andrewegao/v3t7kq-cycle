@@ -33,8 +33,15 @@ function assertBakeDataOnly(source) {
   assert.match(block, /^    uses: \.\/\.github\/workflows\/staging-wind100-recurring.yml$/m);
   assert.doesNotMatch(block, /^\s+(?:steps|run|env):/m);
   assertDataOnly(block, ['ATMOS_DEPLOY_KEY', 'STAGING_R2_WRITE_ACCESS_KEY_ID', 'STAGING_R2_WRITE_SECRET_ACCESS_KEY']);
+  const productionBlocks = [...source.matchAll(/^  production-wind100:\n[\s\S]*?(?=^  [a-z][a-z0-9-]*:|$(?![\s\S]))/gm)];
+  assert.equal(productionBlocks.length, 1, 'one protected production Wind100 caller is required');
+  const productionBlock = productionBlocks[0][0];
+  assert.match(productionBlock, /^    uses: \.\/\.github\/workflows\/production-wind100-recurring\.yml$/m);
+  assert.doesNotMatch(productionBlock, /^\s+(?:steps|run|env):/m);
+  assertDataOnly(productionBlock, ['ATMOS_DEPLOY_KEY', 'PRODUCTION_WIND100_R2_ACCESS_KEY_ID',
+    'PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY']);
   // Staging writer slots remain forbidden everywhere else in the legacy bake.
-  assertDataOnly(source.replace(block, ''), maintenanceKeys);
+  assertDataOnly(source.replace(block, '').replace(productionBlock, ''), maintenanceKeys);
 }
 
 test('both data bakes and legacy backfill have no UI credential or dispatch capability', () => {
@@ -45,6 +52,11 @@ test('both data bakes and legacy backfill have no UI credential or dispatch capa
     assertDataOnly(workflows[name], ['ATMOS_DEPLOY_KEY']);
   assertDataOnly(workflows['publish-current-model-production.yml'], maintenanceKeys);
   assertDataOnly(workflows['resume-model-publication.yml'], maintenanceKeys);
+  assertDataOnly(workflows['production-wind100-recurring.yml'], ['ATMOS_DEPLOY_KEY',
+    'PRODUCTION_WIND100_R2_ACCESS_KEY_ID', 'PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY']);
+  assertDataOnly(workflows['production-wind100-retention.yml'], ['ATMOS_DEPLOY_KEY',
+    'PRODUCTION_WIND100_GC_READ_ACCESS_KEY_ID', 'PRODUCTION_WIND100_GC_READ_SECRET_ACCESS_KEY',
+    'PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID', 'PRODUCTION_WIND100_GC_DELETE_SECRET_ACCESS_KEY']);
   assert.match(workflows['bake.yml'], /DATA_PUBLISH_MODE: r2-release/);
   assert.match(workflows['catalog-bake.yml'], /bash ops\/bake-model-component\.sh/);
 });

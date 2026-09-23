@@ -1,0 +1,222 @@
+name: publish recurring production ECMWF native 100m wind
+on:
+  workflow_call:
+    inputs:
+      check_only:
+        description: Check only the dedicated production Wind100 writer credential boundary
+        type: boolean
+        required: false
+        default: false
+    outputs:
+      credentials_ready:
+        description: Boolean-only confirmation that both dedicated production credentials are present
+        value: ${{ jobs.wind100.outputs.credentials_ready }}
+    secrets:
+      ATMOS_DEPLOY_KEY:
+        required: true
+      PRODUCTION_WIND100_R2_ACCESS_KEY_ID:
+        required: false
+      PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY:
+        required: false
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: weatherx-production-native-wind100-recurring
+  cancel-in-progress: false
+jobs:
+  wind100:
+    environment:
+      name: data-production-wind100
+      url: https://weatherx.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      credentials_ready: ${{ steps.production_credentials.outputs.ready }}
+    env:
+      ATMOS_SHA: 9174329db6ca8527569e67f14ef70406dedefb69
+      CORE_ATMOS_SHA: d8cd45d123f60c30c413c14d46f68113e37468b7
+      MODEL_ID: ecmwf
+      WIND100_PRODUCTION_ENVIRONMENT: data-production-wind100
+      PRODUCTION_WIND100_APPROVED_SOURCE_SHA: ${{ vars.PRODUCTION_WIND100_APPROVED_SOURCE_SHA }}
+      PRODUCTION_WIND100_ENABLED: ${{ vars.PRODUCTION_WIND100_ENABLED }}
+      PRODUCTION_WIND100_CONTROLLER_SHA256: ${{ vars.PRODUCTION_WIND100_CONTROLLER_SHA256 }}
+      PRODUCTION_WIND100_R2_ACCOUNT_ID: ${{ vars.PRODUCTION_WIND100_R2_ACCOUNT_ID }}
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - name: Check the protected production Wind100 opt-in
+        id: opt_in
+        run: |
+          if [ "$PRODUCTION_WIND100_ENABLED" = true ]; then
+            echo 'enabled=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
+            echo 'recurring production Wind100 is disabled'
+          fi
+      - name: Check both dedicated production Wind100 writer credentials without exposing values
+        id: production_credentials
+        if: ${{ inputs.check_only == true || steps.opt_in.outputs.enabled == 'true' }}
+        env:
+          PRODUCTION_WIND100_R2_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_WIND100_R2_ACCESS_KEY_ID }}
+          PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$PRODUCTION_WIND100_R2_ACCESS_KEY_ID"
+          test -n "$PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY"
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        if: ${{ inputs.check_only != true && steps.opt_in.outputs.enabled == 'true' }}
+        with: { path: cycle, persist-credentials: false }
+      - name: Refuse an unapproved caller, controller, source, or environment
+        if: ${{ inputs.check_only != true && steps.opt_in.outputs.enabled == 'true' }}
+        run: node cycle/tools/production-wind100.mjs gate
+      - name: Checkout the exact ordinary core producer
+        if: ${{ inputs.check_only != true && steps.opt_in.outputs.enabled == 'true' }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: weatherx-hq/atmos
+          ref: d8cd45d123f60c30c413c14d46f68113e37468b7
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: atmos-core
+          persist-credentials: false
+      - name: Checkout the exact reviewed point-only augmenter and publisher
+        if: ${{ inputs.check_only != true && steps.opt_in.outputs.enabled == 'true' }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: weatherx-hq/atmos
+          ref: 9174329db6ca8527569e67f14ef70406dedefb69
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: atmos
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        if: ${{ inputs.check_only != true && steps.opt_in.outputs.enabled == 'true' }}
+        with: { node-version: 22 }
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        if: ${{ inputs.check_only != true && steps.opt_in.outputs.enabled == 'true' }}
+        with: { python-version: '3.12' }
+      - name: Authenticate this bake's ordinary sealed ECMWF artifact
+        id: handoff
+        if: ${{ inputs.check_only != true && steps.opt_in.outputs.enabled == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python -I cycle/tools/current-model-artifact.py \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --controller-sha "$GITHUB_SHA" --atmos-source-sha "$CORE_ATMOS_SHA" \
+            --atmos-root "$GITHUB_WORKSPACE/atmos-core" --kind core --model ecmwf \
+            --output "$RUNNER_TEMP/weatherx-wind100-handoff" --github-output "$GITHUB_OUTPUT"
+      - name: Provision only hash-locked qualification and production transport dependencies
+        if: ${{ steps.handoff.outputs.status == 'ready' }}
+        run: |
+          set -euo pipefail
+          test "$(git -C cycle rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C atmos-core rev-parse HEAD)" = "$CORE_ATMOS_SHA"
+          test "$(git -C atmos rev-parse HEAD)" = "$ATMOS_SHA"
+          git -C cycle diff --exit-code HEAD
+          git -C atmos-core diff --exit-code HEAD
+          git -C atmos diff --exit-code HEAD
+          python -m venv atmos/data/.venv
+          atmos/data/.venv/bin/pip install --disable-pip-version-check --require-hashes --only-binary=:all: \
+            -r cycle/tools/staging-wind100-requirements.txt
+          npm ci --ignore-scripts --prefix cycle/staging-controller
+          archive="$RUNNER_TEMP/rclone-v1.75.0-linux-amd64.zip"
+          curl --fail --silent --show-error --location \
+            https://github.com/rclone/rclone/releases/download/v1.75.0/rclone-v1.75.0-linux-amd64.zip --output "$archive"
+          printf '%s  %s\n' aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa "$archive" | sha256sum --check --status
+          unzip -q "$archive" -d "$RUNNER_TEMP"
+          sudo install -m 0755 "$RUNNER_TEMP/rclone-v1.75.0-linux-amd64/rclone" /usr/local/bin/rclone
+          rclone version | sed -n '1p' | grep -Fx 'rclone v1.75.0'
+      - name: Verify the point-only source closure before generated data exists
+        if: ${{ steps.handoff.outputs.status == 'ready' }}
+        run: node cycle/tools/production-wind100.mjs source "$GITHUB_WORKSPACE/atmos" > "$RUNNER_TEMP/weatherx-wind100-source.json"
+      - name: Bind idempotency to the authenticated input content
+        if: ${{ steps.handoff.outputs.status == 'ready' }}
+        run: |
+          set -euo pipefail
+          manifest="$RUNNER_TEMP/weatherx-wind100-handoff/packs/ecmwf/manifest.json"
+          run="$(node -e 'const m=JSON.parse(require("node:fs").readFileSync(process.argv[1]));process.stdout.write(m.forecastRun)' "$manifest")"
+          input="$(node -e 'const fs=require("node:fs"),c=require("node:crypto"),m=JSON.parse(fs.readFileSync(process.argv[1])),r=m.files.filter(x=>x.path.startsWith("data/.ecmwf-point/"));if(r.length<5||r.length>32)process.exit(2);process.stdout.write(c.createHash("sha256").update(JSON.stringify(r)).digest("hex"))' "$manifest")"
+          printf 'WIND100_RUN_ID=%s\nWIND100_INPUT_SHA256=%s\n' "$run" "$input" >> "$GITHUB_ENV"
+      - name: Skip a byte-verified candidate already selected for this model input
+        id: preflight
+        if: ${{ steps.handoff.outputs.status == 'ready' }}
+        env:
+          PRODUCTION_WIND100_R2_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_WIND100_R2_ACCESS_KEY_ID }}
+          PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          result="$(node cycle/tools/production-wind100.mjs preflight "$GITHUB_WORKSPACE/atmos")"
+          status="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).status)' "$result")"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "$result"
+      - name: Add only native 100u and 100v to a copy of the authenticated point stage
+        if: ${{ steps.preflight.outputs.status == 'new-input' }}
+        run: |
+          set -euo pipefail
+          cp -a "$RUNNER_TEMP/weatherx-wind100-handoff/packs/ecmwf/payload/data/.ecmwf-point" atmos/data/.ecmwf-point
+          atmos/data/.venv/bin/python -I cycle/tools/staging-wind100-python.py \
+            "$GITHUB_WORKSPACE/atmos" data/augment_ecmwf_wind100.py \
+            --stage "$GITHUB_WORKSPACE/atmos/data/.ecmwf-point" --input-sha256 "$WIND100_INPUT_SHA256" \
+            --receipt "$RUNNER_TEMP/weatherx-wind100-augmentation.json"
+      - name: Build and validate only the augmented point component
+        if: ${{ steps.preflight.outputs.status == 'new-input' }}
+        working-directory: atmos
+        run: |
+          set -euo pipefail
+          data/.venv/bin/python -I "$GITHUB_WORKSPACE/cycle/tools/staging-wind100-python.py" \
+            "$GITHUB_WORKSPACE/atmos" data/build_point_series.py --input ecmwf=data/.ecmwf-point \
+            --out "$RUNNER_TEMP/weatherx-wind100-point-series"
+          node ops/platform/validate-point-series.mjs "$RUNNER_TEMP/weatherx-wind100-point-series" \
+            > "$RUNNER_TEMP/weatherx-wind100-point-proof.json"
+      - name: Qualify every augmented point byte against its sealed core input
+        if: ${{ steps.preflight.outputs.status == 'new-input' }}
+        run: |
+          set -euo pipefail
+          node cycle/tools/production-wind100.mjs qualify "$GITHUB_WORKSPACE/atmos" \
+            weatherx-wind100-source.json "$GITHUB_WORKSPACE/atmos/data/.ecmwf-point" \
+            "$RUNNER_TEMP/weatherx-wind100-point-series" weatherx-wind100-point-proof.json \
+            weatherx-wind100-augmentation.json \
+            weatherx-wind100-handoff/handoff.json weatherx-wind100-handoff/packs/ecmwf/manifest.json
+      - name: Upload one immutable production point component
+        if: ${{ steps.preflight.outputs.status == 'new-input' }}
+        working-directory: atmos
+        env:
+          PRODUCTION_WIND100_R2_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_WIND100_R2_ACCESS_KEY_ID }}
+          PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_WIND100_R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://${{ env.PRODUCTION_WIND100_R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+          COMPONENT_R2_REMOTE: weatherx:weatherx-components-production
+          CATALOG_ENDPOINT: https://invalid.invalid
+          CATALOG_PROMOTION_KEY: unused-promote-zero
+          PROMOTE: '0'
+        run: |
+          set -euo pipefail
+          node "$GITHUB_WORKSPACE/cycle/tools/production-wind100.mjs" component-gate
+          node "$GITHUB_WORKSPACE/cycle/tools/production-wind100.mjs" retention-gate production-wind100/qualification.json
+          initialized="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1])).integrity.initializedAt)' "$RUNNER_TEMP/production-wind100/qualification.json")"
+          node -e 'const fs=require("node:fs"),r=JSON.parse(fs.readFileSync(process.argv[1]));fs.writeFileSync(process.argv[3],JSON.stringify({schemaVersion:1,modelId:process.argv[2],descriptor:r.models[process.argv[2]]})+"\n")' \
+            "$RUNNER_TEMP/weatherx-wind100-point-proof.json" ecmwf "$RUNNER_TEMP/weatherx-wind100-point-descriptor.json"
+          SOURCE_DIR="$RUNNER_TEMP/weatherx-wind100-point-series/v2/ecmwf" COMPONENT_ID=point-ecmwf \
+            ARTIFACT_ID="prod-wind100-recurring-point-ecmwf-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" GENERATION_TIME="$initialized" \
+            MOUNT=point-series/v2/ecmwf/ COMPONENT_QUALITY_CHECKS=point_series \
+            POINT_SERIES_COMPONENT_DESCRIPTOR_FILE="$RUNNER_TEMP/weatherx-wind100-point-descriptor.json" \
+            COMPONENT_RECEIPT_FILE="$RUNNER_TEMP/weatherx-wind100-point-component.json" bash ops/platform/publish-r2-component.sh
+      - name: Publish immutable metadata and rotate only the bounded production selector
+        if: ${{ steps.preflight.outputs.status == 'new-input' }}
+        env:
+          PRODUCTION_WIND100_R2_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_WIND100_R2_ACCESS_KEY_ID }}
+          PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          node cycle/tools/production-wind100.mjs publish production-wind100/qualification.json \
+            weatherx-wind100-point-component.json "$GITHUB_WORKSPACE/atmos" \
+            > "$RUNNER_TEMP/weatherx-wind100-selection.json"
+          node cycle/tools/production-wind100.mjs activate weatherx-wind100-selection.json "$GITHUB_WORKSPACE/atmos"
+# This reusable workflow needs one `needs: core-ecmwf` call from bake.yml. It writes
+# only isolated production Wind100 objects and never touches catalogs/current.json.

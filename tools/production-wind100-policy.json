@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "targetOrigin": "https://weatherx.org",
+  "model": "ecmwf",
+  "sourceSha": "9174329db6ca8527569e67f14ef70406dedefb69",
+  "coreSourceSha": "d8cd45d123f60c30c413c14d46f68113e37468b7",
+  "dataBucket": "weatherx-data-production",
+  "componentBucket": "weatherx-components-production",
+  "pointerKey": "production-candidates/wind100/current-v1.json",
+  "componentPrefix": "components/point-ecmwf/prod-wind100-recurring-point-ecmwf-",
+  "catalogPrefix": "catalogs/snapshots/prod-wind100-recurring-",
+  "selectionPrefix": "production-candidates/wind100/prod-wind100-recurring-",
+  "publicationMode": "point-only-recurring-v1",
+  "maximumComponentPrefixObjects": 50000,
+  "freshnessHours": 30,
+  "minimumForecastLeaseHours": 6,
+  "retentionProfileStatus": "unavailable-until-pointer-ancestry-gc"
+}
