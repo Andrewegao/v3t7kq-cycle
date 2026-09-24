@@ -1,0 +1,75 @@
+# One-time route-only repair for production USGS and composed hazards. No Worker, Pages, data or secret writes.
+name: WeatherX production feed route repair
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type ATTACH-PRODUCTION-FEED-ROUTES
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-production-data-edge
+  cancel-in-progress: false
+jobs:
+  routes:
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' }}
+    environment:
+      name: production
+      url: https://weatherx.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ATMOS_SHA: 7497b9815f1f5ca657cda8ed24ad5894afa267e0
+      ATMOS_ROOT: ${{ github.workspace }}/atmos
+      ROUTE_RELEASE_ENVIRONMENT: production
+    steps:
+      - name: Require exact route-only repair confirmation
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: test "$CONFIRM" = ATTACH-PRODUCTION-FEED-ROUTES
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: cycle
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: 7497b9815f1f5ca657cda8ed24ad5894afa267e0
+          fetch-depth: 0
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: atmos
+          persist-credentials: false
+      - name: Verify exact clean reviewed source
+        run: |
+          test "$(git -C cycle rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C atmos rev-parse HEAD)" = "$ATMOS_SHA"
+          test "$(git -C atmos rev-parse refs/remotes/origin/master)" = "$ATMOS_SHA"
+          git -C cycle diff --exit-code HEAD
+          git -C atmos diff --exit-code HEAD
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Test exact route boundary and live contract guards
+        run: node --test cycle/tests/platform-production-feed-routes.mjs
+      - name: Attach only missing USGS and composed-hazard routes and prove live response
+        id: attach
+        env:
+          DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
+          ROUTE_RECEIPT: ${{ runner.temp }}/platform-feed-routes/receipt.json
+        run: node cycle/tools/platform-production-feed-routes.mjs attach
+      - name: Remove only routes owned by this run if proof failed
+        if: ${{ always() && (steps.attach.outcome == 'failure' || steps.attach.outcome == 'cancelled') }}
+        env:
+          DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
+          ROUTE_RECEIPT: ${{ runner.temp }}/platform-feed-routes/receipt.json
+        run: node cycle/tools/platform-production-feed-routes.mjs recover
+      - name: Retain route identity and live proof
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: platform-production-feed-routes-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/platform-feed-routes/*.json
+          if-no-files-found: ignore
+          retention-days: 30

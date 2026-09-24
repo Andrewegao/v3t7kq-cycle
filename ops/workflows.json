@@ -513,6 +513,15 @@
       "subsystem": "Production platform",
       "lifecycle": "manual-supported",
       "runbook": "docs/platform-wind100-worker-release.md"
+    },
+    {
+      "id": "platform-production-feed-routes",
+      "path": ".github/workflows/platform-production-feed-routes.yml",
+      "family": "releases",
+      "purpose": "Attach and verify only the missing production USGS and composed-hazard Worker routes.",
+      "subsystem": "Production platform",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/platform-production-feed-routes.md"
     }
   ]
 }
