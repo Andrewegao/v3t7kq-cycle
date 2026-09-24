@@ -6,9 +6,9 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `b8cd03a01813dc52e4c23963ac41d3dfd3fa6e991b3b23ffe6eb6c3f751697ff`.
+Source digest (registry and workflow bytes): `56f05100752f0b008669ceb95dc1f5c307d74e75d95327c216218265ca1e7d93`.
 
-58 workflows. Ordering and output are deterministic; no API request or clock is used.
+59 workflows. Ordering and output are deterministic; no API request or clock is used.
 
 | Workflow | Family / subsystem | Lifecycle | Purpose | Runbook |
 | --- | --- | --- | --- | --- |
@@ -39,6 +39,7 @@ Source digest (registry and workflow bytes): `b8cd03a01813dc52e4c23963ac41d3dfd3
 | [platform-wind100-worker-release](#platform-wind100-worker-release) | releases / Production platform | manual-supported | Release the exact reviewed production platform Worker for the qualified Wind100 selector. | [guide](../docs/platform-wind100-worker-release.md) |
 | [point-route-activate](#point-route-activate) | releases / Production point routes | manual-supported | Activate reviewed point routes with ownership-aware rollback. | [guide](../docs/point-route-activation.md) |
 | [production-account-audit](#production-account-audit) | control-plane / Production account safety | diagnostic | Reconcile exhaustive live Stripe inventory against sanitized production account state without mutation. | [guide](../docs/production-account-audit.md) |
+| [production-wind100-point-reader-release](#production-wind100-point-reader-release) | releases / Production data reader | manual-supported | Release the exact production data Worker Wind100 point reader while preserving base forecasts and routes. | [guide](../docs/production-wind100-point-reader-release.md) |
 | [production-wind100-recurring](#production-wind100-recurring) | models / Native wind | recurring | Publish a guarded production-only native wind point candidate under dedicated approval. | [guide](../docs/production-wind100-retention.md) |
 | [production-wind100-retention](#production-wind100-retention) | maintenance / Native wind | manual-supported | Plan or approve bounded cleanup of journal-proven retired production wind components. | [guide](../docs/production-wind100-retention.md) |
 | [production-wind100-scope-preflight](#production-wind100-scope-preflight) | control-plane / Native wind | diagnostic | Prove dedicated cleanup token permissions with disposable production objects before Wind100 publication. | [guide](../docs/production-wind100-credential-scope.md) |
@@ -773,6 +774,32 @@ Checkout declarations (not a claim of approval or checkout success):
 | [audit / Checkout the exact reviewed Atmos source](../.github/workflows/production-account-audit.yml#L65) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmos_sha }}</code> |
 
 Variable references (declared names only; values and activation unknown): [PRODUCTION_ACCOUNT_AUDIT_CLOUDFLARE_ACCOUNT_ID](../.github/workflows/production-account-audit.yml#L48), [PRODUCTION_ACCOUNT_AUDIT_ENABLED](../.github/workflows/production-account-audit.yml#L47).
+
+
+## production-wind100-point-reader-release
+
+[.github/workflows/production-wind100-point-reader-release.yml](../.github/workflows/production-wind100-point-reader-release.yml#L1) · <code>WeatherX production Wind100 point reader release</code>
+
+Declared triggers: [workflow_dispatch](../.github/workflows/production-wind100-point-reader-release.yml#L5); input names <code>["confirm"]</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-production-data-edge","cancel-in-progress":false}</code>.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [release](../.github/workflows/production-wind100-point-reader-release.yml#L17) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"production","url":"https://weatherx.org"}</code> | <code>30</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+
+Declared job conditions (additional step/helper checks may apply):
+
+- [release](../.github/workflows/production-wind100-point-reader-release.yml#L17): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; github.event_name == 'workflow_dispatch' }}</code>
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [release / step 2](../.github/workflows/production-wind100-point-reader-release.yml#L31) | caller repository (implicit) | <code>${{ github.sha }}</code> |
+| [release / step 3](../.github/workflows/production-wind100-point-reader-release.yml#L36) | <code>weatherx-hq/atmos</code> | <code>f5dc141ef83f209a4cb7637447f87e1b43da7450</code> |
+
+Variable references (declared names only; values and activation unknown): none detected.
 
 
 ## production-wind100-recurring
