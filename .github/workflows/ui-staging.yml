@@ -152,12 +152,16 @@ jobs:
           ssh-key: ${{ secrets.ATMOS_READONLY_KEY }}
           persist-credentials: false
           path: atmos
-      - name: verify current-master immutable source
+      - name: verify current-master or reviewed combined UI ancestor source
         working-directory: atmos
         run: |
           [[ "$ATMOS_SHA" =~ ^[a-f0-9]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$ATMOS_SHA"
-          test "$ATMOS_SHA" = "$(git rev-parse origin/master)"
+          if [ "$MODEL_SELECTION_SHA256" = production-account-ru-kk-wind100-intro-v1 ]; then
+            node ../cycle/tools/ui-combined-source-guard.mjs . "$ATMOS_SHA"
+          else
+            test "$ATMOS_SHA" = "$(git rev-parse origin/master)"
+          fi
       - name: install locked dependencies and browsers
         run: |
           python3.11 -m pip install pillow
