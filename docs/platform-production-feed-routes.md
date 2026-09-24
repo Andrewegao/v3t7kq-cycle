@@ -14,7 +14,9 @@ either exact pattern, and uses only the dedicated route token. It attaches USGS 
 then composed hazards, recording each returned route ID. It checks that all unrelated
 routes remain identical, production account health still has purchases closed, USGS
 returns its JSON contract, and the hazards response comes from the scheduled Worker
-with the four-feed contract. A failed proof removes only route IDs created by this run;
+with the four-feed contract. The live proof allows a bounded two-minute propagation
+window after route creation; it never accepts an HTML Pages fallback or an old
+three-feed response. A failed proof removes only route IDs created by this run;
 an uncertain create response is left for manual inspection instead of speculative
 deletion. No Worker version, Pages artifact, data, secrets, or billing state changes.
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assertRouteBoundary, verifyFeeds } from '../tools/platform-production-feed-routes.mjs';
+import { assertRouteBoundary, verifyFeeds, verifyFeedsEventually } from '../tools/platform-production-feed-routes.mjs';
 
 const before = [
   { id: 'a'.repeat(32), pattern: 'weatherx.org/api/platform/health', script: 'weatherx-platform-edge-production' },
@@ -33,4 +33,22 @@ test('live proof requires the scheduled four-feed Worker contract', async () => 
     Response.json({ v: 1, tc: [], ev: [], bundles: [], feed: { tc: true, gdacs: false, eonet: false } }),
   ];
   await assert.rejects(verifyFeeds(async () => legacy.shift()));
+});
+
+test('live proof waits for both newly attached routes to propagate, but remains bounded', async () => {
+  let attempts = 0;
+  let sleeps = 0;
+  const fetchAfterPropagation = async url => {
+    if (url.endsWith('/health')) { attempts++; return Response.json({ ok: true, authMode: 'observe', billingMode: 'enabled', billingPurchaseMode: 'closed' }); }
+    if (url.endsWith('/usgs/list')) return attempts < 3
+      ? new Response('<html>Pages fallback</html>', { status: 404, headers: { 'content-type': 'text/html' } })
+      : Response.json({ type: 'FeatureCollection', features: [] });
+    return Response.json({ v: 1, tc: [], ev: [], bundles: [], feed: { tc: true, gdacs: false, eonet: false, usgs: false } },
+      { headers: { 'x-weatherx-hazards-source': 'scheduled' } });
+  };
+  assert.equal((await verifyFeedsEventually(fetchAfterPropagation, async () => { sleeps++; })).status, 'verified');
+  assert.equal(attempts, 3);
+  assert.equal(sleeps, 2);
+  await assert.rejects(verifyFeedsEventually(async () => new Response('<html/>', { status: 404 }),
+    async () => {}, 2), /production Platform health failed/);
 });
