@@ -93,6 +93,19 @@ export async function verifyFeeds(fetchImpl = fetch) {
   return { status: 'verified', usgsStatus: usgs.status, hazardsSource: hazards.headers.get('x-weatherx-hazards-source') };
 }
 
+export async function verifyFeedsEventually(fetchImpl = fetch,
+  sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), attempts = 24) {
+  assert.ok(Number.isInteger(attempts) && attempts >= 1 && attempts <= 24);
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try { return await verifyFeeds(fetchImpl); }
+    catch (error) {
+      if (attempt === attempts) throw error;
+      await sleep(5_000);
+    }
+  }
+  throw new Error('unreachable feed verification state');
+}
+
 export async function main(command, env = process.env) {
   context(env);
   const path = env.ROUTE_RECEIPT;
@@ -113,7 +126,7 @@ export async function main(command, env = process.env) {
     }
     receipt.status = 'attached'; save(path, receipt);
     // The two exact routes are now in production. A failed live check rolls back only these IDs.
-    const verified = await verifyFeeds();
+    const verified = await verifyFeedsEventually();
     receipt.status = 'verified'; receipt.live = verified; save(path, receipt);
     return { status: receipt.status, ownedRouteIds: receipt.owned.map(route => route.id), live: verified };
   }
