@@ -1,24 +1,18 @@
 #!/usr/bin/env node
-// Rebuild the reviewed UI pin only while current master differs in reviewed Worker-only files.
+// Build the reviewed combined UI only from the exact current Atmos master.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const UI_SOURCE = '14e1e2579c2ebe0c0e0236c53623a491f110cce3';
-export const REVIEWED_MASTER = '7497b9815f1f5ca657cda8ed24ad5894afa267e0';
-export const EDGE_ONLY_DIFF = Object.freeze([
-  'platform/edge/scripts/verify-config.mjs',
-  'platform/edge/test/productionWind100.test.ts',
-  'platform/edge/test/stagingPublic.test.ts',
-  'platform/edge/test/verifyConfig.test.mjs',
-  'platform/edge/wrangler.jsonc',
-]);
+export const UI_SOURCE = '54e40231b54b906bbb4568bbc94d8f3551baab18';
+export const REVIEWED_MASTER = UI_SOURCE;
+export const EDGE_ONLY_DIFF = Object.freeze([]);
 
 export function assertReviewedMaster(master, changedPaths) {
   assert.equal(master, REVIEWED_MASTER, 'Atmos master changed; review a fresh source boundary');
   assert.deepEqual(changedPaths, EDGE_ONLY_DIFF,
-    'changes since UI pin are not exactly the reviewed Worker-only set');
+    'changes since UI pin are not empty');
 }
 
 export function assertCombinedSource(cwd, expected = UI_SOURCE) {
