@@ -522,6 +522,15 @@
       "subsystem": "Production platform",
       "lifecycle": "manual-supported",
       "runbook": "docs/platform-production-feed-routes.md"
+    },
+    {
+      "id": "production-wind100-point-reader-release",
+      "path": ".github/workflows/production-wind100-point-reader-release.yml",
+      "family": "releases",
+      "purpose": "Release the exact production data Worker Wind100 point reader while preserving base forecasts and routes.",
+      "subsystem": "Production data reader",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/production-wind100-point-reader-release.md"
     }
   ]
 }
