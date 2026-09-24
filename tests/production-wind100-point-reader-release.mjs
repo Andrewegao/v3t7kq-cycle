@@ -43,16 +43,18 @@ test('route scope includes current specific data-edge point route and fences dri
 test('point proof requires exact base parity and real finite Wind100 samples',()=>{
   const selector={runId:'2026092312',catalogId:'prod-wind100-recurring-35921335025-1',
     selectionSha256:'a'.repeat(64)};
-  const base={schemaVersion:2,model:'ecmwf',runId:selector.runId,releaseId:'release',
+  const base={schemaVersion:1,model:'ecmwf',runId:selector.runId,releaseId:'base-data-catalog',
     quality:'complete',series:{wind_speed:{samples:[
       {validTime:'2026-09-24T00:00:00.000Z',value:1},
       {validTime:'2026-09-24T03:00:00.000Z',value:2},
     ]}}};
-  const point={...base,series:{...base.series,wind_speed_100m:{samples:[
+  const point={...base,releaseId:selector.catalogId,series:{...base.series,wind_speed_100m:{samples:[
     {validTime:'2026-09-24T00:00:00.000Z',value:2},
     {validTime:'2026-09-24T03:00:00.000Z',value:3},
   ]}}};
   assertPoint(point,selector,base);
+  assert.throws(()=>assertPoint({...point,releaseId:base.releaseId},selector,base),
+    /Expected values to be strictly equal/);
   assert.equal(wind100Query(selector).get('catalog'),selector.catalogId);
   assert.throws(()=>assertPoint({...point,series:{...point.series,
     wind_speed_100m:{samples:[{validTime:'x',value:Infinity}]}}},selector,base),/Wind100 samples missing/);
