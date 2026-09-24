@@ -209,7 +209,11 @@ async function verifyLive(ctx,receipt) {
 async function recover(ctx,receipt) {
   if(!receipt?.previous||!receipt?.candidate)return 'nothing-to-restore';
   const current=await remoteBoundary(ctx);
-  if(recoveryAction(current.active,receipt)==='already-restored')return 'prior-version-already-active';
+  if(recoveryAction(current.active,receipt)==='already-restored'){
+    sameBoundary(receipt.before,current,{candidateSettings:true});
+    same((await publicBoundary()).base,receipt.public.base,'base point changed with prior version active');
+    return 'prior-version-already-active';
+  }
   sameBoundary(receipt.before,current,{candidateSettings:true});
   await runWrangler(ctx,['rollback',receipt.previous,'--yes',
     '--message','Restore prior data Worker after Wind100 point reader failure']);
