@@ -74,7 +74,9 @@ export function assertPoint(value, selector, base) {
   assert.equal(value?.schemaVersion, base.schemaVersion);
   assert.equal(value?.model, 'ecmwf');
   assert.equal(value?.runId, selector.runId);
-  assert.equal(value?.releaseId, base.releaseId);
+  // The opt-in response is served from its own pinned Wind100 catalog. The
+  // ordinary forecast response remains on the separate data catalog.
+  assert.equal(value?.releaseId, selector.catalogId);
   assert.equal(value?.quality, 'complete');
   same(value.series?.wind_speed, base.series?.wind_speed, 'base wind-speed samples changed');
   const samples = value.series?.wind_speed_100m?.samples;
