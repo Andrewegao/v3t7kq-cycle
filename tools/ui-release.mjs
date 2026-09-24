@@ -17,6 +17,7 @@ import {profileFor,validateProfile,selectionProfile,coreReleaseProfile,publicLoc
 import {LANE_B_CONTRACT,PRODUCTION_ACCOUNT_APPROVAL,validateProductionPagesConfiguration} from './production-account-contract.mjs';
 import {assertPublicLocaleBetaReady} from './ui-public-locale-beta.mjs';
 import {assertPublicCombinedReady,PUBLIC_COMBINED_WIND100_RECEIPT} from './ui-public-combined.mjs';
+import {assertCombinedSource} from './ui-combined-source-guard.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONTROL = resolve(ROOT, '../control');
@@ -30,6 +31,7 @@ const CORE_CATALOG_MODELS = ['ecmwf','gfs'];
 export const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workflows/ui-staging-tc.yml', '.github/workflows/ui-release.yml',
   'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh',
   'tools/ui-release-profile-preflight.mjs','tools/ui-public-locale-beta.mjs','tools/ui-public-combined.mjs',
+  'tools/ui-combined-source-guard.mjs','tools/ui-weather-feed-baseline.mjs',
   'tools/production-account-contract.mjs','tools/production-account-trust-policy.mjs','tools/production-account-release.mjs','tools/production-account-execution.mjs',
   'tools/ui-staging-models.mjs','tools/ui-staging-model-browser.mjs','tools/ui-staging-core-browser.mjs','tools/ui-staging-tc-proof.mjs','tools/ui-staging-preflight.mjs',
   'tools/ui-staging-account-proof.mjs',
@@ -323,7 +325,9 @@ export function requiredSourceGuard(profile) {
 function sourceIdentity(profile) {
   assert.match(process.env.ATMOS_SHA ?? '', /^[a-f0-9]{40}$/);
   assert.equal(git(['rev-parse','HEAD'], SOURCE), process.env.ATMOS_SHA);
-  assert.equal(git(['rev-parse','origin/master'], SOURCE), process.env.ATMOS_SHA, 'stage the exact current-master source');
+  if (publicCombinedProfile(profile)) assertCombinedSource(SOURCE, process.env.ATMOS_SHA);
+  else assert.equal(git(['rev-parse','origin/master'], SOURCE), process.env.ATMOS_SHA,
+    'stage the exact current-master source');
   git(['diff','--exit-code','HEAD'], SOURCE);
   if(publicCombinedProfile(profile))assert.equal(process.env.ATMOS_SHA,assertPublicCombinedReady(),
     'combined production Lab source must equal the reviewed master SHA');

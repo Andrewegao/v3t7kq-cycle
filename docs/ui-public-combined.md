@@ -16,3 +16,9 @@ the unchanged full weather-feed verifier, including USGS and the four-source
 hazards contract, inside the guarded three-success production soak. This is
 scoped only to this exact combined profile; earlier profiles retain their full
 preflight verifier.
+
+If the exact UI source is restaged after the production Worker merge, the
+source guard permits only the reviewed `14e1e257…` UI ancestor while Atmos
+master is exactly `7497b981…`. It verifies that the intervening diff contains
+only the five reviewed `platform/edge` configuration/test files and that the
+checkout is clean. Any later master or UI change blocks staging until review.
