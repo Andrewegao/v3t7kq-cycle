@@ -1,7 +1,7 @@
 // Guarded orchestration only. This program never writes Workers, DNS, bindings, data or settings.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, lstatSync, chmodSync, existsSync, unlinkSync } from 'node:fs';
+import { constants, closeSync, fstatSync, openSync, readFileSync, readSync, writeFileSync, mkdirSync, readdirSync, statSync, lstatSync, chmodSync, existsSync, unlinkSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {installCompressionOverlay,selectCompressionAssets,validateCompressionFiles} from './ui-static-compression.mjs';
@@ -10,6 +10,8 @@ import {staticCompressionProfile} from './ui-staging-models.mjs';
 import {verifyProductionGround} from './ui-production-ground.mjs';
 import {accountQualificationRequired,runAccountQualification,readAccountProof,accountQualificationBinding,
   requireAccountQualificationBinding} from './ui-staging-account-proof.mjs';
+import {PUBLIC_JOURNEY_PROOF_MAX_BYTES,runPublicReleaseJourneys,readPublicJourneyProof,
+  validatePublicJourneyProofBytes,publicJourneyBinding,requirePublicJourneyBinding} from './ui-public-release-journeys.mjs';
 import { controlShaFor, TC_CONTROL_SHA, REPOSITORY, MAX_BYTES, gate, hash, createCandidate, validateCandidate,
   readTree, validateFiles, seal, unseal, restore, eligibleRun } from './ui-candidate.mjs';
 import { packBuild, unpackBuild, eligibleBuild } from './ui-build-transfer.mjs';
@@ -27,6 +29,8 @@ const ACCOUNT = 'a89f9a1af485021fbc60a68b163c7c6e';
 const ORIGINS = { staging: 'https://staging.weatherx.org', production: 'https://weatherx.org' };
 const PROJECTS = { staging: 'weatherx-platform-staging', production: 'atmos-platform' };
 const SAFE_CATALOG_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
+const DEPLOYMENT_ID = /^[a-f0-9-]{36}$/;
+const GUARD_SUCCESS_RECEIPT_MAX_BYTES = 4096;
 const CORE_CATALOG_MODELS = ['ecmwf','gfs'];
 export const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workflows/ui-staging-tc.yml', '.github/workflows/ui-release.yml',
   'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh',
@@ -34,7 +38,7 @@ export const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workfl
   'tools/ui-combined-source-guard.mjs','tools/ui-weather-feed-baseline.mjs',
   'tools/production-account-contract.mjs','tools/production-account-trust-policy.mjs','tools/production-account-release.mjs','tools/production-account-execution.mjs',
   'tools/ui-staging-models.mjs','tools/ui-staging-model-browser.mjs','tools/ui-staging-core-browser.mjs','tools/ui-staging-tc-proof.mjs','tools/ui-staging-preflight.mjs',
-  'tools/ui-staging-account-proof.mjs',
+  'tools/ui-staging-account-proof.mjs','tools/ui-public-release-journeys.mjs',
   'tools/ui-static-compression.mjs','tools/ui-static-compression-wire.mjs',
   'tools/ui-production-ground.mjs','docs/production-ground-review-20260907.md','docs/ui-public-locale-beta.md','docs/ui-public-combined.md'];
 const run = (command, args, options = {}) => execFileSync(command, args, { stdio: 'inherit', ...options });
@@ -45,6 +49,84 @@ export const pipelineDigest = (profile=profileFor(),root=ROOT) => hash(POLICY_FI
   .concat(tcGuidanceProfile(profile)?[`staging-tc-selections/${profile.tcSelectionSha256}/selection.json\0${hash(readTcSelection(root,profile,null).bytes)}`]:[]).join('\n'));
 const stateFile = () => resolve(process.env.RUNNER_TEMP, 'ui-candidate.json');
 function save(file, value) { mkdirSync(dirname(file), { recursive: true, mode: 0o700 }); writeFileSync(file, JSON.stringify(value), { mode: 0o600 }); }
+export function transactionReceiptPath(runnerTemp,stage){
+  assert.ok(Object.hasOwn(PROJECTS,stage),'unknown UI target');
+  assert.equal(resolve(runnerTemp),runnerTemp,'transaction receipt runner temp must be absolute');
+  return resolve(runnerTemp,'ui-deploy-transactions',`${stage}.json`);
+}
+export function guardSuccessReceiptPath(runnerTemp,stage){
+  assert.ok(Object.hasOwn(PROJECTS,stage),'unknown UI target');
+  assert.equal(resolve(runnerTemp),runnerTemp,'guard success receipt runner temp must be absolute');
+  return resolve(runnerTemp,'ui-deploy-transactions',`${stage}-guard-success.json`);
+}
+export function validateGuardSuccessReceiptBytes(bytes,{stage,previousDeploymentId,sourceSha,releaseId,indexSha256}){
+  assert.ok(Object.hasOwn(PROJECTS,stage),'unknown UI target');
+  assert.ok(Buffer.isBuffer(bytes)&&bytes.length>0&&bytes.length<=GUARD_SUCCESS_RECEIPT_MAX_BYTES,
+    'guard success receipt exceeds its byte bound');
+  let receipt;
+  try{receipt=JSON.parse(bytes);}catch{throw new Error('guard success receipt is not JSON');}
+  assert.ok(receipt&&typeof receipt==='object'&&!Array.isArray(receipt),'guard success receipt must be an object');
+  assert.deepEqual(Object.keys(receipt).sort(),['schemaVersion','project','previousDeploymentId','candidateDeploymentId',
+    'sourceSha','releaseId','indexSha256'].sort(),'guard success receipt fields changed');
+  assert.equal(receipt.schemaVersion,1);assert.equal(receipt.project,PROJECTS[stage]);
+  assert.match(receipt.previousDeploymentId??'',DEPLOYMENT_ID,'guard previous deployment ID is invalid');
+  assert.equal(receipt.previousDeploymentId,previousDeploymentId,'guard rollback deployment differs from armed transaction');
+  assert.match(receipt.candidateDeploymentId??'',DEPLOYMENT_ID,'guard candidate deployment ID is invalid');
+  assert.notEqual(receipt.candidateDeploymentId,receipt.previousDeploymentId,'guard candidate deployment did not change');
+  assert.equal(receipt.sourceSha,sourceSha,'guard source differs from candidate');
+  assert.equal(receipt.releaseId,releaseId,'guard release differs from candidate');
+  assert.equal(receipt.indexSha256,indexSha256,'guard index differs from candidate');
+  return receipt;
+}
+export function readGuardSuccessReceipt(path,context){
+  assert.equal(resolve(path),path,'guard success receipt path must be absolute');
+  let descriptor;
+  try{
+    descriptor=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW);
+    const before=fstatSync(descriptor,{bigint:true});
+    assert.ok(before.isFile()&&before.nlink===1n&&(before.mode&0o777n)===0o600n
+      &&before.size>0n&&before.size<=BigInt(GUARD_SUCCESS_RECEIPT_MAX_BYTES),
+      'guard success receipt must be one bounded regular file');
+    const allocation=Buffer.alloc(GUARD_SUCCESS_RECEIPT_MAX_BYTES+1);let length=0;
+    while(length<allocation.length){const count=readSync(descriptor,allocation,length,allocation.length-length,length);if(count===0)break;length+=count;}
+    assert.ok(length<=GUARD_SUCCESS_RECEIPT_MAX_BYTES,'guard success receipt grew beyond its byte bound');
+    const after=fstatSync(descriptor,{bigint:true});
+    assert.ok(before.dev===after.dev&&before.ino===after.ino&&before.size===after.size
+      &&before.mtimeNs===after.mtimeNs&&before.ctimeNs===after.ctimeNs,'guard success receipt changed while it was read');
+    assert.equal(BigInt(length),before.size,'guard success receipt byte count changed');
+    return validateGuardSuccessReceiptBytes(Buffer.from(allocation.subarray(0,length)),context);
+  }finally{if(descriptor!==undefined)closeSync(descriptor);}
+}
+export function guardTransactionArguments(profile,previousDeploymentId,successReceiptPath){
+  validateProfile(profile);
+  if(!publicCombinedProfile(profile)){
+    assert.equal(previousDeploymentId,undefined,'legacy UI profiles cannot use the new predecessor protocol');
+    assert.equal(successReceiptPath,undefined,'legacy UI profiles cannot use the new success receipt protocol');
+    return [];
+  }
+  assert.match(previousDeploymentId??'',DEPLOYMENT_ID,'combined UI predecessor deployment ID is invalid');
+  assert.equal(resolve(successReceiptPath??''),successReceiptPath,'combined UI success receipt path must be absolute');
+  return ['--expected-previous-id',previousDeploymentId,'--success-receipt',successReceiptPath];
+}
+export function armedTransactionReceipt(stage,c,previousDeploymentId,now=new Date()){
+  assert.ok(Object.hasOwn(PROJECTS,stage),'unknown UI target');validateCandidate(c);
+  assert.match(previousDeploymentId??'',DEPLOYMENT_ID,'rollback deployment ID is invalid');
+  assert.ok(now instanceof Date&&Number.isFinite(now.getTime()),'transaction capture time is invalid');
+  return {schemaVersion:1,stage,project:PROJECTS[stage],status:'armed',sourceSha:c.sourceSha,
+    releaseId:validateCandidate(c).releaseId,artifactDigest:c.artifactDigest,
+    expectedPreviousDeploymentId:previousDeploymentId,rollbackDeploymentId:previousDeploymentId,
+    candidateDeploymentId:null,capturedAt:now.toISOString()};
+}
+export function completedTransactionReceipt(receipt,candidateDeploymentId,now=new Date()){
+  assert.equal(receipt?.schemaVersion,1);assert.equal(receipt?.status,'armed');
+  assert.match(receipt?.rollbackDeploymentId??'',DEPLOYMENT_ID,'rollback deployment ID is invalid');
+  assert.equal(receipt.expectedPreviousDeploymentId,receipt.rollbackDeploymentId,
+    'expected previous deployment differs from rollback target');
+  assert.match(candidateDeploymentId??'',DEPLOYMENT_ID,'candidate deployment ID is invalid');
+  assert.notEqual(candidateDeploymentId,receipt.rollbackDeploymentId,'candidate deployment did not change');
+  assert.ok(now instanceof Date&&Number.isFinite(now.getTime()),'transaction completion time is invalid');
+  return {...receipt,status:'healthy',candidateDeploymentId,completedAt:now.toISOString()};
+}
 function candidate() { const c = JSON.parse(readFileSync(stateFile())); validateCandidate(c); return c; }
 function controller(profile = profileFor(process.env.MODEL_SELECTION_SHA256)) {
   assert.equal(git(['rev-parse','HEAD']),process.env.GITHUB_SHA, 'release workflow checkout changed');
@@ -570,18 +652,41 @@ async function deploy(stage) {
   const dist = stage === 'staging' ? resolve(process.env.RUNNER_TEMP,'ui-stage-dist') : resolve(process.env.RUNNER_TEMP,'ui-promote-dist');
   assert.equal(validateFiles(readTree(dist,c.profile),c.profile).digest,c.artifactDigest, 'deploy bytes differ from candidate');
   const env = environment(c);
+  const strictTransaction=publicCombinedProfile(c.profile);
+  let previousDeploymentId,transactionPath,guardSuccessPath,transaction;
+  if(strictTransaction){
+    const before=await projectSnapshot(stage);previousDeploymentId=before.canonical_deployment.id;
+    transactionPath=transactionReceiptPath(process.env.RUNNER_TEMP,stage);
+    guardSuccessPath=guardSuccessReceiptPath(process.env.RUNNER_TEMP,stage);
+    assert.equal(existsSync(guardSuccessPath),false,'guard success receipt path must be new');
+    transaction=armedTransactionReceipt(stage,c,previousDeploymentId);
+    save(transactionPath,transaction);
+  }
+  const transactionArgs=guardTransactionArguments(c.profile,previousDeploymentId,guardSuccessPath);
   // Work outside the Atmos app: no wrangler config discovery, no Functions discovery/rebuild.
   const uploadCwd=resolve(process.env.RUNNER_TEMP,'ui-upload-cwd'); mkdirSync(uploadCwd,{recursive:true,mode:0o700});
   run('bash',[resolve(CONTROL,'ops/release/guard-pages-deploy.sh'),'--project',PROJECTS[stage],
-    '--branch','main','--dir',dist,'--receipt',resolve(dist,'health/release.json'),'--',
+    '--branch','main','--dir',dist,'--receipt',resolve(dist,'health/release.json'),
+    ...transactionArgs,'--',
     'bash',resolve(ROOT,'tools/ui-verify.sh'),stage], {cwd:uploadCwd,env});
   assert.equal(validateFiles(readTree(dist,c.profile),c.profile).digest,c.artifactDigest, 'deployment modified artifact');
+  let guardSuccess,p;
+  if(strictTransaction){
+    const release=validateCandidate(c),indexSha256=c.files.find(file=>file.path==='index.html').sha256;
+    guardSuccess=readGuardSuccessReceipt(guardSuccessPath,{stage,previousDeploymentId,sourceSha:c.sourceSha,
+      releaseId:release.releaseId,indexSha256});
+    p=await projectSnapshot(stage);
+    assert.equal(p.canonical_deployment.id,guardSuccess.candidateDeploymentId,
+      'Pages canonical deployment changed after guarded verification');
+    save(transactionPath,completedTransactionReceipt(transaction,guardSuccess.candidateDeploymentId));
+  }else p=await projectSnapshot(stage);
+  const deploymentId=guardSuccess?.candidateDeploymentId??p.canonical_deployment.id;
   if (stage === 'staging') {
-    const p = await projectSnapshot(stage),wind100=await exactStaging(c);
+    const wind100=await exactStaging(c);
     const selection=requireStagingApproval(c,process.env),modelProof=c.profile.stagingOnly?readFileSync(resolve(process.env.RUNNER_TEMP,'ui-model-browser.json')):null;
     if(modelProof&&selectionProfile(c.profile))validateBrowserReceipt(modelProof,selection,{sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId,selectionSha256:c.profile.modelSelectionSha256});
     if(modelProof&&coreReleaseProfile(c.profile))validateCoreBrowserReceipt(modelProof,{sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId});
-    c.qualification = {origin:ORIGINS.staging, deploymentId:p.canonical_deployment.id,
+    c.qualification = {origin:ORIGINS.staging, deploymentId,
       artifactDigest:c.artifactDigest,qualifiedAt:new Date().toISOString(),fullTests:true,weatherLab:true,builtRuntime:true,probes:3};
     if(wind100)Object.assign(c.qualification,{wind100});
     if(modelProof&&selectionProfile(c.profile))Object.assign(c.qualification,{modelSelectionSha256:c.profile.modelSelectionSha256,modelBrowserReceiptSha256:hash(modelProof),modelBrowserModels:selection.entries.length});
@@ -590,6 +695,11 @@ async function deploy(stage) {
       const accountProof=await readAccountProof({runnerTemp:process.env.RUNNER_TEMP,controlRoot:CONTROL,
         sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId});
       Object.assign(c.qualification,accountQualificationBinding(c,accountProof));
+    }
+    if(publicCombinedProfile(c.profile)){
+      const publicProof=readPublicJourneyProof({runnerTemp:process.env.RUNNER_TEMP,controlRoot:CONTROL,stage,
+        sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId,requireFreshWind:false});
+      Object.assign(c.qualification,publicJourneyBinding(publicProof));
     }
     if(staticCompressionProfile(c.profile)){
       const proof=readFileSync(resolve(process.env.RUNNER_TEMP,'ui-compression-wire.json'));
@@ -638,11 +748,13 @@ async function verify(stage) {
       UI_MODEL_BROWSER_OUTPUT:resolve(process.env.RUNNER_TEMP,'ui-model-browser.json')})});
     if(accountQualificationRequired(stage,phase,c.profile))await runAccountQualification({candidate:c,
       releaseId:validateCandidate(c).releaseId,runnerTemp:process.env.RUNNER_TEMP,controlRoot:CONTROL});
+    if(publicCombinedProfile(c.profile))runPublicReleaseJourneys({runnerTemp:process.env.RUNNER_TEMP,
+      controlRoot:CONTROL,stage,sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId});
   }
 }
 async function retain() {
   const c=candidate(), out=resolve(process.env.RUNNER_TEMP,'ui-sealed');
-  let compressionProof,accountProof;
+  let compressionProof,accountProof,publicProof;
   const selection=requireStagingApproval(c,process.env);
   const wind100=candidateWind100(c,process.env);
   assert.deepEqual(c.qualification?.wind100,wind100??undefined,'staging Wind100 qualification binding differs from receipt');
@@ -650,6 +762,9 @@ async function retain() {
   if(coreReleaseProfile(c.profile)){assert.equal(c.qualification?.coreProfile,c.profile.releaseRosterCore);assert.equal(c.qualification?.coreBrowserModels,2);assert.match(c.qualification?.coreBrowserReceiptSha256??'',/^[a-f0-9]{64}$/);}
   if(c.profile.account){accountProof=await readAccountProof({runnerTemp:process.env.RUNNER_TEMP,controlRoot:CONTROL,
     sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId,requireFresh:false});requireAccountQualificationBinding(c,accountProof);}
+  if(publicCombinedProfile(c.profile)){publicProof=readPublicJourneyProof({runnerTemp:process.env.RUNNER_TEMP,
+    controlRoot:CONTROL,stage:'staging',sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId,requireFreshWind:false});
+    requirePublicJourneyBinding(c,publicProof);}
   if(staticCompressionProfile(c.profile)){
     const manifest=validateCompressionFiles(c.files,true);
     assert.equal(c.qualification?.staticCompressionSealSha256,manifest.sealSha256);
@@ -664,6 +779,7 @@ async function retain() {
   // request headers or credentials. Preserve the exact proof bound into the encrypted candidate.
   if(compressionProof)writeFileSync(resolve(out,'compression-wire.json'),compressionProof,{mode:0o600});
   if(accountProof)writeFileSync(resolve(out,'account-qualification.json'),accountProof.bytes,{flag:'wx',mode:0o600});
+  if(publicProof)writeFileSync(resolve(out,'public-release-journeys.json'),publicProof.bytes,{flag:'wx',mode:0o600});
   const summary={sourceSha:c.sourceSha,stagingRunId:c.runId,attempt:c.attempt,artifactDigest:c.artifactDigest,
     deploymentId:c.qualification.deploymentId,qualifiedAt:c.qualification.qualifiedAt};
   save(resolve(out,'summary.json'),summary);
@@ -694,14 +810,15 @@ async function download() {
   const out=resolve(process.env.RUNNER_TEMP,'ui-download'); mkdirSync(out,{mode:0o700});
   run('gh',['run','download',String(r.id),'--repo',REPOSITORY,'--name',name,'--dir',out],{env:{...process.env,GH_TOKEN:process.env.GITHUB_TOKEN}});
   const downloadedFiles=readdirSync(out).sort();
-  assert.ok(downloadedFiles.every(name=>['account-qualification.json','candidate.wxui','summary.json'].includes(name)),
+  assert.ok(downloadedFiles.every(name=>['account-qualification.json','candidate.wxui','public-release-journeys.json','summary.json'].includes(name)),
     'staging candidate artifact contains an unapproved file');
   assert.ok(statSync(resolve(out,'candidate.wxui')).size<MAX_BYTES*2);
   const c=unseal(readFileSync(resolve(out,'candidate.wxui')),process.env.UI_CANDIDATE_KEY);
   requireReleaseProfileBinding(c.profile);
-  assert.deepEqual(downloadedFiles,c.profile.account
-    ? ['account-qualification.json','candidate.wxui','summary.json']
-    : ['candidate.wxui','summary.json']);
+  const expectedFiles=['candidate.wxui','summary.json'];
+  if(c.profile.account)expectedFiles.push('account-qualification.json');
+  if(publicCombinedProfile(c.profile))expectedFiles.push('public-release-journeys.json');
+  assert.deepEqual(downloadedFiles,expectedFiles.sort());
   if(c.profile.account){
     const proofPath=resolve(out,'account-qualification.json'),proofStat=lstatSync(proofPath);
     assert.ok(proofStat.isFile()&&!proofStat.isSymbolicLink()&&proofStat.size>0&&proofStat.size<=1024*1024,
@@ -711,6 +828,14 @@ async function download() {
       'retained account qualification proof differs from candidate binding');
     assert.equal(proof.harnessSha256,c.qualification?.accountHarnessSha256,
       'retained account qualification harness differs from candidate binding');
+  }
+  if(publicCombinedProfile(c.profile)){
+    const proofPath=resolve(out,'public-release-journeys.json'),proofStat=lstatSync(proofPath);
+    assert.ok(proofStat.isFile()&&!proofStat.isSymbolicLink()&&proofStat.size>0&&proofStat.size<=PUBLIC_JOURNEY_PROOF_MAX_BYTES,
+      'retained public journey proof is invalid');
+    const proof=validatePublicJourneyProofBytes(readFileSync(proofPath),{stage:'staging',sourceSha:c.sourceSha,
+      releaseId:validateCandidate(c).releaseId,requireFreshWind:false});
+    requirePublicJourneyBinding(c,{...proof,harnessSha256:c.qualification?.publicJourneyHarnessSha256});
   }
   requireUiProductionProfile(c.profile);
   await auditRun(c); await exactStaging(c);

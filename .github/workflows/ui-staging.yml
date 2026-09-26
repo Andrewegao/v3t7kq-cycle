@@ -9,7 +9,7 @@ on:
         required: true
         type: string
       model_selection_sha256:
-        description: approved/hash uses a pinned selection; production-account-billing-v1 selects the reviewed production account UI; production-account-ru-kk-beta-v1 adds the exact RU/KK public locale beta; production-account-ru-kk-wind100-intro-v1 adds native production Wind100 and desktop intro with billing UI off; release-roster-core-v1 enables reviewed core expansion plus release roster; release-roster-core-br11-v1 adds separately approved staging-only static compression; release-roster-core-account-v1 preserves separately approved staging accounts with standard compression; none selects baseline
+        description: approved/hash uses a pinned selection; production-account-billing-v1 selects the reviewed production account UI; production-account-ru-kk-beta-v1 adds the exact RU/KK public locale beta; production-account-ru-kk-wind100-onboarding-v2 adds native production Wind100 and onboarding with billing UI off; release-roster-core-v1 enables reviewed core expansion plus release roster; release-roster-core-br11-v1 adds separately approved staging-only static compression; release-roster-core-account-v1 preserves separately approved staging accounts with standard compression; none selects baseline
         required: false
         default: approved
         type: string
@@ -66,7 +66,7 @@ jobs:
           // Wind100 approval belongs only to the staging account profile. Protected
           // environment variables may remain enabled while a production-account
           // candidate is built, so remove them before resolving that distinct profile.
-          const windEnvironment = ['production-account-billing-v1', 'production-account-ru-kk-beta-v1', 'production-account-ru-kk-wind100-intro-v1'].includes(selection)
+          const windEnvironment = ['production-account-billing-v1', 'production-account-ru-kk-beta-v1', 'production-account-ru-kk-wind100-onboarding-v2'].includes(selection)
             ? {
                 ...process.env,
                 STAGING_WIND100_UI_ENABLED: '',
@@ -126,7 +126,7 @@ jobs:
           repository: weatherx-hq/atmos
           # Baseline artifacts keep the production-compatible controller; staging-only
           # profiles use a separately reviewed literal pin. Never accept an input SHA here.
-          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-intro-v1' && '3687c64e1911c213040f832d15cdf081a6d80d05' || needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' && 'b9db38dd22eed1da56c6c4dd4140480da7e89153' || needs.profile.outputs.model_selection_sha256 == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || needs.profile.outputs.model_selection_sha256 == 'none' && '25c402db5149daa018e349a34a4beeba1f2dca45' || '4dafd26387d5917604deb7379a8d45a994fc5b67' }}
+          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2' && 'ce16ac269249cc0d6252cfa147471f096313cddc' || needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' && 'b9db38dd22eed1da56c6c4dd4140480da7e89153' || needs.profile.outputs.model_selection_sha256 == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || needs.profile.outputs.model_selection_sha256 == 'none' && '25c402db5149daa018e349a34a4beeba1f2dca45' || '4dafd26387d5917604deb7379a8d45a994fc5b67' }}
           ssh-key: ${{ secrets.ATMOS_READONLY_KEY }}
           persist-credentials: false
           path: control
@@ -157,7 +157,7 @@ jobs:
         run: |
           [[ "$ATMOS_SHA" =~ ^[a-f0-9]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$ATMOS_SHA"
-          if [ "$MODEL_SELECTION_SHA256" = production-account-ru-kk-wind100-intro-v1 ]; then
+          if [ "$MODEL_SELECTION_SHA256" = production-account-ru-kk-wind100-onboarding-v2 ]; then
             node ../cycle/tools/ui-combined-source-guard.mjs . "$ATMOS_SHA"
           else
             test "$ATMOS_SHA" = "$(git rev-parse origin/master)"
@@ -176,7 +176,7 @@ jobs:
           node ops/release/test-production-verifiers.mjs
       - name: full application test gate
         env:
-          WX_CI_PROFILE: ${{ (needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' || needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-intro-v1') && 'public-beta-ci-lab-road-security-v1' || '' }}
+          WX_CI_PROFILE: ${{ (needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' || needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2') && 'public-beta-ci-lab-road-security-v1' || '' }}
         run: npm test --prefix atmos/app
       - name: Weather Lab release gate
         working-directory: atmos
@@ -228,7 +228,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-intro-v1' && '3687c64e1911c213040f832d15cdf081a6d80d05' || needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' && 'b9db38dd22eed1da56c6c4dd4140480da7e89153' || needs.profile.outputs.model_selection_sha256 == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || needs.profile.outputs.model_selection_sha256 == 'none' && '25c402db5149daa018e349a34a4beeba1f2dca45' || '4dafd26387d5917604deb7379a8d45a994fc5b67' }}
+          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2' && 'ce16ac269249cc0d6252cfa147471f096313cddc' || needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' && 'b9db38dd22eed1da56c6c4dd4140480da7e89153' || needs.profile.outputs.model_selection_sha256 == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || needs.profile.outputs.model_selection_sha256 == 'none' && '25c402db5149daa018e349a34a4beeba1f2dca45' || '4dafd26387d5917604deb7379a8d45a994fc5b67' }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
           path: control
@@ -272,7 +272,11 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ui-staging-incidents-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/ui-incidents/*.json
+          path: |
+            ${{ runner.temp }}/ui-incidents/*.json
+            ${{ runner.temp }}/ui-deploy-transactions/staging.json
+            ${{ runner.temp }}/ui-deploy-transactions/staging-guard-success.json
+            ${{ runner.temp }}/ui-public-release-journeys/staging.json
           if-no-files-found: ignore
           retention-days: 90
       - name: retain failed core browser receipt

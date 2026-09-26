@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const UI_SOURCE = '3687c64e1911c213040f832d15cdf081a6d80d05';
+export const UI_SOURCE = 'ce16ac269249cc0d6252cfa147471f096313cddc';
 export const REVIEWED_MASTER = UI_SOURCE;
 export const EDGE_ONLY_DIFF = Object.freeze([]);
 

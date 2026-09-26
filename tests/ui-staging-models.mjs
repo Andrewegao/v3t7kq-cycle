@@ -232,7 +232,7 @@ test('manual staging defaults to protected approval and only explicit none selec
   assert.equal((staging.match(/^\s+MODEL_SELECTION_SHA256: \$\{\{ needs\.profile\.outputs\.model_selection_sha256 \}\}$/gm)||[]).length,2);
   assert.equal((staging.match(/^\s+STAGING_WIND100_UI_DYNAMIC: \$\{\{ vars\.STAGING_WIND100_UI_DYNAMIC \}\}$/gm)||[]).length,1);
   assert.equal((staging.match(/^\s+STAGING_WIND100_UI_DYNAMIC: \$\{\{ needs\.profile\.outputs\.wind100_dynamic \}\}$/gm)||[]).length,2);
-  assert.match(staging,/\['production-account-billing-v1', 'production-account-ru-kk-beta-v1', 'production-account-ru-kk-wind100-intro-v1'\]\.includes\(selection\)[\s\S]*?STAGING_WIND100_UI_DYNAMIC: ''[\s\S]*?resolveWind100BuildPin\(profileFor\(selection\), windEnvironment\)/);
+  assert.match(staging,/\['production-account-billing-v1', 'production-account-ru-kk-beta-v1', 'production-account-ru-kk-wind100-onboarding-v2'\]\.includes\(selection\)[\s\S]*?STAGING_WIND100_UI_DYNAMIC: ''[\s\S]*?resolveWind100BuildPin\(profileFor\(selection\), windEnvironment\)/);
   assert.match(staging,/wind100_dynamic=\$\{pin\?\.dynamic === true \? 'true' : ''\}/);
   assert.doesNotMatch(production,/STAGING_WIND100_UI_DYNAMIC|VITE_STAGING_WIND100_DYNAMIC/);
   assert.match(staging,/name: ui-staging[\s\S]*?UI_STAGING_MODEL_SELECTION_APPROVED_SHA256: \$\{\{ vars\.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256 \}\}/);
