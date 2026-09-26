@@ -24,7 +24,7 @@ on:
           - none
           - production-account-billing-v1
           - production-account-ru-kk-beta-v1
-          - production-account-ru-kk-wind100-intro-v1
+          - production-account-ru-kk-wind100-onboarding-v2
 permissions:
   contents: read
   actions: read
@@ -54,7 +54,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          ref: ${{ inputs.release_profile == 'production-account-ru-kk-wind100-intro-v1' && '3687c64e1911c213040f832d15cdf081a6d80d05' || inputs.release_profile == 'production-account-ru-kk-beta-v1' && 'b9db38dd22eed1da56c6c4dd4140480da7e89153' || inputs.release_profile == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || '25c402db5149daa018e349a34a4beeba1f2dca45' }}
+          ref: ${{ inputs.release_profile == 'production-account-ru-kk-wind100-onboarding-v2' && 'ce16ac269249cc0d6252cfa147471f096313cddc' || inputs.release_profile == 'production-account-ru-kk-beta-v1' && 'b9db38dd22eed1da56c6c4dd4140480da7e89153' || inputs.release_profile == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || '25c402db5149daa018e349a34a4beeba1f2dca45' }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
           path: control
@@ -86,6 +86,10 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ui-production-incidents-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/ui-incidents/*.json
+          path: |
+            ${{ runner.temp }}/ui-incidents/*.json
+            ${{ runner.temp }}/ui-deploy-transactions/production.json
+            ${{ runner.temp }}/ui-deploy-transactions/production-guard-success.json
+            ${{ runner.temp }}/ui-public-release-journeys/production.json
           if-no-files-found: ignore
           retention-days: 90

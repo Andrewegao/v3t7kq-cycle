@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CONTROL_SHA, STAGING_CONTROL_SHA } from '../tools/ui-candidate.mjs';
 const root=new URL('../',import.meta.url);
-const COMBINED_ATMOS_SHA='3687c64e1911c213040f832d15cdf081a6d80d05';
+const COMBINED_ATMOS_SHA='ce16ac269249cc0d6252cfa147471f096313cddc';
 const BETA_ATMOS_SHA='b9db38dd22eed1da56c6c4dd4140480da7e89153';
 const read=p=>readFileSync(new URL(p,root),'utf8');
 const staging=read('.github/workflows/ui-staging.yml'), prod=read('.github/workflows/ui-release.yml'), source=read('tools/ui-release.mjs'), candidate=read('tools/ui-candidate.mjs');
@@ -37,14 +37,14 @@ test('staging workflow leaves release-mode activation to the exact-profile contr
   assert.match(source,/publicBuildEnvironment\(profile,selection/);
   assert.match(source,/merge-base','--is-ancestor',requiredSourceGuard\(profile\),'HEAD'/);
   assert.doesNotMatch(prod,/ATMOS_STAGING_EXPERIMENT_RELEASE|ATMOS_STAGING_RELEASE_ROSTER|VITE_STAGING_MODEL_ADMISSION|UI_STAGING_CORE_PROFILE_APPROVED/);
-  const stagedController="ref: ${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-intro-v1' && '" + COMBINED_ATMOS_SHA + "' || needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' && '" + BETA_ATMOS_SHA + "' || needs.profile.outputs.model_selection_sha256 == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || needs.profile.outputs.model_selection_sha256 == 'none' && '"
+  const stagedController="ref: ${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2' && '" + COMBINED_ATMOS_SHA + "' || needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' && '" + BETA_ATMOS_SHA + "' || needs.profile.outputs.model_selection_sha256 == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || needs.profile.outputs.model_selection_sha256 == 'none' && '"
     + CONTROL_SHA + "' || '" + STAGING_CONTROL_SHA + "' }}";
   assert.equal(staging.split(stagedController).length-1,2);
   assert.match(STAGING_CONTROL_SHA,/^[a-f0-9]{40}$/);
   assert.equal((staging.match(/ref: \$\{\{ needs\.profile\.outputs\.model_selection_sha256/g)||[]).length,2);
   assert.match(candidate,/export const CONTROL_SHA = '25c402db5149daa018e349a34a4beeba1f2dca45'/);
   assert.equal(STAGING_CONTROL_SHA,'4dafd26387d5917604deb7379a8d45a994fc5b67');
-  assert.ok(prod.includes("production-account-ru-kk-wind100-intro-v1' && '" + COMBINED_ATMOS_SHA + "' || inputs.release_profile == 'production-account-ru-kk-beta-v1' && '" + BETA_ATMOS_SHA + "' || inputs.release_profile == 'production-account-billing-v1'"));
+  assert.ok(prod.includes("production-account-ru-kk-wind100-onboarding-v2' && '" + COMBINED_ATMOS_SHA + "' || inputs.release_profile == 'production-account-ru-kk-beta-v1' && '" + BETA_ATMOS_SHA + "' || inputs.release_profile == 'production-account-billing-v1'"));
   assert.match(prod,/repository: weatherx-hq\/atmos/);
   assert.doesNotMatch(prod,/ref: a58eff158b56ef2ba25189d2b859315b00893a14/);
   assert.doesNotMatch(prod,/STAGING_CONTROL_SHA|stagingOnly/);
@@ -79,7 +79,7 @@ test('staging Wind100 pin comes only from protected profile outputs and producti
     assert.match(build,new RegExp(`STAGING_WIND100_UI_${suffix}: \\\$\\{\\{ needs\\.profile\\.outputs\\.wind100_${suffix.toLowerCase()} \\}\\}`));
     assert.match(qualify,new RegExp(`STAGING_WIND100_UI_${suffix}: \\\$\\{\\{ needs\\.profile\\.outputs\\.wind100_${suffix.toLowerCase()} \\}\\}`));
   }
-  assert.match(profile,/\['production-account-billing-v1', 'production-account-ru-kk-beta-v1', 'production-account-ru-kk-wind100-intro-v1'\]\.includes\(selection\)[\s\S]*?STAGING_WIND100_UI_ENABLED: ''[\s\S]*?resolveWind100BuildPin\(profileFor\(selection\), windEnvironment\)/,
+  assert.match(profile,/\['production-account-billing-v1', 'production-account-ru-kk-beta-v1', 'production-account-ru-kk-wind100-onboarding-v2'\]\.includes\(selection\)[\s\S]*?STAGING_WIND100_UI_ENABLED: ''[\s\S]*?resolveWind100BuildPin\(profileFor\(selection\), windEnvironment\)/,
     'the production-account profile must clear ambient staging-only Wind100 approvals');
   assert.match(source,/validateWind100BuildReceipt\(c\.profile,JSON\.parse\(bytes\),process\.env\)/,
     'the deployed live release receipt must be compared with the current protected tuple');
@@ -127,7 +127,21 @@ test('guard is pinned, both candidate verification paths are inside automatic ro
   assert.match(source,/ui-weather-feed-baseline\.mjs/);
   assert.doesNotMatch(source,/if \(standaloneWeatherFeedVerificationRequired\(stage, phase\)\)/);
   assert.match(source,/weather-lab-only-runtime\.mjs/);assert.match(source,/layer-switch-tint\.mjs/);
+  assert.match(source,/guardTransactionArguments\(c\.profile,previousDeploymentId,guardSuccessPath\)/);
+  assert.match(source,/if\(!publicCombinedProfile\(profile\)\)[\s\S]*?return \[\]/);
+  assert.match(source,/return \['--expected-previous-id',previousDeploymentId,'--success-receipt',successReceiptPath\]/);
+  assert.match(source,/p\.canonical_deployment\.id,guardSuccess\.candidateDeploymentId/);
+  assert.match(source,/if\(publicCombinedProfile\(c\.profile\)\)runPublicReleaseJourneys/);
+  assert.equal((source.match(/controlRoot:CONTROL/g)||[]).length,6);
+  assert.doesNotMatch(source,/PublicJourneyProof\(\{[^}]*sourceRoot|runPublicReleaseJourneys\(\{[^}]*sourceRoot/s);
+  assert.match(candidate,/publicJourneyProofSha256/);
   assert.match(source,/cwd:uploadCwd/);assert.doesNotMatch(source,/cwd:dirname\(dist\)/);
+  assert.match(staging,/ui-deploy-transactions\/staging\.json/);
+  assert.match(staging,/ui-deploy-transactions\/staging-guard-success\.json/);
+  assert.match(staging,/ui-public-release-journeys\/staging\.json/);
+  assert.match(prod,/ui-deploy-transactions\/production\.json/);
+  assert.match(prod,/ui-deploy-transactions\/production-guard-success\.json/);
+  assert.match(prod,/ui-public-release-journeys\/production\.json/);
 });
 test('only a staging candidate receives the bounded degraded-cache convergence window',()=>{
   const base={RELEASE_GUARD_VERIFY_REQUIRED_SUCCESSES:'3',RELEASE_GUARD_VERIFY_SLEEP_SECONDS:'15'};

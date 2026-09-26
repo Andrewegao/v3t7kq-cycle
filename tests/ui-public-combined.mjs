@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {PUBLIC_COMBINED_REQUEST,PUBLIC_COMBINED_APPROVAL,PUBLIC_COMBINED_ATMOS_SHA,
   PUBLIC_COMBINED_INTRO_SOURCE_SHA256,PUBLIC_COMBINED_ACCOUNT_SOURCES,PUBLIC_COMBINED_SIDECAR,assertPublicCombinedReady,
+  PUBLIC_COMBINED_ONBOARDING_SOURCES,
   validateCombinedBuild} from '../tools/ui-public-combined.mjs';
 import {PUBLIC_COMBINED_PROFILE,profileFor,validateProfile,publicCombinedProfile,
   publicLocaleBetaProfile,accountServingProductionProfile,requireUiProductionProfile,
@@ -20,9 +21,10 @@ function fixture(){
   const sidecar={schemaVersion:1,profile:'production-account-billing-v1',
     reviewedSourcesSha256:{...PUBLIC_COMBINED_ACCOUNT_SOURCES},
     accountChunks:[info(account)],billingUiEnabled:false,
-    intro:{enabled:true,sourceSha256:PUBLIC_COMBINED_INTRO_SOURCE_SHA256,chunks:[info(intro)]}};
+    intro:{enabled:true,sourceSha256:PUBLIC_COMBINED_INTRO_SOURCE_SHA256,
+      reviewedSourcesSha256:{...PUBLIC_COMBINED_ONBOARDING_SOURCES},chunks:[info(intro)]}};
   const files=[account,intro,file(PUBLIC_COMBINED_SIDECAR,JSON.stringify(sidecar))];
-  const receipt={buildProfile:{...LANE_B_CONTRACT.buildReceipt,wind100:'production-native-dynamic-v1',localeBeta:'ru-kk-public-beta-v1'}};
+  const receipt={buildProfile:{...LANE_B_CONTRACT.buildReceipt,wind100:'production-native-dynamic-v2',localeBeta:'ru-kk-public-beta-v1'}};
   return {receipt,files,sidecar};
 }
 test('distinct combined profile requires its exact reviewed source and protected approvals',()=>{
@@ -31,7 +33,7 @@ test('distinct combined profile requires its exact reviewed source and protected
   assert.equal(publicCombinedProfile(PUBLIC_COMBINED_PROFILE),true);
   assert.equal(publicLocaleBetaProfile(PUBLIC_COMBINED_PROFILE),true);
   assert.equal(accountServingProductionProfile(PUBLIC_COMBINED_PROFILE),true);
-  assert.equal(PUBLIC_COMBINED_ATMOS_SHA,'3687c64e1911c213040f832d15cdf081a6d80d05');
+  assert.equal(PUBLIC_COMBINED_ATMOS_SHA,'ce16ac269249cc0d6252cfa147471f096313cddc');
   assert.equal(assertPublicCombinedReady(),PUBLIC_COMBINED_ATMOS_SHA);
   assert.equal(controlShaFor(PUBLIC_COMBINED_PROFILE),PUBLIC_COMBINED_ATMOS_SHA);
   assert.deepEqual(requireUiProductionProfile(PUBLIC_COMBINED_PROFILE),PUBLIC_COMBINED_PROFILE);
@@ -60,7 +62,9 @@ test('exact sidecar and receipt authenticate intro, account chunks and billing-o
   const tamper=(mutate)=>{const f=structuredClone(files),s=JSON.parse(Buffer.from(f[2].base64,'base64'));mutate(s,f);f[2]=file(PUBLIC_COMBINED_SIDECAR,JSON.stringify(s));return f;};
   assert.throws(()=>validateCombinedBuild(receipt,tamper(s=>{s.billingUiEnabled=true;})),/billing UI/);
   assert.throws(()=>validateCombinedBuild(receipt,tamper(s=>{s.intro.enabled=false;})));
-  assert.throws(()=>validateCombinedBuild(receipt,tamper(s=>{s.intro.sourceSha256='a'.repeat(64);})),/1f567/);
+  assert.throws(()=>validateCombinedBuild(receipt,tamper(s=>{s.intro.sourceSha256='a'.repeat(64);})),/30a3c65/);
+  assert.throws(()=>validateCombinedBuild(receipt,tamper(s=>{s.intro.reviewedSourcesSha256['onboarding\/Icon.tsx']='a'.repeat(64);})),/onboarding sidecar source hashes/);
+  assert.throws(()=>validateCombinedBuild(receipt,tamper(s=>{s.intro.chunks=[];})),/one to 64/);
   assert.throws(()=>validateCombinedBuild(receipt,tamper(s=>{s.reviewedSourcesSha256['client.ts']='a'.repeat(64);})),/account sidecar source hashes/);
   assert.throws(()=>validateCombinedBuild(receipt,tamper(s=>{s.intro.chunks[0].path=s.accountChunks[0].path;})),/duplicate production account or intro chunk/);
   assert.throws(()=>validateCombinedBuild(receipt,tamper(s=>{s.intro.chunks[0].sha256='b'.repeat(64);})),/Expected values/);
@@ -71,8 +75,8 @@ test('protected workflows contain combined choice, exact pins and approval',()=>
   const release=readFileSync(new URL('../.github/workflows/ui-release.yml',import.meta.url),'utf8');
   assert.match(staging,/APPROVED_PUBLIC_COMBINED: \$\{\{ vars.UI_PUBLIC_COMBINED_PROFILE_APPROVED \}\}/);
   assert.match(staging,/UI_PUBLIC_COMBINED_PROFILE_APPROVED: \$\{\{ vars.UI_PUBLIC_COMBINED_PROFILE_APPROVED \}\}/);
-  assert.match(staging,/production-account-ru-kk-wind100-intro-v1/);
-  assert.match(release,/production-account-ru-kk-wind100-intro-v1/);
-  for(const workflow of [staging,release])assert.ok(workflow.includes(`production-account-ru-kk-wind100-intro-v1' && '${PUBLIC_COMBINED_ATMOS_SHA}'`));
+  assert.match(staging,/production-account-ru-kk-wind100-onboarding-v2/);
+  assert.match(release,/production-account-ru-kk-wind100-onboarding-v2/);
+  for(const workflow of [staging,release])assert.ok(workflow.includes(`production-account-ru-kk-wind100-onboarding-v2' && '${PUBLIC_COMBINED_ATMOS_SHA}'`));
   assert.doesNotMatch(release,/WX_GROUND_QUALIFICATION_SCOPE/);
 });

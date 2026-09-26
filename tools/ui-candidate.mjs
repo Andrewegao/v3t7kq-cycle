@@ -278,5 +278,15 @@ export function eligibleRun(run, artifacts, { runId, sourceSha, digest, pipeline
   assert.equal(q?.fullTests, true); assert.equal(q?.weatherLab, true); assert.equal(q?.builtRuntime, true);
   assert.equal(q?.probes, 3); assert.match(q?.deploymentId ?? '', /^[a-f0-9-]{36}$/);
   assert.ok(Date.parse(q.qualifiedAt) <= now && now - Date.parse(q.qualifiedAt) < 30 * 86400000, 'staging qualification is stale');
+  if(publicCombinedProfile(candidate.profile)){
+    assert.match(q?.publicJourneyProofSha256 ?? '', DIGEST, 'public journey proof binding is missing');
+    assert.match(q?.publicJourneyHarnessSha256 ?? '', DIGEST, 'public journey harness binding is missing');
+    assert.deepEqual(q?.publicJourneyViewports, ['desktop','mobile'], 'public journey viewport coverage is missing');
+    assert.deepEqual(q?.publicJourneyIdentity, {
+      sourceSha:candidate.sourceSha,releaseId:validateCandidate(candidate).releaseId,
+      indexSha256:candidate.files.find(file=>file.path==='index.html').sha256,
+      billingUiEnabled:false,introEnabled:true,
+    }, 'public journey identity differs from the retained candidate');
+  }
   return matches[0];
 }
