@@ -35,7 +35,7 @@ export const PUBLIC_COMBINED_ONBOARDING_SOURCES = Object.freeze({
   'onboarding/screens/Watch.tsx': 'ce59077b992405aac3595e50a4d22de4e25934d12874297b6db90330161e0a57',
   'onboarding/screens/WeekChart.tsx': '44c022c1f3e312aa94724aa53387a55724c552857de483b0571b4d88f992831c',
   'onboarding/screens/Windows.tsx': 'f6590d28b811adc7c5f660ac115e7d445b98e2259b77546087b134205ed87dfa',
-  'onboarding/screens/addPlace.css': 'fca6644b08396c862d63ec6f4fd72a913ac31a0388c8517973bd26083fed1a90',
+  'onboarding/screens/addPlace.css': 'b9c14fc05fd84f21d75e056ad13cad395de6b2df6d8928678aec164e07da877e',
   'onboarding/screens/addPlaceMessages.ts': 'c5f21f196dcdc4eb6764b306466050cb393dd940178a2cba46d9fd4f387c2c04',
   'onboarding/screens/stackWhenClipped.ts': 'fb2f83a969ab54471c9e349254deac849b9715727494207dc7cbbfc96c6c7cda',
   'onboarding/screens/startCopy.ts': 'ec022d3dff4dfd53092c53666d12c784eee396bfd5e0df82764dfbef2ec32787',
@@ -55,7 +55,7 @@ export const PUBLIC_COMBINED_ONBOARDING_SOURCES = Object.freeze({
   'onboarding/useObData.ts': 'c9d259db928451a62c7ce3a8188b4cce21119ba402f0a8406ead5b8bc1b3ddf0',
 });
 export const PUBLIC_COMBINED_SIDECAR = 'assets/weatherx-production-account-build-v1.json';
-export const PUBLIC_COMBINED_ATMOS_SHA = 'ba72f52ff3461b3d235cc94c9fc7b53232dda8c5';
+export const PUBLIC_COMBINED_ATMOS_SHA = 'c257ef903462518b0c257b1e2d0a52ca8fd61873';
 
 export function assertPublicCombinedReady() {
   assert.match(PUBLIC_COMBINED_ATMOS_SHA, /^[a-f0-9]{40}$/);
