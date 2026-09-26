@@ -549,7 +549,8 @@ async function build() {
   assert.ok(!existsSync(resolve(shell,TC_SELECTION_ASSET)),'candidate source must not supply TC selection policy');
   if(selection){mkdirSync(dirname(resolve(shell,SELECTION_ASSET)),{recursive:true,mode:0o700});writeFileSync(resolve(shell,SELECTION_ASSET),selection.bytes,{flag:'wx',mode:0o600});}
   if(tcSelection){mkdirSync(dirname(resolve(shell,TC_SELECTION_ASSET)),{recursive:true,mode:0o700});writeFileSync(resolve(shell,TC_SELECTION_ASSET),tcSelection.bytes,{flag:'wx',mode:0o600});}
-  run('npm',['run','build'],{cwd:app,env:{...buildEnv,ATMOS_PUBLIC_SHELL_DIR:shell}});
+  // Match the reviewed Atmos CI build heap for the expanded TypeScript graph.
+  run('npm',['run','build'],{cwd:app,env:{...buildEnv,ATMOS_PUBLIC_SHELL_DIR:shell,NODE_OPTIONS:'--max-old-space-size=4096'}});
   const dist = resolve(app,'dist');
   // Compile once BEFORE qualification; production must never discover/recompile functions/.
   // Wrangler 4.123+ writes a multipart upload envelope for --outfile. Build
