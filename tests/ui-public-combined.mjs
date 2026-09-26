@@ -33,7 +33,7 @@ test('distinct combined profile requires its exact reviewed source and protected
   assert.equal(publicCombinedProfile(PUBLIC_COMBINED_PROFILE),true);
   assert.equal(publicLocaleBetaProfile(PUBLIC_COMBINED_PROFILE),true);
   assert.equal(accountServingProductionProfile(PUBLIC_COMBINED_PROFILE),true);
-  assert.equal(PUBLIC_COMBINED_ATMOS_SHA,'ce16ac269249cc0d6252cfa147471f096313cddc');
+  assert.equal(PUBLIC_COMBINED_ATMOS_SHA,'9da64b54fadf6efb21302c1504575c75bf5b1d54');
   assert.equal(assertPublicCombinedReady(),PUBLIC_COMBINED_ATMOS_SHA);
   assert.equal(controlShaFor(PUBLIC_COMBINED_PROFILE),PUBLIC_COMBINED_ATMOS_SHA);
   assert.deepEqual(requireUiProductionProfile(PUBLIC_COMBINED_PROFILE),PUBLIC_COMBINED_PROFILE);
