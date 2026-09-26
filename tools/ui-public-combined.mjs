@@ -7,12 +7,12 @@ export const PUBLIC_COMBINED_REQUEST = 'production-account-ru-kk-wind100-intro-v
 export const PUBLIC_COMBINED_APPROVAL = PUBLIC_COMBINED_REQUEST;
 export const PUBLIC_COMBINED_WIND100_RECEIPT = 'production-native-dynamic-v1';
 export const PUBLIC_COMBINED_LOCALE_RECEIPT = 'ru-kk-public-beta-v1';
-export const PUBLIC_COMBINED_INTRO_SOURCE_SHA256 = 'b21fd3688004d182b667ee870c7c83567a3f2498f2ec786698ef515ab1cd3bdd';
+export const PUBLIC_COMBINED_INTRO_SOURCE_SHA256 = '1f56751cfd42092768cf24b90bba08fb563d582b11181bfd13a2a122b8ef7eda';
 export const PUBLIC_COMBINED_ACCOUNT_SOURCES = Object.freeze({
   'client.ts': 'a06ec9e7d56551dae4fbf07ae552cf296365e5749d5c7e9f47b080f481588f1a',
   'pointSeriesContract.ts': '8a3ae4af11d87a37e954891bbdb43b0907c591c65ca902852bc5a13e2af7d36e',
   'session.ts': '9896c3b9382f5a64e2bad0d43c298c2a4af670cb3e645874d08629caf343e6b3',
-  'PlatformAccount.tsx': '2a4c2f8feb2bd8017c7f7104ecc3a7dfdc0ec89daa208c1f79a32526f68b1bae',
+  'PlatformAccount.tsx': '30bfa0072c023649e12f1e371027f0b7cd1a1fe5fa407dcbff469d367c4a0803',
   'accountEntry.ts': 'b997aaabe8dc9efa6d8b7b15e385c257ba0e1a33a42456ed55a0c3fc9b51e386',
   'accountDoor.ts': '14acf20279baf760cbf5a6890dfcb66d7330b5a353a69f80e802ec34f3d22bcf',
   'PlatformAccountBoundary.tsx': '796337fb0db7a6bb0d9cbbc56b3820a26e263b9107b8f296f8fa0b0a8e9c9580',
@@ -20,7 +20,7 @@ export const PUBLIC_COMBINED_ACCOUNT_SOURCES = Object.freeze({
 });
 export const PUBLIC_COMBINED_SIDECAR = 'assets/weatherx-production-account-build-v1.json';
 // Replace only with the final reviewed, pushed Atmos master commit.
-export const PUBLIC_COMBINED_ATMOS_SHA = '54e40231b54b906bbb4568bbc94d8f3551baab18';
+export const PUBLIC_COMBINED_ATMOS_SHA = '3687c64e1911c213040f832d15cdf081a6d80d05';
 
 export function assertPublicCombinedReady() {
   assert.match(PUBLIC_COMBINED_ATMOS_SHA, /^[a-f0-9]{40}$/);

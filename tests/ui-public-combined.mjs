@@ -31,7 +31,7 @@ test('distinct combined profile requires its exact reviewed source and protected
   assert.equal(publicCombinedProfile(PUBLIC_COMBINED_PROFILE),true);
   assert.equal(publicLocaleBetaProfile(PUBLIC_COMBINED_PROFILE),true);
   assert.equal(accountServingProductionProfile(PUBLIC_COMBINED_PROFILE),true);
-  assert.equal(PUBLIC_COMBINED_ATMOS_SHA,'54e40231b54b906bbb4568bbc94d8f3551baab18');
+  assert.equal(PUBLIC_COMBINED_ATMOS_SHA,'3687c64e1911c213040f832d15cdf081a6d80d05');
   assert.equal(assertPublicCombinedReady(),PUBLIC_COMBINED_ATMOS_SHA);
   assert.equal(controlShaFor(PUBLIC_COMBINED_PROFILE),PUBLIC_COMBINED_ATMOS_SHA);
   assert.deepEqual(requireUiProductionProfile(PUBLIC_COMBINED_PROFILE),PUBLIC_COMBINED_PROFILE);
@@ -60,7 +60,7 @@ test('exact sidecar and receipt authenticate intro, account chunks and billing-o
   const tamper=(mutate)=>{const f=structuredClone(files),s=JSON.parse(Buffer.from(f[2].base64,'base64'));mutate(s,f);f[2]=file(PUBLIC_COMBINED_SIDECAR,JSON.stringify(s));return f;};
   assert.throws(()=>validateCombinedBuild(receipt,tamper(s=>{s.billingUiEnabled=true;})),/billing UI/);
   assert.throws(()=>validateCombinedBuild(receipt,tamper(s=>{s.intro.enabled=false;})));
-  assert.throws(()=>validateCombinedBuild(receipt,tamper(s=>{s.intro.sourceSha256='a'.repeat(64);})),/b21fd/);
+  assert.throws(()=>validateCombinedBuild(receipt,tamper(s=>{s.intro.sourceSha256='a'.repeat(64);})),/1f567/);
   assert.throws(()=>validateCombinedBuild(receipt,tamper(s=>{s.reviewedSourcesSha256['client.ts']='a'.repeat(64);})),/account sidecar source hashes/);
   assert.throws(()=>validateCombinedBuild(receipt,tamper(s=>{s.intro.chunks[0].path=s.accountChunks[0].path;})),/duplicate production account or intro chunk/);
   assert.throws(()=>validateCombinedBuild(receipt,tamper(s=>{s.intro.chunks[0].sha256='b'.repeat(64);})),/Expected values/);
