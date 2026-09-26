@@ -126,7 +126,7 @@ jobs:
           repository: weatherx-hq/atmos
           # Baseline artifacts keep the production-compatible controller; staging-only
           # profiles use a separately reviewed literal pin. Never accept an input SHA here.
-          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-intro-v1' && '54e40231b54b906bbb4568bbc94d8f3551baab18' || needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' && 'b9db38dd22eed1da56c6c4dd4140480da7e89153' || needs.profile.outputs.model_selection_sha256 == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || needs.profile.outputs.model_selection_sha256 == 'none' && '25c402db5149daa018e349a34a4beeba1f2dca45' || '4dafd26387d5917604deb7379a8d45a994fc5b67' }}
+          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-intro-v1' && '3687c64e1911c213040f832d15cdf081a6d80d05' || needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' && 'b9db38dd22eed1da56c6c4dd4140480da7e89153' || needs.profile.outputs.model_selection_sha256 == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || needs.profile.outputs.model_selection_sha256 == 'none' && '25c402db5149daa018e349a34a4beeba1f2dca45' || '4dafd26387d5917604deb7379a8d45a994fc5b67' }}
           ssh-key: ${{ secrets.ATMOS_READONLY_KEY }}
           persist-credentials: false
           path: control
@@ -228,7 +228,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-intro-v1' && '54e40231b54b906bbb4568bbc94d8f3551baab18' || needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' && 'b9db38dd22eed1da56c6c4dd4140480da7e89153' || needs.profile.outputs.model_selection_sha256 == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || needs.profile.outputs.model_selection_sha256 == 'none' && '25c402db5149daa018e349a34a4beeba1f2dca45' || '4dafd26387d5917604deb7379a8d45a994fc5b67' }}
+          ref: ${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-intro-v1' && '3687c64e1911c213040f832d15cdf081a6d80d05' || needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' && 'b9db38dd22eed1da56c6c4dd4140480da7e89153' || needs.profile.outputs.model_selection_sha256 == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || needs.profile.outputs.model_selection_sha256 == 'none' && '25c402db5149daa018e349a34a4beeba1f2dca45' || '4dafd26387d5917604deb7379a8d45a994fc5b67' }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
           path: control
