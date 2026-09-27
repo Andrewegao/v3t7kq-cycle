@@ -1,0 +1,125 @@
+{
+  "provenance": "Exact pinned Atmos Git trees; actual sparse-tree dependency checks and five existing release fixture suites passed for each pin. Browser probes were not run against a deployment. See docs/production-controller-sparse-20260926.md.",
+  "controllers": [
+    {
+      "pin": "25c402db5149daa018e349a34a4beeba1f2dca45",
+      "files": [
+        "app/e2e/layer-switch-surface.mjs",
+        "app/e2e/layer-switch-tint.mjs",
+        "app/e2e/weather-lab-only-runtime.mjs",
+        "app/package-lock.json",
+        "app/package.json",
+        "ops/release/build-release-receipt.mjs",
+        "ops/release/guard-pages-deploy.sh",
+        "ops/release/pages-client.mjs",
+        "ops/release/release-fuse.mjs",
+        "ops/release/test-build-release-receipt.mjs",
+        "ops/release/test-guard-pages-deploy.mjs",
+        "ops/release/test-pages-client.mjs",
+        "ops/release/test-production-verifiers.mjs",
+        "ops/release/test-release-fuse.mjs",
+        "ops/release/verify-platform-production.sh",
+        "ops/release/verify-point-series.mjs",
+        "ops/release/verify-weather-feeds.mjs",
+        "platform/edge/package-lock.json",
+        "platform/edge/package.json"
+      ],
+      "externalPackages": [
+        "pixelmatch",
+        "playwright",
+        "pngjs"
+      ]
+    },
+    {
+      "pin": "6fcec22638f6696be71daa2f2e974ebc4b24318e",
+      "files": [
+        "app/e2e/layer-switch-surface.mjs",
+        "app/e2e/layer-switch-tint.mjs",
+        "app/e2e/weather-lab-only-runtime.mjs",
+        "app/package-lock.json",
+        "app/package.json",
+        "ops/release/build-release-receipt.mjs",
+        "ops/release/guard-pages-deploy.sh",
+        "ops/release/pages-client.mjs",
+        "ops/release/release-fuse.mjs",
+        "ops/release/run-locked-wrangler.sh",
+        "ops/release/test-build-release-receipt.mjs",
+        "ops/release/test-guard-pages-deploy.mjs",
+        "ops/release/test-pages-client.mjs",
+        "ops/release/test-production-verifiers.mjs",
+        "ops/release/test-release-fuse.mjs",
+        "ops/release/verify-platform-production.sh",
+        "ops/release/verify-point-series.mjs",
+        "ops/release/verify-weather-feeds.mjs",
+        "platform/edge/package-lock.json",
+        "platform/edge/package.json"
+      ],
+      "externalPackages": [
+        "pixelmatch",
+        "playwright",
+        "pngjs"
+      ]
+    },
+    {
+      "pin": "b9db38dd22eed1da56c6c4dd4140480da7e89153",
+      "files": [
+        "app/e2e/layer-switch-surface.mjs",
+        "app/e2e/layer-switch-tint.mjs",
+        "app/e2e/weather-lab-only-runtime.mjs",
+        "app/package-lock.json",
+        "app/package.json",
+        "ops/release/build-release-receipt.mjs",
+        "ops/release/guard-pages-deploy.sh",
+        "ops/release/pages-client.mjs",
+        "ops/release/release-fuse.mjs",
+        "ops/release/run-locked-wrangler.sh",
+        "ops/release/test-build-release-receipt.mjs",
+        "ops/release/test-guard-pages-deploy.mjs",
+        "ops/release/test-pages-client.mjs",
+        "ops/release/test-production-verifiers.mjs",
+        "ops/release/test-release-fuse.mjs",
+        "ops/release/verify-platform-production.sh",
+        "ops/release/verify-point-series.mjs",
+        "ops/release/verify-weather-feeds.mjs",
+        "platform/edge/package-lock.json",
+        "platform/edge/package.json"
+      ],
+      "externalPackages": [
+        "pixelmatch",
+        "playwright",
+        "pngjs"
+      ]
+    },
+    {
+      "pin": "c257ef903462518b0c257b1e2d0a52ca8fd61873",
+      "files": [
+        "app/e2e/layer-switch-surface.mjs",
+        "app/e2e/layer-switch-tint.mjs",
+        "app/e2e/public-release-journeys.mjs",
+        "app/e2e/weather-lab-only-runtime.mjs",
+        "app/package-lock.json",
+        "app/package.json",
+        "ops/release/build-release-receipt.mjs",
+        "ops/release/guard-pages-deploy.sh",
+        "ops/release/pages-client.mjs",
+        "ops/release/release-fuse.mjs",
+        "ops/release/run-locked-wrangler.sh",
+        "ops/release/test-build-release-receipt.mjs",
+        "ops/release/test-guard-pages-deploy.mjs",
+        "ops/release/test-pages-client.mjs",
+        "ops/release/test-production-verifiers.mjs",
+        "ops/release/test-release-fuse.mjs",
+        "ops/release/verify-platform-production.sh",
+        "ops/release/verify-point-series.mjs",
+        "ops/release/verify-weather-feeds.mjs",
+        "platform/edge/package-lock.json",
+        "platform/edge/package.json"
+      ],
+      "externalPackages": [
+        "pixelmatch",
+        "playwright",
+        "pngjs"
+      ]
+    }
+  ]
+}
