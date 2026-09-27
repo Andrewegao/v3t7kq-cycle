@@ -227,11 +227,11 @@ test('manual staging defaults to protected approval and only explicit none selec
   assert.match(staging,/model_selection_sha256:[\s\S]*?default: approved/);
   assert.match(staging,/\n  profile:\n[\s\S]*?environment:\s*\n\s*name: ui-staging[\s\S]*?APPROVED_SELECTION: \$\{\{ vars\.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256 \}\}/);
   assert.match(staging,/APPROVED_CORE_PROFILE: \$\{\{ vars\.UI_STAGING_CORE_PROFILE_APPROVED \}\}/);
-  // The selected profile reaches both build and qualify unchanged. Controller
+  // The selected profile reaches build, app-tests and qualify unchanged. Controller
   // checkout selection is separately bound to literal pins by ui-workflow.mjs.
-  assert.equal((staging.match(/^\s+MODEL_SELECTION_SHA256: \$\{\{ needs\.profile\.outputs\.model_selection_sha256 \}\}$/gm)||[]).length,2);
+  assert.equal((staging.match(/^\s+MODEL_SELECTION_SHA256: \$\{\{ needs\.profile\.outputs\.model_selection_sha256 \}\}$/gm)||[]).length,3);
   assert.equal((staging.match(/^\s+STAGING_WIND100_UI_DYNAMIC: \$\{\{ vars\.STAGING_WIND100_UI_DYNAMIC \}\}$/gm)||[]).length,1);
-  assert.equal((staging.match(/^\s+STAGING_WIND100_UI_DYNAMIC: \$\{\{ needs\.profile\.outputs\.wind100_dynamic \}\}$/gm)||[]).length,2);
+  assert.equal((staging.match(/^\s+STAGING_WIND100_UI_DYNAMIC: \$\{\{ needs\.profile\.outputs\.wind100_dynamic \}\}$/gm)||[]).length,3);
   assert.match(staging,/\['production-account-billing-v1', 'production-account-ru-kk-beta-v1', 'production-account-ru-kk-wind100-onboarding-v2'\]\.includes\(selection\)[\s\S]*?STAGING_WIND100_UI_DYNAMIC: ''[\s\S]*?resolveWind100BuildPin\(profileFor\(selection\), windEnvironment\)/);
   assert.match(staging,/wind100_dynamic=\$\{pin\?\.dynamic === true \? 'true' : ''\}/);
   assert.doesNotMatch(production,/STAGING_WIND100_UI_DYNAMIC|VITE_STAGING_WIND100_DYNAMIC/);

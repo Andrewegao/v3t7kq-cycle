@@ -14,10 +14,14 @@ explicit approval. Normal data collection, scoring, archive and R2 publication a
 ## Release procedure, after activation is separately approved
 
 1. Run **WeatherX UI staging qualification** (`ui-staging.yml`) with the exact current Atmos
-   master SHA. It runs all app tests, the existing live Weather Lab gates, builds the public-only
-   shell and compiles Pages Functions once on a build runner with no deployment environment
-   or deployment secrets. A separate fresh publisher runner uses the existing deploy/rollback
-   guard to deploy only to `weatherx-platform-staging`, then verifies the actual built website.
+   master SHA (or the separately reviewed combined-profile source admitted by its existing guard).
+   After resolving the protected profile, two source-read runners operate in parallel: `app-tests`
+   runs the complete `npm test --prefix atmos/app` command with the selected CI profile; `build`
+   preserves the live Weather Lab gates, then builds the public shell and Pages Functions once.
+   Neither runner receives publication secrets. Qualification requires both jobs to succeed in
+   the same run attempt, with an exact source/profile/controller receipt verified against GitHub's
+   completed test job and full-gate step. A fresh publisher runner then uses the existing
+   deploy/rollback guard for `weatherx-platform-staging` and verifies the actual built website.
 2. Test `https://staging.weatherx.org`. A successful workflow retains an encrypted candidate
    and a summary with the source SHA, run ID and artifact digest. Failed qualification never
    produces a promotable artifact. Neither the candidate source nor server code is uploaded

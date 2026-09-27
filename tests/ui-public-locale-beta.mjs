@@ -61,7 +61,9 @@ test('beta build keeps production account and disables staging-only UI',()=>{
   const staging=readFileSync(new URL('../.github/workflows/ui-staging.yml',import.meta.url),'utf8');
   const production=readFileSync(new URL('../.github/workflows/ui-release.yml',import.meta.url),'utf8');
   assert.match(staging,/WX_GROUND_QUALIFICATION_SCOPE: staging-qualification-only/);
-  assert.match(staging,/name: full application test gate\n\s+env:\n\s+WX_CI_PROFILE: \$\{\{ .*production-account-ru-kk-beta-v1'.*'public-beta-ci-lab-road-security-v1' \|\| '' \}\}\n\s+run: npm test --prefix atmos\/app/);
+  const appTests=staging.slice(staging.indexOf('\n  app-tests:\n'),staging.indexOf('\n  qualify:\n'));
+  assert.match(appTests,/WX_CI_PROFILE: \$\{\{ \(needs\.profile\.outputs\.model_selection_sha256 == 'production-account-ru-kk-beta-v1' \|\| needs\.profile\.outputs\.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2'\) && 'public-beta-ci-lab-road-security-v1' \|\| '' \}\}/);
+  assert.match(appTests,/name: full application test gate\n\s+run: npm test --prefix atmos\/app/);
   assert.doesNotMatch(production,/WX_GROUND_QUALIFICATION_SCOPE/);
   assert.match(production,/production-account-ru-kk-beta-v1/);
   assert.doesNotMatch(production,/VITE_PRO_PROTO|WIND100/);
