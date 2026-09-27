@@ -17,6 +17,7 @@ jobs:
   diagnose:
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    environment: staging
     timeout-minutes: 20
     env:
       DIAGNOSTIC_TARGET: ${{ inputs.target }}

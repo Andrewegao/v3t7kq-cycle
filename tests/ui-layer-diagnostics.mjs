@@ -71,7 +71,9 @@ test('workflow has no publish authority, arbitrary target/source or production a
  assert.match(workflow,/github.event_name == 'workflow_dispatch' && github.ref == 'refs\/heads\/main'/);
  assert.ok(workflow.includes('ref: '+SOURCE));
  assert.deepEqual([...new Set([...workflow.matchAll(/secrets\.([A-Z_]+)/g)].map(m=>m[1]))],['ATMOS_DEPLOY_KEY']);
- assert.doesNotMatch(workflow,/environment:|ui-release.mjs|wrangler|actions: write|issues: write|workflow_call|pull_request|schedule:/);
+ assert.match(workflow,/^    environment: staging$/m);
+ assert.equal((workflow.match(/^    environment:/gm)||[]).length,1);
+ assert.doesNotMatch(workflow,/environment: production|name: ui-production|ui-release.mjs|wrangler|actions: write|issues: write|workflow_call|pull_request|schedule:/);
  assert.equal((workflow.match(/persist-credentials: false/g)||[]).length,2);
  assert.match(workflow,/if: \$\{\{ always\(\) \}\}/);
  assert.match(workflow,/timeout-minutes: 20/);
