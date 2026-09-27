@@ -57,16 +57,65 @@ async function diagnosticSnapshot(layer, phase, started) {
       const numbers = (value, keys) => Object.fromEntries(keys.map(key => [key,
         typeof value?.[key] === 'number' && Number.isFinite(value[key]) ? value[key] : null]));
       const deck = app?.deckSnapshot();
+      const ledger = app?.renderCausalDiagnostics?.();
+      const ledgerKeys = ['intentKey','intentGeneration','model','run','cursor','swap','overlayGeneration',
+        'renderedGeneration','accepted','painted','path','previewMounted','previewGeneration',
+        'previewMatchesAuthoritative','handoff','contourPending'];
+      const clean = value => typeof value === 'string' ? token(value) : scalar(value);
       return { visible: Object.entries(store?.layers ?? {}).filter(([,v]) => v?.visible).map(([id]) => token(id)).slice(0, 30),
         swap: token(document.body.dataset.wlSwap ?? 'idle'), cursorMs: scalar(store?.cursorMs), catchingUp: scalar(store?.catchingUp),
         manifest: {model: token(store?.manifest?.model), init: token(store?.manifest?.init_time)},
         deck: (Array.isArray(deck) ? deck : []).slice(0, 40).map(row => ({id:token(row.id),opacity:scalar(row.opacity),visible:scalar(row.visible)})),
         decode: numbers(app?.decodeWorkerStats?.(), ['workers', 'pending', 'textureJobs', 'fieldJobs']),
         textures: numbers(app?.weatherTextureBudgetStats?.(), ['bytes', 'derivedBytes', 'weatherBytes', 'textures', 'ceiling', 'evictions', 'recycles']),
+        causal: {enabled:scalar(ledger?.enabled),errors:scalar(ledger?.errors),dropped:scalar(ledger?.dropped),
+          events:(ledger?.events ?? []).slice(-24).map(event => ({sequence:scalar(event.sequence),stage:token(event.stage),
+            data:Object.fromEntries(ledgerKeys.filter(key=>event.data?.[key]!==undefined).map(key=>[key,key==='painted' && typeof event.data[key]==='string' ? event.data[key].split('|').slice(0,30).map(token) : clean(event.data[key])]))}))},
+        rendered: (app?.deckRenderedLayers?.() ?? []).filter(row=>['temp-raster','cloud-raster','gust-raster','precip-raster','wind-field'].includes(row.id))
+          .slice(0,5).map(row=>({id:token(row.id),loaded:scalar(row.isLoaded),opacity:scalar(row.props?.opacity),
+            visible:scalar(row.props?.visible),textures:Boolean(row.state?.imageTexture&&row.state?.imageTexture2)})),
         coldReady: performance.getEntriesByName('wx:cold-start-complete').length > 0 };
     }), new Promise(resolve => { snapshotTimer = setTimeout(() => resolve({ unavailable: true, reason: 'snapshot-timeout' }), 2_000); })]);
   } catch { state = { unavailable: true }; }
   finally { clearTimeout(snapshotTimer); }
   diagnosticEmit({event:'prefill',layer,phase,elapsedMs:Date.now()-started,state,
     pending:diagnosticPending(),network:diagnosticNetwork,gpu:diagnosticGpu,pageErrors:diagnosticPageErrors,writesBlocked:diagnosticWritesBlocked});
+}
+
+// Strict mode adds a separate paint observation after the unchanged original prefill wait.
+// Baseline capture is before activation and refuses an unproven/stale semantic clock.
+async function diagnosticPaintBaseline(layer) {
+  let timer;
+  try {
+    return await Promise.race([page.evaluate(layer => {
+      const api = window.__atmos, state = api.store.getState(), ledger = api.renderCausalDiagnostics();
+      const latest = ledger.events.at(-1), manifest = state.manifest;
+      const known = ['temp','cloud','gust','precip','wind'];
+      const visible = known.filter(id => state.layers[id]?.visible);
+      if (!ledger.enabled || ledger.errors || !manifest || !latest || visible.length !== 1
+        || visible[0] === layer || latest.data.intentKey !== visible[0]
+        || !Number.isInteger(latest.data.intentGeneration) || !Number.isInteger(latest.sequence)
+        || latest.data.model !== manifest.model || latest.data.run !== manifest.init_time
+        || latest.data.base !== manifest.base || latest.data.cursor !== state.cursorMs) {
+        throw new Error('strict-paint-baseline-unavailable');
+      }
+      return {layer,beforeSequence:latest.sequence,beforeIntentGeneration:latest.data.intentGeneration,
+        model:manifest.model,run:manifest.init_time,base:manifest.base,cursorMs:state.cursorMs};
+    }, layer), new Promise((_,reject) => {timer=setTimeout(()=>reject(new Error('strict-paint-baseline-timeout')),2_000);})]);
+  } catch (error) {
+    await diagnosticSnapshot(layer,'paint-baseline-unavailable',Date.now());
+    throw error;
+  } finally {clearTimeout(timer);}
+}
+async function diagnosticWaitForPaint(expected, started) {
+  diagnosticEmit({event:'prefill',layer:expected.layer,phase:'paint-wait',elapsedMs:Date.now()-started});
+  try {
+    const proof = await page.waitForFunction(diagnosticPaintPredicate,expected,{timeout:30_000,polling:250});
+    const receipt = await proof.jsonValue();
+    await proof.dispose();
+    diagnosticEmit({event:'prefill',layer:expected.layer,phase:'paint-proven',elapsedMs:Date.now()-started,receipt});
+  } catch (error) {
+    await diagnosticSnapshot(expected.layer,'paint-unproven',started);
+    throw error;
+  }
 }

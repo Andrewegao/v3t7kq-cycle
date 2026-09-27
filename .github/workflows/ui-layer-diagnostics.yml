@@ -8,6 +8,12 @@ on:
         required: true
         default: staging
         options: [staging, failed-preview]
+      mode:
+        description: Original guard or additional exact paint diagnostics
+        type: choice
+        required: true
+        default: original
+        options: [original, strict-paint]
 permissions:
   contents: read
 concurrency:
@@ -17,10 +23,13 @@ jobs:
   diagnose:
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
-    environment: staging
+    environment:
+      name: staging
+      deployment: false
     timeout-minutes: 20
     env:
       DIAGNOSTIC_TARGET: ${{ inputs.target }}
+      DIAGNOSTIC_MODE: ${{ inputs.mode }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { path: cycle, persist-credentials: false }

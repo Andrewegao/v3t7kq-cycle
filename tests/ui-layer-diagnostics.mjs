@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
-import {gate,TARGETS,SOURCE,RELEASE,INDEX,FILES,addDiagnostics,PREFILL_WAIT,PREFILL_ACTIVATE,filterLine,assertIdentity,checkAfterIdentity} from '../tools/ui-layer-diagnostics.mjs';
+import {gate,TARGETS,SOURCE,RELEASE,INDEX,FILES,addDiagnostics,PREFILL_WAIT,PREFILL_ACTIVATE,filterLine,assertIdentity,checkAfterIdentity,diagnosticFailure} from '../tools/ui-layer-diagnostics.mjs';
 const read=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
 const env=()=>({GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_REPOSITORY:'Andrewegao/v3t7kq-cycle',
  GITHUB_REF:'refs/heads/main',GITHUB_EVENT_NAME:'workflow_dispatch',GITHUB_JOB:'diagnose',
- GITHUB_WORKFLOW_REF:'Andrewegao/v3t7kq-cycle/.github/workflows/ui-layer-diagnostics.yml@refs/heads/main',DIAGNOSTIC_TARGET:'staging'});
+ GITHUB_WORKFLOW_REF:'Andrewegao/v3t7kq-cycle/.github/workflows/ui-layer-diagnostics.yml@refs/heads/main',DIAGNOSTIC_TARGET:'staging',DIAGNOSTIC_MODE:'original'});
 test('only fixed reviewed origins and manual main runner are accepted',()=>{
  for(const target of Object.keys(TARGETS))assert.equal(gate({...env(),DIAGNOSTIC_TARGET:target}),TARGETS[target]);
  for(const target of ['production','https://weatherx.org','https://staging.weatherx.org.evil.test','__proto__','',undefined])
@@ -71,7 +71,7 @@ test('workflow has no publish authority, arbitrary target/source or production a
  assert.match(workflow,/github.event_name == 'workflow_dispatch' && github.ref == 'refs\/heads\/main'/);
  assert.ok(workflow.includes('ref: '+SOURCE));
  assert.deepEqual([...new Set([...workflow.matchAll(/secrets\.([A-Z_]+)/g)].map(m=>m[1]))],['ATMOS_DEPLOY_KEY']);
- assert.match(workflow,/^    environment: staging$/m);
+ assert.match(workflow,/^    environment:\n      name: staging\n      deployment: false$/m);
  assert.equal((workflow.match(/^    environment:/gm)||[]).length,1);
  assert.doesNotMatch(workflow,/environment: production|name: ui-production|ui-release.mjs|wrangler|actions: write|issues: write|workflow_call|pull_request|schedule:/);
  assert.equal((workflow.match(/persist-credentials: false/g)||[]).length,2);
@@ -133,4 +133,48 @@ test('decode and texture snapshots retain only finite allowlisted numeric fields
  assert.deepEqual(logs.at(-1).state.decode,{workers:2,pending:3,textureJobs:null,fieldJobs:null});
  assert.equal(logs.at(-1).state.textures.bytes,123);
  assert.ok(!JSON.stringify(logs).includes('secret'));assert.ok(!('recycleQueued' in logs.at(-1).state.textures));
+});
+
+test('strict mode is explicit and leaves original activation/wait and later assertions intact',()=>{
+ for(const mode of ['original','strict-paint'])assert.equal(gate({...env(),DIAGNOSTIC_MODE:mode}),TARGETS.staging);
+ for(const mode of ['strict','deck-prefill','',undefined])assert.throws(()=>gate({...env(),DIAGNOSTIC_MODE:mode}));
+ const source='const page = await context.newPage();\n'+PREFILL_ACTIVATE+'\n'+PREFILL_WAIT+'\nawait page.waitForTimeout(180);\nthrow Error("original");';
+ const original=addDiagnostics(source,''),strict=addDiagnostics(source,'','strict-paint');
+ assert.ok(!original.includes('await diagnosticWaitForPaint'));
+ assert.ok(strict.includes(PREFILL_ACTIVATE+'\n'+PREFILL_WAIT));
+ assert.ok(strict.indexOf('await diagnosticPaintBaseline(id)')<strict.indexOf(PREFILL_ACTIVATE));
+ assert.ok(strict.indexOf('await diagnosticWaitForPaint')>strict.indexOf(PREFILL_WAIT));
+ assert.ok(strict.endsWith('await page.waitForTimeout(180);\nthrow Error("original");'));
+ execFileSync(process.execPath,['--input-type=module','--check'],{input:strict});
+ assert.match(read('.github/workflows/ui-layer-diagnostics.yml'),/default: original\n        options: \[original, strict-paint\]/);
+});
+test('strict baseline refuses stale ledger key/forecast and an unchanged primary selection',async()=>{
+ const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
+ const state={layers:{wind:{visible:true}},manifest:{model:'ecmwf',init_time:'run',base:'base'},cursorMs:1};
+ const data={intentKey:'wind',intentGeneration:3,model:'ecmwf',run:'run',base:'base',cursor:1};
+ const app={store:{getState:()=>state},renderCausalDiagnostics:()=>({enabled:true,errors:0,events:[{sequence:4,data}]})};
+ const baseline=await new AsyncFunction('context','page','process','console','BASE','window',
+  read('tools/ui-layer-diagnostics-browser.txt')+'\ndiagnosticSnapshot=async()=>{}; return diagnosticPaintBaseline;')
+ ({route:async()=>{}},{on:()=>{},evaluate:(callback,arg)=>callback(arg)},{on:()=>{}},{log:()=>{}},TARGETS.staging,{__atmos:app});
+ assert.equal((await baseline('temp')).beforeIntentGeneration,3);
+ await assert.rejects(baseline('wind'));
+ data.intentKey='cloud';await assert.rejects(baseline('temp'));
+ data.intentKey='wind';data.cursor=2;await assert.rejects(baseline('temp'));
+});
+
+test('strict paint observations poll at a bounded cadence without changing original wait',()=>{
+ const runtime=read('tools/ui-layer-diagnostics-browser.txt');
+ assert.match(runtime,/page\.waitForFunction\(diagnosticPaintPredicate,expected,\{timeout:30_000,polling:250\}\)/);
+ assert.ok(!PREFILL_WAIT.includes('polling'));
+ assert.ok(PREFILL_WAIT.includes('{ timeout: 30_000 }'));
+});
+
+test('failure classification separates strict diagnostics while preserving deadline and identity precedence',()=>{
+ const result={phase:'prefill-temp-paint-unproven',identityAfter:{ok:true}};
+ assert.equal(diagnosticFailure(result,'strict-paint'),'strict-paint-unproven');
+ assert.equal(diagnosticFailure({...result,phase:'prefill-temp-paint-baseline-unavailable'},'strict-paint'),'strict-paint-baseline-unavailable');
+ assert.equal(diagnosticFailure({...result,phase:'prefill-temp-timeout'},'strict-paint'),'original-guard-failed');
+ assert.equal(diagnosticFailure(result,'original'),'original-guard-failed');
+ assert.equal(diagnosticFailure({...result,identityAfter:{ok:false}},'strict-paint'),'post-run-identity-failed');
+ assert.equal(diagnosticFailure({...result,deadlineExceeded:true,identityAfter:{ok:false}},'strict-paint'),'process-deadline');
 });
