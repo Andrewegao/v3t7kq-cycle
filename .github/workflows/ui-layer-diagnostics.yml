@@ -1,0 +1,54 @@
+name: WeatherX read-only layer diagnostics
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Exact reviewed deployment to diagnose
+        type: choice
+        required: true
+        default: staging
+        options: [staging, failed-preview]
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-read-only-layer-diagnostics
+  cancel-in-progress: false
+jobs:
+  diagnose:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DIAGNOSTIC_TARGET: ${{ inputs.target }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - name: Enforce manual main-only target before source checkout
+        run: node cycle/tools/ui-layer-diagnostics.mjs gate
+      - name: Checkout exact reviewed diagnostic controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: 5b622f594b107e105dae9ee6b494c20ff8d0699a
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          persist-credentials: false
+          path: control
+          sparse-checkout: app
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Verify source and original harness hashes
+        run: node cycle/tools/ui-layer-diagnostics.mjs verify control
+      - name: Install locked browser dependencies
+        run: |
+          npm ci --ignore-scripts --prefix control/app
+          cd control/app && npx playwright install --with-deps chromium
+      - name: Exercise unchanged layer assertions with bounded diagnostics
+        run: node cycle/tools/ui-layer-diagnostics.mjs run control
+      - name: Retain sanitized diagnostic evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ui-layer-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ui-layer-diagnostics/*.json*
+          if-no-files-found: ignore
+          retention-days: 7

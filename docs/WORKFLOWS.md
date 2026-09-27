@@ -6,9 +6,9 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `fc10aac0bcaeeaa66a5b91644e34b541fd16e4513ef2f85700c16e9e425a631d`.
+Source digest (registry and workflow bytes): `c8095384d36ee98db1f24a780d5406c528d9d7597934b20fd41ef15f2f8d5886`.
 
-59 workflows. Ordering and output are deterministic; no API request or clock is used.
+60 workflows. Ordering and output are deterministic; no API request or clock is used.
 
 | Workflow | Family / subsystem | Lifecycle | Purpose | Runbook |
 | --- | --- | --- | --- | --- |
@@ -67,6 +67,7 @@ Source digest (registry and workflow bytes): `fc10aac0bcaeeaa66a5b91644e34b541fd
 | [staging-wind100-preflight](#staging-wind100-preflight) | staging / Native wind | diagnostic | Check recurring staging wind credentials through the existing check-only path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [staging-wind100-recurring](#staging-wind100-recurring) | staging / Native wind | recurring | Maintain the isolated recurring staging native wind selection. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [staging-wind100](#staging-wind100) | staging / Native wind | manual-supported | Qualify isolated native 100 metre wind for staging. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
+| [ui-layer-diagnostics](#ui-layer-diagnostics) | releases / UI release diagnostics | diagnostic | Collect bounded read-only layer-switch evidence against the exact reviewed staging or failed preview artifact. | [guide](../docs/ui-layer-diagnostics.md) |
 | [ui-release](#ui-release) | releases / Application shell | manual-supported | Promote an eligible immutable application candidate through production guards. | [guide](../docs/production-safe-controller-20260907.md) |
 | [ui-staging-tc](#ui-staging-tc) | staging / Application shell | manual-supported | Build an isolated staging shell with reviewed tropical cyclone guidance. | [guide](../docs/STAGING_TC_GUIDANCE.md) |
 | [ui-staging](#ui-staging) | staging / Application shell | manual-supported | Build and qualify an immutable staging application candidate. | [guide](../docs/UI-STAGING-PROMOTION.md) |
@@ -1448,6 +1449,32 @@ Checkout declarations (not a claim of approval or checkout success):
 | [wind100 / Checkout an independent clean validator and publisher copy](../.github/workflows/staging-wind100.yml#L48) | <code>weatherx-hq/atmos</code> | <code>${{ env.ATMOS_SHA }}</code> |
 
 Variable references (declared names only; values and activation unknown): [STAGING_DATA_ISOLATION_APPROVED](../.github/workflows/staging-wind100.yml#L25), [STAGING_R2_ACCOUNT_ID](../.github/workflows/staging-wind100.yml#L28), [STAGING_WIND100_ATMOS_SHA](../.github/workflows/staging-wind100.yml#L22), [STAGING_WIND100_CONTROLLER_SHA256](../.github/workflows/staging-wind100.yml#L27), [STAGING_WIND100_ENABLED](../.github/workflows/staging-wind100.yml#L26).
+
+
+## ui-layer-diagnostics
+
+[.github/workflows/ui-layer-diagnostics.yml](../.github/workflows/ui-layer-diagnostics.yml#L1) · <code>WeatherX read-only layer diagnostics</code>
+
+Declared triggers: [workflow_dispatch](../.github/workflows/ui-layer-diagnostics.yml#L4); input names <code>["target"]</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-read-only-layer-diagnostics","cancel-in-progress":false}</code>.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [diagnose](../.github/workflows/ui-layer-diagnostics.yml#L18) ← no needs | <code>ubuntu-latest</code> | not declared | <code>20</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+
+Declared job conditions (additional step/helper checks may apply):
+
+- [diagnose](../.github/workflows/ui-layer-diagnostics.yml#L18): <code>${{ github.event_name == 'workflow_dispatch' &amp;&amp; github.ref == 'refs/heads/main' }}</code>
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [diagnose / step 1](../.github/workflows/ui-layer-diagnostics.yml#L24) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [diagnose / Checkout exact reviewed diagnostic controller](../.github/workflows/ui-layer-diagnostics.yml#L28) | <code>weatherx-hq/atmos</code> | <code>5b622f594b107e105dae9ee6b494c20ff8d0699a</code> |
+
+Variable references (declared names only; values and activation unknown): none detected.
 
 
 ## ui-release

@@ -1,0 +1,72 @@
+// Bounded diagnostics only. No response bodies, query strings, headers, or raw console text.
+const diagnosticNetwork = [], diagnosticGpu = [], diagnosticPageErrors = [];
+let diagnosticWritesBlocked = 0;
+const diagnosticInflight = new Map();
+const diagnosticPending = () => [...diagnosticInflight.values()].slice(-40).map(row => ({
+  ...row.location, elapsedMs: Date.now() - row.started,
+}));
+const diagnosticKeep = (rows, row) => { if (rows.length === 160) rows.shift(); rows.push(row); };
+const diagnosticToken = value => typeof value === 'string' ? value.replace(/[^a-zA-Z0-9_.:/-]/g, '').slice(0, 120) : null;
+const diagnosticUrl = value => {
+  try { const url = new URL(value); return { origin: url.origin === BASE ? 'target' : 'external',
+    path: /^\/(?:data|cdn|api)\//.test(url.pathname) ? diagnosticToken(url.pathname) : 'other' }; }
+  catch { return { origin: 'invalid', path: 'other' }; }
+};
+const diagnosticEmit = row => console.log('WX_LAYER_DIAGNOSTIC ' + JSON.stringify(row));
+await context.route('**/*', route => {
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(route.request().method())) {
+    diagnosticWritesBlocked += 1; return route.abort('blockedbyclient');
+  }
+  return route.continue();
+});
+page.on('request', request => {
+  if (diagnosticInflight.size === 256) diagnosticInflight.delete(diagnosticInflight.keys().next().value);
+  diagnosticInflight.set(request, { location: diagnosticUrl(request.url()), started: Date.now() });
+});
+page.on('requestfinished', request => diagnosticInflight.delete(request));
+page.on('requestfailed', request => {
+  diagnosticInflight.delete(request);
+  diagnosticKeep(diagnosticNetwork, {
+  type: 'failed', ...diagnosticUrl(request.url()),
+  failure: /^net::ERR_[A-Z_]+$/.test(request.failure()?.errorText ?? '') ? request.failure().errorText : 'request-failed',
+}); });
+page.on('response', response => { if (response.status() >= 400) diagnosticKeep(diagnosticNetwork,
+  { type: 'http', status: response.status(), ...diagnosticUrl(response.url()) }); });
+page.on('pageerror', error => diagnosticKeep(diagnosticPageErrors,
+  ['Error','TypeError','RangeError','ReferenceError'].includes(error.name) ? error.name : 'page-error'));
+page.on('console', message => {
+  const value = message.text();
+  if (/GL_INVALID|INVALID_(?:OPERATION|VALUE|ENUM)|WebGL.*(?:error|warning)/i.test(value)) {
+    const codes = value.match(/(?:GL_)?INVALID_(?:OPERATION|VALUE|ENUM)|CONTEXT_LOST/g) ?? ['WebGL-error-or-warning'];
+    diagnosticKeep(diagnosticGpu, codes.slice(0, 8));
+  }
+});
+// The monitor observes fatal failure without catching it or changing the original exit status.
+process.on('uncaughtExceptionMonitor', error => diagnosticEmit({ event: 'fatal',
+  category: error?.name === 'TimeoutError' ? 'timeout' : error?.name === 'AssertionError' ? 'assertion' : 'runtime-error',
+  pending: diagnosticPending(), network: diagnosticNetwork, gpu: diagnosticGpu, pageErrors: diagnosticPageErrors,
+  writesBlocked: diagnosticWritesBlocked }));
+diagnosticEmit({event:'phase',phase:'browser-ready-before-navigation'});
+async function diagnosticSnapshot(layer, phase, started) {
+  let state, snapshotTimer;
+  try {
+    state = await Promise.race([page.evaluate(() => {
+      const app = window.__atmos, store = app?.store.getState();
+      const token = value => typeof value === 'string' ? value.replace(/[^a-zA-Z0-9_.:/-]/g, '').slice(0, 120) : null;
+      const scalar = value => typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)) ? value : null;
+      const numbers = (value, keys) => Object.fromEntries(keys.map(key => [key,
+        typeof value?.[key] === 'number' && Number.isFinite(value[key]) ? value[key] : null]));
+      const deck = app?.deckSnapshot();
+      return { visible: Object.entries(store?.layers ?? {}).filter(([,v]) => v?.visible).map(([id]) => token(id)).slice(0, 30),
+        swap: token(document.body.dataset.wlSwap ?? 'idle'), cursorMs: scalar(store?.cursorMs), catchingUp: scalar(store?.catchingUp),
+        manifest: {model: token(store?.manifest?.model), init: token(store?.manifest?.init_time)},
+        deck: (Array.isArray(deck) ? deck : []).slice(0, 40).map(row => ({id:token(row.id),opacity:scalar(row.opacity),visible:scalar(row.visible)})),
+        decode: numbers(app?.decodeWorkerStats?.(), ['workers', 'pending', 'textureJobs', 'fieldJobs']),
+        textures: numbers(app?.weatherTextureBudgetStats?.(), ['bytes', 'derivedBytes', 'weatherBytes', 'textures', 'ceiling', 'evictions', 'recycles']),
+        coldReady: performance.getEntriesByName('wx:cold-start-complete').length > 0 };
+    }), new Promise(resolve => { snapshotTimer = setTimeout(() => resolve({ unavailable: true, reason: 'snapshot-timeout' }), 2_000); })]);
+  } catch { state = { unavailable: true }; }
+  finally { clearTimeout(snapshotTimer); }
+  diagnosticEmit({event:'prefill',layer,phase,elapsedMs:Date.now()-started,state,
+    pending:diagnosticPending(),network:diagnosticNetwork,gpu:diagnosticGpu,pageErrors:diagnosticPageErrors,writesBlocked:diagnosticWritesBlocked});
+}
