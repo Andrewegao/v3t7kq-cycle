@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CONTROL_SHA, STAGING_CONTROL_SHA } from '../tools/ui-candidate.mjs';
 const root=new URL('../',import.meta.url);
-const COMBINED_ATMOS_SHA='5b622f594b107e105dae9ee6b494c20ff8d0699a';
+const COMBINED_ATMOS_SHA='e35540607fcf3fc5731aef610411cd67d2dc482e';
 const BETA_ATMOS_SHA='b9db38dd22eed1da56c6c4dd4140480da7e89153';
 const read=p=>readFileSync(new URL(p,root),'utf8');
 const staging=read('.github/workflows/ui-staging.yml'), prod=read('.github/workflows/ui-release.yml'), source=read('tools/ui-release.mjs'), candidate=read('tools/ui-candidate.mjs');
@@ -132,7 +132,8 @@ test('guard is pinned, both candidate verification paths are inside automatic ro
   assert.match(source,/return \['--expected-previous-id',previousDeploymentId,'--success-receipt',successReceiptPath\]/);
   assert.match(source,/p\.canonical_deployment\.id,guardSuccess\.candidateDeploymentId/);
   assert.match(source,/if\(publicCombinedProfile\(c\.profile\)\)runPublicReleaseJourneys/);
-  assert.equal((source.match(/controlRoot:CONTROL/g)||[]).length,6);
+  assert.equal((source.match(/controlRoot:CONTROL/g)||[]).length,7);
+  assert.match(source,/runReleaseLayerGuard\(\{stage,controlRoot:CONTROL/);
   assert.doesNotMatch(source,/PublicJourneyProof\(\{[^}]*sourceRoot|runPublicReleaseJourneys\(\{[^}]*sourceRoot/s);
   assert.match(candidate,/publicJourneyProofSha256/);
   assert.match(source,/cwd:uploadCwd/);assert.doesNotMatch(source,/cwd:dirname\(dist\)/);

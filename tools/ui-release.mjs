@@ -1,3 +1,4 @@
+import {runReleaseLayerGuard} from './ui-release-layer-guard.mjs';
 // Guarded orchestration only. This program never writes Workers, DNS, bindings, data or settings.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -37,6 +38,7 @@ export const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workfl
   'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-app-test-receipt.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh',
   'tools/ui-release-profile-preflight.mjs','tools/ui-public-locale-beta.mjs','tools/ui-public-combined.mjs',
   'tools/ui-combined-source-guard.mjs','tools/ui-weather-feed-baseline.mjs',
+  'tools/ui-release-layer-guard.mjs','tools/ui-layer-diagnostics.mjs','tools/ui-layer-diagnostics-browser.txt','tools/ui-layer-paint-proof.mjs',
   'tools/production-account-contract.mjs','tools/production-account-trust-policy.mjs','tools/production-account-release.mjs','tools/production-account-execution.mjs',
   'tools/ui-staging-models.mjs','tools/ui-staging-model-browser.mjs','tools/ui-staging-core-browser.mjs','tools/ui-staging-tc-proof.mjs','tools/ui-staging-preflight.mjs',
   'tools/ui-staging-account-proof.mjs','tools/ui-public-release-journeys.mjs',
@@ -738,7 +740,11 @@ async function verify(stage) {
       save(resolve(process.env.RUNNER_TEMP,'ui-compression-wire.json'),proof);
     }
     run('node',[resolve(CONTROL,'app/e2e/weather-lab-only-runtime.mjs')], {cwd:resolve(CONTROL,'app'),env:{...process.env,BASE:ORIGINS[stage]}});
-    run('node',[resolve(CONTROL,'app/e2e/layer-switch-tint.mjs')], {cwd:resolve(CONTROL,'app'),env:{...process.env,BASE:ORIGINS[stage]}});
+    if(publicCombinedProfile(c.profile))await runReleaseLayerGuard({stage,controlRoot:CONTROL,runnerTemp:process.env.RUNNER_TEMP,
+      sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId,
+      indexSha256:c.files.find(file=>file.path==='index.html').sha256,
+      receiptSha256:c.files.find(file=>file.path==='health/release.json').sha256});
+    else run('node',[resolve(CONTROL,'app/e2e/layer-switch-tint.mjs')], {cwd:resolve(CONTROL,'app'),env:{...process.env,BASE:ORIGINS[stage]}});
     if(stage==='staging'&&selectionProfile(c.profile)){
       const selectionFile=resolve(process.env.RUNNER_TEMP,'ui-browser-selection.json');
       writeFileSync(selectionFile,Buffer.from(c.files.find(f=>f.path===SELECTION_ASSET).base64,'base64'),{mode:0o600});
