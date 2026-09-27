@@ -531,6 +531,15 @@
       "subsystem": "Production data reader",
       "lifecycle": "manual-supported",
       "runbook": "docs/production-wind100-point-reader-release.md"
+    },
+    {
+      "id": "ui-layer-diagnostics",
+      "path": ".github/workflows/ui-layer-diagnostics.yml",
+      "family": "releases",
+      "purpose": "Collect bounded read-only layer-switch evidence against the exact reviewed staging or failed preview artifact.",
+      "subsystem": "UI release diagnostics",
+      "lifecycle": "diagnostic",
+      "runbook": "docs/ui-layer-diagnostics.md"
     }
   ]
 }
