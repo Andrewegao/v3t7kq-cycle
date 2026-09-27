@@ -147,7 +147,7 @@ function safeExecute(command, args, context, env, timeout) {
     PYTHONDONTWRITEBYTECODE: '1', TMPDIR: env.RUNNER_TEMP }, encoding: 'utf8', stdio: 'pipe', timeout, maxBuffer: 65536 });
 }
 const COLLECTOR_LIMIT = 20000;
-const COLLECTOR_OUTPUT_BYTES = 4096;
+const COLLECTOR_OUTPUT_BYTES = 16384;
 const COLLECTOR_PHASES = new Set(['setup', 'source', 'roster', 'fetch', 'checkpoint', 'validate', 'finalize', 'session', 'collector']);
 const COLLECTOR_CLASSES = new Set(['contract', 'environment', 'provider', 'provider-cooldown', 'minimum-availability', 'unknown']);
 const REQUEST_COUNT_KEYS = ['http2xx', 'http403', 'http429', 'http5xx', 'httpOther', 'timeouts', 'overlongRetryAfter', 'pacerStopped'];
@@ -224,7 +224,7 @@ function parseCollectorFailure(output, family) {
   const value = collectorDocument(output);
   validateCollectorBase(value, family, 'failed', ['phase', 'class'],
     ['rosterStationCount', 'availableStationCount', 'requiredStationCount', 'resumeAttempts',
-      'firstPassAvailableStationCount', 'firstPassRequestCounts', 'requestCounts']);
+      'firstPassAvailableStationCount', 'firstPassRequestCounts', 'requestCounts', 'stationDiagnostics']);
   assert(COLLECTOR_PHASES.has(value.phase) && COLLECTOR_CLASSES.has(value.class), 'invalid collector failure category');
   const hasAvailability = ['rosterStationCount', 'availableStationCount', 'requiredStationCount', 'resumeAttempts', 'requestCounts']
     .every(key => Object.hasOwn(value, key));
@@ -242,6 +242,31 @@ function parseCollectorFailure(output, family) {
     }
     for (const key of ['firstPassRequestCounts', 'requestCounts']) {
       if (Object.hasOwn(value, key)) value[key] = validatedRequestCounts(value[key]);
+    }
+  }
+  if (Object.hasOwn(value, 'stationDiagnostics')) {
+    assert.equal(family, 'tides');
+    const diagnostic = value.stationDiagnostics;
+    exactKeys(diagnostic, ['failedStationCount', 'truncated', 'stations']);
+    const count = boundedInteger(diagnostic.failedStationCount, 1256);
+    assert.equal(diagnostic.truncated, count > 32);
+    assert(Array.isArray(diagnostic.stations) && diagnostic.stations.length === Math.min(count, 32));
+    let previous = '';
+    for (const station of diagnostic.stations) {
+      exactKeys(station, ['id', 'reason', 'product', 'requests']);
+      assert(typeof station.id === 'string' && /^[0-9]{7}$/.test(station.id) && station.id > previous);
+      previous = station.id;
+      assert(['noaa-no-predictions', 'station-fetch-failed', 'events-incomplete', 'events-unavailable',
+        'samples-incomplete'].includes(station.reason));
+      assert(['hilo', '6', 'unknown'].includes(station.product));
+      assert(Array.isArray(station.requests) && station.requests.length <= 2);
+      const seen = new Set();
+      for (const request of station.requests) {
+        exactKeys(request, ['product', 'attempts', 'lastStatus']);
+        assert(['hilo', '6'].includes(request.product) && !seen.has(request.product)); seen.add(request.product);
+        assert(boundedInteger(request.attempts) > 0);
+        const status = boundedInteger(request.lastStatus, 599); assert(status === 0 || status >= 100);
+      }
     }
   }
   return value;

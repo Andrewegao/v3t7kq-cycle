@@ -115,6 +115,37 @@ test('collector subprocess return code and timeout never expose command paths or
     phase: 'process', class: 'process-timeout' });
   assert(!JSON.stringify([exited, timedOut]).includes(secret));
 });
+test('station diagnostics survive the process boundary only with bounded allowlisted fields', () => {
+  const station = { id: '1234567', reason: 'events-unavailable', product: 'hilo',
+    requests: [{ product: 'hilo', attempts: 10, lastStatus: 403 }] };
+  const receipt = { schemaVersion: 1, kind: 'staging-place-collection', status: 'failed', family: 'tides',
+    phase: 'fetch', class: 'minimum-availability', rosterStationCount: 1256, availableStationCount: 1249,
+    requiredStationCount: 1251, resumeAttempts: 1, firstPassAvailableStationCount: 1219,
+    firstPassRequestCounts: emptyRequestCounts, requestCounts: emptyRequestCounts,
+    stationDiagnostics: { failedStationCount: 7, truncated: false,
+      stations: Array.from({ length: 7 }, (_, i) => ({ ...station, id: String(1234567 + i) })) } };
+  const parse = value => collectorProcessFailure({ status: 1, stdout: '', stderr: JSON.stringify(value) }, 'tides');
+  assert.deepEqual(parse(receipt), receipt);
+  for (const mutation of [
+    row => { row.stationDiagnostics.stations[0].id = 'SECRET'; },
+    row => { row.stationDiagnostics.stations[0].reason = 'https://private.invalid'; },
+    row => { row.stationDiagnostics.stations[0].requests[0].body = 'SECRET'; },
+    row => { row.stationDiagnostics.stations[0].requests[0].lastStatus = 99; },
+    row => { row.stationDiagnostics.stations[0].requests[0].attempts = 20001; },
+    row => { row.stationDiagnostics.stations[1].id = row.stationDiagnostics.stations[0].id; },
+    row => { row.stationDiagnostics.failedStationCount = 1257; },
+    row => { row.stationDiagnostics.truncated = true; },
+  ]) {
+    const corrupt = structuredClone(receipt); mutation(corrupt);
+    assert.equal(parse(corrupt).class, 'process-exit');
+  }
+  const bounded = structuredClone(receipt);
+  bounded.stationDiagnostics = { failedStationCount: 1256, truncated: true,
+    stations: Array.from({ length: 32 }, (_, i) => ({ ...station, id: String(1234567 + i),
+      requests: [{ product: 'hilo', attempts: 20000, lastStatus: 503 }, { product: '6', attempts: 20000, lastStatus: 0 }] })) };
+  assert.deepEqual(parse(bounded), bounded);
+  assert(Buffer.byteLength(JSON.stringify(bounded)) < 16384);
+});
 async function fixture(t, kind = 'surf') {
   const root = await realpath(await mkdtemp(resolve(tmpdir(), 'wx-renewal-test-'))); t.after(() => rm(root, { recursive: true, force: true }));
   const now = Date.now();

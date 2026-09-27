@@ -76,3 +76,23 @@ Only when every pin matches may renewal use the corrected date as the comparison
 the old completion is never rewritten, and qualification, newer-identity, six-hour final-CAS
 freshness, and pointer CAS gates remain unchanged. The exception becomes inert after a newer
 pointer replaces that exact legacy pointer.
+
+## Tide failure diagnosis, 2026-09-27
+
+The release is blocked because the prior tide lease expired and three subsequent
+renewals failed the unchanged 1,251-station minimum (1,250, then 1,249 twice).
+Aggregate request counts cannot identify the missing products. A bounded observer
+now retains final failed NOAA station IDs, allowlisted reasons/products, and the
+attempt count and final HTTP status per product across the existing two passes.
+A station recovered on resume is removed from the failure list. Reports contain
+at most 32 stations, with an explicit total and truncation flag; raw responses,
+URLs, headers, names, coordinates, and exception text are excluded. The Node
+process boundary validates every field and rejects unknown or oversized output.
+
+Acceptance: reproduce missing failure evidence; show useful sanitized output on
+a failed minimum without any candidate write; preserve exact producer results,
+exceptions, checkpoint, global pacing, one resume, deadline, 1,251 minimum,
+qualification and publication policy; then use one instrumented hosted run to
+identify the remaining station failures. Targeted provider probes can follow for
+those stations only. This diagnostic change is not a tide-data repair or a release
+qualification by itself, and does not change the frozen Atmos source.

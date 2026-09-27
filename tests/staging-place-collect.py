@@ -36,6 +36,75 @@ class Response:
         self.headers = headers or {}
 
 
+class TideDiagnosticTests(unittest.TestCase):
+    def test_exact_exception_is_preserved_and_its_text_is_never_retained(self):
+        class NoPredictionsError(RuntimeError):
+            product = "6"
+        error = NoPredictionsError("private response body")
+        class Producer:
+            def _fetch_station_v2(self, *args, **kwargs):
+                raise error
+        producer = Producer()
+        producer.NoPredictionsError = NoPredictionsError
+        diagnostics = collector._TideDiagnostics()
+        diagnostics.set_roster([{"id": "1234567"}])
+        diagnostics.instrument(producer)
+        with self.assertRaises(NoPredictionsError) as caught:
+            producer._fetch_station_v2(None, {"id": "1234567"})
+        self.assertIs(caught.exception, error)
+        receipt = collector.failure_receipt("tides", collector.CollectionFailure(
+            "fetch", "minimum-availability", stationDiagnostics=diagnostics))
+        self.assertEqual(receipt["stationDiagnostics"]["stations"][0]["reason"], "noaa-no-predictions")
+        self.assertNotIn("private response", json.dumps(receipt))
+        forged = collector.failure_receipt("tides", collector.CollectionFailure(
+            "fetch", "provider", stationDiagnostics={"secret": "private response"}))
+        self.assertNotIn("stationDiagnostics", forged)
+
+    def test_final_station_outcomes_replace_failed_first_pass_without_changing_fetch(self):
+        class Producer:
+            def _fetch_station_v2(self, session, meta, begin, end, **kwargs):
+                if meta.get("fail"):
+                    kwargs["failure"].update(reason="events-unavailable", product="hilo", private="secret")
+                    return None
+                return ([{"timeMs": 1}], [])
+        producer = Producer()
+        original = producer._fetch_station_v2
+        diagnostics = collector._TideDiagnostics()
+        diagnostics.set_roster([{"id": "1234567"}, {"id": "7654321"}])
+        diagnostics.instrument(producer)
+        self.assertIsNone(producer._fetch_station_v2(None, {"id": "1234567", "fail": True}, None, None, failure={}))
+        diagnostics.observe_request({"station": "1234567", "interval": "hilo"}, 403)
+        self.assertEqual(diagnostics.snapshot()["stations"][0]["reason"], "events-unavailable")
+        producer._fetch_station_v2(None, {"id": "1234567"}, None, None, failure={})
+        producer._fetch_station_v2(None, {"id": "7654321", "fail": True}, None, None, failure={})
+        diagnostics.observe_request({"station": "7654321", "interval": "hilo"}, 200)
+        row = diagnostics.snapshot()
+        self.assertEqual(row, {"failedStationCount": 1, "truncated": False, "stations": [{
+            "id": "7654321", "reason": "events-unavailable", "product": "hilo",
+            "requests": [{"product": "hilo", "attempts": 1, "lastStatus": 200}],
+        }]})
+        self.assertNotIn("secret", json.dumps(row))
+        diagnostics.restore()
+        self.assertEqual(producer._fetch_station_v2, original)
+
+    def test_station_diagnostics_are_bounded_and_ignore_untrusted_fields(self):
+        diagnostics = collector._TideDiagnostics()
+        diagnostics.set_roster([{"id": str(1000000 + i)} for i in range(1256)])
+        for i in range(1256):
+            diagnostics.record(str(1000000 + i), "provider-body", "private-url")
+        diagnostics.record("secret", "events-unavailable", "hilo")
+        diagnostics.observe_request({"station": "1000000", "interval": "hilo", "token": "secret"}, 403)
+        diagnostics.observe_request({"station": "9999999", "interval": "hilo"}, 403)
+        row = diagnostics.snapshot()
+        self.assertEqual(row["failedStationCount"], 1256)
+        self.assertTrue(row["truncated"])
+        self.assertEqual(len(row["stations"]), 32)
+        self.assertEqual(row["stations"][0]["reason"], "station-fetch-failed")
+        self.assertEqual(row["stations"][0]["product"], "unknown")
+        self.assertLess(len(json.dumps(row)), 12000)
+        self.assertNotIn("secret", json.dumps(row))
+
+
 class RetryAfterSession(Session):
     def __init__(self):
         super().__init__()
@@ -250,6 +319,21 @@ class ResumableTideProducer(TideProducer):
         return super().bake_v2(session, stations, output, legacy, **kwargs)
 
 
+class DiagnosedTideProducer(ResumableTideProducer):
+    def fetch_stations(self, session):
+        return [{"id": str(1000000 + i), "type": "R"} for i in range(1256)]
+
+    def _fetch_station_v2(self, session, meta, *args, **kwargs):
+        session.get("https://private.invalid?secret=DO-NOT-PRINT", params={"station": meta["id"], "interval": "hilo"})
+        kwargs["failure"].update(reason="events-unavailable", product="hilo")
+        return None
+
+    def bake_v2(self, session, stations, output, legacy, **kwargs):
+        for station in stations[-7:]:
+            self._fetch_station_v2(session, station, failure={})
+        return super().bake_v2(session, stations, output, legacy, **kwargs)
+
+
 class WrongTypeMinimumTideProducer(FailingTideProducer):
     def bake_v2(self, *args, **kwargs):
         self.bake_calls += 1
@@ -450,6 +534,26 @@ class PlaceCollector(unittest.TestCase):
         self.assertEqual(receipt["requiredStationCount"], 1251)
         self.assertEqual(receipt["resumeAttempts"], 1)
         self.assertEqual(receipt["firstPassAvailableStationCount"], 1169)
+
+    def test_failed_collection_retains_final_station_evidence_and_never_writes_candidate(self):
+        producer = DiagnosedTideProducer(fail_second=True)
+        original = producer._fetch_station_v2
+        session = Session()
+        session.get = lambda *args, **kwargs: Response(403)
+        with self.assertRaises(collector.CollectionFailure) as caught:
+            collector.collect(self.source, self.base / "run", "tides", env={},
+                modules={"tides": producer}, session_factory=lambda: session)
+        receipt = collector.failure_receipt("tides", caught.exception)
+        self.assertEqual(receipt["stationDiagnostics"]["failedStationCount"], 7)
+        self.assertEqual(receipt["stationDiagnostics"]["stations"][0], {
+            "id": "1001249", "reason": "events-unavailable", "product": "hilo",
+            "requests": [{"product": "hilo", "attempts": 2, "lastStatus": 403}],
+        })
+        self.assertEqual(producer.bake_calls, 2)
+        self.assertEqual(producer._fetch_station_v2, original)
+        self.assertTrue(session.closed)
+        self.assertFalse((self.base / "run" / "candidate").exists())
+        self.assertNotIn("DO-NOT-PRINT", json.dumps(receipt))
 
     def test_tides_failure_reports_only_aggregate_http_and_stopped_pacer_state(self):
         now = datetime(2026, 9, 10, 17, 19, 59, tzinfo=timezone.utc)
