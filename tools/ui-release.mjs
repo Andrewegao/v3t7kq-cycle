@@ -15,6 +15,7 @@ import {PUBLIC_JOURNEY_PROOF_MAX_BYTES,runPublicReleaseJourneys,readPublicJourne
 import { controlShaFor, TC_CONTROL_SHA, REPOSITORY, MAX_BYTES, gate, hash, createCandidate, validateCandidate,
   readTree, validateFiles, seal, unseal, restore, eligibleRun } from './ui-candidate.mjs';
 import { packBuild, unpackBuild, eligibleBuild } from './ui-build-transfer.mjs';
+import { verifyAppTestReceipt } from './ui-app-test-receipt.mjs';
 import {profileFor,validateProfile,selectionProfile,coreReleaseProfile,publicLocaleBetaProfile,publicCombinedProfile,accountServingProductionProfile,tcGuidanceProfile,canonical as profileCanonical,readSelection,readTcSelection,requireUiProductionProfile,requireStagingApproval,resolveWind100BuildPin,SELECTION_ASSET,TC_SELECTION_ASSET,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt} from './ui-staging-models.mjs';
 import {LANE_B_CONTRACT,PRODUCTION_ACCOUNT_APPROVAL,validateProductionPagesConfiguration} from './production-account-contract.mjs';
 import {assertPublicLocaleBetaReady} from './ui-public-locale-beta.mjs';
@@ -33,7 +34,7 @@ const DEPLOYMENT_ID = /^[a-f0-9-]{36}$/;
 const GUARD_SUCCESS_RECEIPT_MAX_BYTES = 4096;
 const CORE_CATALOG_MODELS = ['ecmwf','gfs'];
 export const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workflows/ui-staging-tc.yml', '.github/workflows/ui-release.yml',
-  'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh',
+  'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-app-test-receipt.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh',
   'tools/ui-release-profile-preflight.mjs','tools/ui-public-locale-beta.mjs','tools/ui-public-combined.mjs',
   'tools/ui-combined-source-guard.mjs','tools/ui-weather-feed-baseline.mjs',
   'tools/production-account-contract.mjs','tools/production-account-trust-policy.mjs','tools/production-account-release.mjs','tools/production-account-execution.mjs',
@@ -595,6 +596,8 @@ async function receiveBuild() {
   const r=await gh(`actions/runs/${id}`), a=await gh(`actions/runs/${id}/artifacts?per_page=100`);
   const jobs=await gh(`actions/runs/${id}/attempts/${attempt}/jobs?per_page=100`);
   assert.ok(a.total_count<=100 && jobs.total_count<=100);
+  verifyAppTestReceipt(process.env.UI_APP_TEST_RECEIPT,jobs.jobs,{runId:id,attempt,
+    sourceSha:process.env.ATMOS_SHA,workflowSha:process.env.GITHUB_SHA,selection:process.env.MODEL_SELECTION_SHA256});
   const name=`ui-build-${id}-${attempt}`, matches=a.artifacts.filter(x=>x.name===name);
   assert.equal(matches.length,1);assert.equal(matches[0].expired,false);
   assert.ok(matches[0].size_in_bytes<MAX_BYTES*2+1024);

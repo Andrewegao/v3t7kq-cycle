@@ -1,0 +1,225 @@
+{
+  "sourceApi": "repos/Andrewegao/v3t7kq-cycle/actions/runs/36274751260/attempts/1/jobs",
+  "capturedAt": "2026-09-27T02:12:58.204760+00:00",
+  "note": "Unmodified historical build job from GitHub. The full app step lived inside build before this change; this is metadata-shape evidence, not a cloud run of the new sibling job.",
+  "job": {
+    "id": 108495230776,
+    "run_id": 36274751260,
+    "workflow_name": "Staging c257ef903462518b0c257b1e2d0a52ca8fd61873",
+    "head_branch": "main",
+    "run_url": "https://api.github.com/repos/Andrewegao/v3t7kq-cycle/actions/runs/36274751260",
+    "run_attempt": 1,
+    "node_id": "CR_kwDOTY6vcM8AAAAZQtHXOA",
+    "head_sha": "fdcbdb439f46ebc00fd55529d51876a76b8c310b",
+    "url": "https://api.github.com/repos/Andrewegao/v3t7kq-cycle/actions/jobs/108495230776",
+    "html_url": "https://github.com/Andrewegao/v3t7kq-cycle/actions/runs/36274751260/job/108495230776",
+    "status": "completed",
+    "conclusion": "success",
+    "created_at": "2026-09-26T21:59:09Z",
+    "started_at": "2026-09-26T21:59:12Z",
+    "completed_at": "2026-09-26T22:20:32Z",
+    "name": "build",
+    "steps": [
+      {
+        "name": "Set up job",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 1,
+        "started_at": "2026-09-26T21:59:13Z",
+        "completed_at": "2026-09-26T21:59:14Z"
+      },
+      {
+        "name": "require isolated source key without legacy fallback",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 2,
+        "started_at": "2026-09-26T21:59:14Z",
+        "completed_at": "2026-09-26T21:59:14Z"
+      },
+      {
+        "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 3,
+        "started_at": "2026-09-26T21:59:14Z",
+        "completed_at": "2026-09-26T21:59:15Z"
+      },
+      {
+        "name": "checkout reviewed release controller",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 4,
+        "started_at": "2026-09-26T21:59:15Z",
+        "completed_at": "2026-09-26T21:59:57Z"
+      },
+      {
+        "name": "Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 5,
+        "started_at": "2026-09-26T21:59:57Z",
+        "completed_at": "2026-09-26T21:59:58Z"
+      },
+      {
+        "name": "Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 6,
+        "started_at": "2026-09-26T21:59:58Z",
+        "completed_at": "2026-09-26T21:59:58Z"
+      },
+      {
+        "name": "enforce manually enabled isolated build",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 7,
+        "started_at": "2026-09-26T21:59:58Z",
+        "completed_at": "2026-09-26T21:59:58Z"
+      },
+      {
+        "name": "check pinned receipt profile compatibility before build work",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 8,
+        "started_at": "2026-09-26T21:59:58Z",
+        "completed_at": "2026-09-26T21:59:59Z"
+      },
+      {
+        "name": "preflight public staging data before expensive build or deployment",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 9,
+        "started_at": "2026-09-26T21:59:59Z",
+        "completed_at": "2026-09-26T21:59:59Z"
+      },
+      {
+        "name": "checkout exact candidate Atmos source",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 10,
+        "started_at": "2026-09-26T21:59:59Z",
+        "completed_at": "2026-09-26T22:00:59Z"
+      },
+      {
+        "name": "verify current-master or reviewed combined UI ancestor source",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 11,
+        "started_at": "2026-09-26T22:00:59Z",
+        "completed_at": "2026-09-26T22:00:59Z"
+      },
+      {
+        "name": "install locked dependencies and browsers",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 12,
+        "started_at": "2026-09-26T22:00:59Z",
+        "completed_at": "2026-09-26T22:02:38Z"
+      },
+      {
+        "name": "verify independent release architecture",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 13,
+        "started_at": "2026-09-26T22:02:38Z",
+        "completed_at": "2026-09-26T22:02:48Z"
+      },
+      {
+        "name": "full application test gate",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 14,
+        "started_at": "2026-09-26T22:02:48Z",
+        "completed_at": "2026-09-26T22:09:36Z"
+      },
+      {
+        "name": "Weather Lab release gate",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 15,
+        "started_at": "2026-09-26T22:09:36Z",
+        "completed_at": "2026-09-26T22:19:01Z"
+      },
+      {
+        "name": "build final public-only shell and Functions exactly once",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 16,
+        "started_at": "2026-09-26T22:19:01Z",
+        "completed_at": "2026-09-26T22:20:24Z"
+      },
+      {
+        "name": "encrypt unqualified build for the isolated publisher (public key only)",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 17,
+        "started_at": "2026-09-26T22:20:24Z",
+        "completed_at": "2026-09-26T22:20:28Z"
+      },
+      {
+        "name": "retain encrypted build transport, never plaintext server code",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 18,
+        "started_at": "2026-09-26T22:20:28Z",
+        "completed_at": "2026-09-26T22:20:29Z"
+      },
+      {
+        "name": "Post checkout exact candidate Atmos source",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 32,
+        "started_at": "2026-09-26T22:20:29Z",
+        "completed_at": "2026-09-26T22:20:30Z"
+      },
+      {
+        "name": "Post Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 33,
+        "started_at": "2026-09-26T22:20:30Z",
+        "completed_at": "2026-09-26T22:20:30Z"
+      },
+      {
+        "name": "Post Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 34,
+        "started_at": "2026-09-26T22:20:30Z",
+        "completed_at": "2026-09-26T22:20:30Z"
+      },
+      {
+        "name": "Post checkout reviewed release controller",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 35,
+        "started_at": "2026-09-26T22:20:30Z",
+        "completed_at": "2026-09-26T22:20:30Z"
+      },
+      {
+        "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 36,
+        "started_at": "2026-09-26T22:20:30Z",
+        "completed_at": "2026-09-26T22:20:30Z"
+      },
+      {
+        "name": "Complete job",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 37,
+        "started_at": "2026-09-26T22:20:30Z",
+        "completed_at": "2026-09-26T22:20:31Z"
+      }
+    ],
+    "check_run_url": "https://api.github.com/repos/Andrewegao/v3t7kq-cycle/check-runs/108495230776",
+    "labels": [
+      "ubuntu-latest"
+    ],
+    "runner_id": 1000015155,
+    "runner_name": "GitHub Actions 1000015155",
+    "runner_group_id": 0,
+    "runner_group_name": "GitHub Actions"
+  }
+}

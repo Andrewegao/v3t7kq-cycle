@@ -174,10 +174,6 @@ jobs:
         run: |
           node ops/platform/test-independent-ui-release.mjs
           node ops/release/test-production-verifiers.mjs
-      - name: full application test gate
-        env:
-          WX_CI_PROFILE: ${{ (needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' || needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2') && 'public-beta-ci-lab-road-security-v1' || '' }}
-        run: npm test --prefix atmos/app
       - name: Weather Lab release gate
         working-directory: atmos
         env:
@@ -195,8 +191,84 @@ jobs:
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
+  app-tests:
+    # Complete app tests overlap the browser/build lane; no publisher credentials or cache.
+    needs: profile
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    environment:
+      name: atmos-source-read-ui
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      receipt: ${{ steps.evidence.outputs.receipt }}
+    env:
+      UI_BUILDS_ENABLED: ${{ vars.UI_BUILDS_ENABLED }}
+      ATMOS_SHA: ${{ inputs.atmos_sha }}
+      MODEL_SELECTION_SHA256: ${{ needs.profile.outputs.model_selection_sha256 }}
+      STAGING_WIND100_UI_ENABLED: ${{ needs.profile.outputs.wind100_enabled }}
+      STAGING_WIND100_UI_CATALOG_ID: ${{ needs.profile.outputs.wind100_catalog_id }}
+      STAGING_WIND100_UI_RUN_ID: ${{ needs.profile.outputs.wind100_run_id }}
+      STAGING_WIND100_UI_SELECTION_SHA256: ${{ needs.profile.outputs.wind100_selection_sha256 }}
+      STAGING_WIND100_UI_DYNAMIC: ${{ needs.profile.outputs.wind100_dynamic }}
+      VITE_FUSION_CALIBRATION_ENABLED: ${{ vars.FUSION_CALIBRATION_RUNTIME_ENABLED == 'true' && '1' || '0' }}
+      VITE_PLATFORM_ACCOUNT: '0'
+      # This local onboarding/account prototype is admitted only by the exact
+      # non-promotable staging-account profile. Every other selector compiles it out.
+      VITE_PRO_PROTO: ${{ needs.profile.outputs.model_selection_sha256 == 'release-roster-core-account-v1' && '1' || '0' }}
+      VITE_MODEL_EXPANSION_QUALIFICATION: '0'
+      VITE_MODEL_LOCAL_BASE: ''
+      VITE_STAGING_MODEL_ADMISSION: '0'
+      VITE_STAGING_MODEL_SELECTION_SHA256: ''
+      # The retained ground package is approved only for this staging qualification lane.
+      # Production workflows never receive this scope.
+      WX_GROUND_QUALIFICATION_SCOPE: staging-qualification-only
+      WX_CI_PROFILE: ${{ (needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' || needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2') && 'public-beta-ci-lab-road-security-v1' || '' }}
+    steps:
+      - name: require isolated source key without legacy fallback
+        env:
+          SOURCE_KEY_PROVISIONED: ${{ secrets.ATMOS_READONLY_KEY != '' }}
+        run: |
+          test "$SOURCE_KEY_PROVISIONED" = true || { echo 'isolated UI source key is not provisioned'; exit 1; }
+          test "$UI_BUILDS_ENABLED" = true
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - name: checkout exact app test source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: ${{ inputs.atmos_sha }}
+          fetch-depth: 0
+          ssh-key: ${{ secrets.ATMOS_READONLY_KEY }}
+          persist-credentials: false
+          path: atmos
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with: { python-version: '3.11' }
+      - name: verify exact test source
+        working-directory: atmos
+        run: |
+          [[ "$ATMOS_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$ATMOS_SHA"
+          if [ "$MODEL_SELECTION_SHA256" = production-account-ru-kk-wind100-onboarding-v2 ]; then
+            node ../cycle/tools/ui-combined-source-guard.mjs . "$ATMOS_SHA"
+          else
+            test "$ATMOS_SHA" = "$(git rev-parse origin/master)"
+          fi
+      - name: install locked app test dependencies and browsers
+        run: |
+          python3.11 -m pip install pillow
+          npm ci --prefix atmos/app
+          cd atmos/app && npx playwright install --with-deps chromium
+      - name: full application test gate
+        run: npm test --prefix atmos/app
+      - name: bind successful complete tests to this source and attempt
+        id: evidence
+        run: node cycle/tools/ui-app-test-receipt.mjs emit
   qualify:
-    needs: [profile, build]
+    needs: [profile, build, app-tests]
     # A fresh runner executes pinned controller code only, never candidate source.
     environment:
       name: ui-staging
@@ -204,6 +276,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
+      UI_APP_TEST_RECEIPT: ${{ needs.app-tests.outputs.receipt }}
       UI_RELEASES_ENABLED: ${{ vars.UI_RELEASES_ENABLED }}
       UI_ISOLATION_APPROVED: ${{ vars.UI_ISOLATION_APPROVED }}
       UI_DEPLOYMENT_HOLD_UNTIL: ${{ vars.UI_DEPLOYMENT_HOLD_UNTIL }}

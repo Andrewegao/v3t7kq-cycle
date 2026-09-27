@@ -25,7 +25,7 @@ test('candidate execution uses only the isolated source environment, never publi
   assert.match(profile,/UI_STAGING_STATIC_COMPRESSION_APPROVED/);
   assert.doesNotMatch(profile,/CLOUDFLARE|UI_(?:BUILD_PRIVATE_KEY|BUILD_PUBLIC_KEY|CANDIDATE_KEY|STAGING_PAGES_TOKEN)|STAGING_R2|SHARED_R2|ui-release\.mjs (?:build|deploy|retain)/);
   assert.ok(wf.includes('\n  build:\n'),'separate candidate build job required');
-  const build=wf.slice(wf.indexOf('\n  build:\n'),wf.indexOf('\n  qualify:\n'));
+  const build=wf.slice(wf.indexOf('\n  build:\n'),wf.indexOf('\n  app-tests:\n'));
   assert.match(build,/runs-on: ubuntu-latest/);
   assertSourceIsolation(build);
   assert.doesNotMatch(build,/ui-release\.mjs (?:preflight|deploy|retain)/);
@@ -34,7 +34,7 @@ test('candidate execution uses only the isolated source environment, never publi
   assert.match(build,/ui-release\.mjs build/);
   assert.match(build,/ui-release\.mjs pack-build/);
   const qualify=wf.slice(wf.indexOf('\n  qualify:\n'));
-  assert.match(qualify,/needs: \[profile, build\]/);
+  assert.match(qualify,/needs: \[profile, build, app-tests\]/);
   assert.match(qualify,/runs-on: ubuntu-latest/);
   assert.match(qualify,/name: ui-staging/);
   assert.match(qualify,/UI_STAGING_STATIC_COMPRESSION_APPROVED: \$\{\{ vars\.UI_STAGING_STATIC_COMPRESSION_APPROVED \}\}/);
@@ -47,7 +47,7 @@ test('candidate execution uses only the isolated source environment, never publi
 });
 test('source isolation contract rejects credential and privilege regressions',()=>{
   const wf=read('.github/workflows/ui-staging.yml');
-  const build=wf.slice(wf.indexOf('\n  build:\n'),wf.indexOf('\n  qualify:\n'));
+  const build=wf.slice(wf.indexOf('\n  build:\n'),wf.indexOf('\n  app-tests:\n'));
   assertSourceIsolation(build);
   const defects = [
     build.replace('name: atmos-source-read-ui','name: ui-staging'),
@@ -69,7 +69,7 @@ test('publisher hardcodes staging target and rejects cross-job, account and loca
   assert.deepEqual(target('staging',env),{origin:'https://staging.weatherx.org',project:'weatherx-platform-staging'});
   assert.throws(()=>target('production',env));assert.throws(()=>target('unknown',env));
   for(const k of Object.keys(env))assert.throws(()=>target('staging',{...env,[k]:''}));
-  for(const job of ['build','promote'])assert.throws(()=>target('staging',{...env,GITHUB_JOB:job}));
+  for(const job of ['build','app-tests','promote'])assert.throws(()=>target('staging',{...env,GITHUB_JOB:job}));
   assert.throws(()=>target('staging',{...env,RUNNER_ENVIRONMENT:'self-hosted'}));
   assert.equal(target('production',{...env,GITHUB_JOB:'promote'}).project,'atmos-platform');
 });

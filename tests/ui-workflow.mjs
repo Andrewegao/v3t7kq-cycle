@@ -18,7 +18,7 @@ test('compressed profile is an explicit staging request using the unchanged inpu
   assert.doesNotMatch(prod,/UI_STAGING_STATIC_COMPRESSION_APPROVED|release-roster-core-br11-v1|static-br11-v1/);
 });
 test('staging private checkouts use the current Atmos repository owner',()=>{
-  assert.equal((staging.match(/repository: weatherx-hq\/atmos/g)||[]).length,3);
+  assert.equal((staging.match(/repository: weatherx-hq\/atmos/g)||[]).length,4);
   assert.doesNotMatch(staging,/repository: Andrewegao\/atmos/);
 });
 const {installPagesWorker,platformVerificationEnvironment}=await import('../tools/ui-release.mjs');
@@ -31,7 +31,7 @@ test('staging rejects stale public point data before expensive build work while 
   assert.match(prod,/MODEL_SELECTION_SHA256: \$\{\{ inputs\.release_profile \}\}/);
 });
 test('staging workflow leaves release-mode activation to the exact-profile controller',()=>{
-  const build=staging.slice(staging.indexOf('\n  build:\n'),staging.indexOf('\n  qualify:\n'));
+  const build=staging.slice(staging.indexOf('\n  build:\n'),staging.indexOf('\n  app-tests:\n'));
   assert.match(build,/VITE_MODEL_EXPANSION_QUALIFICATION: '0'/);assert.match(build,/VITE_STAGING_MODEL_ADMISSION: '0'/);
   assert.match(build,/VITE_STAGING_MODEL_SELECTION_SHA256: ''/);assert.doesNotMatch(build,/ATMOS_STAGING_EXPERIMENT_RELEASE:\s*'1'/);
   assert.match(source,/publicBuildEnvironment\(profile,selection/);
@@ -50,7 +50,7 @@ test('staging workflow leaves release-mode activation to the exact-profile contr
   assert.doesNotMatch(prod,/STAGING_CONTROL_SHA|stagingOnly/);
 });
 test('actual pinned receipt profile is checked before expensive staging build work',()=>{
-  const build=staging.slice(staging.indexOf('\n  build:\n'),staging.indexOf('\n  qualify:\n'));
+  const build=staging.slice(staging.indexOf('\n  build:\n'),staging.indexOf('\n  app-tests:\n'));
   const preflight='node cycle/tools/ui-release-profile-preflight.mjs';
   assert.equal((build.match(new RegExp(preflight.replaceAll('.','\\.'),'g'))||[]).length,1);
   const preflightStep=build.slice(build.indexOf('- name: check pinned receipt profile compatibility before build work'),
@@ -63,7 +63,7 @@ test('actual pinned receipt profile is checked before expensive staging build wo
     assert.ok(build.indexOf(preflight)>build.indexOf(prerequisite),`profile preflight must follow ${prerequisite}`);
   }
   for(const expensive of ['preflight public staging data before expensive build or deployment',
-    'checkout exact candidate Atmos source','install locked dependencies and browsers','full application test gate']){
+    'checkout exact candidate Atmos source','install locked dependencies and browsers','Weather Lab release gate']){
     assert.ok(build.indexOf(expensive)>=0,`missing ${expensive}`);
     assert.ok(build.indexOf(preflight)<build.indexOf(expensive),`profile preflight must precede ${expensive}`);
   }
@@ -72,7 +72,7 @@ test('actual pinned receipt profile is checked before expensive staging build wo
 });
 test('staging Wind100 pin comes only from protected profile outputs and production has no flags',()=>{
   const profile=staging.slice(staging.indexOf('\n  profile:\n'),staging.indexOf('\n  build:\n'));
-  const build=staging.slice(staging.indexOf('\n  build:\n'),staging.indexOf('\n  qualify:\n'));
+  const build=staging.slice(staging.indexOf('\n  build:\n'),staging.indexOf('\n  app-tests:\n'));
   const qualify=staging.slice(staging.indexOf('\n  qualify:\n'));
   for(const suffix of ['ENABLED','CATALOG_ID','RUN_ID','SELECTION_SHA256']){
     assert.match(profile,new RegExp(`STAGING_WIND100_UI_${suffix}: \\\$\\{\\{ vars\\.STAGING_WIND100_UI_${suffix} \\}\\}`));
@@ -179,7 +179,7 @@ test('the candidate wallclock propagates failures and kills the whole verifier p
   }finally{rmSync(temp,{recursive:true,force:true});}
 });
 test('only successful staging retains encrypted output; production has no build step',()=>{
-  const order=['npm test --prefix atmos/app','bash ops/weather-lab-ready.sh','ui-release.mjs build\n',
+  const order=['bash ops/weather-lab-ready.sh','ui-release.mjs build\n',
     'ui-release.mjs deploy staging','ui-release.mjs retain','path: ${{ runner.temp }}/ui-sealed/*'];
   for(let i=1;i<order.length;i++)assert.ok(staging.indexOf(order[i])>staging.indexOf(order[i-1]),order[i]);
   assert.doesNotMatch(prod,/ui-release.mjs build|npm run build|deploy-code-only.sh/);
