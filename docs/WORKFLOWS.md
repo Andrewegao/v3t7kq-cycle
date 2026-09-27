@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `d6c8146fd0d827911c4379f1fe7951456ae8d9a75de6ee3bfa95e4ed17cb8792`.
+Source digest (registry and workflow bytes): `e83bbf48944329aeb1053ac05bbddad11dd109414f30b8c396489019b1bdf7ea`.
 
 59 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -1469,7 +1469,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | [promote / step 1](../.github/workflows/ui-release.yml#L51) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 | [promote / checkout reviewed release controller (not candidate source)](../.github/workflows/ui-release.yml#L53) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.release_profile == 'production-account-ru-kk-wind100-onboarding-v2' &amp;&amp; 'c257ef903462518b0c257b1e2d0a52ca8fd61873' &#124;&#124; inputs.release_profile == 'production-account-ru-kk-beta-v1' &amp;&amp; 'b9db38dd22eed1da56c6c4dd4140480da7e89153' &#124;&#124; inputs.release_profile == 'production-account-billing-v1' &amp;&amp; '6fcec22638f6696be71daa2f2e974ebc4b24318e' &#124;&#124; '25c402db5149daa018e349a34a4beeba1f2dca45' }}</code> |
 
-Variable references (declared names only; values and activation unknown): [UI_DEPLOYMENT_HOLD_UNTIL](../.github/workflows/ui-release.yml#L45), [UI_ISOLATION_APPROVED](../.github/workflows/ui-release.yml#L44), [UI_PAGES_CONFIG_SHA256](../.github/workflows/ui-release.yml#L82), [UI_RELEASES_ENABLED](../.github/workflows/ui-release.yml#L43).
+Variable references (declared names only; values and activation unknown): [UI_DEPLOYMENT_HOLD_UNTIL](../.github/workflows/ui-release.yml#L45), [UI_ISOLATION_APPROVED](../.github/workflows/ui-release.yml#L44), [UI_PAGES_CONFIG_SHA256](../.github/workflows/ui-release.yml#L94), [UI_RELEASES_ENABLED](../.github/workflows/ui-release.yml#L43).
 
 
 ## ui-staging-tc
