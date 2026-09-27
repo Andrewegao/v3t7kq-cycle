@@ -161,3 +161,10 @@ test('strict baseline refuses stale ledger key/forecast and an unchanged primary
  data.intentKey='cloud';await assert.rejects(baseline('temp'));
  data.intentKey='wind';data.cursor=2;await assert.rejects(baseline('temp'));
 });
+
+test('strict paint observations poll at a bounded cadence without changing original wait',()=>{
+ const runtime=read('tools/ui-layer-diagnostics-browser.txt');
+ assert.match(runtime,/page\.waitForFunction\(diagnosticPaintPredicate,expected,\{timeout:30_000,polling:250\}\)/);
+ assert.ok(!PREFILL_WAIT.includes('polling'));
+ assert.ok(PREFILL_WAIT.includes('{ timeout: 30_000 }'));
+});

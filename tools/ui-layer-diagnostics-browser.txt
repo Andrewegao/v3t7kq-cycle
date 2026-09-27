@@ -110,7 +110,7 @@ async function diagnosticPaintBaseline(layer) {
 async function diagnosticWaitForPaint(expected, started) {
   diagnosticEmit({event:'prefill',layer:expected.layer,phase:'paint-wait',elapsedMs:Date.now()-started});
   try {
-    const proof = await page.waitForFunction(diagnosticPaintPredicate,expected,{timeout:30_000});
+    const proof = await page.waitForFunction(diagnosticPaintPredicate,expected,{timeout:30_000,polling:250});
     const receipt = await proof.jsonValue();
     await proof.dispose();
     diagnosticEmit({event:'prefill',layer:expected.layer,phase:'paint-proven',elapsedMs:Date.now()-started,receipt});
