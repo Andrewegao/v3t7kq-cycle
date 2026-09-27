@@ -7,12 +7,12 @@ export const PUBLIC_COMBINED_REQUEST = 'production-account-ru-kk-wind100-onboard
 export const PUBLIC_COMBINED_APPROVAL = PUBLIC_COMBINED_REQUEST;
 export const PUBLIC_COMBINED_WIND100_RECEIPT = 'production-native-dynamic-v2';
 export const PUBLIC_COMBINED_LOCALE_RECEIPT = 'ru-kk-public-beta-v1';
-export const PUBLIC_COMBINED_INTRO_SOURCE_SHA256 = '30a3c65cd46cb18b117bc9196be0d7ed8d483c5d7710a42fb5757817026fad7a';
+export const PUBLIC_COMBINED_INTRO_SOURCE_SHA256 = '8f9d8a33cc8b634a89025b02fd45fb7b75a23ff2a87bbd7439bfc60b945d15d7';
 export const PUBLIC_COMBINED_ACCOUNT_SOURCES = Object.freeze({
   'client.ts': 'a06ec9e7d56551dae4fbf07ae552cf296365e5749d5c7e9f47b080f481588f1a',
   'pointSeriesContract.ts': '8a3ae4af11d87a37e954891bbdb43b0907c591c65ca902852bc5a13e2af7d36e',
   'session.ts': '9896c3b9382f5a64e2bad0d43c298c2a4af670cb3e645874d08629caf343e6b3',
-  'PlatformAccount.tsx': '009e3248c4c857ec18272a63f7886d896155bc3c2def7733fc37e140a4380c58',
+  'PlatformAccount.tsx': 'e8b75bbf08e7b3f97ea836388c9a261115973d2f9c833371b56c285890191f8e',
   'accountEntry.ts': '5e168d190409e503cf12ef3501893bf6a757c37fe3558d8e29e018fbbdab532c',
   'accountDoor.ts': '14acf20279baf760cbf5a6890dfcb66d7330b5a353a69f80e802ec34f3d22bcf',
   'PlatformAccountBoundary.tsx': '796337fb0db7a6bb0d9cbbc56b3820a26e263b9107b8f296f8fa0b0a8e9c9580',
@@ -20,24 +20,24 @@ export const PUBLIC_COMBINED_ACCOUNT_SOURCES = Object.freeze({
 });
 export const PUBLIC_COMBINED_ONBOARDING_SOURCES = Object.freeze({
   'onboarding/Icon.tsx': '5eeaba1dae9c441527fa778ed46629c7aeed3f0248bb846095101fbe7a30b1c0',
-  'onboarding/ProductionAccountIntro.tsx': '30a3c65cd46cb18b117bc9196be0d7ed8d483c5d7710a42fb5757817026fad7a',
+  'onboarding/ProductionAccountIntro.tsx': '8f9d8a33cc8b634a89025b02fd45fb7b75a23ff2a87bbd7439bfc60b945d15d7',
   'onboarding/arriveOnce.ts': 'b6d00ed02c7cca6f1dc97703d4a1198f6aa7aa7c1a86cd1692c8705f5f9e7674',
   'onboarding/data.ts': '2a54b7bd7bfaa939c289653467bca4431ff3c6b6aa9bfb2116f1527b4a4c5f72',
   'onboarding/extraReads.ts': '725da8ef3634be80d0bd3ec4605e44acefb5984bfaa60a29dc74bd5ef772929e',
   'onboarding/icons.ts': '51958fd6c47166a9e2849198aefefb7b4e5ad954a09c681ea32dfd6ba342a9d1',
   'onboarding/intent.ts': '0111ac4a418eb8a77ffa856e0de499e6943c311529f6622b9e1a562c1f1045fa',
-  'onboarding/onboarding.css': '8781fcee214cdda1dd13e4a28a3dad706c685a928b9a0a6c2cb0641e6363e05b',
+  'onboarding/onboarding.css': '5dd07ebd4e71501777966180aed001709bb33e86c53d7476d931c7c0a13df170',
   'onboarding/screens/AddPlace.tsx': '0c0cbb7ee3374fd0130c0e7de9d51957246a7a23b37def011584114b1ab317f8',
-  'onboarding/screens/Check.tsx': '4071f6089602b1cc6ea398fa64568cdd8deff7761504d509ee0afe6121b0757e',
+  'onboarding/screens/Check.tsx': 'aa7b46764382dbc2885e8bf1ba63bcf362d2d94f7415e00b42ca37f175c21c10',
   'onboarding/screens/Purpose.tsx': '57f03edc68f55ab25543ed6f7757a3fa1ac87fba5b2f17c8e6f1312d4cbb967b',
-  'onboarding/screens/See.tsx': 'fec8d52b7e9ad9ffeef1c4920d632ff41dd5be06328e6dfaa382155333cae96e',
+  'onboarding/screens/See.tsx': 'd5afb6b43d2b83483ff971ef8108f1d31614e14fe797d89404ce85ecf9e34654',
   'onboarding/screens/Start.tsx': '86d8904823966c1011e71231eda0f77583b593a956a3787cd199177d8252b9d2',
-  'onboarding/screens/Watch.tsx': 'ce59077b992405aac3595e50a4d22de4e25934d12874297b6db90330161e0a57',
-  'onboarding/screens/WeekChart.tsx': '44c022c1f3e312aa94724aa53387a55724c552857de483b0571b4d88f992831c',
+  'onboarding/screens/Watch.tsx': '4892cf332475d388272ce54a11c886f0e11104f3aeed07c960dd1edf1c27beb2',
+  'onboarding/screens/WeekChart.tsx': '124e673869bc0c699da011d085bbc8331477f39f544e30838cca5006d7452501',
   'onboarding/screens/Windows.tsx': 'f6590d28b811adc7c5f660ac115e7d445b98e2259b77546087b134205ed87dfa',
   'onboarding/screens/addPlace.css': 'b9c14fc05fd84f21d75e056ad13cad395de6b2df6d8928678aec164e07da877e',
   'onboarding/screens/addPlaceMessages.ts': 'c5f21f196dcdc4eb6764b306466050cb393dd940178a2cba46d9fd4f387c2c04',
-  'onboarding/screens/stackWhenClipped.ts': 'fb2f83a969ab54471c9e349254deac849b9715727494207dc7cbbfc96c6c7cda',
+  'onboarding/screens/stackWhenClipped.ts': 'b6ece818b52eb20562bdcb38d0f95c0ecf337af7d487a8e886e24e913757267b',
   'onboarding/screens/startCopy.ts': 'ec022d3dff4dfd53092c53666d12c784eee396bfd5e0df82764dfbef2ec32787',
   'onboarding/shared/chart.ts': 'b87fd82b98e7e7759bc47288ee25a3b5086a39e28559954cf1dfad3278c569b2',
   'onboarding/shared/checkPhase.ts': 'db7142fb5a49c1c2b8f9479162ee4d1fdcdd0675f19320499346dc2ece3a3b31',
@@ -51,11 +51,12 @@ export const PUBLIC_COMBINED_ONBOARDING_SOURCES = Object.freeze({
   'onboarding/shared/verdict.ts': '9c7523fff3573bd31944bb246d30285af33189120ff96027219396790bf11e25',
   'onboarding/shared/watch.ts': '35c46bbfe0ef39e58445cf964bf138bcad26c47de504043e4b1a2b29218e9078',
   'onboarding/sheetSignal.ts': '25726f372bc967f79c902daaf812a2e825ace6d4a876fca31ae87d247784f7b0',
+  'onboarding/useIntroMapCover.ts': '478dd42c13233856edf1a1fb9693e6782be8550358a472f3442e0bff6a16b55c',
   'onboarding/useIntroScrimWindow.ts': 'cb1f1301c02cd0624f1c8fa6e2b96ef762db3bb3908cd816a8687567d015686f',
-  'onboarding/useObData.ts': 'c9d259db928451a62c7ce3a8188b4cce21119ba402f0a8406ead5b8bc1b3ddf0',
+  'onboarding/useObData.ts': '84696745e68d6c2a5b927439183751e53a3cd65604b619833899e1741ee936b3',
 });
 export const PUBLIC_COMBINED_SIDECAR = 'assets/weatherx-production-account-build-v1.json';
-export const PUBLIC_COMBINED_ATMOS_SHA = 'c257ef903462518b0c257b1e2d0a52ca8fd61873';
+export const PUBLIC_COMBINED_ATMOS_SHA = '5b622f594b107e105dae9ee6b494c20ff8d0699a';
 
 export function assertPublicCombinedReady() {
   assert.match(PUBLIC_COMBINED_ATMOS_SHA, /^[a-f0-9]{40}$/);
