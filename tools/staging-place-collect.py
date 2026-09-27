@@ -53,6 +53,85 @@ class CollectionFailure(CollectionRefused):
         self.diagnostic = {"phase": phase, "class": category, **fields}
 
 
+_TIDE_REASONS = {"noaa-no-predictions", "station-fetch-failed", "events-incomplete",
+                 "events-unavailable", "samples-incomplete"}
+_TIDE_PRODUCTS = {"hilo", "6", "unknown"}
+
+
+class _TideDiagnostics:
+    """Observe the pinned fetcher's final outcomes; never retain provider text or alter results."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._roster: set[str] = set()
+        self._failures: dict[str, tuple[str, str]] = {}
+        self._requests: dict[tuple[str, str], dict[str, Any]] = {}
+        self._producer = None
+        self._original = None
+
+    def set_roster(self, stations: list[dict[str, Any]]) -> None:
+        self._roster = {row["id"] for row in stations[:TIDE_REFERENCE_STATIONS]
+                        if isinstance(row.get("id"), str) and re.fullmatch(r"[0-9]{7}", row["id"])}
+
+    def record(self, station: str, reason: str | None, product: str = "unknown") -> None:
+        if station not in self._roster:
+            return
+        with self._lock:
+            if reason is None:
+                self._failures.pop(station, None)
+            else:
+                self._failures[station] = (reason if reason in _TIDE_REASONS else "station-fetch-failed",
+                                           product if product in _TIDE_PRODUCTS else "unknown")
+
+    def observe_request(self, params: Any, status: Any) -> None:
+        if not isinstance(params, dict):
+            return
+        station, product = params.get("station"), params.get("interval")
+        if not isinstance(station, str) or station not in self._roster or product not in ("hilo", "6"):
+            return
+        status = status if type(status) is int and 100 <= status <= 599 else 0
+        with self._lock:
+            row = self._requests.setdefault((station, product), {"product": product, "attempts": 0, "lastStatus": 0})
+            row["attempts"] = min(_COUNT_LIMIT, row["attempts"] + 1)
+            row["lastStatus"] = status
+
+    def instrument(self, producer: ModuleType) -> None:
+        original = getattr(producer, "_fetch_station_v2", None)
+        if not callable(original):
+            return
+        self._producer, self._original = producer, original
+
+        def observed(session: Any, meta: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+            station = str(meta.get("id", ""))
+            try:
+                result = original(session, meta, *args, **kwargs)
+            except Exception as error:
+                if type(error) is getattr(producer, "NoPredictionsError", None):
+                    self.record(station, "noaa-no-predictions", getattr(error, "product", "unknown"))
+                else:
+                    self.record(station, "station-fetch-failed")
+                raise
+            failure = kwargs.get("failure") or {}
+            self.record(station, None if result else failure.get("reason", "station-fetch-failed"),
+                        failure.get("product", "unknown"))
+            return result
+
+        producer._fetch_station_v2 = observed
+
+    def restore(self) -> None:
+        if self._producer is not None:
+            self._producer._fetch_station_v2 = self._original
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            rows = [{"id": station, "reason": reason, "product": product,
+                     "requests": [dict(self._requests[(station, interval)]) for interval in ("hilo", "6")
+                                  if (station, interval) in self._requests]}
+                    for station, (reason, product) in sorted(self._failures.items())[:32]]
+            return {"failedStationCount": len(self._failures), "truncated": len(self._failures) > 32,
+                    "stations": rows}
+
+
 class _RequestTelemetry:
     """Thread-safe aggregate request observations; never retain request or response data."""
 
@@ -91,7 +170,7 @@ class _RequestTelemetry:
                 or (type(error).__module__ == "requests.exceptions"
                     and type(error).__name__ in {"Timeout", "ConnectTimeout", "ReadTimeout"}))
 
-    def instrument(self, session: Any, producer: ModuleType) -> None:
+    def instrument(self, session: Any, producer: ModuleType, stations: _TideDiagnostics | None = None) -> None:
         original = getattr(session, "get", None)
         if not callable(original):
             return
@@ -102,9 +181,13 @@ class _RequestTelemetry:
             except Exception as error:
                 if self._is_timeout(error):
                     self._increment("timeouts")
+                if stations is not None:
+                    stations.observe_request(kwargs.get("params"), 0)
                 raise
             try:
                 status = getattr(response, "status_code", None)
+                if stations is not None:
+                    stations.observe_request(kwargs.get("params"), status)
                 if isinstance(status, int) and 200 <= status < 300:
                     self._increment("http2xx")
                 elif status == 403:
@@ -202,6 +285,10 @@ def failure_receipt(family: str, error: BaseException) -> dict[str, Any]:
         counts = _request_counts(row.get(key))
         if counts is not None:
             result[key] = counts
+    # Only our typed observer may contribute station diagnostics, never arbitrary error fields.
+    stations = row.get("stationDiagnostics")
+    if family == "tides" and isinstance(stations, _TideDiagnostics):
+        result["stationDiagnostics"] = stations.snapshot()
     return result
 
 
@@ -474,7 +561,9 @@ def collect_tides(
     candidate = root / "candidate"
     checkpoint.mkdir(mode=0o700)
     session = _session(session_factory or producer._session)
-    telemetry.instrument(session, producer)
+    stations = _TideDiagnostics()
+    stations.instrument(producer)
+    telemetry.instrument(session, producer, stations)
     resume_attempts = 0
     first_pass_available = None
     first_pass_request_counts = None
@@ -491,6 +580,7 @@ def collect_tides(
                     raise CollectionFailure("roster", "contract" if isinstance(error, CollectionRefused) else "provider",
                                             requestCounts=telemetry.snapshot(producer)) from None
                 roster_count = len(manifest["stations"])
+                stations.set_roster(manifest["stations"])
                 phase = "checkpoint"
                 manifest_sha256 = _tide_manifest_seal(checkpoint)
 
@@ -522,6 +612,7 @@ def collect_tides(
                             resumeAttempts=0, firstPassAvailableStationCount=first_pass_available,
                             firstPassRequestCounts=first_pass_request_counts,
                             requestCounts=first_pass_request_counts,
+                            stationDiagnostics=stations,
                         ) from None
                     phase = "checkpoint"
                     _require_frozen_tide_manifest(
@@ -541,7 +632,8 @@ def collect_tides(
         except Exception as error:
             available = _tide_minimum_failure_count(error)
             fields: dict[str, Any] = {"resumeAttempts": resume_attempts,
-                                      "requestCounts": telemetry.snapshot(producer)}
+                                      "requestCounts": telemetry.snapshot(producer),
+                                      "stationDiagnostics": stations}
             if roster_count is not None:
                 fields["rosterStationCount"] = roster_count
             if first_pass_available is not None:
@@ -555,6 +647,7 @@ def collect_tides(
                 category = "contract" if isinstance(error, CollectionRefused) else "provider"
             raise CollectionFailure(phase, category, **fields) from None
     finally:
+        stations.restore()
         close = getattr(session, "close", None)
         if callable(close):
             close()
