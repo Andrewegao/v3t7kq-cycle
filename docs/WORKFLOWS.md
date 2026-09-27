@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `63f474cf3595f75c02ee215cdb31e354221b74b7c7ba7fc1bdbb60cb0313b84d`.
+Source digest (registry and workflow bytes): `30d56968d8ecb68b107416a524f00c0e2fa21b74a68730cf16df5df74aa0426e`.
 
 60 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -1461,7 +1461,7 @@ Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <c
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [diagnose](../.github/workflows/ui-layer-diagnostics.yml#L24) ← no needs | <code>ubuntu-latest</code> | <code>staging</code> | <code>20</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [diagnose](../.github/workflows/ui-layer-diagnostics.yml#L24) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"staging","deployment":false}</code> | <code>20</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Declared job conditions (additional step/helper checks may apply):
 
@@ -1471,8 +1471,8 @@ Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [diagnose / step 1](../.github/workflows/ui-layer-diagnostics.yml#L32) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [diagnose / Checkout exact reviewed diagnostic controller](../.github/workflows/ui-layer-diagnostics.yml#L36) | <code>weatherx-hq/atmos</code> | <code>5b622f594b107e105dae9ee6b494c20ff8d0699a</code> |
+| [diagnose / step 1](../.github/workflows/ui-layer-diagnostics.yml#L34) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [diagnose / Checkout exact reviewed diagnostic controller](../.github/workflows/ui-layer-diagnostics.yml#L38) | <code>weatherx-hq/atmos</code> | <code>5b622f594b107e105dae9ee6b494c20ff8d0699a</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
 

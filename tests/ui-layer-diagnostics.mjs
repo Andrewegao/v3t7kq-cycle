@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
-import {gate,TARGETS,SOURCE,RELEASE,INDEX,FILES,addDiagnostics,PREFILL_WAIT,PREFILL_ACTIVATE,filterLine,assertIdentity,checkAfterIdentity} from '../tools/ui-layer-diagnostics.mjs';
+import {gate,TARGETS,SOURCE,RELEASE,INDEX,FILES,addDiagnostics,PREFILL_WAIT,PREFILL_ACTIVATE,filterLine,assertIdentity,checkAfterIdentity,diagnosticFailure} from '../tools/ui-layer-diagnostics.mjs';
 const read=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
 const env=()=>({GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_REPOSITORY:'Andrewegao/v3t7kq-cycle',
  GITHUB_REF:'refs/heads/main',GITHUB_EVENT_NAME:'workflow_dispatch',GITHUB_JOB:'diagnose',
@@ -71,7 +71,7 @@ test('workflow has no publish authority, arbitrary target/source or production a
  assert.match(workflow,/github.event_name == 'workflow_dispatch' && github.ref == 'refs\/heads\/main'/);
  assert.ok(workflow.includes('ref: '+SOURCE));
  assert.deepEqual([...new Set([...workflow.matchAll(/secrets\.([A-Z_]+)/g)].map(m=>m[1]))],['ATMOS_DEPLOY_KEY']);
- assert.match(workflow,/^    environment: staging$/m);
+ assert.match(workflow,/^    environment:\n      name: staging\n      deployment: false$/m);
  assert.equal((workflow.match(/^    environment:/gm)||[]).length,1);
  assert.doesNotMatch(workflow,/environment: production|name: ui-production|ui-release.mjs|wrangler|actions: write|issues: write|workflow_call|pull_request|schedule:/);
  assert.equal((workflow.match(/persist-credentials: false/g)||[]).length,2);
@@ -167,4 +167,14 @@ test('strict paint observations poll at a bounded cadence without changing origi
  assert.match(runtime,/page\.waitForFunction\(diagnosticPaintPredicate,expected,\{timeout:30_000,polling:250\}\)/);
  assert.ok(!PREFILL_WAIT.includes('polling'));
  assert.ok(PREFILL_WAIT.includes('{ timeout: 30_000 }'));
+});
+
+test('failure classification separates strict diagnostics while preserving deadline and identity precedence',()=>{
+ const result={phase:'prefill-temp-paint-unproven',identityAfter:{ok:true}};
+ assert.equal(diagnosticFailure(result,'strict-paint'),'strict-paint-unproven');
+ assert.equal(diagnosticFailure({...result,phase:'prefill-temp-paint-baseline-unavailable'},'strict-paint'),'strict-paint-baseline-unavailable');
+ assert.equal(diagnosticFailure({...result,phase:'prefill-temp-timeout'},'strict-paint'),'original-guard-failed');
+ assert.equal(diagnosticFailure(result,'original'),'original-guard-failed');
+ assert.equal(diagnosticFailure({...result,identityAfter:{ok:false}},'strict-paint'),'post-run-identity-failed');
+ assert.equal(diagnosticFailure({...result,deadlineExceeded:true,identityAfter:{ok:false}},'strict-paint'),'process-deadline');
 });

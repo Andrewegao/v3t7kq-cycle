@@ -77,6 +77,15 @@ export async function checkAfterIdentity(before,read){
  try { const next=await read();assert.deepEqual(next,before);return {ok:true}; }
  catch { return {ok:false,reason:'identity-unavailable-or-changed'}; }
 }
+export function diagnosticFailure(result,mode){
+ if(result.deadlineExceeded)return 'process-deadline';
+ if(result.identityAfter?.ok===false)return 'post-run-identity-failed';
+ if(mode==='strict-paint'){
+  if(/^prefill-(?:temp|cloud|gust|precip|wind)-paint-unproven$/.test(result.phase))return 'strict-paint-unproven';
+  if(/^prefill-(?:temp|cloud|gust|precip|wind)-paint-baseline-unavailable$/.test(result.phase))return 'strict-paint-baseline-unavailable';
+ }
+ return 'original-guard-failed';
+}
 async function run(root,base){
  const out=resolve(process.env.RUNNER_TEMP,'ui-layer-diagnostics');mkdirSync(out,{recursive:true});
  const result={ok:false,phase:'identity-before',identityBefore:false,identityAfter:null,code:null,signal:null,
@@ -119,8 +128,7 @@ async function run(root,base){
  finally {
   if(before)result.identityAfter=await checkAfterIdentity(before,readIdentity);
   result.ok=result.code===0&&result.identityAfter?.ok===true;
-  if(!result.ok&&!result.failure)result.failure=result.deadlineExceeded?'process-deadline'
-   :result.identityAfter?.ok===false?'post-run-identity-failed':'original-guard-failed';
+  if(!result.ok&&!result.failure)result.failure=diagnosticFailure(result,process.env.DIAGNOSTIC_MODE);
   writeFileSync(resolve(out,'result.json'),JSON.stringify({...result,completedAt:new Date().toISOString()},null,2));
  }
  assert.equal(result.ok,true,'diagnostic failed; inspect bounded result and observations');
