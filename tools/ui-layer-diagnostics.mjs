@@ -1,5 +1,6 @@
 // Read-only browser evidence; this lane cannot publish or clear release fuses.
 import assert from 'node:assert/strict';
+import {strictPaintReceipt} from './ui-layer-paint-proof.mjs';
 import {createHash} from 'node:crypto';
 import {execFileSync, spawn} from 'node:child_process';
 import {readFileSync, writeFileSync, mkdirSync, appendFileSync, lstatSync} from 'node:fs';
@@ -21,6 +22,7 @@ export function gate(env){
  assert.equal(env.GITHUB_JOB,'diagnose');
  assert.equal(env.GITHUB_WORKFLOW_REF,'Andrewegao/v3t7kq-cycle/.github/workflows/ui-layer-diagnostics.yml@refs/heads/main');
  assert.ok(Object.hasOwn(TARGETS,env.DIAGNOSTIC_TARGET),'unsupported diagnostic target');
+ assert.ok(['original','strict-paint'].includes(env.DIAGNOSTIC_MODE),'unsupported diagnostic mode');
  for(const key of ['BASE','ANGLE','CPU_THROTTLE','CLOUDFLARE_API_TOKEN','UI_CANDIDATE_KEY','UI_BUILD_PRIVATE_KEY',
   'R2_PRODUCTION_ACCESS_KEY_ID','R2_PRODUCTION_SECRET_ACCESS_KEY'])assert.ok(!env[key],`diagnostics refuses ${key}`);
  return TARGETS[env.DIAGNOSTIC_TARGET];
@@ -50,14 +52,19 @@ const ADD_AFTER=`
     throw error;
   }
   await diagnosticSnapshot(id, 'settled', diagnosticStarted);`;
-export function addDiagnostics(source,runtime){
+export function addDiagnostics(source,runtime,mode='original'){
+ assert.ok(['original','strict-paint'].includes(mode));
  const anchor='const page = await context.newPage();';
  assert.equal(source.split(anchor).length,2,'page anchor changed');
  assert.equal(source.split(PREFILL_WAIT).length,2,'prefill wait changed');
  assert.equal(source.split(PREFILL_ACTIVATE+'\n'+PREFILL_WAIT).length,2,'activation/wait adjacency changed');
  // The original wait/assertion bytes are retained verbatim, with observations around them.
- return source.replace(anchor,anchor+'\n'+runtime+'\n')
-  .replace(PREFILL_ACTIVATE+'\n'+PREFILL_WAIT,ADD_BEFORE+PREFILL_ACTIVATE+'\n'+PREFILL_WAIT+ADD_AFTER);
+ const strict = mode === 'strict-paint';
+ const before = strict ? ADD_BEFORE.replace('  const diagnosticStarted', '  const diagnosticExpected = await diagnosticPaintBaseline(id);\n  const diagnosticStarted') : ADD_BEFORE;
+ const after = strict ? ADD_AFTER + '\n  await diagnosticWaitForPaint(diagnosticExpected, diagnosticStarted);' : ADD_AFTER;
+ const proof = strict ? '\nconst diagnosticPaintPredicate = new Function("return (expected) => { const temp = " + temperatureSurfaceProof.toString() + "; const wind = " + windSurfaceProof.toString() + "; return (" + ' + JSON.stringify(strictPaintReceipt.toString()) + ' + ")(expected, temp, wind); }")();\n' : '';
+ return source.replace(anchor,anchor+'\n'+runtime+proof+'\n')
+  .replace(PREFILL_ACTIVATE+'\n'+PREFILL_WAIT,before+PREFILL_ACTIVATE+'\n'+PREFILL_WAIT+after);
 }
 export function filterLine(line){
  if(!line.startsWith('WX_LAYER_DIAGNOSTIC '))return null;
@@ -85,11 +92,11 @@ async function run(root,base){
   const original=readFileSync(resolve(root,'app/e2e/layer-switch-tint.mjs'),'utf8');
   const runtime=readFileSync(new URL('./ui-layer-diagnostics-browser.txt',import.meta.url),'utf8');
   const copy=resolve(root,'app/e2e/.ui-layer-diagnostics.mjs');
-  writeFileSync(copy,addDiagnostics(original,runtime),{flag:'wx'});
+  writeFileSync(copy,addDiagnostics(original,runtime,process.env.DIAGNOSTIC_MODE),{flag:'wx'});
   writeFileSync(resolve(out,'identity.json'),JSON.stringify({sourceSha:SOURCE,releaseId:RELEASE,indexSha256:INDEX,
    receiptSha256:before.receiptSha256,target:process.env.DIAGNOSTIC_TARGET,origin:base,
    originalHarnessSha256:FILES['app/e2e/layer-switch-tint.mjs'],workflowSha:process.env.GITHUB_SHA,
-   instrumentation:{networkRouting:true,httpCacheDisabled:true},startedAt:new Date().toISOString()},null,2));
+   instrumentation:{mode:process.env.DIAGNOSTIC_MODE,networkRouting:true,httpCacheDisabled:true},startedAt:new Date().toISOString()},null,2));
   result.phase='browser-launch';
   const log=resolve(out,'observations.jsonl');let buffer='';
   const append=line=>{let safe;try{safe=filterLine(line);}catch{result.truncated=true;return;}

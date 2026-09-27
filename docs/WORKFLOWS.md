@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `a860d8ae0b6e13462e35bc2b0707bd8bfbf59569a8a3fbaf4878b3618c28e213`.
+Source digest (registry and workflow bytes): `63f474cf3595f75c02ee215cdb31e354221b74b7c7ba7fc1bdbb60cb0313b84d`.
 
 60 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -1455,24 +1455,24 @@ Variable references (declared names only; values and activation unknown): [STAGI
 
 [.github/workflows/ui-layer-diagnostics.yml](../.github/workflows/ui-layer-diagnostics.yml#L1) · <code>WeatherX read-only layer diagnostics</code>
 
-Declared triggers: [workflow_dispatch](../.github/workflows/ui-layer-diagnostics.yml#L4); input names <code>["target"]</code>.
+Declared triggers: [workflow_dispatch](../.github/workflows/ui-layer-diagnostics.yml#L4); input names <code>["target","mode"]</code>.
 
 Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-read-only-layer-diagnostics","cancel-in-progress":false}</code>.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [diagnose](../.github/workflows/ui-layer-diagnostics.yml#L18) ← no needs | <code>ubuntu-latest</code> | <code>staging</code> | <code>20</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [diagnose](../.github/workflows/ui-layer-diagnostics.yml#L24) ← no needs | <code>ubuntu-latest</code> | <code>staging</code> | <code>20</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [diagnose](../.github/workflows/ui-layer-diagnostics.yml#L18): <code>${{ github.event_name == 'workflow_dispatch' &amp;&amp; github.ref == 'refs/heads/main' }}</code>
+- [diagnose](../.github/workflows/ui-layer-diagnostics.yml#L24): <code>${{ github.event_name == 'workflow_dispatch' &amp;&amp; github.ref == 'refs/heads/main' }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [diagnose / step 1](../.github/workflows/ui-layer-diagnostics.yml#L25) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [diagnose / Checkout exact reviewed diagnostic controller](../.github/workflows/ui-layer-diagnostics.yml#L29) | <code>weatherx-hq/atmos</code> | <code>5b622f594b107e105dae9ee6b494c20ff8d0699a</code> |
+| [diagnose / step 1](../.github/workflows/ui-layer-diagnostics.yml#L32) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [diagnose / Checkout exact reviewed diagnostic controller](../.github/workflows/ui-layer-diagnostics.yml#L36) | <code>weatherx-hq/atmos</code> | <code>5b622f594b107e105dae9ee6b494c20ff8d0699a</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
 

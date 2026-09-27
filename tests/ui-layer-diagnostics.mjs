@@ -6,7 +6,7 @@ import {gate,TARGETS,SOURCE,RELEASE,INDEX,FILES,addDiagnostics,PREFILL_WAIT,PREF
 const read=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
 const env=()=>({GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_REPOSITORY:'Andrewegao/v3t7kq-cycle',
  GITHUB_REF:'refs/heads/main',GITHUB_EVENT_NAME:'workflow_dispatch',GITHUB_JOB:'diagnose',
- GITHUB_WORKFLOW_REF:'Andrewegao/v3t7kq-cycle/.github/workflows/ui-layer-diagnostics.yml@refs/heads/main',DIAGNOSTIC_TARGET:'staging'});
+ GITHUB_WORKFLOW_REF:'Andrewegao/v3t7kq-cycle/.github/workflows/ui-layer-diagnostics.yml@refs/heads/main',DIAGNOSTIC_TARGET:'staging',DIAGNOSTIC_MODE:'original'});
 test('only fixed reviewed origins and manual main runner are accepted',()=>{
  for(const target of Object.keys(TARGETS))assert.equal(gate({...env(),DIAGNOSTIC_TARGET:target}),TARGETS[target]);
  for(const target of ['production','https://weatherx.org','https://staging.weatherx.org.evil.test','__proto__','',undefined])
@@ -133,4 +133,31 @@ test('decode and texture snapshots retain only finite allowlisted numeric fields
  assert.deepEqual(logs.at(-1).state.decode,{workers:2,pending:3,textureJobs:null,fieldJobs:null});
  assert.equal(logs.at(-1).state.textures.bytes,123);
  assert.ok(!JSON.stringify(logs).includes('secret'));assert.ok(!('recycleQueued' in logs.at(-1).state.textures));
+});
+
+test('strict mode is explicit and leaves original activation/wait and later assertions intact',()=>{
+ for(const mode of ['original','strict-paint'])assert.equal(gate({...env(),DIAGNOSTIC_MODE:mode}),TARGETS.staging);
+ for(const mode of ['strict','deck-prefill','',undefined])assert.throws(()=>gate({...env(),DIAGNOSTIC_MODE:mode}));
+ const source='const page = await context.newPage();\n'+PREFILL_ACTIVATE+'\n'+PREFILL_WAIT+'\nawait page.waitForTimeout(180);\nthrow Error("original");';
+ const original=addDiagnostics(source,''),strict=addDiagnostics(source,'','strict-paint');
+ assert.ok(!original.includes('await diagnosticWaitForPaint'));
+ assert.ok(strict.includes(PREFILL_ACTIVATE+'\n'+PREFILL_WAIT));
+ assert.ok(strict.indexOf('await diagnosticPaintBaseline(id)')<strict.indexOf(PREFILL_ACTIVATE));
+ assert.ok(strict.indexOf('await diagnosticWaitForPaint')>strict.indexOf(PREFILL_WAIT));
+ assert.ok(strict.endsWith('await page.waitForTimeout(180);\nthrow Error("original");'));
+ execFileSync(process.execPath,['--input-type=module','--check'],{input:strict});
+ assert.match(read('.github/workflows/ui-layer-diagnostics.yml'),/default: original\n        options: \[original, strict-paint\]/);
+});
+test('strict baseline refuses stale ledger key/forecast and an unchanged primary selection',async()=>{
+ const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
+ const state={layers:{wind:{visible:true}},manifest:{model:'ecmwf',init_time:'run',base:'base'},cursorMs:1};
+ const data={intentKey:'wind',intentGeneration:3,model:'ecmwf',run:'run',base:'base',cursor:1};
+ const app={store:{getState:()=>state},renderCausalDiagnostics:()=>({enabled:true,errors:0,events:[{sequence:4,data}]})};
+ const baseline=await new AsyncFunction('context','page','process','console','BASE','window',
+  read('tools/ui-layer-diagnostics-browser.txt')+'\ndiagnosticSnapshot=async()=>{}; return diagnosticPaintBaseline;')
+ ({route:async()=>{}},{on:()=>{},evaluate:(callback,arg)=>callback(arg)},{on:()=>{}},{log:()=>{}},TARGETS.staging,{__atmos:app});
+ assert.equal((await baseline('temp')).beforeIntentGeneration,3);
+ await assert.rejects(baseline('wind'));
+ data.intentKey='cloud';await assert.rejects(baseline('temp'));
+ data.intentKey='wind';data.cursor=2;await assert.rejects(baseline('temp'));
 });
