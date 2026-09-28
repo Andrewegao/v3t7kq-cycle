@@ -7,6 +7,8 @@ import {resolve} from 'node:path';
 import {coreReleaseProfile,cycleTime,profileFor,readSelection,selectionProfile,STAGING_ORIGIN} from './ui-staging-models.mjs';
 
 const HOUR=3_600_000;
+const TIDE_PATH='/data-atmos/tides/tides.json';
+const MAX_TIDE_BYTES=2*1024*1024;
 const PIPELINE_MARGIN=25*60_000;
 const POINT_MODELS=['ecmwf','gfs','aifs','hrrr'];
 const VARIABLES=['temperature','wind_speed','wind_direction','wind_gust','precipitation','dewpoint','visibility','solar_radiation'];
@@ -42,35 +44,73 @@ export function validatePointPayload(payload,model,{now=Date.now(),location,star
   for(const field of ['temperature','wind_speed','wind_direction'])assert.ok(hasFiniteSample(payload.series?.[field],start,end),`staging point ${field} is unavailable`);
   return {model,runId:payload.runId,releaseId:payload.releaseId,quality:payload.quality,initializedAt:payload.initializedAt,freshUntil:payload.freshUntil};
 }
+// Match the existing final guard's GET and release authority, including reading the
+// complete response. The staging reader enforces the tide lease; never fall back to
+// production or cache a successful result. Discard chunks to keep memory bounded.
+async function probeTides(fetchImpl){
+  const url=new URL(TIDE_PATH,STAGING_ORIGIN);
+  const response=await fetchImpl(url,{redirect:'error',signal:AbortSignal.timeout(20_000),
+    headers:{Accept:'application/json','Cache-Control':'no-cache'}});
+  try{
+    assert.equal(response.url,url.href,'staging tide request redirected');
+    assert.equal(response.status,200,`staging tide ${TIDE_PATH} returned ${response.status}`);
+    assert.match(response.headers.get('content-type')??'',/^application\/json(?:;|$)/i,'staging tide response must be JSON');
+    const releaseId=response.headers.get('x-weatherx-release');
+    assert.ok(releaseId,'staging tide response lacks a release header');
+    const declared=response.headers.get('content-length');
+    assert.ok(declared===null||(/^\d+$/.test(declared)&&Number(declared)<=MAX_TIDE_BYTES),'staging tide response exceeds size bound');
+    assert.ok(response.body,'staging tide response lacks a body');
+    let bytes=0;
+    for await(const chunk of response.body){
+      bytes+=chunk.byteLength;
+      assert.ok(bytes<=MAX_TIDE_BYTES,'staging tide response exceeds size bound');
+    }
+    assert.ok(bytes>0,'staging tide response is empty');
+    return {path:TIDE_PATH,releaseId,bytes};
+  }finally{
+    if(response.body&&!response.body.locked)await response.body.cancel().catch(()=>{});
+  }
+}
+
 export async function runPreflight({selection='none',root,fetchImpl=fetch,now=Date.now(),batchSize=4}={}){
   assert.ok(Number.isInteger(batchSize)&&batchSize>=1&&batchSize<=8);const profile=profileFor(selection);
   const bundle=selectionProfile(profile)?requireSelectionMargin(readSelection(root,profile,now).bundle,now):null,locations=preflightLocations(bundle),work=[];
   for(const location of locations)for(const model of ['ecmwf','gfs'])work.push({location,model});
   if(coreReleaseProfile(profile))work.push({location:{name:'aifs-global',lat:35,lon:104},model:'aifs'},
     {location:{name:'hrrr-conus',lat:39.74,lon:-104.99},model:'hrrr'});
+  const probes=work.map(({location,model})=>({name:`${model}@${location.name}`,run:async()=>{
+    const url=pointUrl(model,location,now),start=url.searchParams.get('start'),end=url.searchParams.get('end'),response=await fetchImpl(url,{redirect:'error',signal:AbortSignal.timeout(20_000),headers:{Accept:'application/json','Cache-Control':'no-cache'}});
+    assert.equal(response.url,url.href,'staging point request redirected');assert.equal(response.status,200,`staging point ${model}/${location.name} returned ${response.status}`);
+    const release=response.headers.get('x-weatherx-release');assert.ok(release,'staging point response lacks a release header');
+    const validated=validatePointPayload(await response.json(),model,{now,location,start,end});assert.equal(validated.releaseId,release,'staging point header/body release changed');
+    return {location:location.name,headerRelease:release,...validated};
+  }}));
+  probes.push({name:`tides@${TIDE_PATH}`,run:()=>probeTides(fetchImpl)});
   const results=[],failures=[];
-  for(let i=0;i<work.length;i+=batchSize){
-    const batch=work.slice(i,i+batchSize),settled=await Promise.allSettled(batch.map(async({location,model})=>{
-      const url=pointUrl(model,location,now),start=url.searchParams.get('start'),end=url.searchParams.get('end'),response=await fetchImpl(url,{redirect:'error',signal:AbortSignal.timeout(20_000),headers:{Accept:'application/json','Cache-Control':'no-cache'}});
-      assert.equal(response.url,url.href,'staging point request redirected');assert.equal(response.status,200,`staging point ${model}/${location.name} returned ${response.status}`);
-      const release=response.headers.get('x-weatherx-release');assert.ok(release,'staging point response lacks a release header');
-      const validated=validatePointPayload(await response.json(),model,{now,location,start,end});assert.equal(validated.releaseId,release,'staging point header/body release changed');
-      return {location:location.name,headerRelease:release,...validated};
-    }));
-    settled.forEach((row,index)=>{if(row.status==='fulfilled')results.push(row.value);else failures.push({model:batch[index].model,location:batch[index].location.name,
-      error:row.reason instanceof Error?row.reason.message:String(row.reason)});});
+  for(let i=0;i<probes.length;i+=batchSize){
+    const batch=probes.slice(i,i+batchSize),settled=await Promise.allSettled(batch.map(probe=>probe.run()));
+    settled.forEach((row,index)=>{if(row.status==='fulfilled')results.push(row.value);else failures.push(new Error(
+      `${batch[index].name}: ${row.reason instanceof Error?row.reason.message:String(row.reason)}`));});
   }
-  if(failures.length)throw new AggregateError(failures.map(row=>new Error(`${row.model}@${row.location}: ${row.error}`)),
-    `staging point preflight failed ${failures.length} independent probe(s)`);
+  if(failures.length)throw new AggregateError(failures,`staging data preflight failed ${failures.length} independent probe(s)`);
+  const tides=results.pop();
   assert.equal(new Set(results.map(result=>result.headerRelease)).size,1,'staging point probes span multiple releases');
   const locationCount=new Set(work.map(row=>`${row.location.lat},${row.location.lon}`)).size;
-  return {schemaVersion:1,origin:STAGING_ORIGIN,selection,locations:locationCount,probes:results.length,results};
+  // Tide snapshots have their own publication identity, independent of forecast releases.
+  return {schemaVersion:1,origin:STAGING_ORIGIN,selection,locations:locationCount,probes:results.length,results,tides};
+}
+
+export function formatPreflightFailure(error){
+  const line=value=>String(value instanceof Error?value.message:value).split('\n',1)[0]
+    .replace(/[\x00-\x1f\x7f]/g,' ').slice(0,240);
+  const details=error instanceof AggregateError?error.errors.slice(0,12).map(item=>`  - ${line(item)}`):[];
+  return [line(error),...details].join('\n');
 }
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
   try{
     const root=resolve(process.env.UI_CYCLE_ROOT??fileURLToPath(new URL('../',import.meta.url)));
     const receipt=await runPreflight({selection:process.env.MODEL_SELECTION_SHA256??'none',root});
-    console.log(JSON.stringify({phase:'staging-data-preflight',origin:receipt.origin,locations:receipt.locations,probes:receipt.probes,production:false}));
-  }catch(error){console.error('Staging data preflight failed: '+(error instanceof Error?error.message:String(error)));process.exitCode=1;}
+    console.log(JSON.stringify({phase:'staging-data-preflight',origin:receipt.origin,locations:receipt.locations,probes:receipt.probes,tides:receipt.tides,production:false}));
+  }catch(error){console.error('Staging data preflight failed: '+formatPreflightFailure(error));process.exitCode=1;}
 }
