@@ -45,7 +45,7 @@ test('all four reviewed controller dependency inventories fit the sparse selecti
     assert.ok(record.externalPackages.includes('pngjs'));
     assert.ok(record.externalPackages.includes('pixelmatch'));
   }
-  const combined=fixture.controllers.find(row=>row.pin==='18e52b6b1cb784e94939ac767be3bf0f9306fd19');
+  const combined=fixture.controllers.find(row=>row.pin==='d23f65d7916d2a0ad5aebaccdfc1eb3fdc506adb');
   assert.ok(combined.files.includes('app/e2e/public-release-journeys.mjs'));
 });
 
