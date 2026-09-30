@@ -21,6 +21,7 @@ import {profileFor,validateProfile,selectionProfile,coreReleaseProfile,publicLoc
 import {LANE_B_CONTRACT,PRODUCTION_ACCOUNT_APPROVAL,validateProductionPagesConfiguration} from './production-account-contract.mjs';
 import {assertPublicLocaleBetaReady} from './ui-public-locale-beta.mjs';
 import {assertPublicCombinedReady,PUBLIC_COMBINED_WIND100_RECEIPT} from './ui-public-combined.mjs';
+import {requireStagingTides} from './ui-required-data-preflight.mjs';
 import {assertCombinedSource} from './ui-combined-source-guard.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -41,7 +42,7 @@ export const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workfl
   'tools/ui-release-layer-guard.mjs','tools/ui-layer-diagnostics.mjs','tools/ui-layer-diagnostics-browser.txt','tools/ui-layer-paint-proof.mjs',
   'tools/production-account-contract.mjs','tools/production-account-trust-policy.mjs','tools/production-account-release.mjs','tools/production-account-execution.mjs',
   'tools/ui-staging-models.mjs','tools/ui-staging-model-browser.mjs','tools/ui-staging-core-browser.mjs','tools/ui-staging-tc-proof.mjs','tools/ui-staging-preflight.mjs',
-  'tools/ui-staging-account-proof.mjs','tools/ui-public-release-journeys.mjs',
+  'tools/ui-staging-account-proof.mjs','tools/ui-public-release-journeys.mjs','tools/ui-required-data-preflight.mjs',
   'tools/ui-static-compression.mjs','tools/ui-static-compression-wire.mjs',
   'tools/ui-production-ground.mjs','docs/production-ground-review-20260907.md','docs/ui-public-locale-beta.md','docs/ui-public-combined.md'];
 const run = (command, args, options = {}) => execFileSync(command, args, { stdio: 'inherit', ...options });
@@ -358,6 +359,7 @@ function verifyWeatherFeeds(stage, profile) {
 }
 export async function publicModes(origin,profile=profileFor(),phase='candidate') {
   assert.ok(Object.values(ORIGINS).includes(origin));
+  if(origin===ORIGINS.staging&&phase==='preflight')await requireStagingTides();
   const health = await json(`${origin}/api/platform/health`);
   const data = await json(`${origin}/api/platform/data-health`);
   const catalogId = validatePublicModes(origin, health, data,profile,phase);

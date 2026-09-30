@@ -124,6 +124,10 @@ function stagingModeFetch(indexChange={},options={}){
     }
     if(url.pathname==='/data/gfs/index.json')return Response.json({},
       {headers:options.mutableHeaders??{'X-WeatherX-Catalog':CATALOG}});
+    if(url.pathname==='/data-atmos/tides/tides.json'){
+      const reply=new Response(null,{status:options.tidesStatus??200,headers:options.tidesHeaders??{'Content-Type':'application/json','X-WeatherX-Release':'release-a'}});
+      Object.defineProperty(reply,'url',{value:url.href});return reply;
+    }
     if(url.pathname==='/data/ledger/index.json')return Response.json({},
       {headers:options.ledgerHeaders??{'X-WeatherX-Release':'release-a'}});
     return new Response('missing',{status:404});
@@ -212,6 +216,7 @@ test('production public-mode proof retains its previous health shape and mutable
     if(url.pathname==='/api/platform/data-health')return Response.json({ok:true,authMode:'public',catalogMode:'serve'});
     if(url.pathname==='/data/gfs/index.json')return Response.json({runs:[]},
       {headers:{'X-WeatherX-Catalog':'production-current'}});
+    assert.notEqual(url.pathname,'/data-atmos/tides/tides.json','production must never run staging tides preflight');
     if(url.pathname==='/data/ledger/index.json')return Response.json({},
       {headers:{'X-WeatherX-Release':'release-a'}});
     return new Response('missing',{status:404});
@@ -418,4 +423,25 @@ test('workflow never exposes account failure diagnostics as an artifact',()=>{
   const staging=read('.github/workflows/ui-staging.yml'),prod=read('.github/workflows/ui-release.yml');
   for(const workflow of [staging,prod])
     assert.doesNotMatch(workflow,/ui-staging-account-(?:failure|proof)|retain failed account qualification metadata/);
+});
+
+
+test('staging deploy preflight refuses unavailable tides before upload',async t=>{
+  const {fetcher,paths}=stagingModeFetch({}, {tidesStatus:503});t.mock.method(globalThis,'fetch',fetcher);
+  await assert.rejects(publicModes(STAGING,PROFILE,'preflight'),/required staging data.*tides.*status 503.*expected 200/);
+  assert.deepEqual(paths,['/data-atmos/tides/tides.json']);
+});
+
+test('staging deploy preflight checks healthy tides first and retains all existing public-mode proofs',async t=>{
+  const {fetcher,paths}=stagingModeFetch();t.mock.method(globalThis,'fetch',fetcher);
+  await publicModes(STAGING,PROFILE,'preflight');
+  assert.equal(paths[0],'/data-atmos/tides/tides.json');
+  assert.equal(paths.length,6);assert.equal(paths.at(-1),'/data/ledger/index.json');
+});
+test('staging deploy preflight refuses wrong MIME or missing release before any other dependency',async t=>{
+  for(const headers of [ {'Content-Type':'text/html','X-WeatherX-Release':'release-a'}, {'Content-Type':'application/json'} ]){
+    const {fetcher,paths}=stagingModeFetch({}, {tidesHeaders:headers});t.mock.method(globalThis,'fetch',fetcher);
+    await assert.rejects(publicModes(STAGING,PROFILE,'preflight'),/required staging data.*(Content-Type|missing X-WeatherX-Release)/);
+    assert.deepEqual(paths,['/data-atmos/tides/tides.json']);
+  }
 });
