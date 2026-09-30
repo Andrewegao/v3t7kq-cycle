@@ -91,7 +91,7 @@
       ]
     },
     {
-      "pin": "44b14604b447a473fee962c24417fd303da9bbd9",
+      "pin": "18e52b6b1cb784e94939ac767be3bf0f9306fd19",
       "files": [
         "app/e2e/layer-switch-surface.mjs",
         "app/e2e/layer-switch-tint.mjs",
