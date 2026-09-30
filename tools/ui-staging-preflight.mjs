@@ -6,6 +6,8 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {resolve} from 'node:path';
 import {coreReleaseProfile,cycleTime,profileFor,readSelection,selectionProfile,STAGING_ORIGIN} from './ui-staging-models.mjs';
 
+import {requireStagingTides} from './ui-required-data-preflight.mjs';
+
 const HOUR=3_600_000;
 const PIPELINE_MARGIN=25*60_000;
 const POINT_MODELS=['ecmwf','gfs','aifs','hrrr'];
@@ -43,6 +45,7 @@ export function validatePointPayload(payload,model,{now=Date.now(),location,star
   return {model,runId:payload.runId,releaseId:payload.releaseId,quality:payload.quality,initializedAt:payload.initializedAt,freshUntil:payload.freshUntil};
 }
 export async function runPreflight({selection='none',root,fetchImpl=fetch,now=Date.now(),batchSize=4}={}){
+  await requireStagingTides({fetchImpl});
   assert.ok(Number.isInteger(batchSize)&&batchSize>=1&&batchSize<=8);const profile=profileFor(selection);
   const bundle=selectionProfile(profile)?requireSelectionMargin(readSelection(root,profile,now).bundle,now):null,locations=preflightLocations(bundle),work=[];
   for(const location of locations)for(const model of ['ecmwf','gfs'])work.push({location,model});
