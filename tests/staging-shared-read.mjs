@@ -100,7 +100,8 @@ function stagingSite({releaseId='cycle-100',catalogId='90-abc',source='shared',h
     if(pathname==='/api/platform/data-health')return Response.json({ok:true,authMode:'public',catalogMode:'serve',dataSource:'shared',sharedReadConfigured:true,pin:null,...health});
     if(pathname==='/data/ledger/index.json')return new Response(null,{headers:{'x-weatherx-release':releaseId,'x-weatherx-data-source':source}});
     if(pathname==='/data/ecmwf/index.json')return new Response(null,{headers:{'x-weatherx-catalog':catalogId,'x-weatherx-data-source':source}});
-    if(pathname==='/api/v1/point-series/ecmwf')return Response.json({releaseId:pointRelease??releaseId,runId:'2026090400',quality:'complete',freshUntil:'2026-09-05T00:00:00Z'});
+    if(pathname==='/api/v1/point-series/ecmwf')return Response.json({releaseId:pointRelease??releaseId,runId:'2026090400',quality:'complete',freshUntil:'2026-09-05T00:00:00Z'},
+      {headers:{'x-weatherx-data-source':source}});
     throw Error('unexpected '+pathname);
   };
   return {calls,fetcher};
@@ -110,7 +111,7 @@ test('a following staging serves exactly production current from the shared sour
   assert.deepEqual(site.calls,['GET /api/platform/data-health','HEAD /data/ledger/index.json','HEAD /data/ecmwf/index.json','GET /api/v1/point-series/ecmwf']);
   const receipt=assertFollowing(productionCurrent(production().io),staging,now);
   assert.equal(receipt.following,true);assert.equal(receipt.productionWritten,false);assert.equal(receipt.stagingWritten,false);
-  assert.deepEqual(receipt.staging,{releaseId:'cycle-100',catalogId:'90-abc',point:{releaseId:'cycle-100',runId:'2026090400',quality:'complete',freshUntil:'2026-09-05T00:00:00Z'}});
+  assert.deepEqual(receipt.staging,{releaseId:'cycle-100',catalogId:'90-abc',point:{releaseId:'cycle-100',catalogId:null,dataSource:'shared',runId:'2026090400',quality:'complete',freshUntil:'2026-09-05T00:00:00Z'}});
 });
 
 function windSite({selectorPatch={},pointPatch={},headersPatch={},status=200,afterPoint=()=>{}}={}){
@@ -273,3 +274,42 @@ test('shared-read workflows are read-only probes or a staging-scoped pin writer;
   assert.deepEqual(pinSecrets,['STAGING_R2_WRITE_ACCESS_KEY_ID','STAGING_R2_WRITE_SECRET_ACCESS_KEY']);
   assert.doesNotMatch(pin,/schedule:/);assert.match(pin,/STAGING_SHARED_READ_PIN_ENABLED/);
 });
+
+// Separate catalog and whole-release snapshots follow the Worker response contract.
+{
+const now=Date.parse('2026-10-01T16:49:09Z');
+const releaseId='cycle-33979262543',catalogId='1348-a652ee09-790b-4bb5-bd4a-7c423861313f';
+const production={releaseId,catalogId};
+function site({pointCatalog=catalogId,pointSource='shared',bodyIdentity=pointCatalog??releaseId,quality='complete',pin=null}={}){
+  const fetcher=async(url,init)=>{
+    const path=new URL(url).pathname;
+    if(path==='/api/platform/data-health')return Response.json({ok:true,authMode:'public',catalogMode:'serve',dataSource:'shared',sharedReadConfigured:true,pin});
+    if(path==='/data/ledger/index.json')return new Response(null,{headers:{'X-WeatherX-Release':releaseId,'X-WeatherX-Data-Source':'shared'}});
+    if(path==='/data/ecmwf/index.json')return new Response(null,{headers:{'X-WeatherX-Catalog':catalogId,'X-WeatherX-Data-Source':'shared'}});
+    if(path==='/api/v1/point-series/ecmwf')return Response.json({releaseId:bodyIdentity,runId:'2026100100',quality,freshUntil:'2026-10-02T06:00:00Z'},
+      {headers:{'X-WeatherX-Data-Source':pointSource,...(pointCatalog===null?{}:{'X-WeatherX-Catalog':pointCatalog})}});
+    throw Error('unexpected route');
+  };
+  return fetcher;
+}
+test('catalog point snapshot follows production even when legacy release differs',async()=>{
+  const snapshot=await stagingServing(site(),now);
+  assert.equal(assertFollowing(production,snapshot,now).following,true);
+});
+test('legacy point fallback stays bound to the whole release',async()=>{
+  const snapshot=await stagingServing(site({pointCatalog:null}),now);
+  assert.equal(assertFollowing(production,snapshot,now).following,true);
+});
+test('wrong catalog, mismatched body, own source, stale data and legacy mismatch remain refused',async()=>{
+  for(const patch of [{pointCatalog:'1347-old'},{bodyIdentity:releaseId},{pointSource:'own'},{pointSource:''},{quality:'stale'},
+    {pointCatalog:null,bodyIdentity:catalogId}]){
+    const snapshot=await stagingServing(site(patch),now);
+    assert.throws(()=>assertFollowing(production,snapshot,now));
+  }
+});
+test('release lag, catalog lag and invalid active pin stay refused',async()=>{
+  const snapshot=await stagingServing(site(),now);
+  for(const patch of [{releaseId:'cycle-old'},{catalogId:'old-catalog'},{health:{...snapshot.health,pin:{schemaVersion:1,releaseId:'cycle-pinned',expiresAt:'2026-10-01T18:00:00Z'}}}])
+    assert.throws(()=>assertFollowing(production,{...snapshot,...patch},now));
+});
+}
