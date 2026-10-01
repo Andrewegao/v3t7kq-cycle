@@ -144,8 +144,8 @@ export function requireReleaseProfileBinding(candidateProfile,selection=process.
     'production candidate profile differs from requested release profile');
   return candidateProfile;
 }
-async function get(url, token, limit = 2 * 1024 * 1024) {
-  const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(20000),
+async function get(url, token, limit = 2 * 1024 * 1024, {fetcher=fetch,timeoutMs=20000} = {}) {
+  const response = await fetcher(url, { redirect: 'error', signal: AbortSignal.timeout(timeoutMs),
     headers: { 'Cache-Control': 'no-cache', ...(token ? { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } : {}) } });
   assert.equal(response.status, 200, `read failed (${response.status}): ${new URL(url).pathname}`);
   const chunks = []; let size = 0;
@@ -297,10 +297,51 @@ function productionPagesContractFromProvider(deploymentConfigs) {
   }
   return {deployment_configs:sanitized};
 }
+export async function pagesProjectMetadata(stage, token, {fetcher=fetch,now=()=>performance.now(),
+  sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms)),
+  onFailure=diagnostic=>console.error(`Pages metadata GET refused: ${JSON.stringify(diagnostic)}`)} = {}) {
+  assert.ok(Object.hasOwn(PROJECTS,stage),'unknown UI target');
+  const url=`https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/pages/projects/${PROJECTS[stage]}`;
+  // Repeat only this safe provider GET, never deployment or validation. A total
+  // monotonic deadline includes backoff and body consumption; each request keeps
+  // the existing 20-second ceiling and all identity/configuration gates below.
+  const started=now();assert.ok(Number.isFinite(started),'Pages metadata clock is invalid');
+  const remaining=()=>{const clock=now();assert.ok(Number.isFinite(clock),'Pages metadata clock is invalid');return 45000-(clock-started);};
+  const transientCodes=new Set(['ECONNRESET','ETIMEDOUT','EAI_AGAIN','UND_ERR_SOCKET',
+    'UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT']);
+  const diagnosticCodes=new Set([...transientCodes,'ENOTFOUND','ECONNREFUSED','CERT_HAS_EXPIRED',
+    'ERR_TLS_CERT_ALTNAME_INVALID','DEPTH_ZERO_SELF_SIGNED_CERT','UNABLE_TO_VERIFY_LEAF_SIGNATURE']);
+  for(let attempt=0;attempt<3;attempt++){
+    const budget=remaining();assert.ok(budget>0,'Pages metadata GET deadline exhausted');
+    let payload,requestSignal;
+    try{
+      const {bytes}=await get(url,token,2*1024*1024,{timeoutMs:Math.min(20000,Math.ceil(budget)),
+        fetcher:(url,options)=>{requestSignal=options.signal;return fetcher(url,{...options,method:'GET'});}});
+      payload=JSON.parse(bytes);
+    }catch(error){
+      const code=error?.code??error?.cause?.code;
+      const ownTimeout=requestSignal?.aborted&&requestSignal.reason?.name==='TimeoutError'
+        &&(error===requestSignal.reason||error?.name==='AbortError');
+      const retryEligible=Boolean(ownTimeout||transientCodes.has(code));
+      const refuse=(failure,reason)=>{
+        onFailure({kind:'ui-pages-metadata-get-failure',attempt:attempt+1,maxAttempts:3,reason,
+          transportCode:diagnosticCodes.has(code)?code:null,ownTimeout:Boolean(ownTimeout),retryEligible});
+        throw new Error('Pages metadata GET refused',{cause:failure});
+      };
+      if(!retryEligible)refuse(error,'nontransient-or-unclassified');
+      const left=remaining();
+      if(left<=0)refuse(new Error('Pages metadata GET deadline exhausted',{cause:error}),'deadline');
+      if(attempt===2)refuse(error,'attempts-exhausted');
+      await sleep(Math.min((attempt+1)*250,left));continue;
+    }
+    assert.ok(remaining()>0,'Pages metadata GET deadline exhausted');
+    return payload;
+  }
+}
 async function projectSnapshot(stage) {
   if(stage==='production') requireUiProductionProfile(candidate().profile);
-  const { project } = target(stage);
-  const payload = await json(`https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/pages/projects/${project}`, process.env.CLOUDFLARE_API_TOKEN);
+  target(stage);
+  const payload = await pagesProjectMetadata(stage,process.env.CLOUDFLARE_API_TOKEN);
   assert.equal(payload.success, true);
   return validateProjectSnapshot(stage, payload.result, process.env.UI_PAGES_CONFIG_SHA256);
 }
