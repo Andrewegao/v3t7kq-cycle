@@ -1,11 +1,52 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {readFileSync} from 'node:fs';
+import {copyFileSync,existsSync,mkdirSync,mkdtempSync,readFileSync,rmSync} from 'node:fs';
+import {execFileSync} from 'node:child_process';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {ACCOUNT,hash} from '../tools/shared-data.mjs';
 import {activePin,assertFollowing,assertSharedReadConfig,MAX_PIN_HOURS,PIN_KEY,pinDocument,pinGate,probeGate,probeFailureDiagnostic,productionCurrent,releasedPinDocument,SHARED_READ_SECRETS,SHARED_READ_VARS,stagingServing,writePin} from '../tools/staging-shared-read.mjs';
 
 const now=Date.parse('2026-09-04T06:00:00Z');
 const hosted={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_REPOSITORY:'Andrewegao/v3t7kq-cycle',GITHUB_REF:'refs/heads/main'};
+
+test('clean snapshot bootstraps read-only contracts without the write SDK and keeps pin guards',t=>{
+  const root=mkdtempSync(join(tmpdir(),'weatherx-shared-read-bootstrap-'));
+  t.after(()=>rmSync(root,{recursive:true,force:true}));
+  mkdirSync(join(root,'tools'));mkdirSync(join(root,'tests'));mkdirSync(join(root,'receipts'));
+  // Explicit source-only copy: an installed SDK anywhere in the parent checkout must
+  // never mask the workflow's dependency-free probe bootstrap contract.
+  for(const name of ['staging-shared-read.mjs','shared-data.mjs','staging-data.mjs','staging-s3.mjs','staging-wind100-policy.json'])
+    copyFileSync(new URL('../tools/'+name,import.meta.url),join(root,'tools',name));
+  copyFileSync(new URL('./staging-shared-read.mjs',import.meta.url),join(root,'tests/staging-shared-read.mjs'));
+  assert.equal(existsSync(join(root,'staging-controller/node_modules')),false);
+  const moduleUrl=pathToFileURL(join(root,'tools/staging-shared-read.mjs')).href;
+  const smoke=`
+    import assert from 'node:assert/strict';
+    import {readFileSync} from 'node:fs';
+    const controller=await import(${JSON.stringify(moduleUrl)});
+    const hosted=${JSON.stringify(hosted)};
+    const env={...hosted,GITHUB_EVENT_NAME:'workflow_dispatch',RUNNER_TEMP:${JSON.stringify(join(root,'receipts'))},PATH:''};
+    await assert.rejects(controller.main('probe',env),/S3 read cat failed/);
+    const receipt=JSON.parse(readFileSync(${JSON.stringify(join(root,'receipts/staging-shared-read/probe-failure.json'))}));
+    assert.equal(receipt.phase,'production-current');assert.equal(receipt.ok,false);
+    // No read credential was supplied, so the probe cannot make a network request.
+    for(const command of ['pin','unpin']){
+      await assert.rejects(controller.main(command,{}),error=>error.code==='ERR_ASSERTION');
+      await assert.rejects(controller.main(command,{...env,STAGING_DATA_ISOLATION_APPROVED:'true',
+        STAGING_SHARED_READ_PIN_ENABLED:'true',STAGING_R2_ACCOUNT_ID:${JSON.stringify(ACCOUNT)},
+        PIN_RELEASE_ID:'cycle-bootstrap',PIN_HOURS:'1'}),error=>error.code==='ERR_MODULE_NOT_FOUND');
+    }
+    console.log('clean snapshot bootstrap and guarded write dependency verified');
+  `;
+  const options={cwd:root,env:{PATH:process.env.PATH},encoding:'utf8',stdio:'pipe',timeout:15_000};
+  const result=execFileSync(process.execPath,['--input-type=module','--eval',smoke],options);
+  assert.match(result,/clean snapshot bootstrap and guarded write dependency verified/);
+  // Exercise real read-only serving contracts from that same source-only snapshot.
+  execFileSync(process.execPath,['--test','--test-name-pattern=a following staging|enabled probe covers|Wind100 freshness|selector HTTP failure',
+    join(root,'tests/staging-shared-read.mjs')],options);
+});
 
 test('probe runs only hosted on main and never holds a write or deployment credential',()=>{
   for(const event of ['workflow_dispatch','schedule'])probeGate({...hosted,GITHUB_EVENT_NAME:event});
