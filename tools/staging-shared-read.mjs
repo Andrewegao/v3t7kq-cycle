@@ -8,7 +8,6 @@ import {mkdirSync,readFileSync,writeFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {ACCOUNT,createTransport,hash,identifier} from './shared-data.mjs';
-import {createStagingS3} from './staging-s3.mjs';
 import {ORIGIN as STAGING_ORIGIN} from './staging-data.mjs';
 
 const REPOSITORY='Andrewegao/v3t7kq-cycle';
@@ -231,6 +230,9 @@ export async function main(command,env=process.env,argv=[]){
   if(command==='pin'||command==='unpin'){
     pinGate(env);
     const document=command==='pin'?pinDocument({releaseId:env.PIN_RELEASE_ID||null,catalogId:env.PIN_CATALOG_ID||null,hours:Number(env.PIN_HOURS),reason:env.PIN_REASON??''}):releasedPinDocument();
+    // The read-only probe intentionally has no write SDK install. Load the adapter
+    // only for an admitted pin operation; its locked dependency and guards remain.
+    const {createStagingS3}=await import('./staging-s3.mjs');
     const io=createStagingS3(env);
     try{const receipt=await writePin(io,document);save(env,command+'.json',receipt);return receipt;}
     finally{io.close();}
