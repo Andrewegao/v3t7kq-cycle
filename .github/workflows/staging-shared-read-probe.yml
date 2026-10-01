@@ -35,15 +35,29 @@ jobs:
       - name: Verify probe contracts without credentials
         run: node --test cycle/tests/staging-shared-read.mjs
       - name: Compare production current pointers with what staging serves
+        id: follow
         env:
+          STAGING_WIND100_ENABLED: ${{ vars.STAGING_WIND100_ENABLED }}
           SHARED_R2_READ_ACCESS_KEY_ID: ${{ secrets.SHARED_R2_READ_ACCESS_KEY_ID }}
           SHARED_R2_READ_SECRET_ACCESS_KEY: ${{ secrets.SHARED_R2_READ_SECRET_ACCESS_KEY }}
         run: node cycle/tools/staging-shared-read.mjs probe
+      - name: Summarize read-only serving coverage
+        if: ${{ always() }}
+        env:
+          PROBE_OUTCOME: ${{ steps.follow.outcome }}
+          STAGING_WIND100_ENABLED: ${{ vars.STAGING_WIND100_ENABLED }}
+        run: |
+          printf 'Shared-read probe outcome: %s; native Wind100 coverage enabled: %s\n' "$PROBE_OUTCOME" "${STAGING_WIND100_ENABLED:-false}" >> "$GITHUB_STEP_SUMMARY"
+          if [ -s "$RUNNER_TEMP/staging-shared-read/probe-failure.json" ]; then
+            cat "$RUNNER_TEMP/staging-shared-read/probe-failure.json" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Retain non-secret follow receipt
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: staging-shared-read-probe-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/staging-shared-read/probe.json
+          path: |
+            ${{ runner.temp }}/staging-shared-read/probe.json
+            ${{ runner.temp }}/staging-shared-read/probe-failure.json
           if-no-files-found: ignore
           retention-days: 14

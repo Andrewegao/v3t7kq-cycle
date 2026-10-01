@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {readFileSync} from 'node:fs';
 import {ACCOUNT,hash} from '../tools/shared-data.mjs';
-import {activePin,assertFollowing,assertSharedReadConfig,MAX_PIN_HOURS,PIN_KEY,pinDocument,pinGate,probeGate,productionCurrent,releasedPinDocument,SHARED_READ_SECRETS,SHARED_READ_VARS,stagingServing,writePin} from '../tools/staging-shared-read.mjs';
+import {activePin,assertFollowing,assertSharedReadConfig,MAX_PIN_HOURS,PIN_KEY,pinDocument,pinGate,probeGate,probeFailureDiagnostic,productionCurrent,releasedPinDocument,SHARED_READ_SECRETS,SHARED_READ_VARS,stagingServing,writePin} from '../tools/staging-shared-read.mjs';
 
 const now=Date.parse('2026-09-04T06:00:00Z');
 const hosted={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_REPOSITORY:'Andrewegao/v3t7kq-cycle',GITHUB_REF:'refs/heads/main'};
@@ -70,6 +70,109 @@ test('a following staging serves exactly production current from the shared sour
   const receipt=assertFollowing(productionCurrent(production().io),staging,now);
   assert.equal(receipt.following,true);assert.equal(receipt.productionWritten,false);assert.equal(receipt.stagingWritten,false);
   assert.deepEqual(receipt.staging,{releaseId:'cycle-100',catalogId:'90-abc',point:{releaseId:'cycle-100',runId:'2026090400',quality:'complete',freshUntil:'2026-09-05T00:00:00Z'}});
+});
+
+function windSite({selectorPatch={},pointPatch={},headersPatch={},status=200,afterPoint=()=>{}}={}){
+  const base=stagingSite();
+  const initializedAt='2026-09-04T00:00:00.000Z',freshUntil='2026-09-05T06:00:00.000Z';
+  const selector={schemaVersion:1,kind:'staging-native-wind100-selector',catalogId:'stage-wind100-recurring-100-1',
+    runId:'2026090400',selectionSha256:'a'.repeat(64),initializedAt,freshUntil,...selectorPatch};
+  const fetcher=async(url,init)=>{
+    const u=new URL(url);
+    if(u.pathname==='/api/platform/staging-wind100/current'){
+      base.calls.push('GET '+u.pathname);assert.equal(init.method,'GET');assert.equal(init.redirect,'error');
+      assert.equal(u.origin,'https://staging.weatherx.org');
+      return Response.json(selector,{status,headers:{'Cache-Control':'no-store'}});
+    }
+    if(u.searchParams.get('optionalVariables')==='wind_speed_100m'){
+      base.calls.push('GET pinned-wind100');
+      assert.equal(u.searchParams.get('run'),selector.runId);assert.equal(u.searchParams.get('catalog'),selector.catalogId);
+      assert.equal(u.searchParams.get('selection'),selector.selectionSha256);assert.equal(init.method,'GET');
+      assert.equal(u.origin,'https://staging.weatherx.org');
+      const times=[initializedAt,'2026-09-04T03:00:00.000Z'];
+      const series=Object.fromEntries(['wind_speed','wind_speed_100m'].map(name=>[name,{kind:'instantaneous',units:'m/s',
+        samples:times.map(validTime=>({validTime,value:5}))}]));
+      const body={schemaVersion:1,model:'ecmwf',runId:selector.runId,releaseId:selector.catalogId,initializedAt,freshUntil,
+        source:'ECMWF IFS 0.25 degree direct open-data GRIB',quality:'complete',missingFields:[],optionalMissingFields:[],
+        nativeCadenceSeconds:10800,resolutionDegrees:0.25,requestedPoint:{latitude:32.06,longitude:118.8},
+        window:{start:initializedAt,end:'2026-09-04T06:00:00.000Z'},series,...pointPatch};
+      afterPoint();
+      return Response.json(body,{headers:{'X-WeatherX-Data-Source':'own','X-WeatherX-Catalog':selector.catalogId,...headersPatch}});
+    }
+    return base.fetcher(url,init);
+  };
+  return {...base,fetcher,selector};
+}
+test('enabled probe covers discovery and the exact pinned native 100m point, without mutations',async()=>{
+  const site=windSite();const staging=await stagingServing(site.fetcher,now,{wind100Enabled:true});
+  assert.deepEqual(site.calls.slice(-2),['GET /api/platform/staging-wind100/current','GET pinned-wind100']);
+  assert.equal(staging.wind100.catalogId,site.selector.catalogId);assert.equal(staging.wind100.runId,site.selector.runId);
+  const receipt=assertFollowing(productionCurrent(production().io),staging,now);
+  assert.equal(receipt.staging.wind100.selectionSha256,'a'.repeat(64));
+  assert.equal(receipt.staging.wind100.freshUntil,site.selector.freshUntil);
+});
+test('Wind100 failure is visible even when broad health succeeds; identity and native completeness fail closed',async()=>{
+  for(const options of [{status:404},{selectorPatch:{selectionSha256:'invalid'}},{selectorPatch:{runId:'2026023100'}},
+    {selectorPatch:{catalogId:'production-100'}},{selectorPatch:{freshUntil:'2026-09-06T00:00:00Z'}},
+    {selectorPatch:{initializedAt:'2026-09-04T12:00:00Z'}},
+    {pointPatch:{runId:'2026090312'}},{pointPatch:{source:'derived wind'}},{pointPatch:{quality:'partial'}},
+    {pointPatch:{optionalMissingFields:['wind_speed_100m']}},{headersPatch:{'X-WeatherX-Data-Source':'shared'}},
+    {headersPatch:{'X-WeatherX-Catalog':'other'}},{pointPatch:{series:{}}}]){
+    await assert.rejects(stagingServing(windSite(options).fetcher,now,{wind100Enabled:true}),JSON.stringify(options));
+  }
+});
+test('Wind100 freshness is rechecked after awaited response and after body consumption at exact expiry',async()=>{
+  const expiry=Date.parse('2026-09-05T06:00:00Z');let clock=expiry-1;
+  const site=windSite({afterPoint:()=>{clock=expiry;}});
+  await assert.rejects(stagingServing(site.fetcher,()=>clock,{wind100Enabled:true}),/freshness/);
+  clock=expiry-1;
+  const bodySite=windSite();
+  const delayed=async(url,init)=>{
+    const response=await bodySite.fetcher(url,init);
+    if(!url.includes('optionalVariables'))return response;
+    const bytes=new Uint8Array(await response.arrayBuffer());
+    return new Response(new ReadableStream({pull(controller){clock=expiry;controller.enqueue(bytes);controller.close();}}),{headers:response.headers});
+  };
+  await assert.rejects(stagingServing(delayed,()=>clock,{wind100Enabled:true}),/freshness/);
+  const valid=await stagingServing(windSite().fetcher,()=>expiry-1,{wind100Enabled:true});
+  assert.equal(valid.wind100.freshUntil,'2026-09-05T06:00:00.000Z');
+  assert.throws(()=>assertFollowing(productionCurrent(production().io),valid,expiry),/freshness/);
+  await assert.rejects(stagingServing(windSite().fetcher,Date.parse('2026-09-03T23:59:59Z'),{wind100Enabled:true}),/freshness/);
+});
+test('oversized and failed responses cancel their bodies without exposing response content',async()=>{
+  for(const status of [200,404]){
+    let cancelled=false;
+    const fetcher=async()=>new Response(new ReadableStream({pull(c){c.enqueue(new Uint8Array(65537));},cancel(){cancelled=true;}}),{status});
+    await assert.rejects(stagingServing(fetcher,now),status===200?/oversized/:/expected HTTP 200/);
+    assert.equal(cancelled,true);
+  }
+});
+test('HEAD probes do not apply the body byte limit to the full object Content-Length',async()=>{
+  const site=stagingSite();
+  const fetcher=async(url,init)=>{
+    const response=await site.fetcher(url,init);
+    if(init.method==='HEAD')response.headers.set('Content-Length','5000000');
+    return response;
+  };
+  await stagingServing(fetcher,now);
+  assert.equal(site.calls.length,4);
+});
+test('probe failure receipt has fixed categories and phases, never raw remote content or hostile getters',()=>{
+  const secret='credential secret from remote response';
+  for(const error of [{code:'ERR_ASSERTION',message:secret,actual:secret},new SyntaxError(secret),
+    {name:'TimeoutError',message:secret},{get code(){throw Error(secret);},get name(){throw Error(secret);}}]){
+    const receipt=probeFailureDiagnostic(error,'wind100-selector');
+    assert.deepEqual(Object.keys(receipt).sort(),['schemaVersion','kind','origin','ok','phase','category','httpStatus','productionWritten','stagingWritten'].sort());
+    assert.equal(receipt.phase,'wind100-selector');assert.ok(!JSON.stringify(receipt).includes(secret));
+    assert.equal(receipt.ok,false);assert.equal(receipt.productionWritten,false);assert.equal(receipt.stagingWritten,false);
+  }
+  assert.equal(probeFailureDiagnostic({},secret).phase,'unknown');
+});
+test('selector HTTP failure retains only its numeric status in the bounded diagnostic',async()=>{
+  await assert.rejects(stagingServing(windSite({status:404}).fetcher,now,{wind100Enabled:true}),error=>{
+    const receipt=probeFailureDiagnostic(error,'wind100-selector');
+    assert.equal(receipt.category,'http');assert.equal(receipt.httpStatus,404);return true;
+  });
 });
 test('lag, own-copy serving, missing credential, stale points and unknown mode all fail the probe',async()=>{
   const prod=productionCurrent(production().io);

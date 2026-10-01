@@ -14,6 +14,11 @@ import {ORIGIN as STAGING_ORIGIN} from './staging-data.mjs';
 const REPOSITORY='Andrewegao/v3t7kq-cycle';
 const SHA=/^[a-f0-9]{64}$/;
 const HOUR=3_600_000;
+const WIND_POLICY=JSON.parse(readFileSync(new URL('./staging-wind100-policy.json',import.meta.url),'utf8'));
+assert.equal(WIND_POLICY.model,'ecmwf');assert.equal(WIND_POLICY.freshnessHours,30);
+const WIND_CATALOG=/^stage-wind100-(?:recurring-)?[1-9]\d{0,19}-[1-9]\d{0,5}$/;
+const WIND_SOURCE='ECMWF IFS 0.25 degree direct open-data GRIB';
+const HTTP_FAILURES=new WeakMap();
 export const PIN_KEY='shared-read/pin.json';
 export const MAX_PIN_HOURS=48;
 export const SHARED_READ_VARS={DATA_SOURCE_MODE:'shared',SHARED_READ_ACCOUNT_ID:ACCOUNT,
@@ -68,23 +73,84 @@ export function productionCurrent(io){
     releasePublishedAt:release.publishedAt,catalogPublishedAt:catalog.publishedAt};
 }
 
-async function publicResponse(fetcher,path,method='GET'){
+async function publicResponse(fetcher,path,method='GET',maximum=64*1024){
   const response=await fetcher(STAGING_ORIGIN+path,{method,redirect:'error',cache:'no-store',headers:{'Cache-Control':'no-cache'},signal:AbortSignal.timeout(20_000)});
-  assert.equal(response.status,200,`${path}: expected HTTP 200`);
-  let total=0;const chunks=[];
-  for await(const chunk of response.body??[]){total+=chunk.length;assert.ok(total<=64*1024,`${path}: oversized response`);chunks.push(Buffer.from(chunk));}
-  return {headers:response.headers,body:Buffer.concat(chunks)};
+  let reader;
+  try{
+    if(response.status!==200){
+      const error=Error(`${path}: expected HTTP 200`);
+      HTTP_FAILURES.set(error,response.status);throw error;
+    }
+    const length=response.headers.get('Content-Length');
+    if(method==='GET'&&length!==null)assert.ok(/^\d+$/.test(length)&&Number(length)<=maximum,`${path}: oversized response`);
+    reader=response.body?.getReader();let total=0;const chunks=[];
+    while(reader){const {done,value}=await reader.read();if(done)break;
+      total+=value.byteLength;assert.ok(total<=maximum,`${path}: oversized response`);chunks.push(Buffer.from(value));}
+    return {headers:response.headers,body:Buffer.concat(chunks)};
+  }finally{
+    // Retire both rejected HTTP bodies and a reader stopped by the byte bound.
+    if(reader){try{await reader.cancel();}finally{reader.releaseLock();}}
+    else await response.body?.cancel();
+  }
 }
-export async function stagingServing(fetcher=fetch,now=Date.now()){
+const runIso=run=>`${run.slice(0,4)}-${run.slice(4,6)}-${run.slice(6,8)}T${run.slice(8)}:00:00.000Z`;
+function windFreshness(selected,now){
+  const initialized=Date.parse(runIso(selected.runId)),expires=Date.parse(selected.freshUntil);
+  assert.ok(Number.isFinite(now)&&initialized<=now&&expires===initialized+WIND_POLICY.freshnessHours*HOUR&&expires>now,
+    'Wind100 freshness differs or has expired');
+}
+async function probeWind100(fetcher,clock,onPhase){
+  onPhase('wind100-selector');
+  const discovery=await publicResponse(fetcher,'/api/platform/staging-wind100/current','GET',4096);
+  assert.equal(discovery.headers.get('Cache-Control'),'no-store','Wind100 discovery must not be cached');
+  const selected=JSON.parse(discovery.body.toString('utf8'));
+  assert.ok(selected&&typeof selected==='object'&&!Array.isArray(selected),'Wind100 selector invalid');
+  assert.equal(selected.schemaVersion,1);assert.equal(selected.kind,'staging-native-wind100-selector');
+  assert.match(selected.catalogId??'',WIND_CATALOG);assert.match(selected.selectionSha256??'',SHA);
+  assert.match(selected.runId??'',/^\d{10}$/);
+  const initializedAt=runIso(selected.runId),initialized=Date.parse(initializedAt);
+  assert.ok(Number.isFinite(initialized)&&new Date(initialized).toISOString()===initializedAt,'Wind100 run time invalid');
+  assert.equal(Date.parse(selected.initializedAt),initialized,'Wind100 initialization differs');
+  windFreshness(selected,clock());
+  onPhase('wind100-point');
+  const end=new Date(initialized+6*HOUR).toISOString();
+  const query=new URLSearchParams({lat:'32.06',lon:'118.8',variables:'wind_speed',optionalVariables:'wind_speed_100m',
+    start:initializedAt,end,run:selected.runId,catalog:selected.catalogId,selection:selected.selectionSha256});
+  const response=await publicResponse(fetcher,`/api/v1/point-series/ecmwf?${query}`);
+  const point=JSON.parse(response.body.toString('utf8'));
+  assert.equal(response.headers.get('X-WeatherX-Data-Source'),'own','Wind100 must use the isolated staging source');
+  assert.equal(response.headers.get('X-WeatherX-Catalog'),selected.catalogId,'Wind100 catalog differs');
+  assert.equal(point.schemaVersion,1);assert.equal(point.model,'ecmwf');assert.equal(point.runId,selected.runId);
+  assert.equal(point.releaseId,selected.catalogId);assert.equal(point.source,WIND_SOURCE);
+  assert.equal(point.runSelection,undefined);assert.equal(Date.parse(point.initializedAt),initialized);
+  assert.equal(Date.parse(point.freshUntil),Date.parse(selected.freshUntil));
+  assert.equal(point.quality,'complete');assert.deepEqual(point.missingFields,[]);assert.deepEqual(point.optionalMissingFields,[]);
+  assert.equal(point.nativeCadenceSeconds,10800);assert.equal(point.resolutionDegrees,0.25);
+  assert.deepEqual(point.window,{start:initializedAt,end});assert.deepEqual(point.requestedPoint,{latitude:32.06,longitude:118.8});
+  assert.deepEqual(Object.keys(point.series??{}).sort(),['wind_speed','wind_speed_100m']);
+  for(const series of Object.values(point.series)){
+    assert.equal(series.kind,'instantaneous');assert.equal(series.units,'m/s');assert.ok(Array.isArray(series.samples));
+    assert.deepEqual(series.samples.map(row=>row?.validTime),[initializedAt,new Date(initialized+3*HOUR).toISOString()]);
+    assert.ok(series.samples.every(row=>Number.isFinite(row?.value)&&row.value>=0),'Wind100 native samples invalid');
+  }
+  // The body read is asynchronous: the lease may expire while it is consumed.
+  windFreshness(selected,clock());
+  return {catalogId:selected.catalogId,runId:selected.runId,selectionSha256:selected.selectionSha256,
+    initializedAt,freshUntil:new Date(Date.parse(selected.freshUntil)).toISOString(),native100m:true};
+}
+export async function stagingServing(fetcher=fetch,now=Date.now,{wind100Enabled=false,onPhase=()=>{}}={}){
+  const clock=typeof now==='function'?now:()=>now;
+  onPhase('staging-follow');
   const health=JSON.parse((await publicResponse(fetcher,'/api/platform/data-health')).body.toString('utf8'));
   const whole=await publicResponse(fetcher,'/data/ledger/index.json','HEAD');
   const component=await publicResponse(fetcher,'/data/ecmwf/index.json','HEAD');
-  const start=new Date(Math.floor(now/HOUR)*HOUR).toISOString(),end=new Date(Date.parse(start)+6*HOUR).toISOString();
+  const start=new Date(Math.floor(clock()/HOUR)*HOUR).toISOString(),end=new Date(Date.parse(start)+6*HOUR).toISOString();
   const query=new URLSearchParams({lat:'35',lon:'104',variables:'temperature',start,end});
   const point=JSON.parse((await publicResponse(fetcher,`/api/v1/point-series/ecmwf?${query}`)).body.toString('utf8'));
   return {health,releaseId:whole.headers.get('x-weatherx-release'),catalogId:component.headers.get('x-weatherx-catalog'),
     dataSources:[whole.headers.get('x-weatherx-data-source'),component.headers.get('x-weatherx-data-source')],
-    point:{releaseId:point.releaseId,runId:point.runId,quality:point.quality,freshUntil:point.freshUntil}};
+    point:{releaseId:point.releaseId,runId:point.runId,quality:point.quality,freshUntil:point.freshUntil},
+    ...(wind100Enabled?{wind100:await probeWind100(fetcher,clock,onPhase)}:{})};
 }
 
 export function activePin(pin,now=Date.now()){
@@ -104,7 +170,9 @@ export function assertFollowing(production,staging,now=Date.now()){
   assert.equal(staging.catalogId,expected.catalogId,pin?'staging does not serve the pinned catalog':'staging lags production catalog');
   assert.equal(staging.point.releaseId,staging.releaseId,'point series and map release differ');
   assert.notEqual(staging.point.quality,'stale','staging point data is stale');
-  return {schemaVersion:1,kind:'weatherx-staging-shared-read-probe',origin:STAGING_ORIGIN,production,staging:{releaseId:staging.releaseId,catalogId:staging.catalogId,point:staging.point},
+  if(staging.wind100)windFreshness(staging.wind100,now);
+  return {schemaVersion:1,kind:'weatherx-staging-shared-read-probe',origin:STAGING_ORIGIN,production,staging:{releaseId:staging.releaseId,catalogId:staging.catalogId,point:staging.point,
+    ...(staging.wind100?{wind100:staging.wind100}:{})},
     pin,following:!pin,checkedAt:new Date(now).toISOString(),productionWritten:false,stagingWritten:false};
 }
 
@@ -135,6 +203,15 @@ function save(env,name,value){
   const dir=resolve(env.RUNNER_TEMP,'staging-shared-read');mkdirSync(dir,{recursive:true,mode:0o700});
   writeFileSync(resolve(dir,name),JSON.stringify(value,null,2)+'\n',{flag:'wx',mode:0o600});
 }
+export function probeFailureDiagnostic(error,phase){
+  const safe=(object,key)=>{try{return object?.[key];}catch{return undefined;}};
+  const code=safe(error,'code'),name=safe(error,'name');
+  return {schemaVersion:1,kind:'weatherx-staging-shared-read-probe-failure',origin:STAGING_ORIGIN,ok:false,
+    phase:['production-current','staging-follow','wind100-selector','wind100-point','follow-contract'].includes(phase)?phase:'unknown',
+    category:HTTP_FAILURES.has(error)?'http':code==='ERR_ASSERTION'?'contract':['AbortError','TimeoutError'].includes(name)?'timeout':name==='SyntaxError'?'parse':'unexpected',
+    httpStatus:HTTP_FAILURES.get(error)??null,
+    productionWritten:false,stagingWritten:false};
+}
 export async function main(command,env=process.env,argv=[]){
   if(command==='config'){
     const config=assertSharedReadConfig(JSON.parse(readFileSync(resolve(argv[0]??''),'utf8')));
@@ -142,9 +219,14 @@ export async function main(command,env=process.env,argv=[]){
   }
   if(command==='probe'){
     probeGate(env);
-    const io=createTransport(env,execFileSync,event=>console.log(JSON.stringify(event)));
-    const receipt=assertFollowing(productionCurrent(io),await stagingServing());
-    save(env,'probe.json',receipt);return receipt;
+    let phase='production-current';
+    try{
+      const io=createTransport(env,execFileSync,event=>console.log(JSON.stringify(event)));
+      const production=productionCurrent(io);
+      const staging=await stagingServing(fetch,Date.now,{wind100Enabled:env.STAGING_WIND100_ENABLED==='true',onPhase:value=>{phase=value;}});
+      phase='follow-contract';const receipt=assertFollowing(production,staging,Date.now());
+      save(env,'probe.json',receipt);return receipt;
+    }catch(error){save(env,'probe-failure.json',probeFailureDiagnostic(error,phase));throw error;}
   }
   if(command==='pin'||command==='unpin'){
     pinGate(env);
@@ -157,5 +239,5 @@ export async function main(command,env=process.env,argv=[]){
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
   main(process.argv[2],process.env,process.argv.slice(3)).then(result=>console.log(JSON.stringify(result)))
-    .catch(error=>{console.error(`Shared-read controller refused: ${error.message}`);process.exitCode=1;});
+    .catch(error=>{console.error(process.argv[2]==='probe'?'Shared-read probe refused; see the bounded failure receipt.':`Shared-read controller refused: ${error.message}`);process.exitCode=1;});
 }

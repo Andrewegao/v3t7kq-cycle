@@ -191,7 +191,13 @@ Preconditions: this PR and the Atmos PR are merged; nothing has been dispatched.
 5. **Prove the follow.** Dispatch `staging-shared-read-probe.yml`. It must report staging
    serving exactly production's current release and catalog with
    `X-WeatherX-Data-Source: shared` and fresh point series. Then set
-   `STAGING_SHARED_READ_PROBE_ENABLED=true` on `data-staging` for the half-hourly schedule.
+   `STAGING_SHARED_READ_PROBE_ENABLED=true` as a **repository-level Actions variable** for
+   the half-hourly schedule. The job admission condition is evaluated before environment-level
+   variables are available; a `data-staging` variable cannot enable this scheduled job
+   ([GitHub variable availability](https://docs.github.com/en/actions/reference/workflows-and-actions/variables#configuration-variable-precedence)).
+   Keep `STAGING_WIND100_ENABLED` in the `data-staging` environment: the probe reads it at
+   runtime to include native Wind100 selector and pinned point coverage. These are separate
+   scheduling and feature flags; this runbook does not change either setting.
 6. **Enable canary pins when needed.** Set `STAGING_SHARED_READ_PIN_ENABLED=true`; dispatch
    `staging-shared-read-pin.yml` with `action=pin`, a production release and/or catalog id and
    a lifetime (1 to 48 h). The probe then verifies the pin instead of current. `action=unpin`

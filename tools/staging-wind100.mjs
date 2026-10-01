@@ -85,6 +85,8 @@ const PUBLICATION_PHASES = new Set([
   'map-component', 'point-component', 'pair', 'catalog-validation', 'catalog-write',
   'lease', 'selection-write', 'receipt',
 ]);
+const PREFLIGHT_PHASES = new Set(['gate', 'reader', 'transport', 'selected-input']);
+const POINTER_FAILURES = new WeakMap();
 const CONTROLLER_LABEL = 'tools/staging-wind100.mjs';
 const CONTROLLER_URL = import.meta.url;
 const MAX_DIAGNOSTIC_NUMBER = 10_000;
@@ -208,6 +210,38 @@ function markPublication(trace, phase) {
 
 function safeProperty(value, name) {
   try { return value?.[name]; } catch { return undefined; }
+}
+
+// Never retain raw SDK messages, causes, request IDs, URLs or credentials. Only fixed
+// categories survive the generic transport refusal. A 403 alone cannot prove expiry.
+function pointerFailureFields(error) {
+  const rawStatus = safeProperty(safeProperty(error, '$metadata'), 'httpStatusCode');
+  const httpStatus = Number.isInteger(rawStatus) && rawStatus >= 100 && rawStatus <= 599 ? rawStatus : null;
+  const name = safeProperty(error, 'name'), code = safeProperty(error, 'code');
+  const allowed = new Set(['ExpiredToken', 'InvalidAccessKeyId', 'SignatureDoesNotMatch', 'AccessDenied', 'NoSuchKey', 'PreconditionFailed']);
+  const serviceCode = allowed.has(name) ? name : allowed.has(code) ? code : null;
+  const category = serviceCode === 'ExpiredToken' ? 'credential_expired'
+    : httpStatus === 401 || httpStatus === 403 ? 'auth_denied'
+      : ['AbortError', 'TimeoutError'].includes(name) || ['ETIMEDOUT', 'ESOCKETTIMEDOUT'].includes(code) ? 'timeout'
+        : ['CERT_HAS_EXPIRED', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'ERR_TLS_CERT_ALTNAME_INVALID', 'DEPTH_ZERO_SELF_SIGNED_CERT'].includes(code) ? 'tls'
+          : httpStatus !== null ? 'service'
+            : ['ERR_MODULE_NOT_FOUND', 'ERR_PACKAGE_PATH_NOT_EXPORTED', 'ERR_MODULE_LINK_MISMATCH'].includes(code) ? 'dependency' : qualificationCategory(error);
+  return { category, httpStatus, serviceCode };
+}
+
+function pointerRefusal(error, message) {
+  const refusal = Error(message);
+  POINTER_FAILURES.set(refusal, pointerFailureFields(error));
+  return refusal;
+}
+
+export function preflightFailureDiagnostic(error, trace, controllerSha256 = null) {
+  const phase = safeProperty(trace, 'phase');
+  const fields = POINTER_FAILURES.get(error) ?? pointerFailureFields(error);
+  return { schemaVersion: 1, operation: 'preflight', phase: PREFLIGHT_PHASES.has(phase) ? phase : 'unknown',
+    ...fields, controller: CONTROLLER_LABEL,
+    controllerSha256: typeof controllerSha256 === 'string' && SHA.test(controllerSha256) ? controllerSha256 : null,
+    ...controllerCoordinate(error) };
 }
 
 function qualificationCategory(error) {
@@ -1520,7 +1554,10 @@ export async function createPointerS3(env, injectedClient, injectedSdk) {
     assert.ok(Number.isSafeInteger(maximum) && maximum > 0 && maximum <= MAX_JSON_BYTES);
     let object;
     try { object = await client.send(new sdk.GetObjectCommand(admitted(key)), { abortSignal: AbortSignal.timeout(120_000) }); }
-    catch (error) { if (error?.$metadata?.httpStatusCode === 404) return null; throw Error('staging pointer read failed'); }
+    catch (error) {
+      if (safeProperty(safeProperty(error, '$metadata'), 'httpStatusCode') === 404) return null;
+      throw pointerRefusal(error, 'staging pointer read failed');
+    }
     const chunks = []; let bytes = 0;
     try {
       assert.ok(Number.isSafeInteger(object.ContentLength) && object.ContentLength > 0 && object.ContentLength <= maximum);
@@ -1538,8 +1575,8 @@ export async function createPointerS3(env, injectedClient, injectedSdk) {
         Metadata: { sha256: hash(body) }, ...conditional }), { abortSignal: AbortSignal.timeout(120_000) });
       return true;
     } catch (error) {
-      if (error?.$metadata?.httpStatusCode === 412) return false;
-      throw Error('staging pointer write failed');
+      if (safeProperty(safeProperty(error, '$metadata'), 'httpStatusCode') === 412) return false;
+      throw pointerRefusal(error, 'staging pointer write failed');
     }
   }
   return { get, put, close: () => client.destroy?.() };
@@ -1640,14 +1677,21 @@ export async function main(command, env = process.env, argv = process.argv.slice
   }
   if (command === 'source') return verifySource(argv[0], policy);
   if (command === 'preflight') {
-    recurringGate(env, policy, controllerDigest(), 'metadata');
+    if (trace) trace.phase = 'gate';
+    const digest = controllerDigest();
+    recurringGate(env, policy, digest, 'metadata');
+    if (trace) trace.controllerSha256 = digest;
     assert.match(env.WIND100_RUN_ID ?? '', RUN); assert.match(env.WIND100_INPUT_SHA256 ?? '', SHA);
+    if (trace) trace.phase = 'reader';
     const validator = await loadCatalogValidator(argv[0]);
-    const io = await createPointerS3(env);
-    try { return await findQualifiedInput({ runId: env.WIND100_RUN_ID, inputSha256: env.WIND100_INPUT_SHA256,
-      sourceSha: policy.sourceSha,
-      io, policy, catalogValidator: validator.validate }); }
-    finally { validator.close(); io.close(); }
+    let io;
+    try {
+      if (trace) trace.phase = 'transport';
+      io = await createPointerS3(env);
+      if (trace) trace.phase = 'selected-input';
+      return await findQualifiedInput({ runId: env.WIND100_RUN_ID, inputSha256: env.WIND100_INPUT_SHA256,
+        sourceSha: policy.sourceSha, io, policy, catalogValidator: validator.validate });
+    } finally { validator.close(); io?.close(); }
   }
   if (command === 'qualify' || command === 'qualify-recurring') {
     markQualification(trace, 'gate');
@@ -1713,13 +1757,22 @@ export async function main(command, env = process.env, argv = process.argv.slice
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const command = process.argv[2];
   const trace = command === 'qualify' || command === 'qualify-recurring' ? createQualificationTrace()
-    : command === 'publish' || command === 'publish-recurring' ? createPublicationTrace() : null;
+    : command === 'publish' || command === 'publish-recurring' ? createPublicationTrace()
+      : command === 'preflight' ? { phase: 'gate' } : null;
   main(command, process.env, process.argv.slice(3), trace).then(value => console.log(JSON.stringify(value)))
     .catch(error => {
       if (trace) {
-        const diagnostic = command === 'qualify' ? qualificationFailureDiagnostic : publicationFailureDiagnostic;
-        console.error(`Staging wind100 diagnostic ${JSON.stringify(diagnostic(
-          error, trace, safeProperty(trace, 'controllerSha256')))}`);
+        const diagnostic = command === 'preflight' ? preflightFailureDiagnostic
+          : command === 'qualify' || command === 'qualify-recurring' ? qualificationFailureDiagnostic : publicationFailureDiagnostic;
+        const receipt = diagnostic(error, trace, safeProperty(trace, 'controllerSha256'));
+        console.error(`Staging wind100 diagnostic ${JSON.stringify(receipt)}`);
+        if (command === 'preflight' && process.env.RUNNER_TEMP) {
+          try {
+            const root = resolve(process.env.RUNNER_TEMP, 'staging-wind100');
+            mkdirSync(root, { recursive: true, mode: 0o700 });
+            writeFileSync(resolve(root, 'preflight-failure.json'), `${JSON.stringify(receipt)}\n`, { flag: 'wx', mode: 0o600 });
+          } catch { console.error('Staging wind100 diagnostic receipt could not be retained.'); }
+        }
       }
       console.error('Staging wind100 refused; no serving pointer or production object changed.');
       process.exitCode = 1;
