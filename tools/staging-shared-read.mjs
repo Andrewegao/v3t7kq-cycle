@@ -160,6 +160,7 @@ export function activePin(pin,now=Date.now()){
   return Number.isFinite(expires)&&expires>now?pin:null;
 }
 export function assertFollowing(production,staging,now=Date.now()){
+  assert.ok(Number.isFinite(now),'staging probe clock is invalid');
   const health=staging.health;
   assert.equal(health?.ok,true);assert.equal(health.authMode,'public');assert.equal(health.catalogMode,'serve');
   assert.equal(health.dataSource,'shared','staging is not in shared-read mode');
@@ -177,6 +178,8 @@ export function assertFollowing(production,staging,now=Date.now()){
     assert.equal(staging.point.releaseId,staging.releaseId,'legacy point series and whole release differ');
   }
   assert.notEqual(staging.point.quality,'stale','staging point data is stale');
+  const pointExpiry=typeof staging.point.freshUntil==='string'?Date.parse(staging.point.freshUntil):NaN;
+  assert.ok(Number.isFinite(pointExpiry)&&pointExpiry>=now,'staging point freshness expired or invalid');
   if(staging.wind100)windFreshness(staging.wind100,now);
   return {schemaVersion:1,kind:'weatherx-staging-shared-read-probe',origin:STAGING_ORIGIN,production,staging:{releaseId:staging.releaseId,catalogId:staging.catalogId,point:staging.point,
     ...(staging.wind100?{wind100:staging.wind100}:{})},
