@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `c158ac520b847d5b41b8cd705f151c3dac0e2f3ee60c4f4c4c4c2a68e9014ef7`.
+Source digest (registry and workflow bytes): `78cf92d73127376c7cc7bb0db81f83a0cbe235cb88c71943d56b739221cb4f08`.
 
 60 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -1355,7 +1355,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | --- | --- | --- |
 | [probe / step 1](../.github/workflows/staging-shared-read-probe.yml#L22) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
-Variable references (declared names only; values and activation unknown): [STAGING_SHARED_READ_PROBE_ENABLED](../.github/workflows/staging-shared-read-probe.yml#L15).
+Variable references (declared names only; values and activation unknown): [STAGING_SHARED_READ_PROBE_ENABLED](../.github/workflows/staging-shared-read-probe.yml#L15), [STAGING_WIND100_ENABLED](../.github/workflows/staging-shared-read-probe.yml#L40).
 
 
 ## staging-tc-guidance

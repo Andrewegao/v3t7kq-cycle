@@ -13,11 +13,68 @@ import { fileURLToPath } from 'node:url';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import {
   ACCOUNT, COMPONENTS, CONFIRMATION, DATA, MODEL, SOURCE_SHA, activateCandidate, controllerDigest,
-  createCandidateS3, createPublicationTrace, createQualificationTrace, findQualifiedInput, gate, hash, loadCatalogValidator, prepareCandidate,
+  createCandidateS3, createPointerS3, createPublicationTrace, createQualificationTrace, findQualifiedInput, gate, hash, loadCatalogValidator, prepareCandidate,
   listRecurringPrefixS3, nextWind100Pointer, pointerEntry, publicationFailureDiagnostic, qualificationFailureDiagnostic,
   qualifyMapInventory, qualifyPointPacks, readPolicy, recurringPrefixCapacity, sealedPointInputSha,
   validateWind100Pointer, verifySource,
 } from '../tools/staging-wind100.mjs';
+import * as windController from '../tools/staging-wind100.mjs';
+
+test('pointer transport preserves only safe diagnostic categories and expected absence/conflict', async () => {
+  class Command { constructor(input) { this.input = input; } }
+  const secret = 'credential-secret https://secret.invalid/?token=secret';
+  for (const [error, category, status, serviceCode] of [
+    [{ name: 'ExpiredToken', $metadata: { httpStatusCode: 403 }, message: secret }, 'credential_expired', 403, 'ExpiredToken'],
+    [{ name: 'AccessDenied', $metadata: { httpStatusCode: 403 }, message: secret }, 'auth_denied', 403, 'AccessDenied'],
+    [{ $metadata: { httpStatusCode: 401 }, message: secret }, 'auth_denied', 401, null],
+    [{ name: 'TimeoutError', message: secret }, 'timeout', null, null],
+    [{ code: 'CERT_HAS_EXPIRED', message: secret }, 'tls', null, null],
+    [{ code: 'ERR_MODULE_NOT_FOUND', message: secret }, 'dependency', null, null],
+    [{ name: secret, $metadata: { httpStatusCode: 503 }, message: secret }, 'service', 503, null],
+    [{ name: secret, $metadata: { httpStatusCode: '403' }, message: secret }, 'unexpected', null, null],
+    [{ get name() { throw Error(secret); }, get $metadata() { throw Error(secret); }, message: secret }, 'unexpected', null, null],
+  ]) {
+    const io = await createPointerS3({ STAGING_R2_ACCOUNT_ID: ACCOUNT }, { send: async () => { throw error; } },
+      { GetObjectCommand: Command, PutObjectCommand: Command });
+    for (const operation of [() => io.get(windController.POINTER_KEY), () => io.put(Buffer.from('{}'), null)]) {
+      await assert.rejects(operation(), wrapped => {
+        const diagnostic = windController.preflightFailureDiagnostic(wrapped, { phase: 'selected-input' }, 'a'.repeat(64));
+        assert.equal(diagnostic.category, category); assert.equal(diagnostic.httpStatus, status);
+        assert.equal(diagnostic.serviceCode, serviceCode); assert.equal(diagnostic.phase, 'selected-input');
+        assert.ok(!JSON.stringify(diagnostic).includes(secret)); return true;
+      });
+    }
+  }
+  const io = await createPointerS3({ STAGING_R2_ACCOUNT_ID: ACCOUNT }, { send: async command => {
+    throw { $metadata: { httpStatusCode: command.input.Body ? 412 : 404 } };
+  } }, { GetObjectCommand: Command, PutObjectCommand: Command });
+  assert.equal(await io.get(windController.POINTER_KEY), null);
+  assert.equal(await io.put(Buffer.from('{}'), null), false);
+  await assert.rejects(io.get('catalogs/current.json'));
+  const diagnostic = windController.preflightFailureDiagnostic({ message: secret, stack: secret }, { phase: secret }, secret);
+  assert.equal(diagnostic.phase, 'unknown');assert.equal(diagnostic.controllerSha256, null);
+  assert.ok(!JSON.stringify(diagnostic).includes(secret));
+});
+
+test('preflight CLI emits and privately retains a safe phase diagnostic and remains nonzero on refusal', t => {
+  const root = mkdtempSync(resolve(tmpdir(), 'weatherx-preflight-diagnostic-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  try {
+    execFileSync(process.execPath, [new URL('../tools/staging-wind100.mjs', import.meta.url).pathname, 'preflight'],
+      { env: { PATH: process.env.PATH, RUNNER_TEMP: root }, encoding: 'utf8', stdio: 'pipe' });
+    assert.fail('preflight must refuse');
+  } catch (error) {
+    assert.equal(error.status, 1);
+    const lines = error.stderr.trim().split('\n');
+    const diagnostic = JSON.parse(lines[0].slice('Staging wind100 diagnostic '.length));
+    assert.equal(diagnostic.operation, 'preflight'); assert.equal(diagnostic.phase, 'gate');
+    assert.equal(diagnostic.category, 'contract');
+    assert.equal(lines.at(-1), 'Staging wind100 refused; no serving pointer or production object changed.');
+    const path = resolve(root, 'staging-wind100/preflight-failure.json');
+    assert.deepEqual(JSON.parse(readFileSync(path)), diagnostic);
+    assert.equal(lstatSync(path).mode & 0o777, 0o600);assert.ok(lstatSync(path).size < 2048);
+  }
+});
 
 const MISSING = -32768;
 const FIELDS = [

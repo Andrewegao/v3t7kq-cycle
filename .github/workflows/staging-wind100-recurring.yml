@@ -146,7 +146,9 @@ jobs:
           STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
-          result="$(node cycle/tools/staging-wind100.mjs preflight "$GITHUB_WORKSPACE/atmos")"
+          mkdir -p "$RUNNER_TEMP/staging-wind100"
+          node cycle/tools/staging-wind100.mjs preflight "$GITHUB_WORKSPACE/atmos" > "$RUNNER_TEMP/staging-wind100/preflight.json"
+          result="$(cat "$RUNNER_TEMP/staging-wind100/preflight.json")"
           status="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).status)' "$result")"
           echo "status=$status" >> "$GITHUB_OUTPUT"
           echo "$result"
@@ -219,5 +221,25 @@ jobs:
             weatherx-wind100-point-component.json "$GITHUB_WORKSPACE/atmos" \
             > "$RUNNER_TEMP/weatherx-wind100-selection.json"
           node cycle/tools/staging-wind100.mjs activate weatherx-wind100-selection.json "$GITHUB_WORKSPACE/atmos"
+      - name: Summarize staging preflight outcome
+        if: ${{ always() && inputs.check_only != true && steps.opt_in.outputs.enabled == 'true' }}
+        env:
+          PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
+          PREFLIGHT_STATUS: ${{ steps.preflight.outputs.status }}
+        run: |
+          printf 'Wind100 preflight outcome: %s; selected-input status: %s\n' "$PREFLIGHT_OUTCOME" "${PREFLIGHT_STATUS:-unknown}" >> "$GITHUB_STEP_SUMMARY"
+          if [ -s "$RUNNER_TEMP/staging-wind100/preflight-failure.json" ]; then
+            cat "$RUNNER_TEMP/staging-wind100/preflight-failure.json" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Retain bounded staging preflight diagnostics
+        if: ${{ always() && inputs.check_only != true && steps.opt_in.outputs.enabled == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: staging-wind100-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/staging-wind100/preflight.json
+            ${{ runner.temp }}/staging-wind100/preflight-failure.json
+          if-no-files-found: ignore
+          retention-days: 14
 # This reusable workflow needs one `needs: core-ecmwf` call from bake.yml. It never
 # addresses production storage, deploys a Worker/UI, or writes a shared catalog pointer.
