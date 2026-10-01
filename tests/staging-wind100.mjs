@@ -156,7 +156,7 @@ test('input identity covers only authenticated point-stage bytes and ignores reg
   assert.notEqual(sealedPointInputSha(first), sealedPointInputSha(second));
 });
 
-test('pointer activation verifies immutable selection/catalog and retries one CAS conflict', async () => {
+test('pointer activation verifies immutable selection/catalog and retries one CAS conflict', async t => {
   const selection = { schemaVersion: 1, kind: 'weatherx-staging-native-wind100-selection',
     status: 'DATA_QUALIFIED_NOT_ACTIVATED', targetOrigin: 'https://staging.weatherx.org', model: MODEL,
     runId: '2026091112', catalogId: 'stage-wind100-recurring-1234-1', catalogSha256: '', sourceSha: SOURCE_SHA,
@@ -179,20 +179,21 @@ test('pointer activation verifies immutable selection/catalog and retries one CA
   const catalogBody = encode(catalog); selection.catalogSha256 = hash(catalogBody);
   const selectionBody = encode(selection), selectionSha256 = hash(selectionBody);
   assert.throws(() => pointerEntry({ ...selection, catalogId: 'stage-wind100-1234-1' }, selectionSha256));
-  let pointerBody = null, conflicts = 1;
+  let pointerBody = null, conflicts = 1, writes = 0;
   const io = {
     async get(key) {
       if (key.endsWith('/selection.json')) return { body: selectionBody };
       if (key.startsWith('catalogs/snapshots/')) return { body: catalogBody };
       return pointerBody == null ? null : { body: pointerBody, etag: 'etag-1' };
     },
-    async put(body) { if (conflicts-- > 0) return false; pointerBody = body; return true; },
+    async put(body) { writes++; if (conflicts-- > 0) return false; pointerBody = body; return true; },
   };
   const pointer = await activateCandidate({ selection, selectionSha256, io, now: () => Date.parse('2026-09-11T20:00:00Z'),
     catalogValidator: value => JSON.stringify(value) === JSON.stringify(catalog) });
   assert.equal(conflicts, -1); assert.equal(pointer.entries[0].inputSha256, selection.inputSha256);
   const unchanged = await findQualifiedInput({ runId: selection.runId, inputSha256: selection.inputSha256,
-    io, catalogValidator: value => JSON.stringify(value) === JSON.stringify(catalog) });
+    io, now: () => Date.parse('2026-09-11T20:00:00Z'),
+    catalogValidator: value => JSON.stringify(value) === JSON.stringify(catalog) });
   assert.equal(unchanged.status, 'unchanged'); assert.equal(unchanged.catalogId, selection.catalogId);
   const upgradedSource = await findQualifiedInput({ runId: selection.runId, inputSha256: selection.inputSha256,
     sourceSha: '9'.repeat(40), io, catalogValidator: () => true });
@@ -202,6 +203,35 @@ test('pointer activation verifies immutable selection/catalog and retries one CA
     now: () => Date.parse('2026-09-11T20:00:01Z'), catalogValidator: value => JSON.stringify(value) === JSON.stringify(catalog) });
   assert.equal(replaced.entries.length, 1);
   assert.equal(replaced.entries[0].sourceSha, SOURCE_SHA);
+  const expiry = Date.parse(selection.freshUntil), before = Buffer.from(pointerBody), writesBefore = writes;
+  const preflight = (now, catalogValidator = () => true) => findQualifiedInput({
+    runId: selection.runId, inputSha256: selection.inputSha256, io, now, catalogValidator,
+  });
+  await t.test('same-input preflight preserves the source expiry before its boundary', async () => {
+    const healthy = await preflight(() => expiry - 1);
+    assert.equal(healthy.status, 'unchanged'); assert.equal(healthy.freshUntil, selection.freshUntil);
+  });
+  for (const clock of [expiry, expiry + 1]) {
+    await t.test(`same-input preflight refuses expired source at ${clock}`, async () => {
+      await assert.rejects(preflight(() => clock), /expired/);
+    });
+  }
+  await t.test('same-input preflight refuses non-finite clocks', async () => {
+    for (const clock of [NaN, Infinity, -Infinity]) await assert.rejects(preflight(() => clock), /clock/);
+  });
+  await t.test('same-input preflight rechecks expiry after awaited catalog validation', async () => {
+    let clock = expiry - 1;
+    const delayedIo = { ...io, async get(key) {
+      const object = await io.get(key);
+      if (key.startsWith('catalogs/snapshots/')) clock = expiry;
+      return object;
+    } };
+    let validated = false;
+    await assert.rejects(findQualifiedInput({ runId: selection.runId, inputSha256: selection.inputSha256,
+      io: delayedIo, now: () => clock, catalogValidator: () => { validated = true; return true; } }), /expired/);
+    assert.equal(validated, true);
+  });
+  assert.deepEqual(pointerBody, before); assert.equal(writes, writesBefore);
 });
 
 test('recurring preflight never treats a legacy paired selection as unchanged', async () => {

@@ -114,6 +114,38 @@ test('a following staging serves exactly production current from the shared sour
   assert.deepEqual(receipt.staging,{releaseId:'cycle-100',catalogId:'90-abc',point:{releaseId:'cycle-100',catalogId:null,dataSource:'shared',runId:'2026090400',quality:'complete',freshUntil:'2026-09-05T00:00:00Z'}});
 });
 
+test('ordinary point freshness independently rejects expired or malformed complete points',async()=>{
+  const prod=productionCurrent(production().io);
+  const staging=await stagingServing(stagingSite().fetcher,now);
+  for(const freshUntil of [new Date(now-1).toISOString(),'invalid',undefined,null]){
+    const expired={...staging,point:{...staging.point,freshUntil}};
+    assert.equal(expired.point.quality,'complete');
+    assert.throws(()=>assertFollowing(prod,expired,now),/freshness/);
+  }
+  for(const clock of [NaN,Infinity,-Infinity])assert.throws(()=>assertFollowing(prod,staging,clock),/clock/);
+});
+test('ordinary point freshness preserves the Worker equality boundary and partial quality',async()=>{
+  const prod=productionCurrent(production().io),staging=await stagingServing(stagingSite().fetcher,now);
+  for(const delta of [0,1])for(const quality of ['complete','partial']){
+    const point={...staging.point,quality,freshUntil:new Date(now+delta).toISOString()};
+    assert.equal(assertFollowing(prod,{...staging,point},now).staging.point.freshUntil,point.freshUntil);
+  }
+});
+test('ordinary point freshness uses the final clock after response body consumption',async()=>{
+  const prod=productionCurrent(production().io),site=stagingSite();
+  const expiry=Date.parse('2026-09-05T00:00:00Z');let clock=expiry-1;
+  const fetcher=async(url,init)=>{
+    const response=await site.fetcher(url,init);
+    if(new URL(url).pathname!=='/api/v1/point-series/ecmwf')return response;
+    const bytes=new Uint8Array(await response.arrayBuffer());
+    return new Response(new ReadableStream({pull(controller){clock=expiry+1;controller.enqueue(bytes);controller.close();}}),
+      {headers:response.headers});
+  };
+  const staging=await stagingServing(fetcher,()=>clock);
+  assert.equal(staging.point.quality,'complete');assert.equal(clock,expiry+1);
+  assert.throws(()=>assertFollowing(prod,staging,clock),/freshness/);
+});
+
 function windSite({selectorPatch={},pointPatch={},headersPatch={},status=200,afterPoint=()=>{}}={}){
   const base=stagingSite();
   const initializedAt='2026-09-04T00:00:00.000Z',freshUntil='2026-09-05T06:00:00.000Z';
