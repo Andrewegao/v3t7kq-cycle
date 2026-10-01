@@ -145,10 +145,12 @@ export async function stagingServing(fetcher=fetch,now=Date.now,{wind100Enabled=
   const component=await publicResponse(fetcher,'/data/ecmwf/index.json','HEAD');
   const start=new Date(Math.floor(clock()/HOUR)*HOUR).toISOString(),end=new Date(Date.parse(start)+6*HOUR).toISOString();
   const query=new URLSearchParams({lat:'35',lon:'104',variables:'temperature',start,end});
-  const point=JSON.parse((await publicResponse(fetcher,`/api/v1/point-series/ecmwf?${query}`)).body.toString('utf8'));
+  const pointResponse=await publicResponse(fetcher,`/api/v1/point-series/ecmwf?${query}`);
+  const point=JSON.parse(pointResponse.body.toString('utf8'));
   return {health,releaseId:whole.headers.get('x-weatherx-release'),catalogId:component.headers.get('x-weatherx-catalog'),
     dataSources:[whole.headers.get('x-weatherx-data-source'),component.headers.get('x-weatherx-data-source')],
-    point:{releaseId:point.releaseId,runId:point.runId,quality:point.quality,freshUntil:point.freshUntil},
+    point:{releaseId:point.releaseId,catalogId:pointResponse.headers.get('x-weatherx-catalog'),
+      dataSource:pointResponse.headers.get('x-weatherx-data-source'),runId:point.runId,quality:point.quality,freshUntil:point.freshUntil},
     ...(wind100Enabled?{wind100:await probeWind100(fetcher,clock,onPhase)}:{})};
 }
 
@@ -167,7 +169,13 @@ export function assertFollowing(production,staging,now=Date.now()){
   const expected={releaseId:pin?.releaseId??production.releaseId,catalogId:pin?.catalogId??production.catalogId};
   assert.equal(staging.releaseId,expected.releaseId,pin?'staging does not serve the pinned release':'staging lags production release');
   assert.equal(staging.catalogId,expected.catalogId,pin?'staging does not serve the pinned catalog':'staging lags production catalog');
-  assert.equal(staging.point.releaseId,staging.releaseId,'point series and map release differ');
+  assert.equal(staging.point.dataSource,'shared','staging point data did not use the shared source');
+  if(staging.point.catalogId!==null){
+    assert.equal(staging.point.catalogId,staging.catalogId,'point series and map catalog differ');
+    assert.equal(staging.point.releaseId,staging.point.catalogId,'point body and catalog header differ');
+  }else{
+    assert.equal(staging.point.releaseId,staging.releaseId,'legacy point series and whole release differ');
+  }
   assert.notEqual(staging.point.quality,'stale','staging point data is stale');
   if(staging.wind100)windFreshness(staging.wind100,now);
   return {schemaVersion:1,kind:'weatherx-staging-shared-read-probe',origin:STAGING_ORIGIN,production,staging:{releaseId:staging.releaseId,catalogId:staging.catalogId,point:staging.point,
