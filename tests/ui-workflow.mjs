@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CONTROL_SHA, STAGING_CONTROL_SHA } from '../tools/ui-candidate.mjs';
 const root=new URL('../',import.meta.url);
-const COMBINED_ATMOS_SHA='d23f65d7916d2a0ad5aebaccdfc1eb3fdc506adb';
+const COMBINED_ATMOS_SHA='8b2aa22066ecbf736ff3aa133d0c4bf7f332eaad';
 const BETA_ATMOS_SHA='b9db38dd22eed1da56c6c4dd4140480da7e89153';
 const read=p=>readFileSync(new URL(p,root),'utf8');
 const staging=read('.github/workflows/ui-staging.yml'), prod=read('.github/workflows/ui-release.yml'), source=read('tools/ui-release.mjs'), candidate=read('tools/ui-candidate.mjs');
