@@ -56,7 +56,7 @@ export const PUBLIC_COMBINED_ONBOARDING_SOURCES = Object.freeze({
   'onboarding/useObData.ts': '84696745e68d6c2a5b927439183751e53a3cd65604b619833899e1741ee936b3',
 });
 export const PUBLIC_COMBINED_SIDECAR = 'assets/weatherx-production-account-build-v1.json';
-export const PUBLIC_COMBINED_ATMOS_SHA = 'd23f65d7916d2a0ad5aebaccdfc1eb3fdc506adb';
+export const PUBLIC_COMBINED_ATMOS_SHA = '8b2aa22066ecbf736ff3aa133d0c4bf7f332eaad';
 
 export function assertPublicCombinedReady() {
   assert.match(PUBLIC_COMBINED_ATMOS_SHA, /^[a-f0-9]{40}$/);
