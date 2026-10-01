@@ -1624,7 +1624,7 @@ export async function activateCandidate({ selection, selectionSha256, io, now = 
 }
 
 export async function findQualifiedInput({ runId, inputSha256, sourceSha, io, policy = readPolicy(),
-  catalogValidator = () => true }) {
+  catalogValidator = () => true, now = Date.now }) {
   sourceSha ??= policy.sourceSha;
   assert.match(runId ?? '', RUN); assert.match(inputSha256 ?? '', SHA); assert.match(sourceSha ?? '', COMMIT);
   const saved = await io.get(POINTER_KEY, MAX_POINTER_BYTES);
@@ -1644,6 +1644,9 @@ export async function findQualifiedInput({ runId, inputSha256, sourceSha, io, po
   const catalogObject = await io.get(`catalogs/snapshots/${entry.catalogId}.json`, MAX_JSON_BYTES);
   assert.ok(catalogObject && hash(catalogObject.body) === entry.catalogSha256);
   validateSelectedCatalog(selection, JSON.parse(catalogObject.body), catalogValidator);
+  const checkedAt = now();
+  assert.ok(Number.isFinite(checkedAt), 'Wind100 preflight clock is invalid');
+  assert.ok(finiteTime(entry.freshUntil, 'wind100 expiry') > checkedAt, 'Wind100 source has expired');
   return { status: 'unchanged', runId, inputSha256, freshUntil: entry.freshUntil,
     catalogId: entry.catalogId, selectionSha256: entry.selectionSha256 };
 }
