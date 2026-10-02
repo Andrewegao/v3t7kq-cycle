@@ -1,18 +1,23 @@
 // Immutable reviewed Search V4 producer. A separately protected exact UI source SHA identifies
 // the deployed shell; that commit must descend from this producer and preserve this reader closure.
 export const ATMOS_SHA = 'dfa25e9f473f15d5e2f630fe78c268b73234bd3a';
+// Exact SF reader/normalization pins; see the bounded dependency review record.
 export const SEARCH_V4_READER_CLOSURE = Object.freeze({
-  'app/src/chrome/Search.tsx': 'ccc1d445d69cebc9494444f43491d79ab3633d1fb8c73ba149ef0f9b991f701e',
-  'app/src/chrome/searchIndex.ts': '6a3fcfdca59107060e59380ce1b5fc26bc56a200d13634698db3ee08be3f9400',
-  'app/src/chrome/searchCompose.ts': 'f5892709df1c93acc608f71be1bb534e8bc9bac5e0708493bc5315a7933297f3',
-  'app/src/chrome/searchNormalize.ts': '08a7619586b832a532a4465436f0d06400b309db9a5aac3ee2409441d85f8b5c',
-  'app/src/chrome/searchIntent.ts': '06daf588a5cf65c8c4981eac5395d3700b9043967338f8fa2f72e939d5517595',
-  'app/src/chrome/searchShape.ts': '014802f8bb9f00bc662899384c85e22c1c5e1b51940501e14272bcce4490fc9e',
+  'app/src/chrome/Search.tsx': '69aaa185ac45f0f9d699c23b764927eb9a6c2f424902c890e32820fa977da4dc',
+  'app/src/chrome/searchIndex.ts': '071b6c483256304729a1e7d5a3d3fdaa6ddfc4470cf01181ac2b98d796365165',
+  'app/src/chrome/searchCompose.ts': '96f09ee1315c1fc4f6d34d9f4d4b96e1909c4ac7dc513039014d25232e395cd4',
+  'app/src/chrome/searchNormalize.ts': 'c9f10f833bee37efec00764fa74797da979077b80ba412edb17c007bc1da56ec',
+  'app/src/chrome/searchIntent.ts': '7cb2df1a5eeb8239e500225555cf51725e33ff536db6229fb2feffc5c3fc90f1',
+  'app/src/chrome/searchShape.ts': 'b90b863519c0cb73abde4c00296a6b37d411d01ed6632bd4711850abdb97737c',
   'app/src/chrome/searchLedger.ts': '77c088ec01def39e24024f60130b6ed5e4887b802d25906022fe687385bedbc1',
-  // Search.tsx moved its formerly inline place/layer source functions here. Keep the extraction
-  // inside the exact boundary so a later source-only edit cannot bypass reader review.
-  'app/src/chrome/searchSources.ts': '06dcd924ad857c32a027a02dfd735d6a33eb77d6398b3ee4daae4640437e1c38',
-  'app/src/data/gazetteer.ts': '095c2ad3c8a46154a52e777285c82cd332859bc162c6c646be771de48586b128',
-  'app/src/lib/boundedResponse.ts': '5260d0cc1035b1f350f321bd91e17af9ddd097cb556c49986f3a545245fa40c2',
+  'app/src/chrome/searchSources.ts': '8d1452181ebc9a4972341f6774975835239f7490b295fa8df8519ae2d2a0a813',
+  'app/src/data/gazetteer.ts': '6be88846dea87a7c2cb9dadaa9bbea8be2ac0d6a590a0b9e7848d73ba77243ea',
+  'app/src/lib/boundedResponse.ts': 'cc63fdc6187f78752283703b61cc6bb0edde820c86d2b46b3ab8b4066e88acb6',
+  'app/src/chrome/searchCoords.ts': '9a44ac34f5335d9e4f2ecf036f745b670aa9dccffb79b441192e4285c55b1e0e',
+  'app/src/chrome/searchMessages.ts': '53f8d81ddc7e41f352288894b1a9e8bb0f33e0947802c125ecaec9c472dbce5a',
+  'app/src/i18n/localeRegistry.ts': '753b0d6901209ecc3f67b0b2cc701c108d72092ed387feb33f13422131884ab8',
+  'app/src/i18n/names.ts': '58825d3d85a6ffe9d639781721a6a3f15796bc524d29b9fc965b5a60925292c6',
+  'app/src/i18n/kazakhCountryNames.ts': 'c2dd4393720ab6e9bc8d7178573959e4497d75172a719c25efe712d7cad58077',
+  'app/src/i18n/runtime.ts': 'a2a934e868c893084f67d066204c97bf22a42096f27d4cc7d8800b58d33c859d',
 });
 export const STAGING_ORIGIN = 'https://staging.weatherx.org';
