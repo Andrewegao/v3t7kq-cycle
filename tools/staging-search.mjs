@@ -115,6 +115,12 @@ function validWind100Run(runId) {
 }
 
 function validStagingBuildProfile(value) {
+  const combined = { product: 'lab', platformAccount: '1', platformDataAuth: 'public',
+    accountRelease: 'production-account-billing-v1', wind100: 'production-native-dynamic-v2',
+    localeBeta: 'ru-kk-public-beta-v1' };
+  if (exact(value, Object.keys(combined))) {
+    return Object.entries(combined).every(([key, expected]) => value[key] === expected);
+  }
   const base = ['product', 'platformAccount', 'platformDataAuth'];
   if (!object(value) || !exact(value, Object.hasOwn(value, 'wind100') ? [...base, 'wind100'] : base) ||
       value.product !== 'lab' || value.platformAccount !== '1' || value.platformDataAuth !== 'public') return false;
