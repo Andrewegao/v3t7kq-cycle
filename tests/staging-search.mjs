@@ -226,8 +226,7 @@ test('gate refuses local/unreviewed execution, foreign credentials and weather w
     `staging-candidates/${'a'.repeat(64)}/search/../weather.json`]) assert.throws(() => allowedSearchKey(path));
 });
 
-test('V4 source proof binds the reviewed SF sixteen-file reader closure', () => {
-  assert.deepEqual(SEARCH_V4_READER_CLOSURE, {
+const HISTORICAL_SF_CLOSURE = {
     'app/src/chrome/Search.tsx': '69aaa185ac45f0f9d699c23b764927eb9a6c2f424902c890e32820fa977da4dc',
     'app/src/chrome/searchIndex.ts': '071b6c483256304729a1e7d5a3d3fdaa6ddfc4470cf01181ac2b98d796365165',
     'app/src/chrome/searchCompose.ts': '96f09ee1315c1fc4f6d34d9f4d4b96e1909c4ac7dc513039014d25232e395cd4',
@@ -244,12 +243,36 @@ test('V4 source proof binds the reviewed SF sixteen-file reader closure', () => 
     'app/src/i18n/names.ts': '58825d3d85a6ffe9d639781721a6a3f15796bc524d29b9fc965b5a60925292c6',
     'app/src/i18n/kazakhCountryNames.ts': 'c2dd4393720ab6e9bc8d7178573959e4497d75172a719c25efe712d7cad58077',
     'app/src/i18n/runtime.ts': 'a2a934e868c893084f67d066204c97bf22a42096f27d4cc7d8800b58d33c859d',
+};
+
+test('V4 source proof binds the reviewed f265 twenty-file reader closure', () => {
+  assert.deepEqual(SEARCH_V4_READER_CLOSURE, {
+    'app/src/chrome/Search.tsx': '69aaa185ac45f0f9d699c23b764927eb9a6c2f424902c890e32820fa977da4dc',
+    'app/src/chrome/searchIndex.ts': '071b6c483256304729a1e7d5a3d3fdaa6ddfc4470cf01181ac2b98d796365165',
+    'app/src/chrome/searchCompose.ts': '96f09ee1315c1fc4f6d34d9f4d4b96e1909c4ac7dc513039014d25232e395cd4',
+    'app/src/chrome/searchNormalize.ts': 'c9f10f833bee37efec00764fa74797da979077b80ba412edb17c007bc1da56ec',
+    'app/src/chrome/searchIntent.ts': '7cb2df1a5eeb8239e500225555cf51725e33ff536db6229fb2feffc5c3fc90f1',
+    'app/src/chrome/searchShape.ts': 'b90b863519c0cb73abde4c00296a6b37d411d01ed6632bd4711850abdb97737c',
+    'app/src/chrome/searchLedger.ts': '77c088ec01def39e24024f60130b6ed5e4887b802d25906022fe687385bedbc1',
+    'app/src/chrome/searchSources.ts': '8d1452181ebc9a4972341f6774975835239f7490b295fa8df8519ae2d2a0a813',
+    'app/src/data/gazetteer.ts': 'f4e83093d3ce6a1c68346bc86995a0585b3222cc7a774e7fd369a62228e390d2',
+    'app/src/lib/boundedResponse.ts': 'cc63fdc6187f78752283703b61cc6bb0edde820c86d2b46b3ab8b4066e88acb6',
+    'app/src/chrome/searchCoords.ts': '9a44ac34f5335d9e4f2ecf036f745b670aa9dccffb79b441192e4285c55b1e0e',
+    'app/src/chrome/searchMessages.ts': '53f8d81ddc7e41f352288894b1a9e8bb0f33e0947802c125ecaec9c472dbce5a',
+    'app/src/i18n/localeRegistry.ts': '753b0d6901209ecc3f67b0b2cc701c108d72092ed387feb33f13422131884ab8',
+    'app/src/i18n/names.ts': '58825d3d85a6ffe9d639781721a6a3f15796bc524d29b9fc965b5a60925292c6',
+    'app/src/i18n/kazakhCountryNames.ts': 'c2dd4393720ab6e9bc8d7178573959e4497d75172a719c25efe712d7cad58077',
+    'app/src/i18n/runtime.ts': 'a2a934e868c893084f67d066204c97bf22a42096f27d4cc7d8800b58d33c859d',
+    'app/src/data/gazetteerCompact.ts': '07934a0eceafb2c9053827892705974cac9c7ab28d3253c3c51950d6f166a1c8',
+    'app/src/build/gazetteerAssets.ts': '1518a4baa5e3a281d6cab184a6b7193d5365edf72bf0c84aee5455588ffc4d20',
+    'app/src/engine/warm.ts': '30cef6a09c4bfc5f0bae73d1afc0d977d4d4ec6cb77f0e76d8f5d06cdd42a74a',
+    'app/vite.config.ts': '5a302ff0e653db4648a8d84e46e8b254c41e255a66783afa2d2bdb2f4157e8e9',
   });
   const env = { STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA: UI_SHA };
   const evidence = { head: UI_SHA, clean: true, includesSearchV4Base: true,
     files: { ...SEARCH_V4_READER_CLOSURE } };
   assert.deepEqual(validateV4SourceEvidence(env, evidence), {
-    uiSourceSha: UI_SHA, searchV4BaseSha: ATMOS_SHA, files: 16,
+    uiSourceSha: UI_SHA, searchV4BaseSha: ATMOS_SHA, files: 20,
   });
   for (const mutate of [
     value => { value.head = ATMOS_SHA; },
@@ -304,13 +327,41 @@ test('SF operator record preserves bounded review and separate recovery authorit
   assert.ok(review.includes('8b2aa22066ecbf736ff3aa133d0c4bf7f332eaad'));
   assert.ok(review.includes('fac2fc164420d4d31870a410c9a877d16ad76fb0'));
   assert.ok(review.includes(ATMOS_SHA));
-  for (const [path, digest] of Object.entries(SEARCH_V4_READER_CLOSURE)) {
+  for (const [path, digest] of Object.entries(HISTORICAL_SF_CLOSURE)) {
     assert.ok(review.includes(`\`${path}\``), `SF record omits ${path}`);
     assert.ok(review.includes(`\`${digest}\``), `SF record omits ${path} digest`);
   }
   assert.match(review, /not a full transitive UI review/);
   assert.match(review, /expired pointer cannot be revived by renewal/);
   assert.match(review, /preview or reconstructed pointer hash is not publication authorization/);
+});
+
+test('old SF reader bytes cannot be relabeled as the reviewed f265 closure', () => {
+  const env = { STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA: UI_SHA };
+  const evidence = { head: UI_SHA, clean: true, includesSearchV4Base: true,
+    files: { ...HISTORICAL_SF_CLOSURE } };
+  assert.throws(() => validateV4SourceEvidence(env, evidence), /reader closure differs/);
+  const oldGazetteer = { ...evidence, files: { ...SEARCH_V4_READER_CLOSURE,
+    'app/src/data/gazetteer.ts': HISTORICAL_SF_CLOSURE['app/src/data/gazetteer.ts'] } };
+  assert.throws(() => validateV4SourceEvidence(env, oldGazetteer), /reader closure differs/);
+  const exactBytes = { ...evidence, files: { ...SEARCH_V4_READER_CLOSURE } };
+  assert.throws(() => validateV4SourceEvidence({}, exactBytes), /exact protected/);
+  assert.throws(() => validateV4SourceEvidence({ STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA: 'a'.repeat(40) },
+    exactBytes), /differs from protected approval/);
+});
+
+test('f265 operator record pins dependencies without inventing a final source approval', () => {
+  const review = readFileSync(new URL('../docs/staging-search-reader-review-f265ed18b352.md', import.meta.url), 'utf8');
+  assert.match(review, /preparation only/i);
+  assert.ok(review.includes('f265ed18b3527e6b65fa4b0e7e446f61cdaf8051'));
+  assert.ok(review.includes(ATMOS_SHA));
+  for (const [path, digest] of Object.entries(SEARCH_V4_READER_CLOSURE)) {
+    assert.ok(review.includes(`\`${path}\``), `f265 record omits ${path}`);
+    assert.ok(review.includes(`\`${digest}\``), `f265 record omits ${path} digest`);
+  }
+  assert.match(review, /final S2 SHA is unknown/i);
+  assert.match(review, /not a full transitive UI review/);
+  assert.match(review, /expired pointer cannot be revived by renewal/);
 });
 
 test('source filesystem boundary refuses symlink and oversized added dependencies', () => {
@@ -328,14 +379,19 @@ test('source filesystem boundary refuses symlink and oversized added dependencie
       assert.equal(args[0], 'rev-parse');
       return args[1] === 'HEAD' ? UI_SHA : root;
     };
-    const added = join(root, 'app/src/chrome/searchCoords.ts');
     const target = join(root, 'fixture-target'); writeFileSync(target, 'bounded fixture');
-    rmSync(added); symlinkSync(target, added);
-    assert.throws(() => verifyV4Source(root, env, run), /without symlinks/);
-    rmSync(added); writeFileSync(added, Buffer.alloc(2 * 1024 * 1024 + 1));
-    assert.throws(() => verifyV4Source(root, env, run), /bounded regular file/);
-    rmSync(added);
-    assert.throws(() => verifyV4Source(root, env, run), { code: 'ENOENT' });
+    for (const path of ['app/src/chrome/searchCoords.ts',
+      'app/src/data/gazetteerCompact.ts', 'app/src/build/gazetteerAssets.ts',
+      'app/src/engine/warm.ts', 'app/vite.config.ts']) {
+      const added = join(root, path);
+      rmSync(added); symlinkSync(target, added);
+      assert.throws(() => verifyV4Source(root, env, run), /without symlinks/);
+      rmSync(added); writeFileSync(added, Buffer.alloc(2 * 1024 * 1024 + 1));
+      assert.throws(() => verifyV4Source(root, env, run), /bounded regular file/);
+      rmSync(added);
+      assert.throws(() => verifyV4Source(root, env, run), { code: 'ENOENT' });
+      writeFileSync(added, 'bounded fixture');
+    }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -445,6 +501,35 @@ test('renewal revalidates approved live bytes without changing source provenance
   assert.equal(renewed.pointer.expiresAt, new Date(now + 25 * 3600000).toISOString());
   assert.deepEqual(renewed.pointer.files, first.pointer.files);
   assert.deepEqual(io.objects.get(`staging-candidates/${c.candidateId}/search/core.json`).body, f['core.json']);
+});
+
+test('new source closure leaves current exact SF live renewal unchanged', async () => {
+  const io = memory(), c = await prepareSearch(io, files()), now = Date.parse(time);
+  await activateSearch(io, { candidateId: c.candidateId, expectedPointerSha256: 'absent',
+    now, ensureV2Compatible: v2Ready });
+  const sourceSha = '8b2aa22066ecbf736ff3aa133d0c4bf7f332eaad';
+  const releaseId = 'git-8b2aa22066ec-run-36939608182';
+  const html = Buffer.from('<!doctype html><title>SF renewal fixture</title>');
+  const env = { STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA: sourceSha,
+    STAGING_SEARCH_V4_APPROVED_RELEASE_ID: releaseId };
+  const receipt = { gitSha: sourceSha, releaseId, shellSha256: 'b'.repeat(64), indexSha256: hash(html),
+    buildProfile: { product: 'lab', platformAccount: '1', platformDataAuth: 'public',
+      accountRelease: 'production-account-billing-v1', wind100: 'production-native-dynamic-v2',
+      localeBeta: 'ru-kk-public-beta-v1' } };
+  const fetcher = async (url, init) => {
+    assert.equal(init.credentials, 'omit'); assert.equal(init.redirect, 'error');
+    if (url === `${STAGING_ORIGIN}/health/release.json?search_v4_compatibility=1`) return Response.json(receipt);
+    assert.equal(url, `${STAGING_ORIGIN}/?search_v4_compatibility=1`);
+    return new Response(html, { headers: { 'content-type': 'text/html' } });
+  };
+  const renewed = await renewSearch(io, { approvedCandidateId: c.candidateId,
+    clock: () => now + 3600000, ensureV2Compatible: () => verifyV4Staging(env, fetcher) });
+  assert.equal(renewed.pointer.candidateId, c.candidateId);
+  const writes = io.writes.length;
+  receipt.gitSha = 'd'.repeat(40); // unrelated future UI fixture, not an inferred S2 identity
+  await assert.rejects(renewSearch(io, { approvedCandidateId: c.candidateId,
+    clock: () => now + 3600001, ensureV2Compatible: () => verifyV4Staging(env, fetcher) }));
+  assert.equal(io.writes.length, writes);
 });
 
 test('V2 renewal never restores a candidate after exact UI compatibility is withdrawn', async () => {
