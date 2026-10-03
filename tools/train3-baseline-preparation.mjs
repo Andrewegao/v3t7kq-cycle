@@ -5,6 +5,7 @@ import { Transform } from 'node:stream';
 import { lstat, mkdir, readFile, rename, rm, statfs, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 
 export const ACCOUNT = 'a89f9a1af485021fbc60a68b163c7c6e';
 export const DATA = 'weatherx-data-production', COMPONENTS = 'weatherx-components-production';
@@ -17,7 +18,55 @@ export const LIMITS = Object.freeze({ metadata: 32 * 1024 ** 2, plan: 48 * 1024 
   inventoryRequests: 200, exportRequests: 25_100, milliseconds: 43 * 60_000 });
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/, HEX = /^[a-f0-9]{64}$/;
 export const hash = value => createHash('sha256').update(value).digest('hex');
-const check = (ok, code) => { if (!ok) throw new Error(code); };
+const localErrors = new WeakMap(), failureRecords = new WeakMap();
+const refusal = code => { const error = new Error(code); localErrors.set(error, code); return error; };
+const check = (ok, code) => { if (!ok) throw refusal(code); };
+const PHASES = new Set(['gate', 'scratch-admission', 'plan-admission', 'reader-init', 'pointer-before',
+  'snapshot', 'component-manifest', 'component-list', 'pointer-after', 'export-payload', 'output-finalization', 'cleanup']);
+const SDK_NAMES = new Set(['AccessDenied', 'NoSuchKey', 'NoSuchBucket', 'InvalidAccessKeyId',
+  'SignatureDoesNotMatch', 'ExpiredToken', 'SlowDown', 'TimeoutError', 'AbortError', 'RequestTimeout']);
+const TRANSPORT_CODES = new Set(['ETIMEDOUT', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED']);
+const FILE_CODES = new Set(['EACCES', 'EPERM', 'ENOSPC', 'EMFILE', 'ENOENT']);
+const own = (value, key) => { try { return value && Object.getOwnPropertyDescriptor(value, key)?.value; } catch { return undefined; } };
+const count = (value, maximum) => Number.isSafeInteger(value) && value >= 0 && value <= maximum ? value : null;
+function diagnostic(error, context) {
+  const localCode = localErrors.get(error) ?? null, name = own(error, 'name'), code = own(error, 'code');
+  const http = own(own(error, '$metadata'), 'httpStatusCode');
+  const httpStatus = Number.isInteger(http) && http >= 100 && http <= 599 ? http : null;
+  const sdkName = SDK_NAMES.has(name) ? name : null;
+  const transportCode = TRANSPORT_CODES.has(code) ? code : null, filesystemCode = FILE_CODES.has(code) ? code : null;
+  const category = localCode ? 'validation' : error instanceof SyntaxError ? 'invalid-json'
+    : httpStatus === 403 || name === 'AccessDenied' ? 'access-denied'
+    : httpStatus === 401 || ['InvalidAccessKeyId', 'SignatureDoesNotMatch', 'ExpiredToken'].includes(name) ? 'authentication'
+    : httpStatus === 404 || ['NoSuchKey', 'NoSuchBucket'].includes(name) ? 'not-found'
+    : httpStatus === 429 || name === 'SlowDown' ? 'throttled'
+    : ['TimeoutError', 'AbortError', 'RequestTimeout'].includes(name) ? 'timeout-or-interrupted'
+    : transportCode ? 'transport' : filesystemCode ? 'filesystem' : httpStatus >= 500 ? 'service' : 'unknown';
+  return { schemaVersion: 1, kind: 'weatherx-train3-baseline-failure-v1',
+    phase: PHASES.has(context.failurePhase ?? context.phase) ? context.failurePhase ?? context.phase : 'unknown',
+    category, localCode, sdkName, httpStatus, transportCode, filesystemCode,
+    requests: count(own(context.counts, 'requests'), LIMITS.exportRequests),
+    wireBytes: count(own(context.counts, 'wireBytes'), LIMITS.metadata + LIMITS.payload),
+    cleanup: ['passed', 'failed'].includes(context.cleanup) ? context.cleanup : 'unknown',
+    completeOutputEligible: false };
+}
+export function failureDiagnostic(error) {
+  return failureRecords.get(error) ?? diagnostic(error, {});
+}
+function trackedReader(client, context) {
+  let pointerReads = 0;
+  return {
+    async get(bucket, key, cap) {
+      context.phase = bucket === DATA ? key === 'catalogs/current.json'
+        ? pointerReads++ === 0 ? 'pointer-before' : 'pointer-after' : 'snapshot'
+        : key.endsWith('/component.json') ? 'component-manifest' : 'export-payload';
+      return client.get(bucket, key, cap);
+    },
+    async list(...args) { context.phase = 'component-list'; return client.list(...args); },
+    stats() { return client.stats(); }, close() { return client.close(); },
+  };
+}
+function captureCounts(client, context) { try { context.counts = client?.stats(); } catch { context.counts = undefined; } }
 const json = bytes => JSON.parse(bytes.toString('utf8'));
 export function safeKey(value) {
   check(typeof value === 'string' && value.length <= 1024 && /^[A-Za-z0-9_./@+-]+$/.test(value)
@@ -75,9 +124,9 @@ export class BoundedReadHandler {
     const bounded = new Transform({ transform: (chunk, _encoding, callback) => {
       bytes += chunk.length; this.bytes += chunk.length;
       if (bytes > cap || this.bytes > LIMITS.metadata + (this.operation === 'export' ? LIMITS.payload : 0)
-        || this.now() >= this.deadline) callback(new Error('wire-budget'));
+        || this.now() >= this.deadline) callback(refusal('wire-budget'));
       else callback(null, chunk);
-    }, flush: callback => callback(this.now() >= this.deadline ? new Error('wire-deadline') : undefined) });
+    }, flush: callback => callback(this.now() >= this.deadline ? refusal('wire-deadline') : undefined) });
     bounded.on('error', () => sourceBody.destroy());
     sourceBody.on('error', error => bounded.destroy(error));
     sourceBody.pipe(bounded);
@@ -94,12 +143,12 @@ export async function bodyBytes(body, cap) {
     return Buffer.concat(chunks, bytes);
   } catch (error) { body.destroy?.(); throw error; }
 }
-export async function readClient(env, operation, signal) {
+export async function readClient(env, operation, signal, { httpHandler } = {}) {
   check(env.SHARED_R2_READ_ACCESS_KEY_ID && env.SHARED_R2_READ_SECRET_ACCESS_KEY, 'missing-existing-reader');
   const require = createRequire(new URL('../staging-controller/package.json', import.meta.url));
   const { S3Client, GetObjectCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
   const { NodeHttpHandler } = require('@smithy/node-http-handler');
-  const handler = new BoundedReadHandler(new NodeHttpHandler({ connectionTimeout: 10_000,
+  const handler = new BoundedReadHandler(httpHandler ?? new NodeHttpHandler({ connectionTimeout: 10_000,
     requestTimeout: 30_000, socketTimeout: 30_000, throwOnRequestTimeout: true }), { operation });
   const client = new S3Client({ region: 'auto', endpoint: `https://${ACCOUNT}.r2.cloudflarestorage.com`,
     forcePathStyle: true, maxAttempts: 1, requestHandler: handler,
@@ -140,7 +189,7 @@ function descriptor(entry, id) {
 function manifestMatches(manifest, entry) {
   for (const key of ['schemaVersion', 'componentId', 'artifactId', 'rootPrefix', 'generationTime', 'completedAt',
     'mounts', 'objectCount', 'inventorySha256', 'quality', 'pointSeries'])
-    check(JSON.stringify(manifest[key]) === JSON.stringify(entry[key]), 'manifest-descriptor');
+    check(isDeepStrictEqual(manifest[key], entry[key]), 'manifest-descriptor');
 }
 function rowsSafe(rows, prefix) {
   const seen = new Set(); let bytes = 0;
@@ -275,19 +324,21 @@ export async function exportBaseline(client, reviewed, root) {
     coreSealSha256: hash(sealBytes), components: receipts, scientificValidationPerformed: false, publicationAuthorized: false };
 }
 
-export async function preparation({ env = process.env, clientFactory = readClient, now = Date.now,
-  milliseconds = LIMITS.milliseconds } = {}) {
+async function runPreparation({ env = process.env, clientFactory = readClient, now = Date.now,
+  milliseconds = LIMITS.milliseconds } = {}, context) {
   const { operation, catalogId } = gate(env);
-  const deadline = now() + milliseconds;
+  const deadline = now() + milliseconds; context.phase = 'scratch-admission';
   const parent = resolve(env.RUNNER_TEMP), destination = join(parent, 'train3-baseline-preparation');
   check((await lstat(parent)).isDirectory() && !(await lstat(parent)).isSymbolicLink(), 'temporary-root');
-  try { await lstat(destination); throw new Error('existing-output'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  try { await lstat(destination); throw refusal('existing-output'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   let reviewed;
   if (operation === 'export') {
+    context.phase = 'plan-admission';
     const path = resolve('ops/train3-baseline/export-plan.json'), info = await lstat(path);
     check(info.isFile() && !info.isSymbolicLink() && info.nlink === 1 && info.size <= LIMITS.plan, 'plan-file');
     reviewed = exportPlan(await readFile(path), env.REVIEWED_PLAN_SHA256, catalogId);
   }
+  context.phase = 'scratch-admission';
   const disk = await statfs(parent); check(disk.bavail * disk.bsize >= (reviewed ? 4 * reviewed.total : LIMITS.plan * 2) + 1024 ** 3, 'free-disk-budget');
   const work = join(parent, `train3-baseline-work-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}`);
   await mkdir(work, { mode: 0o700 }); let client;
@@ -298,26 +349,40 @@ export async function preparation({ env = process.env, clientFactory = readClien
   let ownsDestination = false, complete = false;
   try {
     checkBudget();
-    client = await clientFactory(env, operation, abort.signal);
+    context.phase = 'reader-init';
+    client = trackedReader(await clientFactory(env, operation, abort.signal), context);
     const result = operation === 'inventory' ? await inventory(client, catalogId, env.GITHUB_SHA) : await exportBaseline(client, reviewed, work);
-    checkBudget();
+    checkBudget(); context.phase = 'output-finalization';
     await save(work, operation === 'inventory' ? 'inventory-plan.json' : 'export-receipt.json', Buffer.from(JSON.stringify(result) + '\n'));
     await save(work, 'acquisition-receipt.json', Buffer.from(JSON.stringify({ operation, catalogId,
       sourceSha: env.GITHUB_SHA, ...client.stats(), publicationAuthorized: false }) + '\n'));
     checkBudget(); await rename(work, destination); ownsDestination = true;
     checkBudget(); complete = true; return result;
+  } catch (error) {
+    context.hasPrimaryFailure = true; context.failurePhase = context.phase; captureCounts(client, context); throw error;
   } finally {
     clearTimeout(timer); process.removeListener('SIGINT', cancel); process.removeListener('SIGTERM', cancel);
     let cleanupError;
     try { client?.close(); } catch (error) { cleanupError = error; }
     try { await rm(work, { recursive: true, force: true }); } catch (error) { cleanupError ??= error; }
-    if (ownsDestination && (!complete || cleanupError)) await rm(destination, { recursive: true, force: true });
-    if (cleanupError) throw cleanupError;
+    if (ownsDestination && (!complete || cleanupError)) {
+      try { await rm(destination, { recursive: true, force: true }); } catch (error) { cleanupError ??= error; }
+    }
+    context.cleanup = cleanupError ? 'failed' : 'passed';
+    if (cleanupError && !context.hasPrimaryFailure) { context.failurePhase = 'cleanup'; captureCounts(client, context); throw cleanupError; }
+  }
+}
+export async function preparation(options) {
+  const context = { phase: 'gate' };
+  try { return await runPreparation(options, context); }
+  catch (error) {
+    const failure = error && typeof error === 'object' ? error : new Error('preparation-failed');
+    failureRecords.set(failure, diagnostic(failure, context)); throw failure;
   }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  preparation().then(() => console.log('Train 3 baseline preparation complete.')).catch(() => {
-    // Provider errors can contain request details; never serialize the SDK error/env.
-    console.error('Train 3 baseline preparation failed; no complete export retained.'); process.exitCode = 1;
+  preparation().then(() => console.log('Train 3 baseline preparation complete.')).catch(error => {
+    // Only finite categories/local codes and validated counts; never serialize SDK error/env.
+    console.error(JSON.stringify(failureDiagnostic(error))); process.exitCode = 1;
   });
 }

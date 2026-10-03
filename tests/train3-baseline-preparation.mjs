@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseWorkflow } from '../tools/workflow-inventory.mjs';
 import { ACCOUNT, BoundedReadHandler, COMPONENTS, DATA, IDS, LIMITS, bodyBytes, exportBaseline,
-  exportPlan, gate, hash, inventory, preparation, producerOrder } from '../tools/train3-baseline-preparation.mjs';
+  exportPlan, failureDiagnostic, gate, hash, inventory, preparation, producerOrder, readClient } from '../tools/train3-baseline-preparation.mjs';
 
 const SOURCE = 'a'.repeat(40), CATALOG = '1395-fixture';
 const env = { GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', GITHUB_REPOSITORY: 'Andrewegao/v3t7kq-cycle',
@@ -158,12 +158,12 @@ test('failed acquisition removes only its private output and retains no complete
     assert.deepEqual(await readdir(root), []);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
-test('reader close failure still removes its private directory', async () => {
+test('reader close failure preserves the primary failure and removes its private directory', async () => {
   const root = await mkdtemp(join(tmpdir(), 'train3-close-test-'));
   try {
     await assert.rejects(preparation({ env: { ...env, RUNNER_TEMP: root }, clientFactory: () => ({
       get() { throw new Error('read-failure'); }, close() { throw new Error('close-failure'); },
-    }) }), /close-failure/);
+    }) }), error => { assert.match(error.message, /read-failure/); assert.equal(failureDiagnostic(error).cleanup, 'failed'); return true; });
     assert.deepEqual(await readdir(root), []);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -231,4 +231,89 @@ test('real locked SDK serialization is admitted without making any network conne
     const page = await client.send(new ListObjectsV2Command({ Bucket: COMPONENTS, Prefix: 'components/ecmwf/artifact-ecmwf/', MaxKeys: 1000 }));
     assert.equal(page.IsTruncated, false); assert.equal(requests.length, 2);
   } finally { client.destroy(); }
+});
+
+function changeCatalogDescriptor(f, change) {
+  const key = `${DATA}/catalogs/snapshots/${CATALOG}.json`;
+  const snapshot = JSON.parse(f.objects.get(key)); change(snapshot.components.ecmwf);
+  const bytes = json(snapshot); f.objects.set(key, bytes);
+  const pointerKey = `${DATA}/catalogs/current.json`, pointer = JSON.parse(f.objects.get(pointerKey));
+  pointer.catalogSha256 = hash(bytes); f.objects.set(pointerKey, json(pointer));
+}
+test('semantically identical descriptor objects can have different property order', async () => {
+  const f = fixture();
+  changeCatalogDescriptor(f, entry => { entry.quality = { checks: entry.quality.checks, status: entry.quality.status }; });
+  const plan = await inventory(f.client, CATALOG, SOURCE);
+  assert.equal(plan.components.length, IDS.length);
+  assert.deepEqual(plan.missing, []);
+});
+test('descriptor value or array changes still refuse inventory', async () => {
+  for (const change of [entry => { entry.quality.status = 'failed'; }, entry => { entry.quality.checks = ['unexpected']; }]) {
+    const f = fixture(); changeCatalogDescriptor(f, change);
+    await assert.rejects(inventory(f.client, CATALOG, SOURCE), /manifest-descriptor/);
+  }
+});
+
+const NO_DETAILS = 'do-not-print-provider-details';
+async function failedPreparation(factory, change = {}) {
+  const root = await mkdtemp(join(tmpdir(), 'train3-diagnostic-'));
+  try {
+    let failure;
+    await assert.rejects(preparation({ env: { ...env, RUNNER_TEMP: root, ...change }, clientFactory: factory }), error => {
+      failure = error; return true;
+    });
+    assert.deepEqual(await readdir(root), []);
+    const record = failureDiagnostic(failure), encoded = JSON.stringify(record);
+    assert.ok(Buffer.byteLength(encoded) < 1024); assert.ok(!encoded.includes(NO_DETAILS));
+    assert.equal(record.completeOutputEligible, false); return record;
+  } finally { await rm(root, { recursive: true, force: true }); }
+}
+test('SDK access-denied XML emits only bounded categories, phase and numeric counts', async () => {
+  const body = Buffer.from(`<Error><Code>AccessDenied</Code><Message>${NO_DETAILS}</Message><Key>${NO_DETAILS}</Key><RequestId>${NO_DETAILS}</RequestId></Error>`);
+  const inner = { metadata: {}, destroy() {}, async handle() {
+    return { response: { statusCode: 403, headers: { 'content-type': 'application/xml' }, body: Readable.from([body]) } };
+  } };
+  const record = await failedPreparation((e, operation, signal) => readClient({ ...e,
+    SHARED_R2_READ_ACCESS_KEY_ID: 'a', SHARED_R2_READ_SECRET_ACCESS_KEY: 'b' }, operation, signal, { httpHandler: inner }));
+  assert.equal(record.phase, 'pointer-before'); assert.equal(record.category, 'access-denied');
+  assert.equal(record.sdkName, 'AccessDenied'); assert.equal(record.httpStatus, 403);
+  assert.equal(record.requests, 1); assert.equal(record.wireBytes, body.length); assert.equal(record.cleanup, 'passed');
+  assert.equal(record.localCode, null);
+});
+test('local validation provenance cannot be spoofed by an SDK error message', async () => {
+  const local = await failedPreparation(() => { throw new Error('unreachable'); }, { REVIEWED_SOURCE_SHA: 'b'.repeat(40) });
+  assert.equal(local.phase, 'gate'); assert.equal(local.localCode, 'source-pin'); assert.equal(local.category, 'validation');
+  const spoof = await failedPreparation(() => ({ get() { throw new Error('source-pin'); }, stats() { return { requests: 0, wireBytes: 0 }; }, close() {} }));
+  assert.equal(spoof.phase, 'pointer-before'); assert.equal(spoof.localCode, null); assert.equal(spoof.category, 'unknown');
+});
+test('unknown fields and malformed counters are withheld, retaining primary and cleanup outcomes', async () => {
+  const record = await failedPreparation(() => ({
+    get() { throw Object.assign(new Error(NO_DETAILS), { name: NO_DETAILS, code: NO_DETAILS,
+      $metadata: { httpStatusCode: NO_DETAILS }, stack: NO_DETAILS, request: NO_DETAILS }); },
+    stats() { return { requests: NO_DETAILS, wireBytes: Infinity }; },
+    close() { throw new Error(NO_DETAILS); },
+  }));
+  assert.equal(record.phase, 'pointer-before'); assert.equal(record.category, 'unknown'); assert.equal(record.cleanup, 'failed');
+  for (const field of ['sdkName', 'localCode', 'httpStatus', 'requests', 'wireBytes', 'transportCode', 'filesystemCode']) assert.equal(record[field], null);
+});
+test('failure classification refuses accessor properties instead of evaluating them', () => {
+  let called = false;
+  const record = failureDiagnostic(Object.defineProperties(new Error(NO_DETAILS), {
+    name: { get() { called = true; throw new Error(NO_DETAILS); } },
+    $metadata: { get() { called = true; throw new Error(NO_DETAILS); } },
+  }));
+  assert.equal(called, false); assert.equal(record.category, 'unknown'); assert.equal(record.sdkName, null);
+});
+
+test('a non-object primary failure still retains read phase across cleanup failure', async () => {
+  const record = await failedPreparation(() => ({ get() { throw ''; }, stats() { return { requests: 0, wireBytes: 0 }; },
+    close() { throw new Error(NO_DETAILS); } }));
+  assert.equal(record.phase, 'pointer-before'); assert.equal(record.category, 'unknown'); assert.equal(record.cleanup, 'failed');
+});
+
+test('stats accessor values cannot replace a failure or enter diagnostics', async () => {
+  let called = false;
+  const stats = Object.defineProperty({}, 'requests', { get() { called = true; throw new Error(NO_DETAILS); } });
+  const record = await failedPreparation(() => ({ get() { throw new Error(NO_DETAILS); }, stats() { return stats; }, close() {} }));
+  assert.equal(called, false); assert.equal(record.requests, null); assert.equal(record.category, 'unknown');
 });
