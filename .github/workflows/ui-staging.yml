@@ -130,6 +130,14 @@ jobs:
           ssh-key: ${{ secrets.ATMOS_READONLY_KEY }}
           persist-credentials: false
           path: control
+          # Only this literal controller/profile has a reviewed build-only closure.
+          # Empty lines keep every other profile's existing full checkout.
+          sparse-checkout: |
+            ${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2' && '/.gitignore' || '' }}
+            ${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2' && '/platform/edge/package.json' || '' }}
+            ${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2' && '/platform/edge/package-lock.json' || '' }}
+            ${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2' && '/ops/release/build-release-receipt.mjs' || '' }}
+          sparse-checkout-cone-mode: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22 }
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5

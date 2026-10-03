@@ -121,5 +121,17 @@
         "pngjs"
       ]
     }
-  ]
+  ],
+  "stagingBuild": {
+    "profile": "production-account-ru-kk-wind100-onboarding-v2",
+    "pin": "ee6c16fa59b35204e999ae2ffccb66b75578bf83",
+    "paths": [
+      ".gitignore",
+      "platform/edge/package.json",
+      "platform/edge/package-lock.json",
+      "ops/release/build-release-receipt.mjs"
+    ],
+    "coneMode": false,
+    "provenance": "Separate exact-S5 build-only noncone closure: actual four-file sparse Git layout and unchanged receipt fixture passed with a disclosed separate test-only guard overlay; original edge lock installed offline and Wrangler 4.123.0 started. Combined profile still requires actual artifact evidence after build. No hosted sparse checkout or measured saving. See docs/staging-build-controller-sparse-20261002.md."
+  }
 }
