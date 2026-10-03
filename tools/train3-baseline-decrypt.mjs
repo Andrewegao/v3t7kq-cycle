@@ -14,7 +14,33 @@ import { allocationEstimate, baselineCapacity, batchExpectedTree, joinBaseline, 
 import { verifyAgeToolchain, assertAgeToolchain } from './train3-baseline-encrypt.mjs';
 
 const RESERVE = 1024 ** 3, RECEIPT_CAP = 64 * 1024, STDERR_CAP = 16 * 1024;
-const check = (ok, code) => { if (!ok) throw new Error(code); };
+const refusalCodes = new WeakMap(), refusalPhases = new WeakMap();
+const check = (ok, code) => { if (!ok) { const error = new Error(code); refusalCodes.set(error, code); throw error; } };
+const PHASES = new Set(['descriptor', 'capacity', 'toolchain', 'identity', 'recipient', 'ciphertext', 'extraction', 'join', 'finalization', 'cleanup']);
+const SHARED_CODES = new Set(['original-inventory-hash', 'input-file-type-size', 'input-file-changed',
+  'input-file-replaced', 'input-tree-changed', 'batch-receipt-binding', 'acquisition-receipt-binding',
+  'free-disk-budget', 'free-disk-reserve', 'age-version', 'age-version-failed', 'age-binary-hash',
+  'age-binary-changed', 'age-distribution-hash', 'age-toolchain-platform']);
+const FILESYSTEM_CODES = new Set(['EACCES', 'EPERM', 'ENOENT', 'EEXIST', 'ENOSPC', 'EMFILE', 'ENFILE', 'EIO', 'ELOOP', 'EBADF']);
+const objectError = error => error && (typeof error === 'object' || typeof error === 'function');
+async function atPhase(phase, action) {
+  try { return await action(); } catch (error) {
+    if (objectError(error) && !refusalPhases.has(error)) refusalPhases.set(error, phase); throw error;
+  }
+}
+// Finite diagnostic vocabulary only: never expose native messages, arguments,
+// filesystem paths, stderr, private identities, public recipients or descriptor bytes.
+export function decryptFailureDiagnostic(error, fallback = 'descriptor') {
+  let code = 'unknown', phase = PHASES.has(fallback) ? fallback : 'unknown';
+  if (objectError(error)) {
+    phase = refusalPhases.get(error) ?? phase;
+    if (refusalCodes.has(error)) code = refusalCodes.get(error);
+    else if (error instanceof SyntaxError) code = 'invalid-json';
+    else if (FILESYSTEM_CODES.has(error.code)) code = `filesystem-${error.code.toLowerCase()}`;
+    else if (SHARED_CODES.has(error.message)) code = error.message;
+  }
+  return Object.freeze({ phase, code });
+}
 const exact = (value, fields) => value && typeof value === 'object' && !Array.isArray(value)
   && isDeepStrictEqual(Object.keys(value).sort(), [...fields].sort());
 const parse = bytes => JSON.parse(bytes.toString('utf8'));
@@ -180,21 +206,23 @@ export async function decryptAndJoin({ planBytes, planSha256, batchPlanBytes, ba
       && Buffer.isBuffer(item.receiptBytes) && item.receiptBytes.length <= RECEIPT_CAP
       && hash(item.receiptBytes) === item.receiptSha256, 'ciphertext-pin');
   }
-  const available = await disk(parent), capacity = baselineCapacity({ planBytes, planSha256,
-    batchPlanBytes, batchPlanSha256, blockSize: available.bsize });
-  // Ciphertext inputs are already on disk. Require the additional decoded trees
-  // AND complete joined tree before any child starts; there is no plaintext tar spool.
-  check(available.bavail * available.bsize >= capacity.decryptAdditionalBytes, 'free-disk-budget');
-  const verifiedTool = await verifyAgeToolchain(toolchain), controller = new AbortController();
+  await atPhase('capacity', async () => {
+    const available = await disk(parent), capacity = baselineCapacity({ planBytes, planSha256,
+      batchPlanBytes, batchPlanSha256, blockSize: available.bsize });
+    // Ciphertext inputs are already on disk. Require the additional decoded trees
+    // AND complete joined tree before any child starts; there is no plaintext tar spool.
+    check(available.bavail * available.bsize >= capacity.decryptAdditionalBytes, 'free-disk-budget');
+  });
+  const verifiedTool = await atPhase('toolchain', () => verifyAgeToolchain(toolchain)), controller = new AbortController();
   const deadline = now() + LIMITS.milliseconds, cancel = () => controller.abort();
   const budget = () => check(!controller.signal.aborted && !signal?.aborted && now() < deadline, 'interrupted-or-deadline');
   const timeout = setTimeout(cancel, LIMITS.milliseconds); timeout.unref();
   process.on('SIGINT', cancel); process.on('SIGTERM', cancel); signal?.addEventListener('abort', cancel, { once: true });
-  let work, workInfo, destinationInfo, complete = false, primary;
+  let work, workInfo, destinationInfo, complete = false, primary, phase = 'identity';
   try {
     budget(); await mkdir(destination, { mode: 0o700 }); destinationInfo = await lstat(destination, { bigint: true });
     work = await mkdtemp(join(parent, '.train3-baseline-decrypt-')); workInfo = await lstat(work, { bigint: true });
-    const key = await readRegular(dirname(identityFile), relative(dirname(identityFile), identityFile), 4096);
+    const key = await atPhase('identity', () => readRegular(dirname(identityFile), relative(dirname(identityFile), identityFile), 4096));
     check((key.info.mode & 0o077n) === 0n && /^((#[^\r\n]*\r?\n)*)AGE-SECRET-KEY-1[0-9A-Z]{50,100}\r?\n?$/.test(key.bytes.toString('ascii')), 'native-private-identity');
     const privateIdentity = join(work, '.identity');
     const keyDisk = await disk(parent);
@@ -202,19 +230,19 @@ export async function decryptAndJoin({ planBytes, planSha256, batchPlanBytes, ba
       + allocationEstimate(new Map([['.identity', key.bytes.length]]), keyDisk.bsize).allocationBytes, 'free-disk-reserve');
     const keyFile = await open(privateIdentity, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
     try { await keyFile.writeFile(key.bytes); } finally { key.bytes.fill(0); await keyFile.close(); }
-    await assertAgeToolchain(verifiedTool); budget();
-    const recipientBytes = await childStream(verifiedTool.ageKeygenBinary, ['-y', privateIdentity], {
+    phase = 'recipient'; await assertAgeToolchain(verifiedTool); budget();
+    const recipientBytes = await atPhase('recipient', () => childStream(verifiedTool.ageKeygenBinary, ['-y', privateIdentity], {
       cwd: work, signal: controller.signal, spawnProcess, budget, consume: async stream => {
         const chunks = []; let bytes = 0;
         for await (const chunk of stream) { bytes += chunk.length; check(bytes <= 1024, 'recipient-output-budget'); chunks.push(chunk); }
         return Buffer.concat(chunks);
       },
-    });
+    }));
     const recipient = recipientBytes.toString('ascii').trim();
     check(/^age1[0-9a-z]{50,100}$/.test(recipient), 'native-recipient');
     const directories = [];
     for (let i = 0; i < encryptedBatches.length; i++) {
-      budget(); const item = encryptedBatches[i], receipt = parse(item.receiptBytes);
+      phase = 'ciphertext'; budget(); const item = encryptedBatches[i], receipt = parse(item.receiptBytes);
       check(exact(receipt, ['schemaVersion', 'kind', 'ageVersion', 'recipientSha256', 'ciphertextSha256', 'ciphertextBytes',
         'archiveFormat', 'completeBaselineEligible', 'publicationAuthorized']) && receipt.schemaVersion === 1
         && receipt.kind === 'weatherx-train3-encrypted-baseline-batch-v1' && receipt.ageVersion === 'v1.3.2'
@@ -237,25 +265,27 @@ export async function decryptAndJoin({ planBytes, planSha256, batchPlanBytes, ba
         source.on('error', error => cap.destroy(error)); cap.on('error', () => source.destroy());
         cap.once('close', () => { if (!source.readableEnded) source.destroy(); }); source.pipe(cap);
         await assertAgeToolchain(verifiedTool); budget();
-        await childStream(verifiedTool.ageBinary, ['--decrypt', '--identity', privateIdentity], {
+        await atPhase('extraction', () => childStream(verifiedTool.ageBinary, ['--decrypt', '--identity', privateIdentity], {
           cwd: work, signal: controller.signal, spawnProcess, input: cap, budget,
           consume: stream => extractUstar(stream, { planBytes, planSha256, batchPlanBytes, batchPlanSha256,
             expectedSourceSha, destination: batchDestination, maximumArchiveBytes: archiveMaximum }, { disk, budget }),
-        });
+        }));
         check(bytes === item.ciphertextBytes && digest.digest('hex') === item.ciphertextSha256
           && same(info, await file.stat({ bigint: true })) && same(info, await lstat(item.ciphertextPath, { bigint: true })), 'ciphertext-digest-or-change');
       } finally { await file.close(); }
       directories.push(batchDestination);
     }
-    budget();
+    phase = 'join'; budget();
     const joined = join(work, 'joined');
-    const receipt = await joinBaseline({ planBytes, planSha256, batchPlanBytes, batchPlanSha256,
-      expectedSourceSha, batchDirectories: directories, destination: joined }, { disk, now, signal: controller.signal });
-    budget(); check(same(destinationInfo, await lstat(destination, { bigint: true })) && (await readdir(destination)).length === 0, 'destination-reservation');
+    const receipt = await atPhase('join', () => joinBaseline({ planBytes, planSha256, batchPlanBytes, batchPlanSha256,
+      expectedSourceSha, batchDirectories: directories, destination: joined }, { disk, now, signal: controller.signal }));
+    phase = 'finalization'; budget(); check(same(destinationInfo, await lstat(destination, { bigint: true })) && (await readdir(destination)).length === 0, 'destination-reservation');
     const joinedInfo = await lstat(joined, { bigint: true });
     await rename(joined, destination); destinationInfo = joinedInfo; budget(); complete = true;
     return receipt;
-  } catch (error) { primary = error; controller.abort(); throw error; }
+  } catch (error) { primary = error;
+    if (objectError(error) && !refusalPhases.has(error)) refusalPhases.set(error, phase);
+    controller.abort(); throw error; }
   finally {
     let cleanupError;
     try { await removeOwned(work, workInfo); } catch (error) { cleanupError = error; }
@@ -263,7 +293,10 @@ export async function decryptAndJoin({ planBytes, planSha256, batchPlanBytes, ba
     if (!complete || cleanupError || interrupted) try { await removeOwned(destination, destinationInfo); } catch (error) { cleanupError ??= error; }
     clearTimeout(timeout); process.removeListener('SIGINT', cancel); process.removeListener('SIGTERM', cancel);
     signal?.removeEventListener('abort', cancel);
-    if (cleanupError) throw new Error('decrypt-cleanup-failed', { cause: primary ?? cleanupError });
+    if (cleanupError) {
+      const error = new Error('decrypt-cleanup-failed', { cause: primary ?? cleanupError });
+      refusalCodes.set(error, 'decrypt-cleanup-failed'); refusalPhases.set(error, 'cleanup'); throw error;
+    }
     if (complete && interrupted) throw new Error('interrupted-or-deadline');
   }
 }
@@ -288,5 +321,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     await decryptAndJoin({ planBytes, planSha256, batchPlanBytes, batchPlanSha256, expectedSourceSha,
       identityFile, toolchain: parse(toolBytes), destination, encryptedBatches });
     console.log('Train 3 private local baseline assembly complete.');
-  })().catch(() => { console.error('Train 3 private local baseline assembly refused.'); process.exitCode = 1; });
+  })().catch(error => {
+    const diagnostic = decryptFailureDiagnostic(error);
+    console.error(`Train 3 private local baseline assembly refused: ${diagnostic.phase}/${diagnostic.code}.`);
+    process.exitCode = 1;
+  });
 }

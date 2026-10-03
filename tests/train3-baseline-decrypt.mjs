@@ -6,7 +6,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { fixture, useFixture, meteredDisk } from './train3-baseline-join.mjs';
-import { decryptAndJoin, extractUstar } from '../tools/train3-baseline-decrypt.mjs';
+import { decryptAndJoin, decryptFailureDiagnostic, extractUstar } from '../tools/train3-baseline-decrypt.mjs';
 import { baselineCapacity, verifyBatch, isVerifiedBatch } from '../tools/train3-baseline-join.mjs';
 import { verifyAgeToolchain, validateRecipient, encryptBatch } from '../tools/train3-baseline-encrypt.mjs';
 import { hash } from '../tools/train3-baseline-preparation.mjs';
@@ -250,12 +250,42 @@ test('explicit pinned local CLI roundtrip produces only the private joined desti
     const plan = join(f.root, 'plan.json'), batches = join(f.root, 'batches.json'), config = join(f.root, 'tool.json'), inputs = join(f.root, 'inputs.json');
     await writeFile(plan, f.planBytes); await writeFile(batches, f.batchPlanBytes);
     await writeFile(config, toolBytes); await writeFile(inputs, inputBytes);
-    const result = spawnSync(process.execPath, [fileURLToPath(new URL('../tools/train3-baseline-decrypt.mjs', import.meta.url)),
+    for (const [index, env] of [{ LANG: 'C' }, { LANG: 'C.UTF-8' }, { LANG: 'en_US.UTF-8' },
+      { LANG: 'en_US.UTF-8', LC_ALL: 'C' }].entries()) {
+      const destination = index === 0 ? f.destination : join(f.root, `cli-joined-${index}`);
+      const result = spawnSync(process.execPath, [fileURLToPath(new URL('../tools/train3-baseline-decrypt.mjs', import.meta.url)),
+        plan, f.planSha256, batches, f.batchPlanSha256, f.expectedSourceSha, f.identityFile, config, hash(toolBytes),
+        destination, inputs, hash(inputBytes)], { env, cwd: f.root, timeout: 20_000, maxBuffer: 4096 });
+      // Refusal output is finite and safe to include in an assertion. Unexpected
+      // output is withheld so the fixture never dumps paths or key material.
+      assert.ok(result.stderr.length === 0 || /^Train 3 private local baseline assembly refused: [a-z-]+\/[a-z-]+\.\n$/.test(result.stderr.toString()),
+        'CLI diagnostics must be one finite refusal line');
+      assert.equal(result.status, 0, `explicit synthetic CLI assembly must succeed (${index}; ${result.stderr.toString().trim()})`);
+      assert.equal(result.stderr.length, 0); assert.equal(result.stdout.toString(), 'Train 3 private local baseline assembly complete.\n');
+      assert.equal(JSON.parse(await readFile(join(destination, 'join-receipt.json'))).components.length, 22);
+    }
+    const refusedDestination = join(f.root, 'cli-refused');
+    const refused = spawnSync(process.execPath, [fileURLToPath(new URL('../tools/train3-baseline-decrypt.mjs', import.meta.url)),
       plan, f.planSha256, batches, f.batchPlanSha256, f.expectedSourceSha, f.identityFile, config, hash(toolBytes),
-      f.destination, inputs, hash(inputBytes)], { env: { LANG: 'C' }, cwd: f.root, timeout: 20_000, maxBuffer: 4096 });
-    assert.equal(result.status, 0, 'explicit synthetic CLI assembly must succeed');
-    assert.equal(result.stderr.length, 0); assert.equal(result.stdout.toString(), 'Train 3 private local baseline assembly complete.\n');
-    assert.equal(JSON.parse(await readFile(join(f.destination, 'join-receipt.json'))).components.length, 22);
+      refusedDestination, inputs, '0'.repeat(64)], { env: { LANG: 'C' }, cwd: f.root, timeout: 20_000, maxBuffer: 4096 });
+    assert.equal(refused.status, 1); assert.equal(refused.stdout.length, 0);
+    assert.equal(refused.stderr.toString(), 'Train 3 private local baseline assembly refused: descriptor/local-descriptor-pin.\n');
+    await assert.rejects(lstat(refusedDestination), { code: 'ENOENT' });
     assert.ok((await readdir(f.root)).every(name => !name.startsWith('.train3-baseline-decrypt-')));
+  });
+});
+test('finite refusal diagnostics withhold native paths, key material and arbitrary error messages', async () => {
+  const sensitive = 'AGE-SECRET-KEY-1SYNTHETIC /private/fixture/identity';
+  assert.deepEqual(decryptFailureDiagnostic(new Error(sensitive)), { phase: 'descriptor', code: 'unknown' });
+  assert.deepEqual(decryptFailureDiagnostic(Object.assign(new Error(sensitive), { code: 'EACCES' })),
+    { phase: 'descriptor', code: 'filesystem-eacces' });
+  assert.deepEqual(decryptFailureDiagnostic(new SyntaxError(sensitive)), { phase: 'descriptor', code: 'invalid-json' });
+  assert.deepEqual(decryptFailureDiagnostic(new Error('original-inventory-hash'), sensitive),
+    { phase: 'unknown', code: 'original-inventory-hash' });
+  await useEncrypted(async f => {
+    f.encryptedBatches[0].receiptSha256 = '0'.repeat(64);
+    await assert.rejects(decryptAndJoin(f), error => {
+      assert.deepEqual(decryptFailureDiagnostic(error), { phase: 'descriptor', code: 'ciphertext-pin' }); return true;
+    });
   });
 });
