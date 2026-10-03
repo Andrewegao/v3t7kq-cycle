@@ -241,17 +241,23 @@ there is no automatic fallback.
 Historical mode reads and structurally validates the bounded actual current pointer,
 then checks the exact approved snapshot and **all selected manifests before any
 scientific payload read**. It reads only the fixed reviewed keys and repeats the
-original producer inventory hash checks. Finally, it requires the actual current
-pointer to equal the bytes observed at the first read. This establishes equality
-at the two read boundaries; it does not prove continuous stability or detect an
-intervening change that returns to the original observed bytes (ABA).
+original producer inventory hash checks. Finally, it performs the second bounded current-pointer GET and validates its
+structure. Under the explicit `historical-observation-v1` policy the two serving
+observations may differ: the exact reviewed snapshot, manifests and producer
+path/size/SHA256 inventory remain the byte authority. Strict `batch-export` still
+requires equality at both read boundaries; neither mode proves continuous
+stability or detects intervening ABA changes.
 
-The private acquisition receipt records canonical base64 of the observed current
-pointer, bounded to 64 KiB decoded. Independent batch verification checks its
-structure and recomputes exact GET and wire counts from those bytes. Historical
+The new private historical acquisition receipt records `currentPointerPolicy`
+(`historical-observation-v1`), `observedCurrentPointerBase64` and
+`observedCurrentPointerAfterBase64`, each canonical and bounded to 64 KiB
+decoded. Independent batch verification checks their structure and recomputes exact GET and wire counts from those bytes. Historical
 batch GET totals are 13,037, 15,470 and 15,223 respectively: payload objects plus
 selected manifests plus three reads. Wire bytes are payload plus the approved
-snapshot and selected manifests plus twice the observed current pointer length.
+snapshot and selected manifests plus the actual before and after pointer lengths.
+Legacy source `08151f2ea280c052759ff5c80525d40cdbd922ca` historical receipts keep
+their original single-observation schema and twice-before-length accounting; no
+legacy receipt is rewritten or silently upgraded.
 All existing object, aggregate, worker, time, disk and ciphertext retention limits
 remain. No listing, provider collection or storage mutation is permitted.
 
@@ -260,11 +266,44 @@ admits only the two known batch operations; a join rejects mixed operations.
 The historical pointer files are the original reviewed inventory bytes, rather
 than evidence of the currently serving catalog. A complete core seal authenticates
 recovered bytes; it does not establish freshness, scientific qualification or
-publication authority. Retention and availability of the old remote bytes remain
-unverified, and missing or changed bytes must fail closed.
+publication authority. The observed batch2 attempt read and hash-verified its
+selected payload closure but refused at the final pointer boundary. It did not
+establish a successful retained batch or complete baseline. Availability of the
+entire remaining closure still requires verification; missing or changed bytes
+must fail closed.
 
 Specific human approval for the original catalog-1410 payload, private Mac
 destination and recipient has been recorded separately. Source review and merge
 do not dispatch acquisition. The final concrete historical operation remains held
 for root inspection and coordination. No payload export, join, bake or publication
 is established by this source change.
+
+
+### Exact local compatibility for the retained legacy batch
+
+A newly reviewed join source can reuse the independently verified legacy batch1
+only with a separately reviewed, SHA256-pinned compatibility descriptor. Append
+`--historical-source-binding SOURCE_BINDING_JSON SOURCE_BINDING_SHA` to either
+local command. Without it, scalar source admission remains unchanged and all
+batch receipts must match `SOURCE_SHA`.
+
+The descriptor has exactly `schemaVersion: 1`,
+`kind: weatherx-train3-historical-source-binding-v1`, the reviewed `catalogId`,
+`reviewedPlanSha256`, `reviewedBatchPlanSha256`,
+`operation: historical-batch-export`, and three `batches` rows. Each row has exactly
+`batchId`, `sourceSha`, and `currentPointerPolicy`. Batch1 must name
+`08151f2ea280c052759ff5c80525d40cdbd922ca` with `historical-stable-v1` (inferred
+only after exact legacy source and receipt-schema admission). Batches2/3 must
+name the explicit new reviewed `SOURCE_SHA` with `historical-observation-v1`.
+No other source/policy mapping, extra or duplicate row, missing batch, unknown
+field, strict/historical mix, or fallback is accepted even if its digest matches.
+The first archive acquisition receipt selects its row by its actual batch ID,
+source, operation and policy, independent of input order or filesystem name.
+
+Mapped joining records `joinSourceSha`, `sourceBindingSha256`, and each batch's
+source, policy, run identities and original receipt digests. It omits the scalar
+`sourceSha` field that would falsely suggest one common acquisition source.
+Original catalog, manifest and payload byte checks, private-tree mutation audits,
+core seal, age toolchain, recipients, limits and cleanup remain unchanged.
+This source correction does not authorize another remote acquisition or private
+identity access. Preserve the failed batch2 receipt and its final rotation evidence.

@@ -6,8 +6,8 @@ import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { allocationEstimate, baselineCapacity, joinBaseline, readRegular, verifyBatch, isVerifiedBatch } from '../tools/train3-baseline-join.mjs';
-import { CORE, IDS, hash, producerOrder } from '../tools/train3-baseline-preparation.mjs';
+import { allocationEstimate, baselineCapacity, joinBaseline, readRegular, verifyBatch, isVerifiedBatch, historicalSourceBinding } from '../tools/train3-baseline-join.mjs';
+import { CORE, IDS, hash, producerOrder, exportBatch, batchPlan, DATA, COMPONENTS } from '../tools/train3-baseline-preparation.mjs';
 
 const SOURCE = 'a'.repeat(40), CATALOG = '1410-fixture';
 const json = value => Buffer.from(JSON.stringify(value) + '\n');
@@ -387,3 +387,149 @@ test('join refuses mixed strict and historical modes before writing any complete
 });
 
 }
+
+
+// Immutable synthetic batch1 receipts captured from the exact081 exporter; no
+// current helper relabels a new receipt as a legacy acquisition.
+const LEGACY_SOURCE = '08151f2ea280c052759ff5c80525d40cdbd922ca';
+const LEGACY_BATCH = Buffer.from('eyJzY2hlbWFWZXJzaW9uIjoxLCJraW5kIjoid2VhdGhlcngtdHJhaW4zLW9yaWdpbmFsLWJhc2VsaW5lLWJhdGNoLXYxIiwiY29tcGxldGVCYXNlbGluZUVsaWdpYmxlIjpmYWxzZSwiY29yZVNlYWxTaGEyNTYiOm51bGwsImNhdGFsb2dJZCI6IjE0MTAtZml4dHVyZSIsInJldmlld2VkUGxhblNoYTI1NiI6ImY3YmYwMjRjMGU3NzE3NzMwOWQ0MzBkMzY4ZWQzZjk3N2U0NDVmZWNhMmZiMzYxODM0NzhjOGU3MDdjZmU1YjEiLCJyZXZpZXdlZEJhdGNoUGxhblNoYTI1NiI6ImU0MTQzMjE4Mjc0NjI1MzkyMTE4Y2UwOWE3YjE4Y2YwNjFjZTlkMjYzMTU1YmRhYmQ2MjBjODZlZTUyM2M2ZGMiLCJiYXRjaElkIjoiYmF0Y2gtMSIsImNhdGFsb2dTaGEyNTYiOiJjMTliMTgxMDZkZGUzZDBkNjgwZjllNzc0MTVkNjIzOWNkODIxZDM2N2Q0NTAzZGY5MGY5ZTVjNDBiMjM1YmY2Iiwic291cmNlU2hhIjoiMDgxNTFmMmVhMjgwYzA1Mjc1OWZmNWM4MDUyNWQ0MGNkYmQ5MjJjYSIsInJ1bklkIjoiMTEiLCJydW5BdHRlbXB0IjoiMSIsImNvbXBvbmVudHMiOlt7ImNvbXBvbmVudElkIjoiZ2ZzIiwibWFuaWZlc3RTaGEyNTYiOiJmYjdmYTQ0MjQ3YjMwZDBmYWM3YzgyMjhjYmRjODc5ZWFjMjc2MjQyODRiZTViYjk0Y2EzNmM3YmM3NTIwZGFmIiwiaW52ZW50b3J5U2hhMjU2IjoiMWJlYTliZTcwYmZkMDRjYWM0ZjBlZmQ1NDkzYzNhMjg2Y2JmYWY4MWU2YzVkOTZjOGJhN2YyOTVhZTFmY2M4MiIsIm9iamVjdENvdW50IjoyLCJieXRlcyI6MTh9LHsiY29tcG9uZW50SWQiOiJpY29uIiwibWFuaWZlc3RTaGEyNTYiOiJjZWVjNzA3MmQxMDFlYzg0MDE5YmQzOTI2YWRhZGYxMWE4OTM1Zjk1ODM1M2RhYTE1YjMwMmFkNDY0Y2MzMDBhIiwiaW52ZW50b3J5U2hhMjU2IjoiY2JhZTc0Yjg0MzA3ZTZkMjYzYWVjNDgwYWQ1Y2EzMTJkZmZlYzkxY2RjMzU3ZjMxNmU5Yzk5ZDQ2NzUxOWRkZiIsIm9iamVjdENvdW50IjoyLCJieXRlcyI6MTl9LHsiY29tcG9uZW50SWQiOiJuYW0iLCJtYW5pZmVzdFNoYTI1NiI6IjFiNDllM2ZhYjM0NmEyYjQwMWZmOTU1YjlkOTQyMzRlNTM0YjBjMTFmMzNkMTgzZGE3YzZiYjhlNWJlNDYxNTMiLCJpbnZlbnRvcnlTaGEyNTYiOiI4ZWUzMTlhMTBkMDBlNmFkNDY1OGY1NmY5YzM2ZTk3OTY5ZDk3MjFmZWE0ZDRmNjJjMTk3NmY3YWY4MTc5OTIzIiwib2JqZWN0Q291bnQiOjIsImJ5dGVzIjoxOH0seyJjb21wb25lbnRJZCI6ImhycnItYWsiLCJtYW5pZmVzdFNoYTI1NiI6ImEzNGQyYjVhZDg4YTU3YjdmZmYyMmY2NjJiZjljZTI0ZDc3YWVjNTMwYTM2ZDdmMjg2OGFmNjZhYTEzOWZmMzMiLCJpbnZlbnRvcnlTaGEyNTYiOiI3ZjhhNTBiYzE0NDBmZTdlNGE0MmYxMDZkZDllNDE1ZDNjZTUxNmFiZDI3OGFkYzZkM2U2YTkzOWQ0NDQyYTViIiwib2JqZWN0Q291bnQiOjIsImJ5dGVzIjoyMn0seyJjb21wb25lbnRJZCI6ImFyb21lLWFudGlsbGVzIiwibWFuaWZlc3RTaGEyNTYiOiI3NDRhMjJiYTc3MGY5NjE2MzZjZDkxYWU0MzY3MGE0NGVjM2E0ZjBmZTRiNDBjMWE1MTlhYWUwZjNhZjM0NTNhIiwiaW52ZW50b3J5U2hhMjU2IjoiN2IyMjI0N2MzZWRkMjVhZjRjNDE0ZWE3ZjE4ZmQ3ZTYyNTI4Nzc4NjgzMzgwZWQ0MjkyNjlmOTFkZjQ1ODJmNCIsIm9iamVjdENvdW50IjoyLCJieXRlcyI6Mjl9LHsiY29tcG9uZW50SWQiOiJwb2ludC1uYW0iLCJtYW5pZmVzdFNoYTI1NiI6ImZiMTdlMjM2Mzg5ZDJkMDA4NjUxZjQzNTA4ZWM4YjcxZDY4ZmFiNmNkYjI2ODhlZjkzYzA4MmQ1ZmRlMjk5MDciLCJpbnZlbnRvcnlTaGEyNTYiOiJkZTc1YTA1MGRiNjE4ZjVjYzQ4ZDllMmRhMTJiZGRiZTdhYjhmMGZjNTBkMDMwOTNjYmY0M2UzNDMyYWM5MDI1Iiwib2JqZWN0Q291bnQiOjIsImJ5dGVzIjoyNH0seyJjb21wb25lbnRJZCI6InBvaW50LWhycnIiLCJtYW5pZmVzdFNoYTI1NiI6IjcyOWMzYWM5NjhlZWM0MjczNTZkZmI2NDhjMThiNjNmZjdmMjc3ZmQwZGU0N2RmZTgwM2JkMmU4N2VmNGY4ZGUiLCJpbnZlbnRvcnlTaGEyNTYiOiJkZmU4ZGIyM2IwMWU3ZTUyNmZiNGEzNTFmYzJlYjAzZjZhYzNlZDViNjE1MDA4NDhhNGRlMzMxZWU3ODQ2NTE2Iiwib2JqZWN0Q291bnQiOjIsImJ5dGVzIjoyNX1dLCJvcGVyYXRpb24iOiJoaXN0b3JpY2FsLWJhdGNoLWV4cG9ydCIsInNjaWVudGlmaWNWYWxpZGF0aW9uUGVyZm9ybWVkIjpmYWxzZSwicHVibGljYXRpb25BdXRob3JpemVkIjpmYWxzZX0K', 'base64');
+assert.equal(hash(LEGACY_BATCH), '656d7700be3966fc15be169cbf8e1afefd0045e5aab591b4b664c62d60f44f87');
+const LEGACY_ACQUISITION = Buffer.from('eyJvcGVyYXRpb24iOiJoaXN0b3JpY2FsLWJhdGNoLWV4cG9ydCIsImNhdGFsb2dJZCI6IjE0MTAtZml4dHVyZSIsInNvdXJjZVNoYSI6IjA4MTUxZjJlYTI4MGMwNTI3NTlmZjVjODA1MjVkNDBjZGJkOTIyY2EiLCJiYXRjaElkIjoiYmF0Y2gtMSIsInJldmlld2VkUGxhblNoYTI1NiI6ImY3YmYwMjRjMGU3NzE3NzMwOWQ0MzBkMzY4ZWQzZjk3N2U0NDVmZWNhMmZiMzYxODM0NzhjOGU3MDdjZmU1YjEiLCJyZXZpZXdlZEJhdGNoUGxhblNoYTI1NiI6ImU0MTQzMjE4Mjc0NjI1MzkyMTE4Y2UwOWE3YjE4Y2YwNjFjZTlkMjYzMTU1YmRhYmQ2MjBjODZlZTUyM2M2ZGMiLCJvYnNlcnZlZEN1cnJlbnRQb2ludGVyQmFzZTY0IjoiZXlKelkyaGxiV0ZXWlhKemFXOXVJam95TENKallYUmhiRzluU1dRaU9pSXhOREl4TFdacGVIUjFjbVVpTENKelpYRjFaVzVqWlNJNk1UUXlNU3dpY0hWaWJHbHphR1ZrUVhRaU9pSXlNREkyTFRFd0xUQXpWREF5T2pBd09qQXdXaUlzSW5CeVpYWnBiM1Z6UTJGMFlXeHZaMGxrSWpvaU1UUXhNQzFtYVhoMGRYSmxJaXdpWTJGMFlXeHZaMU5vWVRJMU5pSTZJbVptWm1abVptWm1abVptWm1abVptWm1abVptWm1abVptWm1abVptWm1abVptWm1abVptWm1abVptWm1abVptWm1abVptWm1abVptWm1abVptWm1abVlpZlFvPSIsInJlcXVlc3RzIjoyNCwid2lyZUJ5dGVzIjoxNjg3OSwicHVibGljYXRpb25BdXRob3JpemVkIjpmYWxzZX0K', 'base64');
+assert.equal(hash(LEGACY_ACQUISITION), 'f7456ee8b5f7cd4800f53848121015374f8a055232a567d969dc52d2a5195b7d');
+
+export async function compatibilityFixture() {
+  const f = await fixture({ historical: true });
+  try {
+    await put(f.batchDirectories[0], 'batch-receipt.json', LEGACY_BATCH);
+    await put(f.batchDirectories[0], 'acquisition-receipt.json', LEGACY_ACQUISITION);
+    for (let i = 1; i < 3; i++) {
+      const root = f.batchDirectories[i], batchId = `batch-${i + 1}`;
+      await rm(root, { recursive: true }); await mkdir(root, { mode: 0o700 });
+      let requests = 0, wireBytes = 0, pointers = 0;
+      const before = json({ ...JSON.parse(f.pointer), catalogId: '1422-fixture', sequence: 1422,
+        previousCatalogId: CATALOG, catalogSha256: 'f'.repeat(64) });
+      const after = json({ ...JSON.parse(before), catalogId: '1444-longer-observation-fixture', sequence: 1444 });
+      assert.notEqual(before.length, after.length);
+      const client = { async get(bucket, key) {
+        let bytes;
+        if (bucket === DATA) bytes = key === 'catalogs/current.json' ? ++pointers === 1 ? before : after : f.snapshot;
+        else {
+          assert.equal(bucket, COMPONENTS);
+          const body = [...f.bodies.values()].find(item => key.startsWith(item.manifest.rootPrefix));
+          bytes = key.endsWith('/component.json') ? body.raw : body.payload.get(key.slice(body.manifest.rootPrefix.length));
+        }
+        assert.ok(bytes); requests++; wireBytes += bytes.length; return bytes;
+      } };
+      const reviewed = batchPlan(f.planBytes, f.planSha256, f.batchPlanBytes, f.batchPlanSha256, batchId, CATALOG);
+      const receipt = await exportBatch(client, reviewed, root, { sourceSha: SOURCE, runId: String(11 + i),
+        runAttempt: '1', operation: 'historical-batch-export', disk: ampleDisk });
+      const observation = { currentPointerPolicy: receipt.currentPointerPolicy,
+        observedCurrentPointerBase64: receipt.observedCurrentPointerBase64,
+        observedCurrentPointerAfterBase64: receipt.observedCurrentPointerAfterBase64 };
+      for (const key of Object.keys(observation)) delete receipt[key];
+      await put(root, 'batch-receipt.json', json(receipt));
+      await put(root, 'acquisition-receipt.json', json({ operation: 'historical-batch-export', catalogId: CATALOG,
+        sourceSha: SOURCE, batchId, reviewedPlanSha256: f.planSha256, reviewedBatchPlanSha256: f.batchPlanSha256,
+        ...observation, requests, wireBytes, publicationAuthorized: false }));
+      assert.equal(pointers, 2);
+    }
+    f.sourceBindingBytes = json({ schemaVersion: 1, kind: 'weatherx-train3-historical-source-binding-v1',
+      catalogId: CATALOG, reviewedPlanSha256: f.planSha256, reviewedBatchPlanSha256: f.batchPlanSha256,
+      operation: 'historical-batch-export', batches: [
+        { batchId: 'batch-1', sourceSha: LEGACY_SOURCE, currentPointerPolicy: 'historical-stable-v1' },
+        ...['batch-2', 'batch-3'].map(batchId => ({ batchId, sourceSha: SOURCE, currentPointerPolicy: 'historical-observation-v1' })),
+      ] });
+    f.sourceBindingSha256 = hash(f.sourceBindingBytes);
+    return f;
+  } catch (error) { await rm(f.root, { recursive: true, force: true }); throw error; }
+}
+
+export async function useCompatibilityFixture(action) {
+  const f = await compatibilityFixture();
+  try { await action(f); } finally { await rm(f.root, { recursive: true, force: true }); }
+}
+
+test('mapped historical join admits exact legacy081 batch1 and newly observed rotated2/3 with truthful provenance', async () => {
+  await useCompatibilityFixture(async f => {
+    const unchangedLegacy = await readFile(join(f.batchDirectories[0], 'acquisition-receipt.json'));
+    const verified = await verifyBatch({ ...f, batchDirectory: f.batchDirectories[1] });
+    assert.equal(verified.acquisition.currentPointerPolicy, 'historical-observation-v1');
+    const before = Buffer.from(verified.acquisition.observedCurrentPointerBase64, 'base64'),
+      after = Buffer.from(verified.acquisition.observedCurrentPointerAfterBase64, 'base64');
+    assert.notEqual(before.length, after.length);
+    const joined = await joinBaseline({ ...f, batchDirectories: [...f.batchDirectories].reverse() });
+    assert.equal(joined.sourceSha, undefined); assert.equal(joined.joinSourceSha, SOURCE);
+    assert.equal(joined.sourceBindingSha256, f.sourceBindingSha256);
+    assert.deepEqual(joined.batches.map(row => [row.batchId, row.sourceSha, row.currentPointerPolicy]), [
+      ['batch-1', LEGACY_SOURCE, 'historical-stable-v1'],
+      ['batch-2', SOURCE, 'historical-observation-v1'], ['batch-3', SOURCE, 'historical-observation-v1'],
+    ]);
+    assert.deepEqual(await readFile(join(f.batchDirectories[0], 'acquisition-receipt.json')), unchangedLegacy);
+    assert.equal(joined.batches[0].acquisitionReceiptSha256, hash(LEGACY_ACQUISITION));
+    for (const [id, body] of f.bodies) for (const [path, bytes] of body.payload)
+      assert.deepEqual(await readFile(join(f.destination, `original/components/${id}/payload/${path}`)), bytes);
+    assert.equal(hash(await readFile(join(f.destination, 'core/seal.json'))), joined.coreSealSha256);
+  });
+});
+
+test('reviewed historical source mapping refuses bad digest, header, policy, rowset and arbitrary source', async () => {
+  await useCompatibilityFixture(async f => {
+    const header = { expectedSourceSha: SOURCE, catalogId: CATALOG, planSha256: f.planSha256,
+      batchPlanSha256: f.batchPlanSha256 };
+    const oldAnchor = JSON.parse(f.sourceBindingBytes);
+    for (const row of oldAnchor.batches) row.sourceSha = LEGACY_SOURCE;
+    const oldAnchorBytes = json(oldAnchor);
+    assert.throws(() => historicalSourceBinding({ ...header, expectedSourceSha: LEGACY_SOURCE,
+      sourceBindingBytes: oldAnchorBytes, sourceBindingSha256: hash(oldAnchorBytes) }), /historical-source-binding-anchor/);
+    assert.equal(historicalSourceBinding({ ...header, expectedSourceSha: LEGACY_SOURCE }), null);
+    assert.throws(() => historicalSourceBinding({ ...header, sourceBindingBytes: f.sourceBindingBytes,
+      sourceBindingSha256: '0'.repeat(64) }));
+    for (const change of [r => { r.catalogId = 'other'; }, r => { r.operation = 'batch-export'; },
+      r => { r.reviewedPlanSha256 = 'f'.repeat(64); }, r => { r.reviewedBatchPlanSha256 = 'f'.repeat(64); },
+      r => { r.extra = true; }, r => { r.batches.pop(); }, r => { r.batches.push(r.batches[0]); },
+      r => { r.batches[1] = r.batches[0]; }, r => { r.batches[0].sourceSha = SOURCE; },
+      r => { r.batches[1].sourceSha = 'd'.repeat(40); }, r => { r.batches[1].currentPointerPolicy = 'unknown'; },
+      r => { r.batches[0].currentPointerPolicy = 'historical-observation-v1'; }, r => { r.batches[1].extra = true; }]) {
+      const value = JSON.parse(f.sourceBindingBytes); change(value); const sourceBindingBytes = json(value);
+      assert.throws(() => historicalSourceBinding({ ...header, sourceBindingBytes,
+        sourceBindingSha256: hash(sourceBindingBytes) }));
+    }
+    await assert.rejects(joinBaseline({ ...f, sourceBindingBytes: undefined, sourceBindingSha256: undefined }), /batch-receipt-binding/);
+    await assert.rejects(lstat(f.destination), { code: 'ENOENT' });
+  });
+});
+
+test('historical independent verifier rejects actual-source or policy mismatch and forged after-pointer accounting', async () => {
+  const changes = [
+    [0, 'acquisition-receipt.json', r => { r.currentPointerPolicy = 'historical-stable-v1'; }],
+    [1, 'acquisition-receipt.json', r => { r.currentPointerPolicy = 'unknown'; }],
+    [1, 'acquisition-receipt.json', r => { delete r.currentPointerPolicy; }],
+    [1, 'acquisition-receipt.json', r => { delete r.observedCurrentPointerAfterBase64; }],
+    [1, 'acquisition-receipt.json', r => { r.observedCurrentPointerAfterBase64 += '\n'; }],
+    [1, 'acquisition-receipt.json', r => { r.observedCurrentPointerAfterBase64 = Buffer.from('{}').toString('base64'); }],
+    [1, 'acquisition-receipt.json', r => { r.observedCurrentPointerAfterBase64 = Buffer.alloc(65537).toString('base64'); }],
+    [1, 'acquisition-receipt.json', r => { r.wireBytes++; }],
+    [1, 'acquisition-receipt.json', r => { r.requests++; }],
+    [1, 'acquisition-receipt.json', r => { r.sourceSha = LEGACY_SOURCE; }],
+    [1, 'batch-receipt.json', r => { r.sourceSha = LEGACY_SOURCE; }],
+    [1, 'acquisition-receipt.json', r => { r.operation = 'batch-export'; }],
+    [1, 'batch-receipt.json', r => { delete r.operation; }],
+  ];
+  for (const [index, path, change] of changes) await useCompatibilityFixture(async f => {
+    await changeJson(f.batchDirectories[index], path, change);
+    await assert.rejects(verifyBatch({ ...f, batchDirectory: f.batchDirectories[index] }));
+    await assert.rejects(joinBaseline(f));
+    await assert.rejects(lstat(f.destination), { code: 'ENOENT' });
+  });
+});
+
+
+test('mapped historical joining still rejects selected private payload mutation before a complete seal', async () => {
+  await useCompatibilityFixture(async f => {
+    const path = join(f.batchDirectories[1], 'original/components/ecmwf/payload/A/1.txt');
+    const raw = await readFile(path); await writeFile(path, Buffer.alloc(raw.length));
+    await assert.rejects(joinBaseline(f), /core-payload-bytes|original-inventory-hash/);
+    await assert.rejects(lstat(f.destination), { code: 'ENOENT' });
+    assert.ok((await readdir(f.root)).every(name => !name.startsWith('.train3-baseline-join-')));
+  });
+});

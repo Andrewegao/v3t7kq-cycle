@@ -6,7 +6,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import { fixture, useFixture, meteredDisk } from './train3-baseline-join.mjs';
+import { fixture, useFixture, meteredDisk, compatibilityFixture } from './train3-baseline-join.mjs';
 import { childStream, decryptAndJoin, decryptFailureDiagnostic, extractUstar } from '../tools/train3-baseline-decrypt.mjs';
 import { baselineCapacity, verifyBatch, isVerifiedBatch } from '../tools/train3-baseline-join.mjs';
 import { verifyAgeToolchain, validateRecipient, encryptBatch } from '../tools/train3-baseline-encrypt.mjs';
@@ -55,7 +55,7 @@ async function generateIdentity(f, tool, name = 'synthetic.key') {
   assert.equal(publicResult.status, 0); return { path, recipient: publicResult.stdout.toString('ascii').trim() };
 }
 async function encryptedFixture(historical = false) {
-  const f = await fixture({ historical });
+  const f = historical === 'mapped' ? await compatibilityFixture() : await fixture({ historical });
   try {
     const toolchain = await tools(), identity = await generateIdentity(f, toolchain);
     const recipient = await validateRecipient({ ownerConfirmed: true, recipientId: 'synthetic-fixture',
@@ -340,4 +340,60 @@ test('decryption archive admission refuses an unknown operation before accepting
     const receipt = JSON.parse(acquisition.bytes); receipt.operation = 'unknown'; acquisition.bytes = json(receipt);
     await assert.rejects(extract(f, archive(entries)), /archive-receipt-binding/);
   }, { historical: true });
+});
+
+
+test('native mapped legacy081 plus newly exported rotated2/3 decrypts and seals exact bytes with perbatch provenance', async () => {
+  await useEncrypted(async f => {
+    const receipt = await decryptAndJoin({ ...f, encryptedBatches: [...f.encryptedBatches].reverse() });
+    assert.equal(receipt.joinSourceSha, f.expectedSourceSha); assert.equal(receipt.sourceSha, undefined);
+    assert.equal(receipt.sourceBindingSha256, f.sourceBindingSha256);
+    assert.equal(receipt.batches[0].sourceSha, '08151f2ea280c052759ff5c80525d40cdbd922ca');
+    assert.deepEqual(receipt.batches.map(row => row.currentPointerPolicy),
+      ['historical-stable-v1', 'historical-observation-v1', 'historical-observation-v1']);
+    for (const [id, body] of f.bodies) for (const [path, bytes] of body.payload)
+      assert.deepEqual(await readFile(join(f.destination, `original/components/${id}/payload/${path}`)), bytes);
+    assert.equal(hash(await readFile(join(f.destination, 'core/seal.json'))), receipt.coreSealSha256);
+    assert.equal(receipt.scientificValidationPerformed, false); assert.equal(receipt.publicationAuthorized, false);
+  }, 'mapped');
+});
+
+test('mapped decrypt rejects invalid binding before any child or identity read and archive receipt by actual batchid', async () => {
+  await useEncrypted(async f => {
+    let started = false;
+    await assert.rejects(decryptAndJoin({ ...f, identityFile: '/nonexistent-fixture-identity',
+      sourceBindingSha256: '0'.repeat(64) }, { spawnProcess() { started = true; } }), /historical-source-binding-pin/);
+    assert.equal(started, false);
+    for (const change of [r => { r.batchId = 'batch-3'; }, r => { r.sourceSha = f.expectedSourceSha; },
+      r => { r.operation = 'batch-export'; }, r => { r.currentPointerPolicy = 'unknown'; },
+      r => { r.extra = true; }]) {
+      const entries = await entriesFor(f), first = entries.find(e => e.path === 'acquisition-receipt.json');
+      const receipt = JSON.parse(first.bytes); change(receipt); first.bytes = json(receipt);
+      await assert.rejects(extract(f, archive(entries)), receipt.currentPointerPolicy === 'unknown'
+        ? /archive-receipt-binding/ : /historical-batch-source-policy/);
+      await rm(join(f.root, 'extract'), { recursive: true });
+    }
+    await refuses({ ...f, sourceBindingBytes: undefined, sourceBindingSha256: undefined });
+  }, 'mapped');
+});
+
+test('explicit digest-pinned mapped local CLI keeps the scalar source argument as join-source authority', async () => {
+  await useEncrypted(async f => {
+    const toolBytes = json(toolConfig), inputBytes = json(f.encryptedBatches.map(item => ({
+      ciphertextPath: item.ciphertextPath, ciphertextSha256: item.ciphertextSha256, ciphertextBytes: item.ciphertextBytes,
+      receiptPath: join(item.ciphertextPath, '..', 'encrypted-receipt.json'), receiptSha256: item.receiptSha256,
+    })));
+    const files = ['plan.json', 'batches.json', 'tool.json', 'inputs.json', 'source-binding.json'].map(name => join(f.root, name));
+    for (const [i, bytes] of [f.planBytes, f.batchPlanBytes, toolBytes, inputBytes, f.sourceBindingBytes].entries())
+      await writeFile(files[i], bytes, { mode: 0o600 });
+    const args = [fileURLToPath(new URL('../tools/train3-baseline-decrypt.mjs', import.meta.url)),
+      files[0], f.planSha256, files[1], f.batchPlanSha256, f.expectedSourceSha, f.identityFile,
+      files[2], hash(toolBytes), f.destination, files[3], hash(inputBytes),
+      '--historical-source-binding', files[4], f.sourceBindingSha256];
+    const result = spawnSync(process.execPath, args, { env: { LANG: 'C' }, cwd: f.root, timeout: 20_000, maxBuffer: 4096 });
+    assert.equal(result.status, 0); assert.equal(result.stderr.length, 0);
+    const joined = JSON.parse(await readFile(join(f.destination, 'join-receipt.json')));
+    assert.equal(joined.joinSourceSha, f.expectedSourceSha); assert.equal(joined.sourceBindingSha256, f.sourceBindingSha256);
+    assert.equal(joined.sourceSha, undefined);
+  }, 'mapped');
 });
