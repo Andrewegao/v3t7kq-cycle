@@ -14,7 +14,7 @@ export const MODELS = [...CORE, 'icon', 'hrdps', 'arome-antilles', 'hrrr-ak', 'n
 export const IDS = MODELS.flatMap(id => [id, `point-${id}`]);
 export const LIMITS = Object.freeze({ metadata: 32 * 1024 ** 2, plan: 48 * 1024 ** 2,
   pointer: 64 * 1024, snapshot: 512 * 1024, manifest: 1024 ** 2, page: 2 * 1024 ** 2,
-  object: 64 * 1024 ** 2, payload: 2 * 1024 ** 3, objects: 25_000,
+  object: 64 * 1024 ** 2, payload: 2 * 1024 ** 3, objects: 25_000, inventoryObjects: 50_000,
   metadataRequests: IDS.length + 3, inventoryRequests: 200, exportRequests: 25_100, milliseconds: 43 * 60_000 });
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/, HEX = /^[a-f0-9]{64}$/;
 export const hash = value => createHash('sha256').update(value).digest('hex');
@@ -263,7 +263,7 @@ export async function inventory(client, catalogId, sourceSha) {
       check(Array.isArray(page.Contents ?? []) && (page.Contents ?? []).length <= 1000, 'listing-page');
       for (const row of page.Contents ?? []) {
         rows.push({ key: row.Key, bytes: row.Size });
-        check(++objectCount <= LIMITS.objects, 'object-count-budget');
+        check(++objectCount <= LIMITS.inventoryObjects, 'object-count-budget');
       }
       check(typeof page.IsTruncated === 'boolean', 'listing-truncation');
       if (!page.IsTruncated) break;

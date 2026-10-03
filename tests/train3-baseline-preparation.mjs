@@ -51,6 +51,20 @@ async function planned(f = fixture()) {
   const plan = await inventory(f.client, CATALOG, SOURCE), bytes = json(plan);
   return { f, plan, bytes, reviewed: exportPlan(bytes, hash(bytes), CATALOG) };
 }
+function largeInventory(payloadCount) {
+  const f = fixture(), prefix = 'components/ecmwf/artifact-ecmwf/', key = `${COMPONENTS}/${prefix}component.json`;
+  const manifest = JSON.parse(f.objects.get(key)); manifest.objectCount = payloadCount;
+  const raw = json(manifest); f.objects.set(key, raw);
+  changeCatalogDescriptor(f, entry => Object.assign(entry, manifest, { manifestSha256: hash(raw) }));
+  f.prefixes.set(prefix, [{ Key: prefix + 'component.json', Size: raw.length }, ...Array.from({ length: payloadCount },
+    (_, i) => ({ Key: prefix + `payload-${i}.bin`, Size: 1 }))]);
+  f.client.list = async (prefix, token) => {
+    f.calls.push(['list', prefix]); const rows = f.prefixes.get(prefix), start = token ? Number(token) : 0, end = start + 1000;
+    return { Contents: rows.slice(start, end), IsTruncated: end < rows.length,
+      ...(end < rows.length ? { NextContinuationToken: String(end) } : {}) };
+  };
+  return f;
+}
 
 test('workflow is manual, disabled by default, pinned, read-only, and retains success for one day', async () => {
   const path = '.github/workflows/train3-baseline-preparation.yml';
@@ -91,6 +105,19 @@ test('inventory preserves original metadata and lists only the exact 22 selected
   assert.deepEqual(Buffer.from(plan.pointerBase64, 'base64'), f.objects.get(`${DATA}/catalogs/current.json`));
   assert.equal(f.calls.filter(c => c[0] === 'list').length, 22);
   assert.equal(f.calls.filter(c => c[0] === 'get' && c[1] === COMPONENTS && !c[2].endsWith('/component.json')).length, 0);
+});
+test('measured inventory allowance can cross the old cap without widening export admission', async () => {
+  assert.equal(LIMITS.inventoryObjects, 50_000); assert.equal(LIMITS.objects, 25_000);
+  assert.equal(LIMITS.inventoryRequests, 200); assert.equal(LIMITS.metadata, 32 * 1024 ** 2);
+  const f = largeInventory(25_000), plan = await inventory(f.client, CATALOG, SOURCE), bytes = json(plan);
+  assert.equal(plan.objectCount, 25_064); assert.equal(plan.components.length, 22);
+  assert.equal(plan.payloadsRead, false); assert.ok(plan.payloadBytes < LIMITS.payload);
+  assert.throws(() => exportPlan(bytes, hash(bytes), CATALOG), /payload-budget/);
+});
+test('inventory still stops at its separate 50,000 physical-key cap', async () => {
+  const f = largeInventory(LIMITS.inventoryObjects);
+  await assert.rejects(inventory(f.client, CATALOG, SOURCE), /object-count-budget/);
+  assert.ok(f.calls.filter(c => c[0] === 'list').length <= 51);
 });
 test('metadata audit reads 25 original objects without listing or payload, and cannot authorize export', async () => {
   const f = fixture(), audit = await metadataAudit(f.client, CATALOG, SOURCE), bytes = json(audit);

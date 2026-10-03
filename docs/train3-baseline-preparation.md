@@ -20,7 +20,7 @@ current catalog ID, operation, and one-day GitHub artifact retention before sett
 ## Metadata assessment before inventory
 
 Use `operation=metadata` to assess the original manifests before planning a larger
-inventory. The October 3 diagnostic inventory exceeded the unchanged 25,000 physical
+inventory. The October 3 diagnostic inventory exceeded the then-current 25,000 physical
 object cap. It did not establish the failing prefix, total payload bytes, or a
 logical export closure. Repeating it or raising caps is not a sizing strategy.
 
@@ -64,7 +64,17 @@ without modification. The current pointer must remain byte-identical throughout.
 This inventory downloads no scientific payload. Its review establishes exact
 keys, physical layouts, object sizes, total bytes, and supported export closure.
 
-Inventory limits: 200 S3 HTTP requests, 32 MiB aggregate response bytes, 25,000
+The successful metadata assessment for catalog
+`1410-acb8a859-f0bd-4114-98a1-2b9b34b26499` verified all 22 original schema-one
+manifests: 43,699 declared payload objects (36,388 core and 7,311 regional).
+Including one `component.json` per prefix predicts 43,721 physical keys and 60
+listing pages, or 85 reads with all metadata. These are declared expectations;
+only listing can measure actual physical keys and payload sizes. The inventory
+allowance is therefore 50,000 keys, independently of the unchanged 25,000-object
+export limit. This source change requires a new exact-source execution review
+before any inventory dispatch. It authorizes no additional payload transfer.
+
+Inventory limits: 200 S3 HTTP requests, 32 MiB aggregate response bytes, 50,000
 listed objects, 1,000 objects per page, 2 MiB response per listing, 64 KiB pointer,
 512 KiB snapshot, 1 MiB manifest, 48 MiB plan. The SDK response stream is bounded
 before listing XML is parsed. Requests get one attempt, a 10-second connection
