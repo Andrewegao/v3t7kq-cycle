@@ -100,7 +100,8 @@ jobs:
       - name: Staging activation transport and fail-closed recovery contracts
         run: |
           npm ci --ignore-scripts --prefix staging-controller
-          node --test tests/train3-baseline-preparation.mjs
+          node tools/train3-baseline-encrypt.mjs prepare-toolchain --destination "$RUNNER_TEMP/train3-age-tools"
+          TRAIN3_AGE_BINARY="$RUNNER_TEMP/train3-age-tools/age" TRAIN3_AGE_KEYGEN_BINARY="$RUNNER_TEMP/train3-age-tools/age-keygen" TRAIN3_AGE_DISTRIBUTION_ARCHIVE="$RUNNER_TEMP/train3-age-tools/distribution.tar.gz" node --test tests/train3-baseline-preparation.mjs tests/train3-baseline-join.mjs tests/train3-baseline-encrypt.mjs tests/train3-baseline-decrypt.mjs
           node --test tests/staging-*.mjs
           python3 tests/staging-place-collect.py
           python3 tests/staging-consumer-reuse.py

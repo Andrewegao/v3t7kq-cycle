@@ -8,7 +8,7 @@ on:
         default: false
       operation:
         type: choice
-        options: [metadata, inventory, export]
+        options: [metadata, inventory, batch-export]
         default: inventory
       reviewed_source_sha:
         description: Reviewed exact Cycle main commit containing this workflow
@@ -19,7 +19,32 @@ on:
         type: string
         required: true
       reviewed_plan_sha256:
-        description: Export only; exact tracked ops/train3-baseline/export-plan.json digest
+        description: Export or batch-export; exact tracked ops/train3-baseline/export-plan.json digest
+        type: string
+        default: ''
+      reviewed_batch_plan_sha256:
+        description: Batch-export only; exact tracked ops/train3-baseline/batch-plan.json digest
+        type: string
+        default: ''
+      batch_id:
+        description: Batch-export only; separately approved fixed selection
+        type: choice
+        options: ['', batch-1, batch-2, batch-3]
+        default: ''
+      owner_recipient_confirmed:
+        description: Separate approval of private payload transfer and this exact recipient/destination
+        type: boolean
+        default: false
+      reviewed_recipient_id:
+        description: Batch-export only; approved recipient identity
+        type: string
+        default: ''
+      reviewed_age_recipient:
+        description: Batch-export only; approved native X25519 age public recipient (never a private key)
+        type: string
+        default: ''
+      reviewed_age_recipient_sha256:
+        description: Batch-export only; SHA256 of exact public recipient text without a newline
         type: string
         default: ''
 permissions:
@@ -45,8 +70,14 @@ jobs:
         run: |
           npm ci --ignore-scripts --no-audit --no-fund --prefix staging-controller
           npm ci --ignore-scripts --no-audit --no-fund --prefix tools/inventory
+      - name: Prepare the exact public age toolchain without credentials
+        run: node tools/train3-baseline-encrypt.mjs prepare-toolchain --destination "$RUNNER_TEMP/train3-age-tools"
       - name: Check acquisition contracts without credentials
-        run: node --test tests/train3-baseline-preparation.mjs
+        env:
+          TRAIN3_AGE_BINARY: ${{ runner.temp }}/train3-age-tools/age
+          TRAIN3_AGE_KEYGEN_BINARY: ${{ runner.temp }}/train3-age-tools/age-keygen
+          TRAIN3_AGE_DISTRIBUTION_ARCHIVE: ${{ runner.temp }}/train3-age-tools/distribution.tar.gz
+        run: node --test tests/train3-baseline-preparation.mjs tests/train3-baseline-join.mjs tests/train3-baseline-encrypt.mjs tests/train3-baseline-decrypt.mjs
       - name: Read the exact baseline through the existing shared reader
         env:
           TRAIN3_PREPARATION_ENABLED: ${{ inputs.enable_preparation }}
@@ -54,10 +85,21 @@ jobs:
           REVIEWED_SOURCE_SHA: ${{ inputs.reviewed_source_sha }}
           EXPECTED_CATALOG_ID: ${{ inputs.expected_catalog_id }}
           REVIEWED_PLAN_SHA256: ${{ inputs.reviewed_plan_sha256 }}
+          REVIEWED_BATCH_PLAN_SHA256: ${{ inputs.reviewed_batch_plan_sha256 }}
+          BATCH_ID: ${{ inputs.batch_id }}
+          OWNER_RECIPIENT_CONFIRMED: ${{ inputs.owner_recipient_confirmed }}
+          RECIPIENT_ID: ${{ inputs.reviewed_recipient_id }}
+          REVIEWED_RECIPIENT_ID: ${{ inputs.reviewed_recipient_id }}
+          AGE_RECIPIENT: ${{ inputs.reviewed_age_recipient }}
+          REVIEWED_AGE_RECIPIENT: ${{ inputs.reviewed_age_recipient }}
+          REVIEWED_AGE_RECIPIENT_SHA256: ${{ inputs.reviewed_age_recipient_sha256 }}
+          TRAIN3_AGE_BINARY: ${{ runner.temp }}/train3-age-tools/age
+          TRAIN3_AGE_KEYGEN_BINARY: ${{ runner.temp }}/train3-age-tools/age-keygen
+          TRAIN3_AGE_DISTRIBUTION_ARCHIVE: ${{ runner.temp }}/train3-age-tools/distribution.tar.gz
           SHARED_R2_READ_ACCESS_KEY_ID: ${{ secrets.SHARED_R2_READ_ACCESS_KEY_ID }}
           SHARED_R2_READ_SECRET_ACCESS_KEY: ${{ secrets.SHARED_R2_READ_SECRET_ACCESS_KEY }}
         run: node tools/train3-baseline-preparation.mjs
-      - name: Retain only complete original bytes and non-secret receipts
+      - name: Retain only complete metadata or recipient-encrypted payload output
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: train3-baseline-${{ inputs.operation }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -70,3 +112,4 @@ jobs:
         run: |
           rm -rf -- "$RUNNER_TEMP/train3-baseline-work-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           rm -rf -- "$RUNNER_TEMP/train3-baseline-preparation"
+          rm -rf -- "$RUNNER_TEMP/train3-age-tools"

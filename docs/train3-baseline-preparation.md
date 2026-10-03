@@ -83,20 +83,24 @@ inside a 45-minute job. Reserve at least 1 GiB plus twice the plan cap locally.
 The only retained artifact is the bounded plan and acquisition receipt, for one
 day, without compression. Interrupted/failed acquisition is not uploaded.
 
-## Separate request: export
+## Legacy single-export admission
 
 After reviewing the first artifact, commit its exact `inventory-plan.json` bytes
 as `ops/train3-baseline/export-plan.json` through the owning integration lane.
-Review that new source SHA and plan SHA256, then authorize a separate export run.
-No plan is supplied by default in this change. This prevents inventory approval
-from implicitly authorizing a larger transfer.
+Review that new source SHA and plan SHA256 before considering payload transfer.
+The measured catalog-1410 inventory is now tracked with SHA256
+`9f1855cbdd4dde5f859421c806759d9d5c554bd7f3ab3482e960551f4308e93c`.
+Tracking a plan and merging the helper do not authorize its payload transfer.
 
-Export supports original schema-one component layouts only. It refuses schema-two
+The low-level legacy export validator supports original schema-one component layouts only. It refuses schema-two
 references, packed, or direct authenticated layouts: those need a separate reviewed
 transport that preserves their logical closure. It also refuses missing pairs,
 changed identities, map/point generation mismatch, more than 25,000 payload objects,
 more than 64 MiB per object, or more than 2 GiB aggregate payload. Do not raise these
 limits to fit an unknown catalog. Review measured sizes and runner capacity first.
+The manual workflow no longer offers legacy `export`, and the CLI explicitly
+rejects it before loading a reader. Its old plaintext artifact path cannot be
+used as a fallback if encrypted batching fails.
 
 Export performs at most 25,100 S3 reads, with the same finite timeout/no-retry policy.
 Raw byte count is capped at 2 GiB plus 32 MiB metadata. Before acquisition, require
@@ -117,3 +121,119 @@ Output is assembled in a fresh invocation-owned temporary directory, then rename
 to its final artifact directory only after all checks pass. The workflow's final
 cleanup deletes only its reserved private output directories. The ephemeral runner
 owns final cleanup after a forced termination. No provider endpoint is read.
+
+## Three separately approved batches and a local join
+
+The manual batch workflow is default-off. Cycle is public. It encrypts every
+payload batch before any artifact upload; its only payload output is `batch.age`
+and a minimal ciphertext receipt. That receipt contains no original paths,
+catalogs, source/run identities or acquisition receipts; those batch records are
+inside the encrypted archive. Reviewed tracked source plans, workflow identities,
+and previously acquired metadata remain public. Encryption protects scientific
+payload bodies and new acquisition receipts. Metadata/inventory retain their
+documented behavior. Independent source review, CI and specific
+human data/destination approval are required before acquisition. No approved
+private Atmos reader path was found.
+
+The measured complete closure contains 43,699 payload objects and 5,449,895,622
+bytes. The existing single-export limit still rejects it. `batch-export` uses the
+exact original inventory and the tracked `batch-plan.json` digest
+`9eafe3a4a3fb3329886f567166c8dfb51b9affd0505ef855d6dba2aab7064c2c`.
+Admission verifies all 22 original identities and all eleven map/point pairs before
+selecting one fixed batch. The full-plan 6 GiB / 45,000-object allowance applies
+only to local metadata validation; each transfer retains the 2 GiB, 25,000-object,
+64 MiB/object and 25,100-request limits. No listing occurs during batch export.
+
+| Selection | Payload objects | Payload bytes | Required free scratch bytes |
+| --- | ---: | ---: | ---: |
+| batch-1 | 13,027 | 1,817,160,950 | 8,342,385,624 |
+| batch-2 | 15,464 | 1,819,719,449 | 8,352,619,620 |
+| batch-3 | 15,208 | 1,813,015,223 | 8,325,802,716 |
+
+Each batch uses at most eight concurrent reads and a 30-minute acquisition budget
+inside the unchanged 45-minute job. The helper allows at most 40 minutes overall,
+including verification and up to 10 minutes of encryption. Free disk must satisfy four times its reviewed
+payload plus 1 GiB before acquisition; a 1 GiB reserve is monitored during writes.
+The helper stops scheduling on the first failure, cancels active requests, and
+waits for every worker to retire before cleaning its own output. It verifies the
+reviewed current-pointer bytes before and after the transfer. Rotation stops the
+run; another catalog cannot be substituted or mixed across batches.
+
+The encrypted batch archive retains original bytes and regular core copies under
+the existing paths, for one day with upload compression disabled. It has a distinct batch receipt,
+`completeBaselineEligible=false`, and **no complete core seal**. Three successful
+batch jobs alone do not establish a complete baseline or scientific qualification.
+Across all three selections, original plus duplicate core payloads occupy
+10,296,080,134 bytes before metadata and archive overhead. Any encrypted transfer
+must budget that amount and separately account for local ciphertext staging.
+
+Recipient admission requires separate explicit confirmation, the exact approved
+recipient identity, native X25519 `age1` public recipient and its SHA256 without a
+newline. A checksum-validating empty encryption probe runs before the R2 reader
+is created. SSH, plugin and passphrase forms are refused. The pinned age v1.3.2
+distribution has a 32 MiB archive / 128 MiB expanded-tool bound, one attempt and
+a 60-second deadline; original executable members and versions are checked before
+use. Only public tool bytes are downloaded during tests. Synthetic fixture keys
+do not authorize a real recipient.
+
+After independently verifying a complete partial batch, the helper streams only
+regular USTAR records directly into age. There is no plaintext archive file.
+Encryption has a 4 GiB + 128 MiB archive cap, 4 GiB + 132 MiB ciphertext cap,
+50,100-file cap, 64 KiB diagnostic cap, 4 KiB public receipt cap and 1 GiB monitored
+disk reserve. It drains its child process on interruption/failure before removing
+invocation-owned scratch/output. Plaintext batch scratch is removed before a
+successful artifact output is exposed. Missing recipient confirmation, tool drift,
+verification failure or encryption failure cannot retain a plaintext fallback.
+
+The credentialless `tools/train3-baseline-decrypt.mjs` decrypts three explicitly
+identified ciphertexts using a local-only identity file into private scratch,
+with bounded strict archive extraction and exact expected-file admission. No
+private key is uploaded, logged or committed. A local identity must be generated
+only after specific approval; it is not generated by the acquisition workflow.
+The `tools/train3-baseline-join.mjs` join consumes exactly three locally
+downloaded, quiescent batch directories, the two reviewed plans, and an explicit
+expected Cycle source SHA. It makes no network request. It checks each source,
+catalog, plan and batch identity; rejects extra, missing, linked or unsafe paths;
+rehashes original payload inventories and core copies; and requires the exact
+22-component union. Only a successful join emits the complete eight-core seal
+and retains all fourteen regional original closures. The destination must be new.
+Space admission uses the authenticated sizes, exact original/core copies, raw
+metadata, bounded receipts and seal, filesystem block rounding, and conservative
+file/directory metadata allowances. At 4,096-byte allocation blocks, the decoded
+batch trees are estimated at 10,884,222,976 bytes and the joined output at
+10,895,052,800 bytes. Joining already staged plaintext needs **11,968,827,392
+additional free bytes**. Combined decryption and joining needs **22,853,189,632
+additional free bytes after ciphertext staging**, before any decryption child
+starts. Both include scratch and a 1 GiB reserve.
+
+The three conservative ciphertext bounds plus receipt/directory allocation total
+10,376,966,144 bytes. Staging ciphertext, decrypting and joining on one filesystem
+therefore requires an estimated **33,230,155,776 free bytes before staging**,
+including the reserve. These estimates are recalculated for the destination's
+actual allocation block size; they are polled admission checks, not a filesystem
+quota or protection against other writers. Free space is checked during writes.
+The observed local filesystem has about 18.29 GB available and fails admission.
+Choose a private destination with enough capacity before approving acquisition;
+this workflow does not delete unrelated files to make space. Its private temporary
+directory and destination reservation are invocation-owned; inputs must remain
+locally quiescent.
+
+The local commands require explicit reviewed file digests and source identity:
+
+```text
+node tools/train3-baseline-join.mjs PLAN PLAN_SHA BATCH_PLAN BATCH_SHA SOURCE_SHA DESTINATION BATCH1 BATCH2 BATCH3
+node tools/train3-baseline-decrypt.mjs PLAN PLAN_SHA BATCH_PLAN BATCH_SHA SOURCE_SHA IDENTITY_FILE TOOLCHAIN_JSON TOOLCHAIN_SHA DESTINATION CIPHERTEXT_INPUTS_JSON CIPHERTEXT_INPUTS_SHA
+```
+
+The ciphertext input JSON contains exactly three rows with `ciphertextPath`,
+`ciphertextSha256`, `ciphertextBytes`, `receiptPath` and `receiptSha256`. Tool paths
+identify the exact verified age distribution and its original executables. Keep
+identity and descriptor files private locally; neither is a workflow upload.
+
+Automatic approval review rejected the proposed live acquisition of approximately
+5 GiB of private payload because specific human approval for that data and its
+destination is required. Source implementation, review and CI may continue.
+Prepare the exact merged source, fixed batches, artifact retention and private
+local destination for that approval before dispatching any batch. No payload
+export, join, provider collection, bake or publication has been performed by
+this source change.
