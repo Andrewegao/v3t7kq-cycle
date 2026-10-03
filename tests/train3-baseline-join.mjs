@@ -52,7 +52,7 @@ async function changeJson(root, path, change) {
   const value = JSON.parse(await readFile(join(root, path))); change(value); await put(root, path, json(value));
 }
 
-export async function fixture({ pairMismatch = false } = {}) {
+export async function fixture({ pairMismatch = false, historical = false } = {}) {
   const root = await mkdtemp(join(await realpath(tmpdir()), 'train3-join-test-'));
   const descriptors = {}, components = [], bodies = new Map();
   for (const id of IDS) {
@@ -88,6 +88,9 @@ export async function fixture({ pairMismatch = false } = {}) {
     reviewedInventorySha256: planSha256, batches }), batchPlanSha256 = hash(batchPlanBytes), batchDirectories = [];
   for (const batch of batches) {
     const directory = join(root, batch.id); await mkdir(directory, { mode: 0o700 }); batchDirectories.push(directory);
+    // Different current observations across invocation windows are allowed.
+    const observed = historical ? json({ ...JSON.parse(pointer), catalogId: `142${batchDirectories.length}-fixture`,
+      sequence: 1420 + batchDirectories.length, previousCatalogId: CATALOG, catalogSha256: 'f'.repeat(64) }) : pointer;
     for (const [path, bytes] of [['original/catalog-pointer.json', pointer], ['core/catalog-pointer.json', pointer],
       ['original/catalog-snapshot.json', snapshot], ['core/catalog-snapshot.json', snapshot]]) await put(directory, path, bytes);
     const receipts = [];
@@ -106,12 +109,14 @@ export async function fixture({ pairMismatch = false } = {}) {
       catalogId: CATALOG, reviewedPlanSha256: planSha256, reviewedBatchPlanSha256: batchPlanSha256, batchId: batch.id,
       catalogSha256: hash(snapshot), sourceSha: SOURCE, runId: String(10 + batchDirectories.length), runAttempt: '1',
       completeBaselineEligible: false, coreSealSha256: null, components: receipts,
+      ...(historical ? { operation: 'historical-batch-export' } : {}),
       scientificValidationPerformed: false, publicationAuthorized: false }));
-    await put(directory, 'acquisition-receipt.json', json({ operation: 'batch-export', catalogId: CATALOG, sourceSha: SOURCE,
+    await put(directory, 'acquisition-receipt.json', json({ operation: historical ? 'historical-batch-export' : 'batch-export', catalogId: CATALOG, sourceSha: SOURCE,
       batchId: batch.id, reviewedPlanSha256: planSha256, reviewedBatchPlanSha256: batchPlanSha256,
       requests: batch.payloadObjects + batch.componentIds.length + 3,
-      wireBytes: batch.payloadBytes + pointer.length * 2 + snapshot.length
-        + batch.componentIds.reduce((sum, id) => sum + bodies.get(id).raw.length, 0), publicationAuthorized: false }));
+      wireBytes: batch.payloadBytes + observed.length * 2 + snapshot.length
+        + batch.componentIds.reduce((sum, id) => sum + bodies.get(id).raw.length, 0),
+      ...(historical ? { observedCurrentPointerBase64: observed.toString('base64') } : {}), publicationAuthorized: false }));
   }
   return { root, bodies, pointer, snapshot, planBytes, planSha256, batchPlanBytes, batchPlanSha256, batchDirectories,
     destination: join(root, 'joined'), expectedSourceSha: SOURCE };
@@ -325,6 +330,60 @@ test('successful one-attempt acquisition counters must match exact selected bodi
     await changeJson(f.batchDirectories[0], 'acquisition-receipt.json', r => { r[field]--; });
     await refused(f);
   });
+});
+
+}
+
+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+test('historical independent admission authenticates observed accounting and joins all3 windows with original seal', async () => {
+  await useFixture(async f => {
+    const result = await verifyBatch({ ...f, batchDirectory: f.batchDirectories[0] });
+    assert.equal(result.operation, 'historical-batch-export');
+    assert.equal(result.receipt.operation, result.acquisition.operation);
+    assert.equal(result.receipt.observedCurrentPointerBase64, undefined);
+    const joined = await joinBaseline(f);
+    assert.equal(joined.operation, 'historical-batch-export');
+    assert.ok(joined.batches.every(row => row.operation === 'historical-batch-export'));
+    assert.deepEqual(await readFile(join(f.destination, 'original/catalog-pointer.json')), f.pointer);
+    const seal = await readFile(join(f.destination, 'core/seal.json'));
+    assert.equal(hash(seal), joined.coreSealSha256);
+    assert.equal(joined.scientificValidationPerformed, false); assert.equal(joined.publicationAuthorized, false);
+  }, { historical: true });
+});
+
+test('historical verifier refuses noncanonical, oversized, malformed pointer or forged and extra receipt fields', async () => {
+  const changes = [
+    ['acquisition-receipt.json', r => { r.observedCurrentPointerBase64 += '\n'; }],
+    ['acquisition-receipt.json', r => { r.observedCurrentPointerBase64 = Buffer.alloc(65537).toString('base64'); }],
+    ['acquisition-receipt.json', r => { r.observedCurrentPointerBase64 = Buffer.from('{}').toString('base64'); }],
+    ['acquisition-receipt.json', r => { r.observedCurrentPointerBase64 = json({ ...JSON.parse(Buffer.from(r.observedCurrentPointerBase64, 'base64')), extra: true }).toString('base64'); }],
+    ['acquisition-receipt.json', r => { r.requests++; }],
+    ['acquisition-receipt.json', r => { r.wireBytes++; }],
+    ['acquisition-receipt.json', r => { r.extra = true; }],
+    ['acquisition-receipt.json', r => { r.operation = 'unknown'; }],
+    ['batch-receipt.json', r => { r.operation = 'unknown'; }],
+    ['batch-receipt.json', r => { r.extra = true; }],
+    ['batch-receipt.json', r => { delete r.operation; }],
+  ];
+  for (const [path, change] of changes) await useFixture(async f => {
+    await changeJson(f.batchDirectories[0], path, change);
+    await assert.rejects(verifyBatch({ ...f, batchDirectory: f.batchDirectories[0] }));
+  }, { historical: true });
+});
+
+test('join refuses mixed strict and historical modes before writing any complete core seal', async () => {
+  await useFixture(async f => {
+    const directory = f.batchDirectories[1];
+    await changeJson(directory, 'batch-receipt.json', r => { delete r.operation; });
+    await changeJson(directory, 'acquisition-receipt.json', r => {
+      r.operation = 'batch-export';
+      const observed = Buffer.from(r.observedCurrentPointerBase64, 'base64');
+      r.wireBytes += 2 * (f.pointer.length - observed.length); delete r.observedCurrentPointerBase64;
+    });
+    await assert.rejects(joinBaseline(f), /mixed-batch-operations/);
+    await assert.rejects(lstat(f.destination), { code: 'ENOENT' });
+    assert.ok((await readdir(f.root)).every(name => !name.startsWith('.train3-baseline-join-')));
+  }, { historical: true });
 });
 
 }

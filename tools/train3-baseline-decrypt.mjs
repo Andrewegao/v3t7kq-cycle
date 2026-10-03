@@ -9,7 +9,7 @@ import { PassThrough, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
-import { batchPlan, LIMITS, hash, safeKey } from './train3-baseline-preparation.mjs';
+import { batchPlan, BATCH_OPERATIONS, LIMITS, hash, safeKey } from './train3-baseline-preparation.mjs';
 import { allocationEstimate, baselineCapacity, batchExpectedTree, joinBaseline, readRegular } from './train3-baseline-join.mjs';
 import { verifyAgeToolchain, assertAgeToolchain } from './train3-baseline-encrypt.mjs';
 
@@ -133,7 +133,7 @@ export async function extractUstar(stream, { planBytes, planSha256, batchPlanByt
     if (padding) check((await reader.read(padding)).every(byte => byte === 0), 'archive-padding');
     if (!selected) {
       receiptBytes = Buffer.concat(receipt); const acquisition = parse(receiptBytes);
-      check(acquisition.operation === 'batch-export' && acquisition.sourceSha === expectedSourceSha
+      check(BATCH_OPERATIONS.includes(acquisition.operation) && acquisition.sourceSha === expectedSourceSha
         && acquisition.reviewedPlanSha256 === planSha256 && acquisition.reviewedBatchPlanSha256 === batchPlanSha256,
       'archive-receipt-binding');
       selected = batchPlan(planBytes, planSha256, batchPlanBytes, batchPlanSha256, acquisition.batchId, acquisition.catalogId);

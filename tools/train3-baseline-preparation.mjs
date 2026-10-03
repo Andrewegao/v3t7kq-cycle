@@ -12,6 +12,7 @@ export const DATA = 'weatherx-data-production', COMPONENTS = 'weatherx-component
 export const CORE = ['ecmwf', 'gfs', 'hrrr', 'aifs'];
 export const MODELS = [...CORE, 'icon', 'hrdps', 'arome-antilles', 'hrrr-ak', 'nam', 'nam-hi', 'nam-ak'];
 export const IDS = MODELS.flatMap(id => [id, `point-${id}`]);
+export const BATCH_OPERATIONS = Object.freeze(['batch-export', 'historical-batch-export']);
 export const LIMITS = Object.freeze({ metadata: 32 * 1024 ** 2, plan: 48 * 1024 ** 2,
   pointer: 64 * 1024, snapshot: 512 * 1024, manifest: 1024 ** 2, page: 2 * 1024 ** 2,
   object: 64 * 1024 ** 2, payload: 2 * 1024 ** 3, objects: 25_000, inventoryObjects: 50_000,
@@ -83,12 +84,14 @@ export function gate(env) {
     && env.GITHUB_REF === 'refs/heads/main' && env.TRAIN3_PREPARATION_ENABLED === 'true', 'disabled-or-wrong-surface');
   check(/^[a-f0-9]{40}$/.test(env.REVIEWED_SOURCE_SHA ?? '') && env.REVIEWED_SOURCE_SHA === env.GITHUB_SHA, 'source-pin');
   check(ID.test(env.EXPECTED_CATALOG_ID ?? '') && !env.EXPECTED_CATALOG_ID.includes('..'), 'catalog-pin');
-  check(['metadata', 'inventory', 'export', 'batch-export'].includes(env.PREPARATION_OPERATION), 'operation');
+  check(['metadata', 'inventory', 'export', ...BATCH_OPERATIONS].includes(env.PREPARATION_OPERATION), 'operation');
   check(/^\d+$/.test(env.GITHUB_RUN_ID ?? '') && /^\d+$/.test(env.GITHUB_RUN_ATTEMPT ?? ''), 'invocation-identity');
-  if (['export', 'batch-export'].includes(env.PREPARATION_OPERATION)) check(HEX.test(env.REVIEWED_PLAN_SHA256 ?? ''), 'plan-pin');
+  if (['export', ...BATCH_OPERATIONS].includes(env.PREPARATION_OPERATION)) check(HEX.test(env.REVIEWED_PLAN_SHA256 ?? ''), 'plan-pin');
   // The public repository must never retain legacy plaintext payload artifacts.
   check(env.PREPARATION_OPERATION !== 'export', 'legacy-export-needs-confidential-transport');
-  if (env.PREPARATION_OPERATION === 'batch-export') {
+  if (env.PREPARATION_OPERATION === 'historical-batch-export')
+    check(env.HISTORICAL_BASELINE_CONFIRMED === 'true', 'historical-baseline-confirmation');
+  if (BATCH_OPERATIONS.includes(env.PREPARATION_OPERATION)) {
     check(HEX.test(env.REVIEWED_BATCH_PLAN_SHA256 ?? ''), 'batch-plan-pin');
     check(['batch-1', 'batch-2', 'batch-3'].includes(env.BATCH_ID), 'batch-id');
   }
@@ -98,10 +101,14 @@ export function gate(env) {
 // This wraps the SDK response stream BEFORE XML deserialization. A post-deserialization
 // array-length check alone would not bound malicious/oversized listing responses.
 export class BoundedReadHandler {
-  constructor(inner, { operation, now = Date.now }) {
+  constructor(inner, { operation, now = Date.now, reviewedKeys }) {
     this.inner = inner; this.now = now;
-    this.deadline = now() + (operation === 'batch-export' ? BATCH_LIMITS.milliseconds : LIMITS.milliseconds);
+    this.deadline = now() + (BATCH_OPERATIONS.includes(operation) ? BATCH_LIMITS.milliseconds : LIMITS.milliseconds);
     this.operation = operation; this.requests = 0; this.bytes = 0; this.metadata = inner.metadata;
+    if (operation === 'historical-batch-export') {
+      check(reviewedKeys instanceof Set && reviewedKeys.size > 0, 'historical-read-allowlist');
+      this.reviewedKeys = new Set(reviewedKeys);
+    }
   }
   destroy() { this.inner.destroy(); }
   updateHttpClientConfig(...args) { return this.inner.updateHttpClientConfig(...args); }
@@ -123,9 +130,11 @@ export class BoundedReadHandler {
       check(Object.keys(query).every(k => k === 'x-id') && (!query['x-id'] || query['x-id'] === 'GetObject'), 'object-query');
       check((bucket === DATA && (key === 'catalogs/current.json' || /^catalogs\/snapshots\/[A-Za-z0-9._-]+\.json$/.test(key)))
         || (bucket === COMPONENTS && /^components\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\//.test(key)), 'bucket-or-key');
+      if (this.operation === 'historical-batch-export')
+        check(this.reviewedKeys.has(`${bucket}/${key}`), 'historical-unselected-key');
       cap = bucket === DATA ? (key === 'catalogs/current.json' ? LIMITS.pointer : LIMITS.snapshot)
         : key.endsWith('/component.json') ? LIMITS.manifest : LIMITS.object;
-      check(['export', 'batch-export'].includes(this.operation) || bucket === DATA || key.endsWith('/component.json'), 'inventory-payload-read');
+      check(['export', ...BATCH_OPERATIONS].includes(this.operation) || bucket === DATA || key.endsWith('/component.json'), 'inventory-payload-read');
       if (this.operation === 'metadata' && bucket === COMPONENTS) {
         const parts = key.split('/');
         check(parts.length === 4 && parts[0] === 'components' && IDS.includes(parts[1])
@@ -139,7 +148,7 @@ export class BoundedReadHandler {
     let bytes = 0;
     const bounded = new Transform({ transform: (chunk, _encoding, callback) => {
       bytes += chunk.length; this.bytes += chunk.length;
-      if (bytes > cap || this.bytes > LIMITS.metadata + (['export', 'batch-export'].includes(this.operation) ? LIMITS.payload : 0)
+      if (bytes > cap || this.bytes > LIMITS.metadata + (['export', ...BATCH_OPERATIONS].includes(this.operation) ? LIMITS.payload : 0)
         || this.now() >= this.deadline) callback(refusal('wire-budget'));
       else callback(null, chunk);
     }, flush: callback => callback(this.now() >= this.deadline ? refusal('wire-deadline') : undefined) });
@@ -159,13 +168,13 @@ export async function bodyBytes(body, cap) {
     return Buffer.concat(chunks, bytes);
   } catch (error) { body.destroy?.(); throw error; }
 }
-export async function readClient(env, operation, signal, { httpHandler } = {}) {
+export async function readClient(env, operation, signal, { httpHandler, reviewedKeys } = {}) {
   check(env.SHARED_R2_READ_ACCESS_KEY_ID && env.SHARED_R2_READ_SECRET_ACCESS_KEY, 'missing-existing-reader');
   const require = createRequire(new URL('../staging-controller/package.json', import.meta.url));
   const { S3Client, GetObjectCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
   const { NodeHttpHandler } = require('@smithy/node-http-handler');
   const handler = new BoundedReadHandler(httpHandler ?? new NodeHttpHandler({ connectionTimeout: 10_000,
-    requestTimeout: 30_000, socketTimeout: 30_000, throwOnRequestTimeout: true }), { operation });
+    requestTimeout: 30_000, socketTimeout: 30_000, throwOnRequestTimeout: true }), { operation, reviewedKeys });
   const client = new S3Client({ region: 'auto', endpoint: `https://${ACCOUNT}.r2.cloudflarestorage.com`,
     forcePathStyle: true, maxAttempts: 1, requestHandler: handler,
     credentials: { accessKeyId: env.SHARED_R2_READ_ACCESS_KEY_ID, secretAccessKey: env.SHARED_R2_READ_SECRET_ACCESS_KEY } });
@@ -196,6 +205,29 @@ function envelope(pointerBytes, snapshotBytes, expected) {
     && s.parentCatalogId === p.previousCatalogId && (s.rollbackOfCatalogId ?? null) === (p.rollbackOfCatalogId ?? null)
     && s.components && !Array.isArray(s.components), 'catalog-envelope');
   return s;
+}
+
+// Actual serving metadata is observed only; none of its fields select recovery keys.
+export function observedCurrentPointer(bytes) {
+  check(Buffer.isBuffer(bytes) && bytes.length > 0 && bytes.length <= LIMITS.pointer, 'observed-current-pointer');
+  const p = json(bytes), fields = ['schemaVersion', 'catalogId', 'sequence', 'publishedAt', 'previousCatalogId', 'catalogSha256'];
+  const validId = value => typeof value === 'string' && ID.test(value) && !value.includes('..');
+  check(p && typeof p === 'object' && !Array.isArray(p)
+    && isDeepStrictEqual(Object.keys(p).sort(), [...fields, ...(Object.hasOwn(p, 'rollbackOfCatalogId') ? ['rollbackOfCatalogId'] : [])].sort())
+    && p.schemaVersion === 2 && validId(p.catalogId) && HEX.test(p.catalogSha256 ?? '')
+    && Number.isSafeInteger(p.sequence) && p.sequence > 0
+    && typeof p.publishedAt === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(p.publishedAt)
+    && Number.isFinite(Date.parse(p.publishedAt)) && (p.previousCatalogId === null || validId(p.previousCatalogId))
+    && (p.rollbackOfCatalogId === undefined || p.rollbackOfCatalogId === null || validId(p.rollbackOfCatalogId)), 'observed-current-pointer');
+  return bytes;
+}
+
+export function historicalReadKeys(reviewed) {
+  return new Set([`${DATA}/catalogs/current.json`, `${DATA}/catalogs/snapshots/${reviewed.plan.catalogId}.json`,
+    ...reviewed.selectedComponents.flatMap(item => [
+      `${COMPONENTS}/${reviewed.catalog.components[item.id].manifestKey}`,
+      ...item.objects.map(row => `${COMPONENTS}/${row.key}`),
+    ])]);
 }
 function descriptor(entry, id) {
   check(entry.componentId === id && ID.test(entry.artifactId ?? '') && !entry.artifactId.includes('..')
@@ -408,10 +440,12 @@ export async function exportBaseline(client, reviewed, root) {
 }
 
 export async function exportBatch(client, reviewed, root, { signal, cancel = () => client.close?.(), sourceSha, runId, runAttempt,
-  disk = statfs, now = Date.now } = {}) {
+  disk = statfs, now = Date.now, operation = 'batch-export' } = {}) {
   const { plan, pointer, snapshot, catalog, selectedComponents } = reviewed;
   check(/^[a-f0-9]{40}$/.test(sourceSha ?? '') && /^\d+$/.test(runId ?? '')
     && /^\d+$/.test(runAttempt ?? ''), 'invocation-identity');
+  check(BATCH_OPERATIONS.includes(operation), 'operation');
+  const historical = operation === 'historical-batch-export';
   const deadline = now() + BATCH_LIMITS.milliseconds;
   const budget = async () => {
     check(!signal?.aborted && now() < deadline, 'interrupted-or-deadline');
@@ -421,8 +455,16 @@ export async function exportBatch(client, reviewed, root, { signal, cancel = () 
   };
   const write = async (path, bytes) => { await budget(); const row = await save(root, path, bytes); await budget(); return row; };
   await budget();
-  check(pointer.equals(await client.get(DATA, 'catalogs/current.json', LIMITS.pointer)), 'catalog-rotated');
+  const observed = await client.get(DATA, 'catalogs/current.json', LIMITS.pointer);
+  if (historical) observedCurrentPointer(observed);
+  else check(pointer.equals(observed), 'catalog-rotated');
   check(snapshot.equals(await client.get(DATA, `catalogs/snapshots/${plan.catalogId}.json`, LIMITS.snapshot)), 'snapshot-changed');
+  // Historical recovery preflights every selected manifest before any payload GET.
+  if (historical) for (const item of selectedComponents) {
+    await budget();
+    check(Buffer.from(item.manifestBase64, 'base64').equals(await client.get(COMPONENTS,
+      catalog.components[item.id].manifestKey, LIMITS.manifest)), 'manifest-changed');
+  }
   for (const prefix of ['core', 'original']) {
     await write(`${prefix}/catalog-pointer.json`, pointer); await write(`${prefix}/catalog-snapshot.json`, snapshot);
   }
@@ -430,7 +472,7 @@ export async function exportBatch(client, reviewed, root, { signal, cancel = () 
   for (const item of selectedComponents) {
     await budget();
     const entry = catalog.components[item.id], raw = Buffer.from(item.manifestBase64, 'base64'), manifest = json(raw);
-    check(raw.equals(await client.get(COMPONENTS, entry.manifestKey, LIMITS.manifest)), 'manifest-changed');
+    if (!historical) check(raw.equals(await client.get(COMPONENTS, entry.manifestKey, LIMITS.manifest)), 'manifest-changed');
     await write(`original/components/${item.id}/component.json`, raw);
     const core = CORE.includes(item.id.replace(/^point-/, ''));
     if (core) await write(`core/components/${item.id}/manifest.json`, raw);
@@ -465,29 +507,30 @@ export async function exportBatch(client, reviewed, root, { signal, cancel = () 
     receipts.push({ componentId: item.id, manifestSha256: hash(raw), inventorySha256: manifest.inventorySha256,
       objectCount: rows.length, bytes: rows.reduce((sum, row) => sum + row.size, 0) });
   }
-  check(pointer.equals(await client.get(DATA, 'catalogs/current.json', LIMITS.pointer)), 'catalog-rotated');
+  check(observed.equals(await client.get(DATA, 'catalogs/current.json', LIMITS.pointer)), 'catalog-rotated');
   await budget();
   return { schemaVersion: 1, kind: 'weatherx-train3-original-baseline-batch-v1', completeBaselineEligible: false,
     coreSealSha256: null, catalogId: plan.catalogId, reviewedPlanSha256: reviewed.reviewedPlanSha256,
     reviewedBatchPlanSha256: reviewed.reviewedBatchPlanSha256, batchId: reviewed.batchId,
     catalogSha256: json(pointer).catalogSha256, sourceSha, runId, runAttempt, components: receipts,
+    ...(historical ? { operation, observedCurrentPointerBase64: observed.toString('base64') } : {}),
     scientificValidationPerformed: false, publicationAuthorized: false };
 }
 
 async function runPreparation({ env = process.env, clientFactory = readClient, now = Date.now,
   milliseconds } = {}, context) {
   const { operation, catalogId } = gate(env);
-  const maximumMilliseconds = operation === 'batch-export' ? BATCH_LIMITS.totalMilliseconds : LIMITS.milliseconds;
+  const maximumMilliseconds = BATCH_OPERATIONS.includes(operation) ? BATCH_LIMITS.totalMilliseconds : LIMITS.milliseconds;
   check(milliseconds === undefined || Number.isSafeInteger(milliseconds) && milliseconds > 0
     && milliseconds <= maximumMilliseconds, 'preparation-time-budget');
   const deadline = now() + (milliseconds ?? maximumMilliseconds);
   let reviewed, planBytes, batchBytes, toolchain, recipient, encryption;
-  if (['export', 'batch-export'].includes(operation)) {
+  if (['export', ...BATCH_OPERATIONS].includes(operation)) {
     context.phase = 'plan-admission';
     const path = resolve('ops/train3-baseline/export-plan.json'), info = await lstat(path);
     check(info.isFile() && !info.isSymbolicLink() && info.nlink === 1 && info.size <= LIMITS.plan, 'plan-file');
     planBytes = await readFile(path);
-    if (operation === 'batch-export') {
+    if (BATCH_OPERATIONS.includes(operation)) {
       const batchPath = resolve('ops/train3-baseline/batch-plan.json'), batchInfo = await lstat(batchPath);
       check(batchInfo.isFile() && !batchInfo.isSymbolicLink() && batchInfo.nlink === 1
         && batchInfo.size <= BATCH_LIMITS.plan, 'batch-plan-file');
@@ -496,7 +539,7 @@ async function runPreparation({ env = process.env, clientFactory = readClient, n
         env.REVIEWED_BATCH_PLAN_SHA256, env.BATCH_ID, catalogId);
     } else reviewed = exportPlan(planBytes, env.REVIEWED_PLAN_SHA256, catalogId);
   }
-  if (operation === 'batch-export') {
+  if (BATCH_OPERATIONS.includes(operation)) {
     context.phase = 'recipient-admission';
     check(env.OWNER_RECIPIENT_CONFIRMED === 'true', 'owner-recipient-confirmation');
     encryption = await import('./train3-baseline-encrypt.mjs');
@@ -524,21 +567,25 @@ async function runPreparation({ env = process.env, clientFactory = readClient, n
   try {
     checkBudget();
     context.phase = 'reader-init';
-    client = trackedReader(await clientFactory(env, operation, abort.signal), context);
+    client = trackedReader(await clientFactory(env, operation, abort.signal,
+      operation === 'historical-batch-export' ? { reviewedKeys: historicalReadKeys(reviewed) } : undefined), context);
     const result = operation === 'metadata' ? await metadataAudit(client, catalogId, env.GITHUB_SHA)
       : operation === 'inventory' ? await inventory(client, catalogId, env.GITHUB_SHA)
-      : operation === 'batch-export' ? await exportBatch(client, reviewed, work, { signal: abort.signal, cancel,
-        sourceSha: env.GITHUB_SHA, runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT, now })
+      : BATCH_OPERATIONS.includes(operation) ? await exportBatch(client, reviewed, work, { signal: abort.signal, cancel,
+        sourceSha: env.GITHUB_SHA, runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT, now, operation })
       : await exportBaseline(client, reviewed, work);
     checkBudget(); context.phase = 'output-finalization';
+    const observedCurrentPointerBase64 = result.observedCurrentPointerBase64;
+    if (operation === 'historical-batch-export') delete result.observedCurrentPointerBase64;
     await save(work, operation === 'metadata' ? 'metadata-audit.json' : operation === 'inventory'
-      ? 'inventory-plan.json' : operation === 'batch-export' ? 'batch-receipt.json' : 'export-receipt.json', Buffer.from(JSON.stringify(result) + '\n'));
+      ? 'inventory-plan.json' : BATCH_OPERATIONS.includes(operation) ? 'batch-receipt.json' : 'export-receipt.json', Buffer.from(JSON.stringify(result) + '\n'));
     await save(work, 'acquisition-receipt.json', Buffer.from(JSON.stringify({ operation, catalogId,
-      sourceSha: env.GITHUB_SHA, ...(operation === 'batch-export' ? { batchId: reviewed.batchId,
+      sourceSha: env.GITHUB_SHA, ...(BATCH_OPERATIONS.includes(operation) ? { batchId: reviewed.batchId,
         reviewedPlanSha256: reviewed.reviewedPlanSha256, reviewedBatchPlanSha256: reviewed.reviewedBatchPlanSha256 } : {}),
+      ...(operation === 'historical-batch-export' ? { observedCurrentPointerBase64 } : {}),
       ...client.stats(), publicationAuthorized: false }) + '\n'));
     let publicResult = result;
-    if (operation === 'batch-export') {
+    if (BATCH_OPERATIONS.includes(operation)) {
       context.phase = 'batch-verification';
       const { verifyBatch } = await import('./train3-baseline-join.mjs');
       const verifiedBatch = await verifyBatch({ planBytes, planSha256: env.REVIEWED_PLAN_SHA256,

@@ -60,7 +60,7 @@ the existing locked S3 client; there is no upload/delete/list-whole-bucket API.
 The roster is map/point pairs for `ecmwf`, `gfs`, `hrrr`, `aifs`, `icon`, `hrdps`,
 `arome-antilles`, `hrrr-ak`, `nam`, `nam-hi`, and `nam-ak`. Missing pairs are reported.
 Original pointer/snapshot/manifest bytes are embedded in the inventory plan,
-without modification. The current pointer must remain byte-identical throughout.
+without modification. The current pointer must be byte-identical at the initial and final reads; this does not detect intervening changes that return to the same bytes.
 This inventory downloads no scientific payload. Its review establishes exact
 keys, physical layouts, object sizes, total bytes, and supported export closure.
 
@@ -155,9 +155,9 @@ inside the unchanged 45-minute job. The helper allows at most 40 minutes overall
 including verification and up to 10 minutes of encryption. Free disk must satisfy four times its reviewed
 payload plus 1 GiB before acquisition; a 1 GiB reserve is monitored during writes.
 The helper stops scheduling on the first failure, cancels active requests, and
-waits for every worker to retire before cleaning its own output. It verifies the
-reviewed current-pointer bytes before and after the transfer. Rotation stops the
-run; another catalog cannot be substituted or mixed across batches.
+waits for every worker to retire before cleaning its own output. In strict `batch-export`, it requires the reviewed current-pointer bytes before
+and after the transfer. A differing pointer stops that mode; another catalog cannot
+be substituted or mixed across batches.
 
 The encrypted batch archive retains original bytes and regular core copies under
 the existing paths, for one day with upload compression disabled. It has a distinct batch receipt,
@@ -212,9 +212,8 @@ therefore requires an estimated **33,230,155,776 free bytes before staging**,
 including the reserve. These estimates are recalculated for the destination's
 actual allocation block size; they are polled admission checks, not a filesystem
 quota or protection against other writers. Free space is checked during writes.
-The observed local filesystem has about 18.29 GB available and fails admission.
-Choose a private destination with enough capacity before approving acquisition;
-this workflow does not delete unrelated files to make space. Its private temporary
+Available capacity must be measured again immediately before staging. This
+workflow does not delete unrelated files to make space. Its private temporary
 directory and destination reservation are invocation-owned; inputs must remain
 locally quiescent.
 
@@ -230,10 +229,42 @@ The ciphertext input JSON contains exactly three rows with `ciphertextPath`,
 identify the exact verified age distribution and its original executables. Keep
 identity and descriptor files private locally; neither is a workflow upload.
 
-Automatic approval review rejected the proposed live acquisition of approximately
-5 GiB of private payload because specific human approval for that data and its
-destination is required. Source implementation, review and CI may continue.
-Prepare the exact merged source, fixed batches, artifact retention and private
-local destination for that approval before dispatching any batch. No payload
-export, join, provider collection, bake or publication has been performed by
-this source change.
+## Explicit recovery of the reviewed historical catalog
+
+`historical-batch-export` additionally requires `historical_baseline_confirmed=true`.
+It uses the same exact source, catalog, full-plan, batch-plan and native recipient
+admission. It selects only the original reviewed catalog-1410 snapshot, manifests
+and payload keys. A different actual `catalogs/current.json` never selects another
+snapshot or payload. Strict `batch-export` retains its existing refusal behavior;
+there is no automatic fallback.
+
+Historical mode reads and structurally validates the bounded actual current pointer,
+then checks the exact approved snapshot and **all selected manifests before any
+scientific payload read**. It reads only the fixed reviewed keys and repeats the
+original producer inventory hash checks. Finally, it requires the actual current
+pointer to equal the bytes observed at the first read. This establishes equality
+at the two read boundaries; it does not prove continuous stability or detect an
+intervening change that returns to the original observed bytes (ABA).
+
+The private acquisition receipt records canonical base64 of the observed current
+pointer, bounded to 64 KiB decoded. Independent batch verification checks its
+structure and recomputes exact GET and wire counts from those bytes. Historical
+batch GET totals are 13,037, 15,470 and 15,223 respectively: payload objects plus
+selected manifests plus three reads. Wire bytes are payload plus the approved
+snapshot and selected manifests plus twice the observed current pointer length.
+All existing object, aggregate, worker, time, disk and ciphertext retention limits
+remain. No listing, provider collection or storage mutation is permitted.
+
+Acquisition, batch and join receipts retain the explicit operation. Decryption
+admits only the two known batch operations; a join rejects mixed operations.
+The historical pointer files are the original reviewed inventory bytes, rather
+than evidence of the currently serving catalog. A complete core seal authenticates
+recovered bytes; it does not establish freshness, scientific qualification or
+publication authority. Retention and availability of the old remote bytes remain
+unverified, and missing or changed bytes must fail closed.
+
+Specific human approval for the original catalog-1410 payload, private Mac
+destination and recipient has been recorded separately. Source review and merge
+do not dispatch acquisition. The final concrete historical operation remains held
+for root inspection and coordination. No payload export, join, bake or publication
+is established by this source change.

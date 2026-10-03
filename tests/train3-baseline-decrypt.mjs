@@ -54,8 +54,8 @@ async function generateIdentity(f, tool, name = 'synthetic.key') {
   const publicResult = spawnSync(tool.ageKeygenBinary, ['-y', path], { env: { LANG: 'C' }, cwd: f.root, maxBuffer: 4096 });
   assert.equal(publicResult.status, 0); return { path, recipient: publicResult.stdout.toString('ascii').trim() };
 }
-async function encryptedFixture() {
-  const f = await fixture();
+async function encryptedFixture(historical = false) {
+  const f = await fixture({ historical });
   try {
     const toolchain = await tools(), identity = await generateIdentity(f, toolchain);
     const recipient = await validateRecipient({ ownerConfirmed: true, recipientId: 'synthetic-fixture',
@@ -73,8 +73,8 @@ async function encryptedFixture() {
     return { ...f, identityFile: identity.path, recipient: identity.recipient, toolchain: toolConfig, encryptedBatches };
   } catch (error) { await rm(f.root, { recursive: true, force: true }); throw error; }
 }
-async function useEncrypted(action) {
-  const f = await encryptedFixture();
+async function useEncrypted(action, historical = false) {
+  const f = await encryptedFixture(historical);
   try { await action(f); } finally { await rm(f.root, { recursive: true, force: true }); }
 }
 async function refuses(f, options) {
@@ -315,4 +315,29 @@ test('finite refusal diagnostics withhold native paths, key material and arbitra
       assert.deepEqual(decryptFailureDiagnostic(error), { phase: 'descriptor', code: 'ciphertext-pin' }); return true;
     });
   });
+});
+
+test('historical native encryption/decryption admits only pinned original bytes and all3 same-mode batches', async () => {
+  await useEncrypted(async f => {
+    const receipt = await decryptAndJoin(f);
+    assert.equal(receipt.operation, 'historical-batch-export');
+    assert.equal(receipt.components.length, 22);
+    assert.equal(receipt.scientificValidationPerformed, false); assert.equal(receipt.publicationAuthorized, false);
+    const seal = await readFile(join(f.destination, 'core/seal.json')); assert.equal(hash(seal), receipt.coreSealSha256);
+    for (const [id, body] of f.bodies) for (const [path, bytes] of body.payload)
+      assert.deepEqual(await readFile(join(f.destination, `original/components/${id}/payload/${path}`)), bytes);
+    for (const item of f.encryptedBatches) {
+      const publicReceipt = JSON.parse(item.receiptBytes);
+      assert.equal(publicReceipt.observedCurrentPointerBase64, undefined);
+      assert.equal(publicReceipt.operation, undefined);
+    }
+  }, true);
+});
+
+test('decryption archive admission refuses an unknown operation before accepting its tree', async () => {
+  await useFixture(async f => {
+    const entries = await entriesFor(f), acquisition = entries.find(e => e.path === 'acquisition-receipt.json');
+    const receipt = JSON.parse(acquisition.bytes); receipt.operation = 'unknown'; acquisition.bytes = json(receipt);
+    await assert.rejects(extract(f, archive(entries)), /archive-receipt-binding/);
+  }, { historical: true });
 });

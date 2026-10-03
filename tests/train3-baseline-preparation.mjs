@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { Readable } from 'node:stream';
 import { execFileSync } from 'node:child_process';
-import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseWorkflow } from '../tools/workflow-inventory.mjs';
 import { ACCOUNT, BATCH_LIMITS, BoundedReadHandler, COMPONENTS, DATA, IDS, LIMITS, batchPlan, bodyBytes, exportBaseline, exportBatch,
-  exportPlan, failureDiagnostic, gate, hash, inventory, metadataAudit, preparation, producerOrder, readClient } from '../tools/train3-baseline-preparation.mjs';
+  exportPlan, failureDiagnostic, gate, hash, historicalReadKeys, inventory, metadataAudit, preparation, producerOrder, readClient } from '../tools/train3-baseline-preparation.mjs';
 
 const SOURCE = 'a'.repeat(40), CATALOG = '1395-fixture';
 const env = { GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', GITHUB_REPOSITORY: 'Andrewegao/v3t7kq-cycle',
@@ -104,7 +104,8 @@ test('workflow is manual, disabled by default, pinned, read-only, and retains su
   const source = await readFile(new URL('../' + path, import.meta.url), 'utf8'), workflow = parseWorkflow(source, path).data;
   assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch']);
   assert.equal(workflow.on.workflow_dispatch.inputs.enable_preparation.default, false);
-  assert.deepEqual(workflow.on.workflow_dispatch.inputs.operation.options, ['metadata', 'inventory', 'batch-export']);
+  assert.deepEqual(workflow.on.workflow_dispatch.inputs.operation.options, ['metadata', 'inventory', 'batch-export', 'historical-batch-export']);
+  assert.equal(workflow.on.workflow_dispatch.inputs.historical_baseline_confirmed.default, false);
   assert.equal(workflow.on.workflow_dispatch.inputs.reviewed_plan_sha256.type, 'string');
   assert.equal(workflow.on.workflow_dispatch.inputs.reviewed_batch_plan_sha256.type, 'string');
   assert.deepEqual(workflow.on.workflow_dispatch.inputs.batch_id.options, ['', 'batch-1', 'batch-2', 'batch-3']);
@@ -128,6 +129,7 @@ test('workflow is manual, disabled by default, pinned, read-only, and retains su
   assert.ok(toolIndex >= 0 && toolIndex < fixtureIndex);
   const readEnv = job.steps[reader].env;
   assert.equal(readEnv.OWNER_RECIPIENT_CONFIRMED, '${{ inputs.owner_recipient_confirmed }}');
+  assert.equal(readEnv.HISTORICAL_BASELINE_CONFIRMED, '${{ inputs.historical_baseline_confirmed }}');
   assert.equal(readEnv.REVIEWED_AGE_RECIPIENT_SHA256, '${{ inputs.reviewed_age_recipient_sha256 }}');
   assert.equal(readEnv.AGE_RECIPIENT, readEnv.REVIEWED_AGE_RECIPIENT);
   assert.equal(readEnv.RECIPIENT_ID, readEnv.REVIEWED_RECIPIENT_ID);
@@ -627,10 +629,12 @@ test('batch CLI refuses unconfirmed recipients before a reader and retains only 
     REVIEWED_PLAN_SHA256: hash(bytes), REVIEWED_BATCH_PLAN_SHA256: hash(batchBytes) };
   try {
     process.chdir(repo);
+    for (const operation of ['batch-export', 'historical-batch-export'])
     for (const change of [{ REVIEWED_BATCH_PLAN_SHA256: '' }, { BATCH_ID: 'other' }, { REVIEWED_PLAN_SHA256: 'b'.repeat(64) },
-      { REVIEWED_BATCH_PLAN_SHA256: 'b'.repeat(64) }]) {
+      { REVIEWED_BATCH_PLAN_SHA256: 'b'.repeat(64) }, { REVIEWED_SOURCE_SHA: 'b'.repeat(40) }, { EXPECTED_CATALOG_ID: 'other-fixture' }]) {
       let called = false;
-      await assert.rejects(preparation({ env: { ...batchEnv, ...change }, clientFactory() { called = true; } }));
+      await assert.rejects(preparation({ env: { ...batchEnv, PREPARATION_OPERATION: operation,
+        HISTORICAL_BASELINE_CONFIRMED: 'true', ...change }, clientFactory() { called = true; } }));
       assert.equal(called, false); assert.deepEqual(await readdir(root), ['repo']);
     }
     let called = false;
@@ -650,31 +654,48 @@ test('batch CLI refuses unconfirmed recipients before a reader and retains only 
       REVIEWED_RECIPIENT_ID: 'synthetic-fixture', AGE_RECIPIENT: recipient, REVIEWED_AGE_RECIPIENT: recipient,
       REVIEWED_AGE_RECIPIENT_SHA256: hash(Buffer.from(recipient)), TRAIN3_AGE_BINARY: toolchain.ageBinary,
       TRAIN3_AGE_KEYGEN_BINARY: toolchain.ageKeygenBinary, TRAIN3_AGE_DISTRIBUTION_ARCHIVE: toolchain.distributionArchive };
+    for (const operation of ['batch-export', 'historical-batch-export'])
     for (const change of [{ REVIEWED_RECIPIENT_ID: 'different' }, { REVIEWED_AGE_RECIPIENT_SHA256: 'b'.repeat(64) },
       { OWNER_RECIPIENT_CONFIRMED: 'false' }, { TRAIN3_AGE_BINARY: '/nonexistent/age' }]) {
       called = false;
-      await assert.rejects(preparation({ env: { ...confirmed, ...change }, clientFactory() { called = true; } }));
+      await assert.rejects(preparation({ env: { ...confirmed, PREPARATION_OPERATION: operation,
+        HISTORICAL_BASELINE_CONFIRMED: 'true', ...change }, clientFactory() { called = true; } }));
       assert.equal(called, false);
     }
-    f.calls.length = 0;
-    await preparation({ env: confirmed, clientFactory: () => f.client });
-    const output = join(root, 'train3-baseline-preparation');
-    assert.deepEqual((await readdir(output)).sort(), ['batch.age', 'encrypted-receipt.json']);
-    const receipt = JSON.parse(await readFile(join(output, 'encrypted-receipt.json')));
-    assert.equal(receipt.kind, 'weatherx-train3-encrypted-baseline-batch-v1');
-    assert.equal(receipt.completeBaselineEligible, false); assert.equal(receipt.publicationAuthorized, false);
-    assert.equal(receipt.recipientSha256, hash(Buffer.from(recipient)));
-    assert.equal(receipt.ciphertextSha256, hash(await readFile(join(output, 'batch.age'))));
-    for (const field of ['catalogId', 'sourceSha', 'batchId', 'reviewedPlanSha256', 'reviewedBatchPlanSha256']) assert.equal(receipt[field], undefined);
-    const archive = execFileSync(toolchain.ageBinary, ['--decrypt', '--identity', keyPath, join(output, 'batch.age')],
-      { env: childEnv, stdio: 'pipe', timeout: 10_000, maxBuffer: 1024 ** 2 });
-    assert.ok(archive.includes(Buffer.from('batch-receipt.json')));
-    assert.ok(archive.includes(Buffer.from(hash(batchBytes))));
-    assert.ok(archive.includes(Buffer.from('original ecmwf')));
-    assert.equal(f.calls.filter(c => c[0] === 'list').length, 0);
-    await assert.rejects(readFile(join(output, 'core/seal.json')), { code: 'ENOENT' });
-    await assert.rejects(readdir(join(root, 'train3-baseline-work-1-1')), { code: 'ENOENT' });
-    await rm(output, { recursive: true });
+    const output = join(root, 'train3-baseline-preparation'), pinnedPointer = f.objects.get(`${DATA}/catalogs/current.json`);
+    for (const operation of ['batch-export', 'historical-batch-export']) {
+      const observed = operation === 'historical-batch-export' ? newerPointer(f) : pinnedPointer;
+      f.calls.length = 0;
+      await preparation({ env: { ...confirmed, PREPARATION_OPERATION: operation, HISTORICAL_BASELINE_CONFIRMED: 'true' },
+        clientFactory(_env, mode, _signal, options) {
+          assert.equal(mode, operation);
+          if (mode === 'historical-batch-export') assert.deepEqual(options.reviewedKeys, historicalReadKeys(batchPlan(bytes, hash(bytes), batchBytes, hash(batchBytes), 'batch-1', CATALOG)));
+          return f.client;
+        } });
+      assert.deepEqual((await readdir(output)).sort(), ['batch.age', 'encrypted-receipt.json']);
+      const receipt = JSON.parse(await readFile(join(output, 'encrypted-receipt.json')));
+      assert.equal(receipt.kind, 'weatherx-train3-encrypted-baseline-batch-v1');
+      assert.equal(receipt.completeBaselineEligible, false); assert.equal(receipt.publicationAuthorized, false);
+      assert.equal(receipt.recipientSha256, hash(Buffer.from(recipient)));
+      assert.equal(receipt.ciphertextSha256, hash(await readFile(join(output, 'batch.age'))));
+      for (const field of ['catalogId', 'sourceSha', 'batchId', 'reviewedPlanSha256', 'reviewedBatchPlanSha256', 'observedCurrentPointerBase64', 'operation']) assert.equal(receipt[field], undefined);
+      const archive = execFileSync(toolchain.ageBinary, ['--decrypt', '--identity', keyPath, join(output, 'batch.age')],
+        { env: childEnv, stdio: 'pipe', timeout: 10_000, maxBuffer: 1024 ** 2 });
+      assert.ok(archive.includes(Buffer.from('batch-receipt.json')));
+      assert.ok(archive.includes(Buffer.from(hash(batchBytes))));
+      assert.ok(archive.includes(Buffer.from('original ecmwf')));
+      if (operation === 'historical-batch-export') {
+        const observedField = Buffer.from(observed.toString('base64'));
+        assert.ok(archive.includes(observedField));
+        assert.equal(archive.indexOf(observedField), archive.lastIndexOf(observedField));
+        assert.ok(archive.includes(Buffer.from('historical-batch-export')));
+      }
+      assert.equal(f.calls.filter(c => c[0] === 'list').length, 0);
+      await assert.rejects(readFile(join(output, 'core/seal.json')), { code: 'ENOENT' });
+      await assert.rejects(readdir(join(root, 'train3-baseline-work-1-1')), { code: 'ENOENT' });
+      await rm(output, { recursive: true });
+    }
+    f.objects.set(`${DATA}/catalogs/current.json`, pinnedPointer);
     // Change only a disposable exact tool copy after recipient admission. A real
     // encryption process failure must leave neither ciphertext nor plaintext upload output.
     const localTools = join(root, 'synthetic-tools'); await mkdir(localTools, { mode: 0o700 });
@@ -707,4 +728,120 @@ test('batch transport retains request/wire caps, allows payload GET but no LIST,
   const excess = await handler.handle(request, {}); await assert.rejects(bodyBytes(excess.response.body, LIMITS.object), /wire-budget/);
   now = BATCH_LIMITS.milliseconds; await assert.rejects(handler.handle(request, {}), /request-or-time-budget/);
   assert.equal(new BoundedReadHandler(inner, { operation: 'export', now: () => 0 }).deadline, 43 * 60_000);
+});
+
+test('historical mode is explicit and defaults to refusal before any reader', async () => {
+  const admitted = { ...env, PREPARATION_OPERATION: 'historical-batch-export', BATCH_ID: 'batch-1',
+    REVIEWED_PLAN_SHA256: 'b'.repeat(64), REVIEWED_BATCH_PLAN_SHA256: 'c'.repeat(64) };
+  for (const confirmation of [undefined, 'false', 'TRUE']) {
+    let called = false;
+    await assert.rejects(preparation({ env: { ...admitted, HISTORICAL_BASELINE_CONFIRMED: confirmation },
+      clientFactory() { called = true; } }), /historical-baseline-confirmation/);
+    assert.equal(called, false);
+  }
+  assert.equal(gate({ ...admitted, HISTORICAL_BASELINE_CONFIRMED: 'true' }).operation, 'historical-batch-export');
+  assert.throws(() => gate({ ...admitted, HISTORICAL_BASELINE_CONFIRMED: 'true', PREPARATION_OPERATION: 'unknown' }), /operation/);
+});
+
+function newerPointer(f) {
+  const current = JSON.parse(f.objects.get(`${DATA}/catalogs/current.json`));
+  const observed = json({ ...current, catalogId: 'newer-fixture', sequence: current.sequence + 1,
+    previousCatalogId: CATALOG, catalogSha256: 'f'.repeat(64) });
+  f.objects.set(`${DATA}/catalogs/current.json`, observed);
+  return observed;
+}
+const scientificGets = calls => calls.filter(c => c[0] === 'get' && c[1] === COMPONENTS && !c[2].endsWith('/component.json'));
+
+test('strict refuses rotated pointer while historical preflights all pinned manifests and reads no newer keys', async () => {
+  const { f, reviewed } = await batched(), observed = newerPointer(f);
+  const root = await mkdtemp(join(tmpdir(), 'train3-historical-export-'));
+  try {
+    f.calls.length = 0;
+    await assert.rejects(exportBatch(f.client, reviewed, root, invocation), /catalog-rotated/);
+    assert.equal(f.calls.length, 1); assert.deepEqual(await readdir(root), []);
+    f.calls.length = 0;
+    const receipt = await exportBatch(f.client, reviewed, root, { ...invocation, operation: 'historical-batch-export' });
+    assert.equal(receipt.operation, 'historical-batch-export');
+    assert.equal(receipt.observedCurrentPointerBase64, observed.toString('base64'));
+    assert.equal(receipt.completeBaselineEligible, false); assert.equal(receipt.coreSealSha256, null);
+    assert.deepEqual(await readFile(join(root, 'original/catalog-pointer.json')), reviewed.pointer);
+    assert.ok(f.calls.every(c => c[0] === 'get' && historicalReadKeys(reviewed).has(`${c[1]}/${c[2]}`)));
+    const firstPayload = f.calls.findIndex(c => scientificGets([c]).length);
+    assert.equal(firstPayload, reviewed.selectedComponents.length + 2);
+    assert.equal(f.calls.length, scientificGets(f.calls).length + reviewed.selectedComponents.length + 3);
+    assert.ok(!f.calls.some(c => c[2]?.includes('newer-fixture')));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('historical snapshot or any selected manifest mismatch refuses before all scientific GETs', async () => {
+  for (const kind of ['snapshot', 'last-manifest']) {
+    const { f, reviewed } = await batched(); newerPointer(f); f.calls.length = 0;
+    const key = kind === 'snapshot' ? `${DATA}/catalogs/snapshots/${CATALOG}.json`
+      : `${COMPONENTS}/${reviewed.catalog.components[reviewed.selectedComponents.at(-1).id].manifestKey}`;
+    f.objects.set(key, Buffer.from('{}'));
+    const root = await mkdtemp(join(tmpdir(), 'train3-historical-preflight-'));
+    try {
+      await assert.rejects(exportBatch(f.client, reviewed, root, { ...invocation, operation: 'historical-batch-export' }),
+        kind === 'snapshot' ? /snapshot-changed/ : /manifest-changed/);
+      assert.equal(scientificGets(f.calls).length, 0); assert.deepEqual(await readdir(root), []);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
+
+test('historical same-size corruption and changed final current boundary never produce eligibility', async () => {
+  for (const kind of ['payload', 'pointer']) {
+    const { f, reviewed } = await batched(); newerPointer(f); f.calls.length = 0;
+    if (kind === 'payload') {
+      const row = reviewed.selectedComponents[0].objects[0];
+      f.objects.set(`${COMPONENTS}/${row.key}`, Buffer.alloc(row.bytes, 0));
+    } else {
+      const original = f.client.get; let pointers = 0;
+      f.client.get = async (...args) => {
+        const bytes = await original(...args);
+        return args[1] === 'catalogs/current.json' && ++pointers === 2 ? Buffer.from(bytes.toString().replace('newer-fixture', 'other-fixture')) : bytes;
+      };
+    }
+    const root = await mkdtemp(join(tmpdir(), 'train3-historical-boundary-'));
+    try {
+      await assert.rejects(exportBatch(f.client, reviewed, root, { ...invocation, operation: 'historical-batch-export' }),
+        kind === 'payload' ? /original-inventory-hash/ : /catalog-rotated/);
+      await assert.rejects(lstat(join(root, 'batch-receipt.json')), { code: 'ENOENT' });
+      await assert.rejects(lstat(join(root, 'core/seal.json')), { code: 'ENOENT' });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
+
+test('historical HTTP guard enforces exact original keys, bucket, GET and zero LIST before transport', async () => {
+  const { reviewed } = await batched(); let calls = 0;
+  const keys = historicalReadKeys(reviewed);
+  const inner = { metadata: {}, async handle() { calls++; return { response: { body: Readable.from([Buffer.from('ok')]) } }; } };
+  assert.throws(() => new BoundedReadHandler(inner, { operation: 'historical-batch-export' }), /historical-read-allowlist/);
+  const handler = new BoundedReadHandler(inner, { operation: 'historical-batch-export', reviewedKeys: keys });
+  const request = { protocol: 'https:', hostname: `${ACCOUNT}.r2.cloudflarestorage.com`, method: 'GET', query: {} };
+  for (const key of keys) await bodyBytes((await handler.handle({ ...request, path: '/' + key })).response.body, 2);
+  const before = calls;
+  for (const path of [`/${DATA}/catalogs/snapshots/newer-fixture.json`,
+    `/${COMPONENTS}/components/ecmwf/other/component.json`, `/${COMPONENTS}/components/ecmwf/artifact-ecmwf/alternate.txt`,
+    `/${COMPONENTS}/${reviewed.selectedComponents.at(-1).objects[0].key.replace('artifact-', 'new-')}`, '/other/catalogs/current.json'])
+    await assert.rejects(handler.handle({ ...request, path }));
+  await assert.rejects(handler.handle({ ...request, path: `/${COMPONENTS}/`, query: { 'list-type': '2' } }), /unscoped-list/);
+  await assert.rejects(handler.handle({ ...request, path: `/${DATA}/catalogs/current.json`, method: 'PUT' }), /non-read-request/);
+  assert.equal(calls, before);
+});
+
+test('historical original tracked pins and recipient admission refuse before client construction', async () => {
+  const planBytes = await readFile(new URL('../ops/train3-baseline/export-plan.json', import.meta.url));
+  const batchBytes = await readFile(new URL('../ops/train3-baseline/batch-plan.json', import.meta.url));
+  const admitted = { ...env, PREPARATION_OPERATION: 'historical-batch-export', HISTORICAL_BASELINE_CONFIRMED: 'true',
+    EXPECTED_CATALOG_ID: JSON.parse(planBytes).catalogId, REVIEWED_PLAN_SHA256: hash(planBytes),
+    REVIEWED_BATCH_PLAN_SHA256: hash(batchBytes), BATCH_ID: 'batch-1',
+    TRAIN3_AGE_BINARY: process.env.TRAIN3_AGE_BINARY, TRAIN3_AGE_KEYGEN_BINARY: process.env.TRAIN3_AGE_KEYGEN_BINARY,
+    TRAIN3_AGE_DISTRIBUTION_ARCHIVE: process.env.TRAIN3_AGE_DISTRIBUTION_ARCHIVE };
+  for (const change of [{ REVIEWED_SOURCE_SHA: 'b'.repeat(40) }, { REVIEWED_PLAN_SHA256: 'b'.repeat(64) },
+    { REVIEWED_BATCH_PLAN_SHA256: 'b'.repeat(64) }, { EXPECTED_CATALOG_ID: 'different-fixture' },
+    { OWNER_RECIPIENT_CONFIRMED: 'false' }, { OWNER_RECIPIENT_CONFIRMED: 'true', RECIPIENT_ID: 'fixture', REVIEWED_RECIPIENT_ID: 'different' }]) {
+    let called = false;
+    await assert.rejects(preparation({ env: { ...admitted, ...change }, clientFactory() { called = true; } }));
+    assert.equal(called, false);
+  }
 });
