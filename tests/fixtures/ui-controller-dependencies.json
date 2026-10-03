@@ -91,7 +91,7 @@
       ]
     },
     {
-      "pin": "ee6c16fa59b35204e999ae2ffccb66b75578bf83",
+      "pin": "bef6b044add490ec8edd75e77b0ed97a70484987",
       "files": [
         "app/e2e/layer-switch-surface.mjs",
         "app/e2e/layer-switch-tint.mjs",
@@ -124,7 +124,7 @@
   ],
   "stagingBuild": {
     "profile": "production-account-ru-kk-wind100-onboarding-v2",
-    "pin": "ee6c16fa59b35204e999ae2ffccb66b75578bf83",
+    "pin": "bef6b044add490ec8edd75e77b0ed97a70484987",
     "paths": [
       ".gitignore",
       "platform/edge/package.json",
@@ -132,6 +132,6 @@
       "ops/release/build-release-receipt.mjs"
     ],
     "coneMode": false,
-    "provenance": "Separate exact-S5 build-only noncone closure: actual four-file sparse Git layout and unchanged receipt fixture passed with a disclosed separate test-only guard overlay; original edge lock installed offline and Wrangler 4.123.0 started. Combined profile still requires actual artifact evidence after build. No hosted sparse checkout or measured saving. See docs/staging-build-controller-sparse-20261002.md."
+    "provenance": "Exact-S6 build-only noncone closure retains the four byte-identical S5 inputs, verified at both Git object identities. The actual four-file S5 sparse layout, receipt fixture with disclosed test-only guard overlay, offline edge install and Wrangler 4.123.0 evidence remain historical S5 evidence; they do not qualify S6 execution. Current S6 sparse layout and source guard are checked separately in the repin evidence. Combined profile still requires actual hosted sparse checkout and artifact evidence after build; no hosted saving is claimed. See docs/staging-build-controller-sparse-20261002.md and docs/ui-public-combined.md."
   }
 }
