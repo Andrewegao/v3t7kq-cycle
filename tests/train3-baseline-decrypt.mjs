@@ -4,9 +4,10 @@ import { readFile, writeFile, mkdir, readdir, lstat, rm } from 'node:fs/promises
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { Readable } from 'node:stream';
+import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { fixture, useFixture, meteredDisk } from './train3-baseline-join.mjs';
-import { decryptAndJoin, decryptFailureDiagnostic, extractUstar } from '../tools/train3-baseline-decrypt.mjs';
+import { childStream, decryptAndJoin, decryptFailureDiagnostic, extractUstar } from '../tools/train3-baseline-decrypt.mjs';
 import { baselineCapacity, verifyBatch, isVerifiedBatch } from '../tools/train3-baseline-join.mjs';
 import { verifyAgeToolchain, validateRecipient, encryptBatch } from '../tools/train3-baseline-encrypt.mjs';
 import { hash } from '../tools/train3-baseline-preparation.mjs';
@@ -96,6 +97,32 @@ test('bounded USTAR extractor accepts exactly one original batch without a plain
   await useFixture(async f => { const entries = await entriesFor(f); const result = await extract(f, archive(entries));
     assert.equal(result.batchId, 'batch-1'); assert.equal(result.archiveBytes, archive(entries).length);
     for (const e of entries) assert.deepEqual(await readFile(join(f.root, 'extract', e.path)), e.bytes);
+  });
+});
+test('child close before archive consumption preserves buffered stdout across initial directory admission', async () => {
+  await useFixture(async f => {
+    const bytes = archive(await entriesFor(f)); assert.ok(bytes.length < 64 * 1024);
+    const destination = join(f.root, 'slow-extraction'); await mkdir(destination, { mode: 0o700 });
+    let child, closed = false, consumedAfterClose = false;
+    // Deterministic transport fixture, not cryptography: keep the consumer behind
+    // initial directory admission until a real child exits and Node flushes stdio.
+    const script = `const chunks=[];process.stdin.on('data',b=>chunks.push(b));
+      process.stdin.on('end',()=>process.stdout.end(Buffer.concat(chunks)));`;
+    const result = await childStream(process.execPath, ['-e', script], {
+      cwd: f.root, signal: new AbortController().signal, input: Readable.from([bytes]), budget: () => {},
+      spawnProcess: (binary, args, options) => {
+        child = spawn(binary, args, options);
+        child.once('close', () => { closed = true; }); return child;
+      },
+      consume: async stream => {
+        await once(child, 'close'); consumedAfterClose = closed;
+        return extractUstar(stream, { ...f, destination, maximumArchiveBytes: bytes.length }, { disk: ample });
+      },
+    });
+    assert.equal(consumedAfterClose, true); assert.equal(closed, true); assert.equal(result.archiveBytes, bytes.length);
+    assert.equal(result.batchId, 'batch-1');
+    for (const entry of await entriesFor(f)) assert.deepEqual(await readFile(join(destination, entry.path)), entry.bytes);
+    assert.ok(!(await readdir(f.root)).includes('joined'));
   });
 });
 

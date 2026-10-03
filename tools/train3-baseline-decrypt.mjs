@@ -5,7 +5,7 @@ import { lstat, mkdir, mkdtemp, open, readdir, realpath, rename, rm, statfs } fr
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { Transform } from 'node:stream';
+import { PassThrough, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
@@ -147,16 +147,20 @@ export async function extractUstar(stream, { planBytes, planSha256, batchPlanByt
   return { batchId: selected.batchId, archiveBytes: reader.total };
 }
 
-async function childStream(binary, args, { cwd, signal, spawnProcess, input, consume, budget }) {
+export async function childStream(binary, args, { cwd, signal, spawnProcess, input, consume, budget }) {
   budget();
   const child = spawnProcess(binary, args, { cwd, env: { LANG: 'C' }, stdio: ['pipe', 'pipe', 'pipe'] });
+  // Node flushStdio resumes unread child stdout on process exit. Directory
+  // admission may await I/O before the consumer installs its async iterator, so
+  // connect an owned bounded pipe synchronously, before that admission starts.
+  const output = new PassThrough({ highWaterMark: 64 * 1024 });
   let timer, stderr = 0, processError, closed = false;
   const completion = new Promise(resolveClose => {
     child.once('error', () => { processError = new Error('age-process-start'); });
     child.once('close', (code, term) => { closed = true; resolveClose({ code, term }); });
   });
   const stop = () => {
-    child.stdin.destroy(); child.stdout.destroy(); input?.destroy?.();
+    child.stdin.destroy(); child.stdout.destroy(); output.destroy(); input?.destroy?.();
     if (!closed) { child.kill('SIGTERM'); timer ??= setTimeout(() => { if (!closed) child.kill('SIGKILL'); }, 1000); }
   };
   const abort = () => stop(); signal.addEventListener('abort', abort, { once: true });
@@ -166,17 +170,18 @@ async function childStream(binary, args, { cwd, signal, spawnProcess, input, con
   // after the spawned child and its completion/cleanup handlers are owned.
   if (signal.aborted) stop();
   let primary, result;
+  const forward = pipeline(child.stdout, output);
   const send = input ? pipeline(input, child.stdin) : Promise.resolve().then(() => child.stdin.end());
-  const receive = consume(child.stdout);
+  const receive = Promise.resolve().then(() => consume(output));
   try {
-    [result] = await Promise.all([receive, send]);
+    [result] = await Promise.all([receive, send, forward]);
     const status = await completion; budget();
     check(!processError && status.code === 0 && !status.term && stderr <= STDERR_CAP, 'age-process-failed');
     return result;
   } catch (error) { primary = error; stop(); throw error; }
   finally {
     if (primary || signal.aborted) stop();
-    await Promise.allSettled([send, receive, completion]);
+    await Promise.allSettled([send, receive, forward, completion]);
     clearTimeout(timer); signal.removeEventListener('abort', abort);
   }
 }
