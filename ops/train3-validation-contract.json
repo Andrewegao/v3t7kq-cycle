@@ -66,8 +66,8 @@
   ],
   "workflowPath": ".github/workflows/train3-nonpublishing-validation.yml",
   "pins": {
-    "atmosCommit": "8d69cb2a693c726ef4cede91ec5b53e658b5a812",
-    "atmosTree": "ebd81c538bf4369164f34e0b5a9adf030e6d7b79",
+    "atmosCommit": "69ea56d9e5f0179cea21d483625022da41e9a5a5",
+    "atmosTree": "2c5e8455ad6ec975159766e06510e8e192a7d92c",
     "controllerCommit": null,
     "controllerTree": null,
     "workflowSha256": null,

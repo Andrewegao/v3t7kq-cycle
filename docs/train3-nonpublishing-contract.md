@@ -1,18 +1,18 @@
 # Train 3 nonpublishing controller contract
 
-Owner: root integration; local preparer: Train 3 chat. Base: Cycle
-`b65c4de785e8c467598a402332d0e4c246866eb9` (#356). This isolated branch
-changes only an offline contract, its validator/tests, CI registration and this
-runbook. Existing production source pins, environments, helpers, schedules,
-publisher jobs and PR338 remain unchanged.
+Owner: root integration; local preparer: Train 3 chat. The original preparation
+merged in Cycle #357 as `01ce7fedb245a7dac005218c7527666c5a510200`.
+The follow-up updates the offline Atmos identity and adds local content binding
+contracts, tests and CI registration. Production source pins, environments,
+helpers, schedules, publisher jobs and PR338 remain unchanged.
 
 This is a bounded contract, **not a runnable collection workflow**. No validation
 workflow YAML is added. `ops/train3-validation-contract.json` describes a future
 separate manual workflow with its enable switch defaulting to false, literal
 `WEATHERX_DATA_VALIDATION_ONLY=1` / `PUBLISH=0`, four core and seven regional
 collectors, and no publisher, Wind100, vault, mirror, promotion, production
-environment, credential or shared-cache writer. The proposal pins the reviewed
-Atmos source commit and tree; it does not approve or deploy that source.
+environment, credential or shared-cache writer. The proposal pins merged Atmos
+source; it does not grant controller execution, publication or deployment authority.
 
 Controller/workflow/closure, runtime and baseline authority digests remain null.
 Admission refuses every unresolved pin. It also requires a separately reviewed
@@ -100,37 +100,37 @@ second reports unresolved pins and false authorization/qualification fields.
 Scheduler CI names the same isolated contract test. Workflow inventory is checked
 after that CI-only edit; no live workflow entry or writer metadata is registered.
 
-## Current preparation and joined-bake blocker
+## Merged source and offline follow-up
 
-This preparation reuses the offline prototype at `590504d` on current Cycle main;
-it adds no dispatchable workflow. Scheduler CI gains one isolated fixture command
-and a blueprint path filter. Existing scheduler CI uses npm cache; it is ordinary
-repository CI, not a zero-writer validation run. All existing production workflow
-bytes, source pins, environment declarations, schedules, locks and production
-artifact authority are preserved.
+Atmos #432 merged the regional input guard correction. Atmos #434 then merged as
+`69ea56d9e5f0179cea21d483625022da41e9a5a5`, tree
+`2c5e8455ad6ec975159766e06510e8e192a7d92c`. Its squash tree exactly matches
+the independently reviewed head and successful ten-job CI integration tree.
+The offline blueprint now pins this actual merged identity. Historical #357
+evidence remains attached to its original source identity.
 
-The reviewed Atmos source candidate is
-`8d69cb2a693c726ef4cede91ec5b53e658b5a812`, tree
-`ebd81c538bf4369164f34e0b5a9adf030e6d7b79`, based on merged master
-`e4b0e0d44276270fe235471864dbb69f31ca3752`. This is a source-review
-identity, not merge, deployment or run authority.
+This source has the validation-only local adapter: before collection it captures
+the externally pinned core catalog bundle, checks eight map/point counterparts,
+reuses the existing paired rebase transaction and evaluates freshness/superset
+against the original captured baseline without HTTP fallback. The two admitted
+baseline inputs are `VALIDATION_CATALOG_BASELINE_DIR` and
+`VALIDATION_CATALOG_BASELINE_SHA256`. Production branches and gate policies stay
+unchanged. The external digest binds bytes; it does not authenticate their origin.
 
-The Atmos validation guard correction admits `REGIONAL_PACKS_DIR`, which the
-whole-data assembly consumes, while retaining `REGIONAL_MODEL_PACKS_DIR`, which
-the per-component lane consumes. It introduces no writer capability and does not
-qualify a complete joined bake.
+The new [offline attestation contracts](train3-offline-attestation-contract.md)
+check declared baseline-to-seal links, actual bounded toolchain file bytes, and
+explicit completed stages/all eleven model proof identities. They never execute
+the measured binaries or candidate source. Expected digests still need external
+authentication. Success always reports execution, publication, live-collector
+and joined-bake qualification false. Scheduler CI runs these synthetic fixtures;
+its ordinary dependency cache is not a validation runtime or authority.
 
-A full joined bake remains blocked: `ops/bake-weatherx.sh` defaults to
-`DATA_PUBLISH_MODE=r2-release` and invokes the existing strict catalog rebase
-before its data gates. That rebase requires `CATALOG_R2_REMOTE`/`R2_REMOTE` and
-`COMPONENT_R2_REMOTE`; validation admission refuses them and `DATA_PUBLISH_MODE`.
-A separately reviewed bounded local or read-only rebase adapter, new source
-identity and independent sealed baseline authority are required. Do not inject
-production capabilities, skip the rebase/superset gates or describe per-model
-success as complete 4+7 validation. The declared eleven-model roster is retained.
-
-The next executable lane also requires authenticated current-attempt artifact
-authority, strict bounded ZIP membership and inner seals, toolchain authority,
-source-only private checkout admission, output/retention policy and a separately
-approved live run. This branch cannot provide those authorities by self-hashing
-or copying producer metadata. The unresolved pins remain deliberate refusals.
+A full live joined bake remains unqualified. Nine authority pins and all four
+runtime fields remain unresolved; the validation workflow path is still absent.
+Future implementation needs a separately reviewed launcher and source closure,
+independent issuer/run/artifact authority, complete immutable runtime closure,
+authenticated initial workspace and launcher-input mapping, seven regional
+baseline payloads, bounded ZIP members/inner receipts and actual scientific gates.
+The completion contract hashes supplied workspace/collector/retention declaration
+bytes, but does not verify their contents scientifically or establish OS policy.
+Output retention and one live nonpublishing run still need owner approval.
