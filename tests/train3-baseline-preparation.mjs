@@ -59,7 +59,7 @@ test('workflow is manual, disabled by default, pinned, read-only, and retains su
   assert.equal(workflow.on.workflow_dispatch.inputs.enable_preparation.default, false);
   assert.deepEqual(workflow.permissions, { contents: 'read' });
   assert.equal(workflow.concurrency['cancel-in-progress'], false);
-  const job = workflow.jobs.prepare; assert.equal(job.environment, 'data-staging'); assert.equal(job['timeout-minutes'], 45);
+  const job = workflow.jobs.prepare; assert.deepEqual(job.environment, { name: 'data-staging' }); assert.equal(job['timeout-minutes'], 45);
   assert.match(job.if, /inputs\.enable_preparation/); assert.match(job.if, /refs\/heads\/main/);
   assert.match(job.if, /inputs\.reviewed_source_sha == github\.sha/);
   assert.deepEqual([...source.matchAll(/secrets\.([A-Z0-9_]+)/g)].map(m => m[1]).sort(),

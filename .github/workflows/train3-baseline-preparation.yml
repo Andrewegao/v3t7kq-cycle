@@ -30,7 +30,8 @@ concurrency:
 jobs:
   prepare:
     if: ${{ inputs.enable_preparation && github.ref == 'refs/heads/main' && inputs.reviewed_source_sha == github.sha }}
-    environment: data-staging
+    environment:
+      name: data-staging
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

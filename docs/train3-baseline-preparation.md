@@ -8,6 +8,11 @@ effective read scope remain unverified. No credential value, account setting, ne
 permission, provider collection, bake, deployment, R2 write, or production mutation
 is needed by this implementation.
 
+The job uses the existing named environment form `name: data-staging`, matching
+the scheduler's secret-bearing-workflow contract. The local source gates include
+the complete offline commands in scheduler CI and `npm run check --prefix scheduler`
+(types, tests, and a local dry build); their results do not authorize acquisition.
+
 The owner must review and authorize the exact integrated Cycle source SHA, expected
 current catalog ID, operation, and one-day GitHub artifact retention before setting
 `enable_preparation=true`. A merge is not dispatch approval. No run is scheduled.
