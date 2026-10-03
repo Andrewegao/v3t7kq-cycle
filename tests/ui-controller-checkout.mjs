@@ -67,3 +67,82 @@ test('locked dependency setup, exact artifact promotion and guarded probes remai
   assert.match(release,/RELEASE_GUARD_VERIFY_REQUIRED_SUCCESSES:'3'/);
   assert.match(release,/if \(stage === 'production'\) \{ await auditRun\(c\); await exactStaging\(c\); \}/);
 });
+
+// Staging build consumes a smaller closure than guarded qualification/production.
+const staging=read('.github/workflows/ui-staging.yml');
+const buildController=staging.split('      - name: checkout reviewed release controller\n')[1]
+  .split('      - uses: actions/setup-node@')[0];
+const buildClosure=fixture.stagingBuild;
+const controllerRefs=[
+  ['production-account-ru-kk-wind100-onboarding-v2','ee6c16fa59b35204e999ae2ffccb66b75578bf83'],
+  ['production-account-ru-kk-beta-v1','b9db38dd22eed1da56c6c4dd4140480da7e89153'],
+  ['production-account-billing-v1','6fcec22638f6696be71daa2f2e974ebc4b24318e'],
+  ['none','25c402db5149daa018e349a34a4beeba1f2dca45'],
+];
+const baselineController='4dafd26387d5917604deb7379a8d45a994fc5b67';
+function stageBuildContract(block){
+  const ref=block.match(/^          ref: (.+)$/m)?.[1];
+  const expected='${{ '+controllerRefs.map(([selector,pin])=>
+    `needs.profile.outputs.model_selection_sha256 == '${selector}' && '${pin}'`).join(' || ')+
+    ` || '${baselineController}' }}`;
+  assert.equal(ref,expected,'literal controller ref mapping changed');
+  const body=block.split('          sparse-checkout: |\n')[1]?.split('          sparse-checkout-cone-mode:')[0];
+  assert.ok(body,'build sparse selection is missing');
+  const expressions=body.trim().split('\n').map(line=>{
+    const match=line.trim().match(/^\$\{\{ needs\.profile\.outputs\.model_selection_sha256 == '([^']+)' && '(\/[^']+)' \|\| '' \}\}$/);
+    assert.ok(match,'unexpected sparse condition');
+    assert.equal(match[1],buildClosure.profile,'unqualified sparse profile');
+    return {selector:match[1],path:match[2]};
+  });
+  assert.equal(buildClosure.pin,controllerRefs[0][1]);
+  assert.deepEqual(expressions.map(row=>row.path),buildClosure.paths.map(path=>'/'+path));
+  assert.match(block,/^          sparse-checkout-cone-mode: false$/m);
+  assert.doesNotMatch(block,/^          (?:filter|fetch-depth):/m);
+  return {pathsFor:selector=>expressions.filter(row=>row.selector===selector).map(row=>row.path)};
+}
+
+test('only exact combined-Wind staging build gets the reviewed four-file noncone closure',()=>{
+  assert.equal(buildClosure.profile,'production-account-ru-kk-wind100-onboarding-v2');
+  assert.deepEqual(buildClosure.paths,['.gitignore','platform/edge/package.json',
+    'platform/edge/package-lock.json','ops/release/build-release-receipt.mjs']);
+  assert.equal(buildClosure.coneMode,false);
+  const contract=stageBuildContract(buildController);
+  assert.deepEqual(contract.pathsFor(buildClosure.profile),buildClosure.paths.map(path=>'/'+path));
+  for(const profile of ['none','approved','release-roster-core-account-v1',
+    'production-account-ru-kk-beta-v1','production-account-billing-v1','unknown'])
+    assert.deepEqual(contract.pathsFor(profile),[],'other profiles must retain full checkout');
+  assert.match(buildController,/ssh-key: \$\{\{ secrets\.ATMOS_READONLY_KEY \}\}/);
+  assert.match(buildController,/persist-credentials: false/);
+});
+
+test('missing runtime input, unreviewed profile and changed controller pin are rejected',()=>{
+  stageBuildContract(buildController);
+  for(const path of buildClosure.paths){
+    const changed=buildController.split('\n').filter(line=>!line.includes(`&& '/${path}'`)).join('\n');
+    assert.throws(()=>stageBuildContract(changed),/deep-equal|selection is missing|unexpected sparse/);
+  }
+  assert.throws(()=>stageBuildContract(buildController.replace(
+    `== '${buildClosure.profile}' && '/.gitignore'`,`== 'approved' && '/.gitignore'`)),/unqualified sparse profile/);
+  assert.throws(()=>stageBuildContract(buildController.replace(buildClosure.pin,'a'.repeat(40))),/literal controller ref mapping changed/);
+});
+
+test('qualify, candidate and Cycle checkouts and the actual controller guard remain complete',()=>{
+  const qualify=staging.split('  qualify:\n')[1];
+  assert.ok(qualify);
+  assert.doesNotMatch(qualify,/sparse-checkout|filter:/);
+  assert.equal((staging.match(/sparse-checkout: /g)||[]).length,1);
+  assert.equal((staging.match(/with: \{ path: cycle, fetch-depth: 0, persist-credentials: false \}/g)||[]).length,2);
+  const candidate=staging.split('      - name: checkout exact candidate Atmos source\n')[1]
+    .split('      - name: verify current-master')[0];
+  assert.match(candidate,/ref: \$\{\{ inputs\.atmos_sha \}\}/);
+  assert.match(candidate,/fetch-depth: 0/);
+  assert.doesNotMatch(candidate,/sparse-checkout|filter:/);
+  const release=read('tools/ui-release.mjs').split('function controller(')[1].split('export function requireReleaseProfileBinding')[0];
+  assert.match(release,/git\(\['rev-parse','HEAD'\], CONTROL\), controlShaFor\(profile\)/);
+  assert.match(release,/git\(\['diff','--exit-code','HEAD'\], CONTROL\)/);
+  for(const command of ['npm ci --prefix atmos/app','npm ci --prefix control/platform/edge',
+    'npm ci --prefix control/app','npx playwright install --with-deps chromium',
+    'node cycle/tools/ui-release.mjs deploy staging','bash ops/weather-lab-ready.sh'])
+    assert.ok(staging.includes(command),command);
+  assert.doesNotMatch(staging,/actions\/cache|--omit=dev/);
+});
