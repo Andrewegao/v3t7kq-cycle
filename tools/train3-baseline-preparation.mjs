@@ -15,7 +15,7 @@ export const IDS = MODELS.flatMap(id => [id, `point-${id}`]);
 export const LIMITS = Object.freeze({ metadata: 32 * 1024 ** 2, plan: 48 * 1024 ** 2,
   pointer: 64 * 1024, snapshot: 512 * 1024, manifest: 1024 ** 2, page: 2 * 1024 ** 2,
   object: 64 * 1024 ** 2, payload: 2 * 1024 ** 3, objects: 25_000,
-  inventoryRequests: 200, exportRequests: 25_100, milliseconds: 43 * 60_000 });
+  metadataRequests: IDS.length + 3, inventoryRequests: 200, exportRequests: 25_100, milliseconds: 43 * 60_000 });
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/, HEX = /^[a-f0-9]{64}$/;
 export const hash = value => createHash('sha256').update(value).digest('hex');
 const localErrors = new WeakMap(), failureRecords = new WeakMap();
@@ -79,7 +79,7 @@ export function gate(env) {
     && env.GITHUB_REF === 'refs/heads/main' && env.TRAIN3_PREPARATION_ENABLED === 'true', 'disabled-or-wrong-surface');
   check(/^[a-f0-9]{40}$/.test(env.REVIEWED_SOURCE_SHA ?? '') && env.REVIEWED_SOURCE_SHA === env.GITHUB_SHA, 'source-pin');
   check(ID.test(env.EXPECTED_CATALOG_ID ?? '') && !env.EXPECTED_CATALOG_ID.includes('..'), 'catalog-pin');
-  check(['inventory', 'export'].includes(env.PREPARATION_OPERATION), 'operation');
+  check(['metadata', 'inventory', 'export'].includes(env.PREPARATION_OPERATION), 'operation');
   check(/^\d+$/.test(env.GITHUB_RUN_ID ?? '') && /^\d+$/.test(env.GITHUB_RUN_ATTEMPT ?? ''), 'invocation-identity');
   if (env.PREPARATION_OPERATION === 'export') check(HEX.test(env.REVIEWED_PLAN_SHA256 ?? ''), 'plan-pin');
   return { operation: env.PREPARATION_OPERATION, catalogId: env.EXPECTED_CATALOG_ID };
@@ -115,9 +115,14 @@ export class BoundedReadHandler {
       cap = bucket === DATA ? (key === 'catalogs/current.json' ? LIMITS.pointer : LIMITS.snapshot)
         : key.endsWith('/component.json') ? LIMITS.manifest : LIMITS.object;
       check(this.operation === 'export' || bucket === DATA || key.endsWith('/component.json'), 'inventory-payload-read');
+      if (this.operation === 'metadata' && bucket === COMPONENTS) {
+        const parts = key.split('/');
+        check(parts.length === 4 && parts[0] === 'components' && IDS.includes(parts[1])
+          && ID.test(parts[2]) && parts[3] === 'component.json', 'metadata-manifest-key');
+      }
     }
-    check(this.now() < this.deadline && ++this.requests <= (this.operation === 'inventory'
-      ? LIMITS.inventoryRequests : LIMITS.exportRequests), 'request-or-time-budget');
+    check(this.now() < this.deadline && ++this.requests <= (this.operation === 'metadata' ? LIMITS.metadataRequests
+      : this.operation === 'inventory' ? LIMITS.inventoryRequests : LIMITS.exportRequests), 'request-or-time-budget');
     const result = await this.inner.handle(request, options);
     const sourceBody = result.response.body;
     let bytes = 0;
@@ -188,8 +193,43 @@ function descriptor(entry, id) {
 }
 function manifestMatches(manifest, entry) {
   for (const key of ['schemaVersion', 'componentId', 'artifactId', 'rootPrefix', 'generationTime', 'completedAt',
-    'mounts', 'objectCount', 'inventorySha256', 'quality', 'pointSeries'])
+    'mounts', 'objectCount', 'inventorySha256', 'quality', 'pointSeries', 'objectLayout'])
     check(isDeepStrictEqual(manifest[key], entry[key]), 'manifest-descriptor');
+}
+const layoutOf = manifest => manifest.schemaVersion === 1 ? 'schema1'
+  : manifest.objectLayout?.kind ?? manifest.layout ?? manifest.storage?.layout ?? `schema${manifest.schemaVersion}`;
+
+// Descriptor counts are logical, not physical listing counts or measured payload bytes.
+// This distinct audit kind is deliberately ineligible for exportPlan admission.
+export async function metadataAudit(client, catalogId, sourceSha) {
+  check(ID.test(catalogId) && !catalogId.includes('..'), 'catalog-pin');
+  const pointer = await client.get(DATA, 'catalogs/current.json', LIMITS.pointer);
+  check(json(pointer).catalogId === catalogId, 'catalog-rotated');
+  const snapshot = await client.get(DATA, `catalogs/snapshots/${catalogId}.json`, LIMITS.snapshot);
+  const catalog = envelope(pointer, snapshot, catalogId), components = [], missing = [];
+  for (const id of IDS) {
+    const entry = catalog.components[id];
+    if (!entry) { missing.push(id); continue; }
+    descriptor(entry, id);
+    const raw = await client.get(COMPONENTS, entry.manifestKey, LIMITS.manifest);
+    check(hash(raw) === entry.manifestSha256, 'manifest-hash');
+    const manifest = json(raw); manifestMatches(manifest, entry);
+    check(Number.isSafeInteger(manifest.objectCount) && manifest.objectCount >= 0, 'manifest-object-count');
+    const model = id.startsWith('point-') ? id.slice(6) : id;
+    components.push({ id, model, consumerScope: CORE.includes(model) ? 'core-catalog-and-eleven-model-gates' : 'eleven-model-gates',
+      schemaVersion: manifest.schemaVersion, layout: layoutOf(manifest), logicalObjectCount: manifest.objectCount,
+      generationTime: manifest.generationTime, pointSeries: manifest.pointSeries ?? null,
+      manifestSha256: hash(raw), inventorySha256: manifest.inventorySha256 ?? null,
+      manifestBase64: raw.toString('base64') });
+  }
+  const after = await client.get(DATA, 'catalogs/current.json', LIMITS.pointer);
+  check(pointer.equals(after), 'catalog-rotated');
+  const result = { schemaVersion: 1, kind: 'weatherx-train3-baseline-metadata-v1', catalogId, sourceSha,
+    pointerBase64: pointer.toString('base64'), snapshotBase64: snapshot.toString('base64'), components, missing,
+    payloadBytes: null, physicalObjectCount: null, payloadsRead: false, objectsListed: false,
+    exportPlanEligible: false, scientificValidationPerformed: false, publicationAuthorized: false };
+  check(Buffer.byteLength(JSON.stringify(result) + '\n') <= LIMITS.plan, 'plan-budget');
+  return result;
 }
 function rowsSafe(rows, prefix) {
   const seen = new Set(); let bytes = 0;
@@ -235,8 +275,7 @@ export async function inventory(client, catalogId, sourceSha) {
       && rows.find(row => row.key === entry.manifestKey).bytes === raw.length, 'manifest-listing');
     const payload = rows.filter(row => row.key !== entry.manifestKey).sort((a, b) => a.key < b.key ? -1 : 1);
     payloadBytes += payload.reduce((sum, row) => sum + row.bytes, 0);
-    components.push({ id, manifestBase64: raw.toString('base64'), layout: manifest.schemaVersion === 1 ? 'schema1'
-      : (manifest.layout ?? manifest.storage?.layout ?? `schema${manifest.schemaVersion}`), objects: payload });
+    components.push({ id, manifestBase64: raw.toString('base64'), layout: layoutOf(manifest), objects: payload });
   }
   const after = await client.get(DATA, 'catalogs/current.json', LIMITS.pointer);
   check(pointer.equals(after), 'catalog-rotated');
@@ -351,9 +390,11 @@ async function runPreparation({ env = process.env, clientFactory = readClient, n
     checkBudget();
     context.phase = 'reader-init';
     client = trackedReader(await clientFactory(env, operation, abort.signal), context);
-    const result = operation === 'inventory' ? await inventory(client, catalogId, env.GITHUB_SHA) : await exportBaseline(client, reviewed, work);
+    const result = operation === 'metadata' ? await metadataAudit(client, catalogId, env.GITHUB_SHA)
+      : operation === 'inventory' ? await inventory(client, catalogId, env.GITHUB_SHA) : await exportBaseline(client, reviewed, work);
     checkBudget(); context.phase = 'output-finalization';
-    await save(work, operation === 'inventory' ? 'inventory-plan.json' : 'export-receipt.json', Buffer.from(JSON.stringify(result) + '\n'));
+    await save(work, operation === 'metadata' ? 'metadata-audit.json' : operation === 'inventory'
+      ? 'inventory-plan.json' : 'export-receipt.json', Buffer.from(JSON.stringify(result) + '\n'));
     await save(work, 'acquisition-receipt.json', Buffer.from(JSON.stringify({ operation, catalogId,
       sourceSha: env.GITHUB_SHA, ...client.stats(), publicationAuthorized: false }) + '\n'));
     checkBudget(); await rename(work, destination); ownsDestination = true;

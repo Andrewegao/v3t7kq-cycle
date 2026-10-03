@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `d06598fd5f7e211e62225b0d172a68465a69f8fbbca23008daf790b9ea1875af`.
+Source digest (registry and workflow bytes): `9c8012ab00942f0e3115a1c2facf9ff0f19473e264942946f5b3e19de19a3c36`.
 
 61 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -67,7 +67,7 @@ Source digest (registry and workflow bytes): `d06598fd5f7e211e62225b0d172a68465a
 | [staging-wind100-preflight](#staging-wind100-preflight) | staging / Native wind | diagnostic | Check recurring staging wind credentials through the existing check-only path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [staging-wind100-recurring](#staging-wind100-recurring) | staging / Native wind | recurring | Maintain the isolated recurring staging native wind selection. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [staging-wind100](#staging-wind100) | staging / Native wind | manual-supported | Qualify isolated native 100 metre wind for staging. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
-| [train3-baseline-preparation](#train3-baseline-preparation) | staging / Train 3 baseline preparation | diagnostic | Inventory and export exact original Train 3 baseline bytes only after separate bounded manual approvals. | [guide](../docs/train3-baseline-preparation.md) |
+| [train3-baseline-preparation](#train3-baseline-preparation) | staging / Train 3 baseline preparation | diagnostic | Assess original Train 3 metadata, inventory and export bytes only after separate bounded manual approvals. | [guide](../docs/train3-baseline-preparation.md) |
 | [ui-layer-diagnostics](#ui-layer-diagnostics) | releases / UI release diagnostics | diagnostic | Collect bounded read-only layer-switch evidence against the exact reviewed staging or failed preview artifact. | [guide](../docs/ui-layer-diagnostics.md) |
 | [ui-release](#ui-release) | releases / Application shell | manual-supported | Promote an eligible immutable application candidate through production guards. | [guide](../docs/production-safe-controller-20260907.md) |
 | [ui-staging-tc](#ui-staging-tc) | staging / Application shell | manual-supported | Build an isolated staging shell with reviewed tropical cyclone guidance. | [guide](../docs/STAGING_TC_GUIDANCE.md) |

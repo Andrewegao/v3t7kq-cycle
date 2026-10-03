@@ -1,10 +1,10 @@
 # Train 3 original baseline preparation
 
-This is a reviewable execution request, not a dispatched run. The manual workflow
+Each operation requires a separate reviewed execution request. The manual workflow
 defaults to disabled and uses the existing `Andrewegao/v3t7kq-cycle` `data-staging`
 environment. Only `SHARED_R2_READ_ACCESS_KEY_ID` and
 `SHARED_R2_READ_SECRET_ACCESS_KEY` are consumed. Their current availability and
-effective read scope remain unverified. No credential value, account setting, new
+effective scope across the full selected closure remain unverified. No credential value, account setting, new
 permission, provider collection, bake, deployment, R2 write, or production mutation
 is needed by this implementation.
 
@@ -15,9 +15,40 @@ the complete offline commands in scheduler CI and `npm run check --prefix schedu
 
 The owner must review and authorize the exact integrated Cycle source SHA, expected
 current catalog ID, operation, and one-day GitHub artifact retention before setting
-`enable_preparation=true`. A merge is not dispatch approval. No run is scheduled.
+`enable_preparation=true`. A merge is not dispatch approval. No run is scheduled automatically.
 
-## First request: inventory
+## Metadata assessment before inventory
+
+Use `operation=metadata` to assess the original manifests before planning a larger
+inventory. The October 3 diagnostic inventory exceeded the unchanged 25,000 physical
+object cap. It did not establish the failing prefix, total payload bytes, or a
+logical export closure. Repeating it or raising caps is not a sizing strategy.
+
+Metadata mode reads the pinned current pointer, its snapshot, up to 22 selected
+original component manifests, then the current pointer again. It permits at most
+25 GET requests and forbids all listing and payload reads at the HTTP guard.
+Worst-case response bodies are 22.625 MiB, within the existing 32 MiB wire budget.
+The 48 MiB output cap, scratch capacity check, timeouts, private directories,
+atomic completion, cleanup and one-day retention are unchanged.
+
+`metadata-audit.json` preserves original pointer, snapshot and manifest bytes and
+reports missing IDs, schema versions, `objectLayout.kind`, logical counts,
+generation/point descriptors and original hashes. The eight core components feed
+the Atmos local catalog adapter and the eleven-model gates; the other fourteen
+regional components feed the eleven-model gates and remain in the assessment.
+The result uses a distinct `weatherx-train3-baseline-metadata-v1` kind, which the
+export-plan validator rejects. Physical counts and payload bytes remain unknown;
+no scientific validation or publication authorization is implied.
+
+Schema-one manifest counts describe payload files. Packed, reference and direct
+authenticated schema-two layouts use different physical and logical closures.
+The existing exporter and core byte verifier support schema one only. If schema
+two appears, review its authenticated logical transport and consumer compatibility
+before acquisition. Preserve the original manifests rather than rewriting them.
+If declared counts already exceed export caps, stop before listing. Otherwise,
+review a bounded listing plan to measure bytes and exact closure separately.
+
+## Separate request: inventory
 
 Read `weatherx-data-production/catalogs/current.json`, its exact snapshot under
 `catalogs/snapshots/<catalogId>.json`, and original component manifests in
@@ -30,7 +61,7 @@ The roster is map/point pairs for `ecmwf`, `gfs`, `hrrr`, `aifs`, `icon`, `hrdps
 `arome-antilles`, `hrrr-ak`, `nam`, `nam-hi`, and `nam-ak`. Missing pairs are reported.
 Original pointer/snapshot/manifest bytes are embedded in the inventory plan,
 without modification. The current pointer must remain byte-identical throughout.
-This first run downloads no scientific payload. Its review establishes exact
+This inventory downloads no scientific payload. Its review establishes exact
 keys, physical layouts, object sizes, total bytes, and supported export closure.
 
 Inventory limits: 200 S3 HTTP requests, 32 MiB aggregate response bytes, 25,000
@@ -42,7 +73,7 @@ inside a 45-minute job. Reserve at least 1 GiB plus twice the plan cap locally.
 The only retained artifact is the bounded plan and acquisition receipt, for one
 day, without compression. Interrupted/failed acquisition is not uploaded.
 
-## Second request: export
+## Separate request: export
 
 After reviewing the first artifact, commit its exact `inventory-plan.json` bytes
 as `ops/train3-baseline/export-plan.json` through the owning integration lane.
