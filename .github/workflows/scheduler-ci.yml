@@ -100,6 +100,7 @@ jobs:
       - name: Staging activation transport and fail-closed recovery contracts
         run: |
           npm ci --ignore-scripts --prefix staging-controller
+          node --test tests/train3-baseline-preparation.mjs
           node --test tests/staging-*.mjs
           python3 tests/staging-place-collect.py
           python3 tests/staging-consumer-reuse.py
