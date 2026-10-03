@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/**"
       - "ops/workflows.json"
+      - "ops/train3-validation-contract.json"
       - "docs/WORKFLOWS.md"
       - "docs/WORKFLOW_OPERATIONS.md"
       - "README.md"
@@ -88,6 +89,7 @@ jobs:
           node --test tests/model-recovery-workflow.mjs
           python3 tests/test_recover_model_inputs.py
           python3 -m unittest tests.test_current_model_artifact
+          python3 -I tests/test_train3_validation_contract.py
           node --test tests/nam-hi-diagnostic.mjs
           node --test tests/component-publish-diagnostic.mjs tests/resume-model-publication.mjs
       - name: Staged UI artifact, manual promotion and privacy contracts

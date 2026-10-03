@@ -1,7 +1,8 @@
 # Staging build controller sparse checkout
 
 Task: `WX-CYCLE-STAGING-BUILD-CONTROLLER-SPARSE-S6-20261002`.
-Base: actual merged Cycle PR #356, `b65c4de785e8c467598a402332d0e4c246866eb9`.
+Base: actual merged Cycle PR #357, `01ce7fedb245a7dac005218c7527666c5a510200`.
+Initial implementation base was PR #356, `b65c4de785e8c467598a402332d0e4c246866eb9`.
 Status: implemented and independently reviewed; required local contracts and the regenerated
 workflow inventory check passed. Preparing an isolated draft PR; no merge or deployment.
 
@@ -70,13 +71,21 @@ were diagnostic only; generation used the actual candidate source.
 
 ## Sequential integration
 
-Cycle PR #357 is sealed at `248decd139c50c076ceaae043b55a936c5bfc06b` and also changes
-`docs/WORKFLOWS.md`. Root owns its admission and merge order. This branch stays on actual
-merged main `b65c4de785e8c467598a402332d0e4c246866eb9`; it neither imports Train3 changes
-nor edits that checkout. Serialize both integrations and regenerate the inventory from their
-combined source instead of choosing one generated snapshot. Recheck the actual combined head
-and current base with the required contracts and hosted CI before either dependent handoff.
-The overlap is not considered resolved merely because each draft has its own green checks.
+Cycle PR #357 merged as `01ce7fedb245a7dac005218c7527666c5a510200`, exact reviewed tree
+`fdb3df5a07ef6966aecd0321d9d1dd4bdc1618cd`, with parent `b65c4de785e8c467598a402332d0e4c246866eb9`.
+Root authorized refreshing this isolated branch after that merge. A standard local ancestry merge
+preserves this task's original reviewed commit and imports only actual main. The sole conflict was
+`docs/WORKFLOWS.md`; the unchanged generator resolved it from both source changes, and the
+combined inventory contracts and check passed. The Train3 checkout was not edited.
+
+All three reviewed runtime/contract/fixture bytes remain identical. The complete diff from actual
+main is this task's five owned paths; inherited Train3 source stays byte-identical to merged main.
+Fresh affected controller contracts passed 7/7, inventory contracts passed 10/10, scheduler UI
+passed, and the inherited offline Train3 contracts passed 22/22 with an explicit local Python 3.11
+interpreter. Scheduler CI invokes `python3` without pinning a version.
+The first inherited test run used macOS Python 3.9 and lacked `Path.hardlink_to`; that failure is
+retained and required no source change. These checks qualify the composed source;
+hosted CI must bind this new branch head and current base before root's merge admission.
 
 Run with Node 22 from Cycle root:
 
