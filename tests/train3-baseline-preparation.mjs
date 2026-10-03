@@ -678,7 +678,7 @@ test('batch CLI refuses unconfirmed recipients before a reader and retains only 
       assert.equal(receipt.completeBaselineEligible, false); assert.equal(receipt.publicationAuthorized, false);
       assert.equal(receipt.recipientSha256, hash(Buffer.from(recipient)));
       assert.equal(receipt.ciphertextSha256, hash(await readFile(join(output, 'batch.age'))));
-      for (const field of ['catalogId', 'sourceSha', 'batchId', 'reviewedPlanSha256', 'reviewedBatchPlanSha256', 'observedCurrentPointerBase64', 'operation']) assert.equal(receipt[field], undefined);
+      for (const field of ['catalogId', 'sourceSha', 'batchId', 'reviewedPlanSha256', 'reviewedBatchPlanSha256', 'observedCurrentPointerBase64', 'observedCurrentPointerAfterBase64', 'currentPointerPolicy', 'operation']) assert.equal(receipt[field], undefined);
       const archive = execFileSync(toolchain.ageBinary, ['--decrypt', '--identity', keyPath, join(output, 'batch.age')],
         { env: childEnv, stdio: 'pipe', timeout: 10_000, maxBuffer: 1024 ** 2 });
       assert.ok(archive.includes(Buffer.from('batch-receipt.json')));
@@ -687,7 +687,10 @@ test('batch CLI refuses unconfirmed recipients before a reader and retains only 
       if (operation === 'historical-batch-export') {
         const observedField = Buffer.from(observed.toString('base64'));
         assert.ok(archive.includes(observedField));
-        assert.equal(archive.indexOf(observedField), archive.lastIndexOf(observedField));
+        const beforeOffset = archive.indexOf(observedField), afterOffset = archive.indexOf(observedField, beforeOffset + observedField.length);
+        assert.ok(afterOffset > beforeOffset);
+        assert.equal(archive.indexOf(observedField, afterOffset + observedField.length), -1);
+        assert.ok(archive.includes(Buffer.from('historical-observation-v1')));
         assert.ok(archive.includes(Buffer.from('historical-batch-export')));
       }
       assert.equal(f.calls.filter(c => c[0] === 'list').length, 0);
@@ -788,7 +791,7 @@ test('historical snapshot or any selected manifest mismatch refuses before all s
   }
 });
 
-test('historical same-size corruption and changed final current boundary never produce eligibility', async () => {
+test('historical payload corruption and malformed final pointer still refuse', async () => {
   for (const kind of ['payload', 'pointer']) {
     const { f, reviewed } = await batched(); newerPointer(f); f.calls.length = 0;
     if (kind === 'payload') {
@@ -798,13 +801,13 @@ test('historical same-size corruption and changed final current boundary never p
       const original = f.client.get; let pointers = 0;
       f.client.get = async (...args) => {
         const bytes = await original(...args);
-        return args[1] === 'catalogs/current.json' && ++pointers === 2 ? Buffer.from(bytes.toString().replace('newer-fixture', 'other-fixture')) : bytes;
+        return args[1] === 'catalogs/current.json' && ++pointers === 2 ? Buffer.from('{}') : bytes;
       };
     }
     const root = await mkdtemp(join(tmpdir(), 'train3-historical-boundary-'));
     try {
       await assert.rejects(exportBatch(f.client, reviewed, root, { ...invocation, operation: 'historical-batch-export' }),
-        kind === 'payload' ? /original-inventory-hash/ : /catalog-rotated/);
+        kind === 'payload' ? /original-inventory-hash/ : /observed-current-pointer/);
       await assert.rejects(lstat(join(root, 'batch-receipt.json')), { code: 'ENOENT' });
       await assert.rejects(lstat(join(root, 'core/seal.json')), { code: 'ENOENT' });
     } finally { await rm(root, { recursive: true, force: true }); }
@@ -843,5 +846,39 @@ test('historical original tracked pins and recipient admission refuse before cli
     let called = false;
     await assert.rejects(preparation({ env: { ...admitted, ...change }, clientFactory() { called = true; } }));
     assert.equal(called, false);
+  }
+});
+
+
+test('historical before/after rotation is observation only while strict final rotation refuses', async () => {
+  for (const operation of ['batch-export', 'historical-batch-export']) {
+    const { f, reviewed } = await batched(), before = reviewed.pointer;
+    const after = json({ ...JSON.parse(before), catalogId: '1444-longer-rotated-fixture', sequence: 1444,
+      previousCatalogId: CATALOG, catalogSha256: 'f'.repeat(64) });
+    const get = f.client.get; let pointers = 0;
+    f.client.get = async (...args) => args[1] === 'catalogs/current.json' && ++pointers === 2 ? after : get(...args);
+    const root = await mkdtemp(join(tmpdir(), 'train3-pointer-observation-'));
+    try {
+      if (operation === 'batch-export') await assert.rejects(exportBatch(f.client, reviewed, root,
+        { ...invocation, operation }), /catalog-rotated/);
+      else {
+        const result = await exportBatch(f.client, reviewed, root, { ...invocation, operation });
+        assert.equal(result.currentPointerPolicy, 'historical-observation-v1');
+        assert.equal(result.observedCurrentPointerBase64, before.toString('base64'));
+        assert.equal(result.observedCurrentPointerAfterBase64, after.toString('base64'));
+        assert.notEqual(before.length, after.length);
+        assert.deepEqual(await readFile(join(root, 'original/catalog-snapshot.json')), reviewed.snapshot);
+        for (const item of reviewed.selectedComponents) {
+          assert.deepEqual(await readFile(join(root, `original/components/${item.id}/component.json`)),
+            Buffer.from(item.manifestBase64, 'base64'));
+          for (const object of item.objects) {
+            const suffix = object.key.slice(reviewed.catalog.components[item.id].rootPrefix.length);
+            assert.deepEqual(await readFile(join(root, `original/components/${item.id}/payload/${suffix}`)),
+              f.objects.get(`${COMPONENTS}/${object.key}`));
+          }
+        }
+      }
+      assert.equal(pointers, 2);
+    } finally { await rm(root, { recursive: true, force: true }); }
   }
 });

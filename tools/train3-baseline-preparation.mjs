@@ -507,13 +507,17 @@ export async function exportBatch(client, reviewed, root, { signal, cancel = () 
     receipts.push({ componentId: item.id, manifestSha256: hash(raw), inventorySha256: manifest.inventorySha256,
       objectCount: rows.length, bytes: rows.reduce((sum, row) => sum + row.size, 0) });
   }
-  check(observed.equals(await client.get(DATA, 'catalogs/current.json', LIMITS.pointer)), 'catalog-rotated');
+  const observedAfter = await client.get(DATA, 'catalogs/current.json', LIMITS.pointer);
+  if (historical) observedCurrentPointer(observedAfter);
+  else check(observed.equals(observedAfter), 'catalog-rotated');
   await budget();
   return { schemaVersion: 1, kind: 'weatherx-train3-original-baseline-batch-v1', completeBaselineEligible: false,
     coreSealSha256: null, catalogId: plan.catalogId, reviewedPlanSha256: reviewed.reviewedPlanSha256,
     reviewedBatchPlanSha256: reviewed.reviewedBatchPlanSha256, batchId: reviewed.batchId,
     catalogSha256: json(pointer).catalogSha256, sourceSha, runId, runAttempt, components: receipts,
-    ...(historical ? { operation, observedCurrentPointerBase64: observed.toString('base64') } : {}),
+    ...(historical ? { operation, currentPointerPolicy: 'historical-observation-v1',
+      observedCurrentPointerBase64: observed.toString('base64'),
+      observedCurrentPointerAfterBase64: observedAfter.toString('base64') } : {}),
     scientificValidationPerformed: false, publicationAuthorized: false };
 }
 
@@ -575,14 +579,17 @@ async function runPreparation({ env = process.env, clientFactory = readClient, n
         sourceSha: env.GITHUB_SHA, runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT, now, operation })
       : await exportBaseline(client, reviewed, work);
     checkBudget(); context.phase = 'output-finalization';
-    const observedCurrentPointerBase64 = result.observedCurrentPointerBase64;
-    if (operation === 'historical-batch-export') delete result.observedCurrentPointerBase64;
+    const historicalObservation = operation === 'historical-batch-export' ? {
+      currentPointerPolicy: result.currentPointerPolicy,
+      observedCurrentPointerBase64: result.observedCurrentPointerBase64,
+      observedCurrentPointerAfterBase64: result.observedCurrentPointerAfterBase64 } : {};
+    for (const key of Object.keys(historicalObservation)) delete result[key];
     await save(work, operation === 'metadata' ? 'metadata-audit.json' : operation === 'inventory'
       ? 'inventory-plan.json' : BATCH_OPERATIONS.includes(operation) ? 'batch-receipt.json' : 'export-receipt.json', Buffer.from(JSON.stringify(result) + '\n'));
     await save(work, 'acquisition-receipt.json', Buffer.from(JSON.stringify({ operation, catalogId,
       sourceSha: env.GITHUB_SHA, ...(BATCH_OPERATIONS.includes(operation) ? { batchId: reviewed.batchId,
         reviewedPlanSha256: reviewed.reviewedPlanSha256, reviewedBatchPlanSha256: reviewed.reviewedBatchPlanSha256 } : {}),
-      ...(operation === 'historical-batch-export' ? { observedCurrentPointerBase64 } : {}),
+      ...historicalObservation,
       ...client.stats(), publicationAuthorized: false }) + '\n'));
     let publicResult = result;
     if (BATCH_OPERATIONS.includes(operation)) {

@@ -10,7 +10,8 @@ import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { batchPlan, BATCH_OPERATIONS, LIMITS, hash, safeKey } from './train3-baseline-preparation.mjs';
-import { allocationEstimate, baselineCapacity, batchExpectedTree, joinBaseline, readRegular } from './train3-baseline-join.mjs';
+import { acquisitionSource, allocationEstimate, baselineCapacity, batchExpectedTree, historicalSourceBinding,
+  joinBaseline, readRegular } from './train3-baseline-join.mjs';
 import { verifyAgeToolchain, assertAgeToolchain } from './train3-baseline-encrypt.mjs';
 
 const RESERVE = 1024 ** 3, RECEIPT_CAP = 64 * 1024, STDERR_CAP = 16 * 1024;
@@ -103,7 +104,9 @@ function header(block) {
 // The archive contract is deterministic USTAR, files only, lexicographic order,
 // two zero end blocks, no PAX/GNU extensions or extra trailing blocks.
 export async function extractUstar(stream, { planBytes, planSha256, batchPlanBytes, batchPlanSha256,
-  expectedSourceSha, destination, maximumArchiveBytes }, { disk = statfs, budget = () => {} } = {}) {
+  expectedSourceSha, destination, maximumArchiveBytes, sourceBindingBytes, sourceBindingSha256 }, { disk = statfs, budget = () => {} } = {}) {
+  const binding = historicalSourceBinding({ sourceBindingBytes, sourceBindingSha256, expectedSourceSha,
+    catalogId: parse(planBytes).catalogId, planSha256, batchPlanSha256 });
   await directory(destination);
   const reader = new StreamReader(stream, maximumArchiveBytes, budget), seen = new Set();
   let selected, expected, last = '', receiptBytes;
@@ -133,7 +136,10 @@ export async function extractUstar(stream, { planBytes, planSha256, batchPlanByt
     if (padding) check((await reader.read(padding)).every(byte => byte === 0), 'archive-padding');
     if (!selected) {
       receiptBytes = Buffer.concat(receipt); const acquisition = parse(receiptBytes);
-      check(BATCH_OPERATIONS.includes(acquisition.operation) && acquisition.sourceSha === expectedSourceSha
+      check(BATCH_OPERATIONS.includes(acquisition.operation)
+        && (acquisition.currentPointerPolicy === undefined || acquisition.operation === 'historical-batch-export'
+          && acquisition.currentPointerPolicy === 'historical-observation-v1')
+        && acquisition.sourceSha === acquisitionSource(acquisition, binding, expectedSourceSha)
         && acquisition.reviewedPlanSha256 === planSha256 && acquisition.reviewedBatchPlanSha256 === batchPlanSha256,
       'archive-receipt-binding');
       selected = batchPlan(planBytes, planSha256, batchPlanBytes, batchPlanSha256, acquisition.batchId, acquisition.catalogId);
@@ -187,13 +193,14 @@ export async function childStream(binary, args, { cwd, signal, spawnProcess, inp
 }
 
 export async function decryptAndJoin({ planBytes, planSha256, batchPlanBytes, batchPlanSha256, expectedSourceSha,
-  encryptedBatches, identityFile, toolchain, destination }, { disk = statfs, now = Date.now, signal,
+  encryptedBatches, identityFile, toolchain, destination, sourceBindingBytes, sourceBindingSha256 }, { disk = statfs, now = Date.now, signal,
   spawnProcess = spawn } = {}) {
   check(Buffer.isBuffer(planBytes) && planBytes.length <= LIMITS.plan && Buffer.isBuffer(batchPlanBytes)
     && batchPlanBytes.length <= LIMITS.plan, 'plan-bytes');
   const partition = parse(batchPlanBytes), catalogId = parse(planBytes).catalogId;
   check(Array.isArray(partition.batches) && partition.batches.length === 3, 'three-batches');
   const reviewed = partition.batches.map(row => batchPlan(planBytes, planSha256, batchPlanBytes, batchPlanSha256, row.id, catalogId));
+  historicalSourceBinding({ sourceBindingBytes, sourceBindingSha256, expectedSourceSha, catalogId, planSha256, batchPlanSha256 });
   check(/^[a-f0-9]{40}$/.test(expectedSourceSha ?? '') && Array.isArray(encryptedBatches) && encryptedBatches.length === 3
     && new Set(encryptedBatches.map(row => row.ciphertextSha256)).size === 3, 'encrypted-inputs');
   check(typeof destination === 'string' && isAbsolute(destination) && resolve(destination) === destination && destination !== '/', 'destination');
@@ -273,7 +280,8 @@ export async function decryptAndJoin({ planBytes, planSha256, batchPlanBytes, ba
         await atPhase('extraction', () => childStream(verifiedTool.ageBinary, ['--decrypt', '--identity', privateIdentity], {
           cwd: work, signal: controller.signal, spawnProcess, input: cap, budget,
           consume: stream => extractUstar(stream, { planBytes, planSha256, batchPlanBytes, batchPlanSha256,
-            expectedSourceSha, destination: batchDestination, maximumArchiveBytes: archiveMaximum }, { disk, budget }),
+            expectedSourceSha, sourceBindingBytes, sourceBindingSha256,
+            destination: batchDestination, maximumArchiveBytes: archiveMaximum }, { disk, budget }),
         }));
         check(bytes === item.ciphertextBytes && digest.digest('hex') === item.ciphertextSha256
           && same(info, await file.stat({ bigint: true })) && same(info, await lstat(item.ciphertextPath, { bigint: true })), 'ciphertext-digest-or-change');
@@ -283,7 +291,8 @@ export async function decryptAndJoin({ planBytes, planSha256, batchPlanBytes, ba
     phase = 'join'; budget();
     const joined = join(work, 'joined');
     const receipt = await atPhase('join', () => joinBaseline({ planBytes, planSha256, batchPlanBytes, batchPlanSha256,
-      expectedSourceSha, batchDirectories: directories, destination: joined }, { disk, now, signal: controller.signal }));
+      expectedSourceSha, sourceBindingBytes, sourceBindingSha256,
+      batchDirectories: directories, destination: joined }, { disk, now, signal: controller.signal }));
     phase = 'finalization'; budget(); check(same(destinationInfo, await lstat(destination, { bigint: true })) && (await readdir(destination)).length === 0, 'destination-reservation');
     const joinedInfo = await lstat(joined, { bigint: true });
     await rename(joined, destination); destinationInfo = joinedInfo; budget(); complete = true;
@@ -308,12 +317,15 @@ export async function decryptAndJoin({ planBytes, planSha256, batchPlanBytes, ba
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   (async () => {
-    const args = process.argv.slice(2); check(args.length === 11, 'explicit-decrypt-arguments');
+    const args = process.argv.slice(2); check(args.length === 11 || args.length === 14
+      && args[11] === '--historical-source-binding', 'explicit-decrypt-arguments');
     const [planPath, planSha256, batchPath, batchPlanSha256, expectedSourceSha, identityFile,
       toolPath, toolSha, destination, inputPath, inputSha] = args;
     const read = async (path, cap) => (await readRegular(dirname(resolve(path)), relative(dirname(resolve(path)), resolve(path)), cap)).bytes;
     const planBytes = await read(planPath, LIMITS.plan), batchPlanBytes = await read(batchPath, LIMITS.plan);
     const toolBytes = await read(toolPath, RECEIPT_CAP), inputBytes = await read(inputPath, RECEIPT_CAP);
+    const sourceBindingBytes = args.length === 14 ? await read(args[12], 1024 ** 2) : undefined,
+      sourceBindingSha256 = args[13];
     check(hash(toolBytes) === toolSha && hash(inputBytes) === inputSha, 'local-descriptor-pin');
     const descriptors = parse(inputBytes); check(Array.isArray(descriptors) && descriptors.length === 3, 'input-descriptor');
     const encryptedBatches = [];
@@ -324,7 +336,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
         receiptSha256: item.receiptSha256, receiptBytes: await read(item.receiptPath, RECEIPT_CAP) });
     }
     await decryptAndJoin({ planBytes, planSha256, batchPlanBytes, batchPlanSha256, expectedSourceSha,
-      identityFile, toolchain: parse(toolBytes), destination, encryptedBatches });
+      identityFile, toolchain: parse(toolBytes), destination, encryptedBatches, sourceBindingBytes, sourceBindingSha256 });
     console.log('Train 3 private local baseline assembly complete.');
   })().catch(error => {
     const diagnostic = decryptFailureDiagnostic(error);
