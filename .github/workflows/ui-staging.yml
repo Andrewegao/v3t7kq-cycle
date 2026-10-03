@@ -167,7 +167,6 @@ jobs:
           python3.11 -m pip install pillow
           npm ci --prefix atmos/app
           npm ci --prefix control/platform/edge
-          npm ci --prefix control/app
           cd atmos/app && npx playwright install --with-deps chromium
       - name: verify independent release architecture
         working-directory: atmos
