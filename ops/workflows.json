@@ -540,6 +540,15 @@
       "subsystem": "UI release diagnostics",
       "lifecycle": "diagnostic",
       "runbook": "docs/ui-layer-diagnostics.md"
+    },
+    {
+      "id": "train3-baseline-preparation",
+      "path": ".github/workflows/train3-baseline-preparation.yml",
+      "family": "staging",
+      "purpose": "Inventory and export exact original Train 3 baseline bytes only after separate bounded manual approvals.",
+      "subsystem": "Train 3 baseline preparation",
+      "lifecycle": "diagnostic",
+      "runbook": "docs/train3-baseline-preparation.md"
     }
   ]
 }
