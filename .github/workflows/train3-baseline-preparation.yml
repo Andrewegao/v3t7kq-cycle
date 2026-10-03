@@ -8,26 +8,30 @@ on:
         default: false
       operation:
         type: choice
-        options: [metadata, inventory, batch-export]
+        options: [metadata, inventory, batch-export, historical-batch-export]
         default: inventory
+      historical_baseline_confirmed:
+        description: Intentionally recover only the exact reviewed historical catalog bytes
+        type: boolean
+        default: false
       reviewed_source_sha:
         description: Reviewed exact Cycle main commit containing this workflow
         type: string
         required: true
       expected_catalog_id:
-        description: Reviewed current catalog identity; rotation fails closed
+        description: Reviewed catalog identity; strict export requires this serving pointer
         type: string
         required: true
       reviewed_plan_sha256:
-        description: Export or batch-export; exact tracked ops/train3-baseline/export-plan.json digest
+        description: Payload batch; exact tracked ops/train3-baseline/export-plan.json digest
         type: string
         default: ''
       reviewed_batch_plan_sha256:
-        description: Batch-export only; exact tracked ops/train3-baseline/batch-plan.json digest
+        description: Payload batch only; exact tracked ops/train3-baseline/batch-plan.json digest
         type: string
         default: ''
       batch_id:
-        description: Batch-export only; separately approved fixed selection
+        description: Payload batch only; separately approved fixed selection
         type: choice
         options: ['', batch-1, batch-2, batch-3]
         default: ''
@@ -36,15 +40,15 @@ on:
         type: boolean
         default: false
       reviewed_recipient_id:
-        description: Batch-export only; approved recipient identity
+        description: Payload batch only; approved recipient identity
         type: string
         default: ''
       reviewed_age_recipient:
-        description: Batch-export only; approved native X25519 age public recipient (never a private key)
+        description: Payload batch only; approved native X25519 age public recipient (never a private key)
         type: string
         default: ''
       reviewed_age_recipient_sha256:
-        description: Batch-export only; SHA256 of exact public recipient text without a newline
+        description: Payload batch only; SHA256 of exact public recipient text without a newline
         type: string
         default: ''
 permissions:
@@ -82,6 +86,7 @@ jobs:
         env:
           TRAIN3_PREPARATION_ENABLED: ${{ inputs.enable_preparation }}
           PREPARATION_OPERATION: ${{ inputs.operation }}
+          HISTORICAL_BASELINE_CONFIRMED: ${{ inputs.historical_baseline_confirmed }}
           REVIEWED_SOURCE_SHA: ${{ inputs.reviewed_source_sha }}
           EXPECTED_CATALOG_ID: ${{ inputs.expected_catalog_id }}
           REVIEWED_PLAN_SHA256: ${{ inputs.reviewed_plan_sha256 }}

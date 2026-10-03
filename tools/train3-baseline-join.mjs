@@ -5,7 +5,7 @@ import { lstat, mkdir, mkdtemp, open, readdir, readFile, rename, rm, statfs } fr
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
-import { batchPlan, CORE, IDS, LIMITS, hash, producerOrder, safeKey } from './train3-baseline-preparation.mjs';
+import { batchPlan, CORE, IDS, LIMITS, hash, observedCurrentPointer, producerOrder, safeKey } from './train3-baseline-preparation.mjs';
 
 const RESERVE = 1024 ** 3, RECEIPT_CAP = 1024 ** 2, SEAL_CAP = 16 * 1024 ** 2;
 const check = (ok, code) => { if (!ok) throw new Error(code); };
@@ -196,9 +196,11 @@ export async function verifyBatch({ planBytes, planSha256, batchPlanBytes, batch
   };
   const receiptRead = await inputRead(root, 'batch-receipt.json', RECEIPT_CAP);
   const receiptRaw = receiptRead.bytes, receipt = parse(receiptRaw);
+  const historical = receipt.operation === 'historical-batch-export';
+  const operation = historical ? 'historical-batch-export' : 'batch-export';
   check(exact(receipt, ['schemaVersion', 'kind', 'catalogId', 'reviewedPlanSha256', 'reviewedBatchPlanSha256',
     'batchId', 'catalogSha256', 'sourceSha', 'runId', 'runAttempt', 'completeBaselineEligible', 'coreSealSha256',
-    'components', 'scientificValidationPerformed', 'publicationAuthorized']) && receipt.schemaVersion === 1
+    'components', 'scientificValidationPerformed', 'publicationAuthorized', ...(historical ? ['operation'] : [])]) && receipt.schemaVersion === 1
     && receipt.kind === 'weatherx-train3-original-baseline-batch-v1' && receipt.catalogId === catalogId
     && receipt.reviewedPlanSha256 === planSha256 && receipt.reviewedBatchPlanSha256 === batchPlanSha256
     && receipt.catalogSha256 === parse(pointer).catalogSha256 && receipt.sourceSha === expectedSourceSha
@@ -213,13 +215,21 @@ export async function verifyBatch({ planBytes, planSha256, batchPlanBytes, batch
     ['original/catalog-snapshot.json', snapshot], ['core/catalog-snapshot.json', snapshot]])
     check((await inputRead(root, path, bytes.length, bytes.length)).bytes.equals(bytes), 'catalog-bytes');
   const acquisitionRaw = (await inputRead(root, 'acquisition-receipt.json', RECEIPT_CAP)).bytes, acquisition = parse(acquisitionRaw);
+  let observed = pointer;
+  if (historical) {
+    const encodedPointer = acquisition.observedCurrentPointerBase64;
+    check(typeof encodedPointer === 'string' && encodedPointer.length <= 4 * Math.ceil(LIMITS.pointer / 3), 'observed-pointer-base64');
+    observed = Buffer.from(encodedPointer, 'base64');
+    check(observed.toString('base64') === encodedPointer, 'observed-pointer-base64');
+    observedCurrentPointer(observed);
+  }
   const expectedRequests = selected.selectedComponents.reduce((sum, item) => sum + item.objects.length, 0)
     + selected.selectedComponents.length + 3;
-  const expectedWireBytes = selected.total + pointer.length * 2 + snapshot.length
+  const expectedWireBytes = selected.total + observed.length * 2 + snapshot.length
     + selected.selectedComponents.reduce((sum, item) => sum + Buffer.from(item.manifestBase64, 'base64').length, 0);
   check(exact(acquisition, ['operation', 'catalogId', 'sourceSha', 'batchId', 'reviewedPlanSha256',
-    'reviewedBatchPlanSha256', 'requests', 'wireBytes', 'publicationAuthorized'])
-    && acquisition.operation === 'batch-export' && acquisition.catalogId === catalogId
+    'reviewedBatchPlanSha256', 'requests', 'wireBytes', 'publicationAuthorized', ...(historical ? ['observedCurrentPointerBase64'] : [])])
+    && acquisition.operation === operation && acquisition.catalogId === catalogId
     && acquisition.sourceSha === expectedSourceSha && acquisition.batchId === receipt.batchId
     && acquisition.reviewedPlanSha256 === planSha256 && acquisition.reviewedBatchPlanSha256 === batchPlanSha256
     && Number.isSafeInteger(acquisition.requests) && acquisition.requests === expectedRequests && acquisition.requests <= LIMITS.exportRequests
@@ -259,7 +269,8 @@ export async function verifyBatch({ planBytes, planSha256, batchPlanBytes, batch
   }
   await unchanged(root, tree, before);
   const batchReceipt = { batchId: receipt.batchId, sourceSha: receipt.sourceSha, runId: receipt.runId,
-    runAttempt: receipt.runAttempt, batchReceiptSha256: hash(receiptRaw), acquisitionReceiptSha256: hash(acquisitionRaw) };
+    runAttempt: receipt.runAttempt, ...(historical ? { operation } : {}),
+    batchReceiptSha256: hash(receiptRaw), acquisitionReceiptSha256: hash(acquisitionRaw) };
   files.sort((a, b) => a.path < b.path ? -1 : 1);
   check(files.length === tree.files.size, 'incomplete-verified-files');
   const immutableReviewed = { ...selected };
@@ -268,7 +279,7 @@ export async function verifyBatch({ planBytes, planSha256, batchPlanBytes, batch
     pointer: { enumerable: true, get: () => Buffer.from(selected.pointer) },
     snapshot: { enumerable: true, get: () => Buffer.from(selected.snapshot) },
   });
-  const result = freeze({ root, reviewed: immutableReviewed, files, receipt, acquisition, components, batchReceipt });
+  const result = freeze({ root, reviewed: immutableReviewed, files, receipt, acquisition, components, batchReceipt, operation });
   verifiedStates.set(result, { root, tree, before });
   // Test-only alternate readers cannot mint the encryption admission capability.
   if (reader === readRegular) verifiedBatches.add(result);
@@ -311,6 +322,7 @@ export async function joinBaseline({ planBytes, planSha256, batchPlanBytes, batc
     await mkdir(destination, { mode: 0o700 }); destinationInfo = await lstat(destination, { bigint: true });
     work = await mkdtemp(join(parent, '.train3-baseline-join-')); workInfo = await lstat(work, { bigint: true });
     const coreFiles = [], components = [], batchReceipts = [], seen = new Set(), states = [];
+    let operation;
     async function save(path, bytes, core = false) {
       budget(); safeKey(path);
       await free(RESERVE + allocationEstimate(new Map([[path, bytes.length]]), capacity.blockSize).allocationBytes);
@@ -328,6 +340,8 @@ export async function joinBaseline({ planBytes, planSha256, batchPlanBytes, batc
       budget();
       const verified = await verifyBatch({ planBytes, planSha256, batchPlanBytes, batchPlanSha256,
         batchDirectory: root, expectedSourceSha }, { inputRead, budget, onFile: save });
+      check(operation === undefined || operation === verified.operation, 'mixed-batch-operations');
+      operation = verified.operation;
       check(!seen.has(verified.receipt.batchId), 'missing-or-duplicate-batch'); seen.add(verified.receipt.batchId);
       states.push(verifiedStates.get(verified)); components.push(...verified.components); batchReceipts.push(verified.batchReceipt);
     }
@@ -344,6 +358,7 @@ export async function joinBaseline({ planBytes, planSha256, batchPlanBytes, batc
     const receipt = { schemaVersion: 1, kind: 'weatherx-train3-original-baseline-join-v1', catalogId,
       reviewedPlanSha256: planSha256, reviewedBatchPlanSha256: batchPlanSha256,
       catalogSha256: parse(pointer).catalogSha256, sourceSha: expectedSourceSha, coreSealSha256: hash(seal),
+      ...(operation === 'historical-batch-export' ? { operation } : {}),
       components, batches: batchReceipts, scientificValidationPerformed: false, publicationAuthorized: false };
     const receiptBytes = encoded(receipt); check(receiptBytes.length <= RECEIPT_CAP, 'join-receipt-budget');
     await save('join-receipt.json', receiptBytes); budget(); await free(RESERVE);
