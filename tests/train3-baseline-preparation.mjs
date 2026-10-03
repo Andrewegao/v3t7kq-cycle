@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseWorkflow } from '../tools/workflow-inventory.mjs';
 import { ACCOUNT, BoundedReadHandler, COMPONENTS, DATA, IDS, LIMITS, bodyBytes, exportBaseline,
-  exportPlan, failureDiagnostic, gate, hash, inventory, preparation, producerOrder, readClient } from '../tools/train3-baseline-preparation.mjs';
+  exportPlan, failureDiagnostic, gate, hash, inventory, metadataAudit, preparation, producerOrder, readClient } from '../tools/train3-baseline-preparation.mjs';
 
 const SOURCE = 'a'.repeat(40), CATALOG = '1395-fixture';
 const env = { GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', GITHUB_REPOSITORY: 'Andrewegao/v3t7kq-cycle',
@@ -91,6 +91,75 @@ test('inventory preserves original metadata and lists only the exact 22 selected
   assert.deepEqual(Buffer.from(plan.pointerBase64, 'base64'), f.objects.get(`${DATA}/catalogs/current.json`));
   assert.equal(f.calls.filter(c => c[0] === 'list').length, 22);
   assert.equal(f.calls.filter(c => c[0] === 'get' && c[1] === COMPONENTS && !c[2].endsWith('/component.json')).length, 0);
+});
+test('metadata audit reads 25 original objects without listing or payload, and cannot authorize export', async () => {
+  const f = fixture(), audit = await metadataAudit(f.client, CATALOG, SOURCE), bytes = json(audit);
+  assert.equal(f.calls.length, 25); assert.ok(f.calls.every(c => c[0] === 'get'));
+  assert.equal(audit.components.length, 22); assert.deepEqual(audit.missing, []);
+  assert.equal(audit.components.filter(c => c.consumerScope === 'core-catalog-and-eleven-model-gates').length, 8);
+  assert.equal(audit.payloadBytes, null); assert.equal(audit.physicalObjectCount, null);
+  assert.equal(audit.exportPlanEligible, false); assert.equal(audit.scientificValidationPerformed, false);
+  for (const row of audit.components) assert.deepEqual(Buffer.from(row.manifestBase64, 'base64'),
+    f.objects.get(`${COMPONENTS}/components/${row.id}/artifact-${row.id}/component.json`));
+  assert.throws(() => exportPlan(bytes, hash(bytes), CATALOG), /incomplete-plan/);
+});
+test('metadata audit reports schema-two logical layouts and counts without assuming physical closure', async () => {
+  for (const kind of ['packed-v1', 'references-v1', 'direct-auth-v1']) {
+    const f = fixture(), key = `${COMPONENTS}/components/ecmwf/artifact-ecmwf/component.json`;
+    const manifest = JSON.parse(f.objects.get(key)); manifest.schemaVersion = 2;
+    manifest.objectLayout = { kind }; manifest.objectCount = LIMITS.objects + 1;
+    const raw = json(manifest); f.objects.set(key, raw);
+    changeCatalogDescriptor(f, entry => Object.assign(entry, manifest, { manifestSha256: hash(raw) }));
+    const audit = await metadataAudit(f.client, CATALOG, SOURCE);
+    assert.equal(audit.components[0].layout, kind); assert.equal(audit.components[0].logicalObjectCount, LIMITS.objects + 1);
+    assert.equal(audit.objectsListed, false); assert.equal(audit.payloadsRead, false);
+  }
+});
+test('metadata audit rejects descriptor-only object layout identity or closure changes', async () => {
+  for (const change of [layout => { layout.kind = 'packed-v1'; }, layout => { layout.indexSha256 = 'b'.repeat(64); },
+    layout => { layout.sourceRootPrefix = 'components/gfs/other/'; }, layout => { layout.objectCount++; }]) {
+    const f = fixture(), key = `${COMPONENTS}/components/ecmwf/artifact-ecmwf/component.json`;
+    const manifest = JSON.parse(f.objects.get(key)); manifest.schemaVersion = 2;
+    manifest.objectLayout = { kind: 'references-v1', indexSha256: 'a'.repeat(64), sourceRootPrefix: manifest.rootPrefix, objectCount: 2 };
+    const raw = json(manifest); f.objects.set(key, raw);
+    changeCatalogDescriptor(f, entry => { Object.assign(entry, manifest, { manifestSha256: hash(raw) }); change(entry.objectLayout); });
+    await assert.rejects(metadataAudit(f.client, CATALOG, SOURCE), /manifest-descriptor/);
+  }
+});
+test('metadata audit preserves missing roster and refuses changed pointer or original manifest bytes', async () => {
+  const f = fixture(), key = `${DATA}/catalogs/snapshots/${CATALOG}.json`;
+  const snapshot = JSON.parse(f.objects.get(key)); delete snapshot.components['point-icon'];
+  const raw = json(snapshot), pointer = JSON.parse(f.objects.get(`${DATA}/catalogs/current.json`)); pointer.catalogSha256 = hash(raw);
+  f.objects.set(key, raw); f.objects.set(`${DATA}/catalogs/current.json`, json(pointer));
+  assert.deepEqual((await metadataAudit(f.client, CATALOG, SOURCE)).missing, ['point-icon']);
+  const g = fixture(), original = g.client.get; let reads = 0;
+  g.client.get = async (...args) => { const bytes = await original(...args);
+    return args[1] === 'catalogs/current.json' && ++reads > 1 ? Buffer.concat([bytes, Buffer.from(' ')]) : bytes; };
+  await assert.rejects(metadataAudit(g.client, CATALOG, SOURCE), /catalog-rotated/);
+  const h = fixture(); h.objects.set(`${COMPONENTS}/components/ecmwf/artifact-ecmwf/component.json`, Buffer.from('{}'));
+  await assert.rejects(metadataAudit(h.client, CATALOG, SOURCE), /manifest-hash/);
+});
+test('metadata operation produces only its distinct audit and receipt in the private output', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'train3-metadata-test-')), f = fixture();
+  try {
+    await preparation({ env: { ...env, RUNNER_TEMP: root, PREPARATION_OPERATION: 'metadata' }, clientFactory: () => f.client });
+    assert.deepEqual((await readdir(join(root, 'train3-baseline-preparation'))).sort(), ['acquisition-receipt.json', 'metadata-audit.json']);
+    assert.equal(f.calls.length, LIMITS.metadataRequests);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+test('metadata transport forbids listing and payload and stops before request 26', async () => {
+  let calls = 0;
+  const inner = { metadata: {}, async handle() { calls++; return { response: { body: Readable.from(['{}']) } }; } };
+  const handler = new BoundedReadHandler(inner, { operation: 'metadata' });
+  const request = { protocol: 'https:', hostname: `${ACCOUNT}.r2.cloudflarestorage.com`, method: 'GET', path: `/${DATA}/catalogs/current.json`, query: {} };
+  for (const change of [{ path: `/${COMPONENTS}/`, query: { 'list-type': '2', 'max-keys': '1000', prefix: 'components/ecmwf/a/' } },
+    { path: `/${COMPONENTS}/components/ecmwf/a/payload.bin` }, { path: `/${COMPONENTS}/components/ecmwf/a/nested/component.json` },
+    { path: `/${COMPONENTS}/components/unselected/a/component.json` }]) await assert.rejects(handler.handle({ ...request, ...change }, {}));
+  assert.equal(calls, 0);
+  for (let i = 0; i < LIMITS.metadataRequests; i++) {
+    const result = await handler.handle(request, {}); await bodyBytes(result.response.body, LIMITS.pointer);
+  }
+  await assert.rejects(handler.handle(request, {}), /request-or-time-budget/); assert.equal(calls, 25);
 });
 test('catalog rotation fails instead of silently following the new pointer', async () => {
   const f = fixture(), original = f.client.get; let reads = 0;

@@ -8,7 +8,7 @@ on:
         default: false
       operation:
         type: choice
-        options: [inventory, export]
+        options: [metadata, inventory, export]
         default: inventory
       reviewed_source_sha:
         description: Reviewed exact Cycle main commit containing this workflow
