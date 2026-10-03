@@ -16,13 +16,17 @@ export const LIMITS = Object.freeze({ metadata: 32 * 1024 ** 2, plan: 48 * 1024 
   pointer: 64 * 1024, snapshot: 512 * 1024, manifest: 1024 ** 2, page: 2 * 1024 ** 2,
   object: 64 * 1024 ** 2, payload: 2 * 1024 ** 3, objects: 25_000, inventoryObjects: 50_000,
   metadataRequests: IDS.length + 3, inventoryRequests: 200, exportRequests: 25_100, milliseconds: 43 * 60_000 });
+export const BATCH_LIMITS = Object.freeze({ fullPayload: 6 * 1024 ** 3, fullObjects: 45_000,
+  plan: 64 * 1024, milliseconds: 30 * 60_000, totalMilliseconds: 40 * 60_000,
+  workers: 8, reserve: 1024 ** 3 });
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/, HEX = /^[a-f0-9]{64}$/;
 export const hash = value => createHash('sha256').update(value).digest('hex');
 const localErrors = new WeakMap(), failureRecords = new WeakMap();
 const refusal = code => { const error = new Error(code); localErrors.set(error, code); return error; };
 const check = (ok, code) => { if (!ok) throw refusal(code); };
-const PHASES = new Set(['gate', 'scratch-admission', 'plan-admission', 'reader-init', 'pointer-before',
-  'snapshot', 'component-manifest', 'component-list', 'pointer-after', 'export-payload', 'output-finalization', 'cleanup']);
+const PHASES = new Set(['gate', 'scratch-admission', 'plan-admission', 'recipient-admission', 'reader-init', 'pointer-before',
+  'snapshot', 'component-manifest', 'component-list', 'pointer-after', 'export-payload', 'output-finalization',
+  'batch-verification', 'encryption', 'cleanup']);
 const SDK_NAMES = new Set(['AccessDenied', 'NoSuchKey', 'NoSuchBucket', 'InvalidAccessKeyId',
   'SignatureDoesNotMatch', 'ExpiredToken', 'SlowDown', 'TimeoutError', 'AbortError', 'RequestTimeout']);
 const TRANSPORT_CODES = new Set(['ETIMEDOUT', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED']);
@@ -79,9 +83,15 @@ export function gate(env) {
     && env.GITHUB_REF === 'refs/heads/main' && env.TRAIN3_PREPARATION_ENABLED === 'true', 'disabled-or-wrong-surface');
   check(/^[a-f0-9]{40}$/.test(env.REVIEWED_SOURCE_SHA ?? '') && env.REVIEWED_SOURCE_SHA === env.GITHUB_SHA, 'source-pin');
   check(ID.test(env.EXPECTED_CATALOG_ID ?? '') && !env.EXPECTED_CATALOG_ID.includes('..'), 'catalog-pin');
-  check(['metadata', 'inventory', 'export'].includes(env.PREPARATION_OPERATION), 'operation');
+  check(['metadata', 'inventory', 'export', 'batch-export'].includes(env.PREPARATION_OPERATION), 'operation');
   check(/^\d+$/.test(env.GITHUB_RUN_ID ?? '') && /^\d+$/.test(env.GITHUB_RUN_ATTEMPT ?? ''), 'invocation-identity');
-  if (env.PREPARATION_OPERATION === 'export') check(HEX.test(env.REVIEWED_PLAN_SHA256 ?? ''), 'plan-pin');
+  if (['export', 'batch-export'].includes(env.PREPARATION_OPERATION)) check(HEX.test(env.REVIEWED_PLAN_SHA256 ?? ''), 'plan-pin');
+  // The public repository must never retain legacy plaintext payload artifacts.
+  check(env.PREPARATION_OPERATION !== 'export', 'legacy-export-needs-confidential-transport');
+  if (env.PREPARATION_OPERATION === 'batch-export') {
+    check(HEX.test(env.REVIEWED_BATCH_PLAN_SHA256 ?? ''), 'batch-plan-pin');
+    check(['batch-1', 'batch-2', 'batch-3'].includes(env.BATCH_ID), 'batch-id');
+  }
   return { operation: env.PREPARATION_OPERATION, catalogId: env.EXPECTED_CATALOG_ID };
 }
 
@@ -89,7 +99,8 @@ export function gate(env) {
 // array-length check alone would not bound malicious/oversized listing responses.
 export class BoundedReadHandler {
   constructor(inner, { operation, now = Date.now }) {
-    this.inner = inner; this.now = now; this.deadline = now() + LIMITS.milliseconds;
+    this.inner = inner; this.now = now;
+    this.deadline = now() + (operation === 'batch-export' ? BATCH_LIMITS.milliseconds : LIMITS.milliseconds);
     this.operation = operation; this.requests = 0; this.bytes = 0; this.metadata = inner.metadata;
   }
   destroy() { this.inner.destroy(); }
@@ -114,7 +125,7 @@ export class BoundedReadHandler {
         || (bucket === COMPONENTS && /^components\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\//.test(key)), 'bucket-or-key');
       cap = bucket === DATA ? (key === 'catalogs/current.json' ? LIMITS.pointer : LIMITS.snapshot)
         : key.endsWith('/component.json') ? LIMITS.manifest : LIMITS.object;
-      check(this.operation === 'export' || bucket === DATA || key.endsWith('/component.json'), 'inventory-payload-read');
+      check(['export', 'batch-export'].includes(this.operation) || bucket === DATA || key.endsWith('/component.json'), 'inventory-payload-read');
       if (this.operation === 'metadata' && bucket === COMPONENTS) {
         const parts = key.split('/');
         check(parts.length === 4 && parts[0] === 'components' && IDS.includes(parts[1])
@@ -128,7 +139,7 @@ export class BoundedReadHandler {
     let bytes = 0;
     const bounded = new Transform({ transform: (chunk, _encoding, callback) => {
       bytes += chunk.length; this.bytes += chunk.length;
-      if (bytes > cap || this.bytes > LIMITS.metadata + (this.operation === 'export' ? LIMITS.payload : 0)
+      if (bytes > cap || this.bytes > LIMITS.metadata + (['export', 'batch-export'].includes(this.operation) ? LIMITS.payload : 0)
         || this.now() >= this.deadline) callback(refusal('wire-budget'));
       else callback(null, chunk);
     }, flush: callback => callback(this.now() >= this.deadline ? refusal('wire-deadline') : undefined) });
@@ -292,7 +303,7 @@ export function producerOrder(a, b) {
   for (let i = 0; i < Math.min(x.length, y.length); i++) { const cmp = x[i].localeCompare(y[i]); if (cmp) return cmp; }
   return x.length - y.length;
 }
-export function exportPlan(bytes, sha256, catalogId) {
+function reviewedPlan(bytes, sha256, catalogId, payloadLimit, objectLimit) {
   check(bytes.length <= LIMITS.plan && HEX.test(sha256 ?? '') && hash(bytes) === sha256, 'reviewed-plan-hash');
   const plan = json(bytes);
   check(plan.schemaVersion === 1 && plan.kind === 'weatherx-train3-baseline-inventory-v1' && plan.catalogId === catalogId
@@ -313,7 +324,8 @@ export function exportPlan(bytes, sha256, catalogId) {
     total += rowsSafe(item.objects, entry.rootPrefix); count += item.objects.length;
     for (const row of item.objects) check(row.key !== entry.manifestKey && row.bytes <= LIMITS.object, 'payload-object-budget');
   }
-  check(total === plan.payloadBytes && total <= LIMITS.payload && count <= LIMITS.objects, 'payload-budget');
+  check(total === plan.payloadBytes && total <= payloadLimit && count <= objectLimit
+    && plan.objectCount === count + IDS.length, 'payload-budget');
   for (const model of MODELS) {
     const map = catalog.components[model], point = catalog.components[`point-${model}`], d = point.pointSeries?.descriptor;
     check(map.generationTime === point.generationTime && Date.parse(map.generationTime) === Date.parse(d?.initializedAt)
@@ -321,6 +333,38 @@ export function exportPlan(bytes, sha256, catalogId) {
       && new Date(d.initializedAt).toISOString().replace(/[-:T]/g, '').slice(0, 10) === d.runId, 'pair-generation');
   }
   return { plan, pointer, snapshot, catalog, total, reviewedPlanSha256: sha256 };
+}
+export function exportPlan(bytes, sha256, catalogId) {
+  return reviewedPlan(bytes, sha256, catalogId, LIMITS.payload, LIMITS.objects);
+}
+export function batchPlan(planBytes, planSha, batchBytes, batchSha, batchId, catalogId) {
+  // The larger envelope is metadata validation only; no transport cap is widened.
+  const full = reviewedPlan(planBytes, planSha, catalogId, BATCH_LIMITS.fullPayload, BATCH_LIMITS.fullObjects);
+  check(batchBytes.length <= BATCH_LIMITS.plan && HEX.test(batchSha ?? '') && hash(batchBytes) === batchSha,
+    'reviewed-batch-plan-hash');
+  const partition = json(batchBytes);
+  check(partition.schemaVersion === 1 && partition.kind === 'weatherx-train3-baseline-batches-v1'
+    && partition.catalogId === catalogId && partition.reviewedInventorySha256 === planSha
+    && Array.isArray(partition.batches) && partition.batches.length === 3, 'batch-partition');
+  const seen = new Set(), batchIds = new Set(); let selected;
+  for (const batch of partition.batches) {
+    check(['batch-1', 'batch-2', 'batch-3'].includes(batch.id) && !batchIds.has(batch.id)
+      && Array.isArray(batch.componentIds) && batch.componentIds.length > 0, 'batch-partition');
+    batchIds.add(batch.id);
+    const items = [];
+    for (const id of batch.componentIds) {
+      check(IDS.includes(id) && !seen.has(id), 'batch-component-union'); seen.add(id);
+      items.push(full.plan.components.find(item => item.id === id));
+    }
+    const total = items.reduce((sum, item) => sum + item.objects.reduce((n, row) => n + row.bytes, 0), 0);
+    const objects = items.reduce((sum, item) => sum + item.objects.length, 0);
+    check(batch.payloadBytes === total && batch.payloadObjects === objects
+      && total <= LIMITS.payload && objects <= LIMITS.objects, 'batch-payload-budget');
+    if (batch.id === batchId) selected = { selectedComponents: items, total };
+  }
+  check(seen.size === IDS.length && IDS.every(id => seen.has(id)), 'batch-component-union');
+  check(selected, 'batch-id');
+  return { ...full, ...selected, reviewedBatchPlanSha256: batchSha, batchId };
 }
 async function save(root, path, bytes) {
   safeKey(path); const full = join(root, path); await mkdir(dirname(full), { recursive: true });
@@ -363,20 +407,111 @@ export async function exportBaseline(client, reviewed, root) {
     coreSealSha256: hash(sealBytes), components: receipts, scientificValidationPerformed: false, publicationAuthorized: false };
 }
 
+export async function exportBatch(client, reviewed, root, { signal, cancel = () => client.close?.(), sourceSha, runId, runAttempt,
+  disk = statfs, now = Date.now } = {}) {
+  const { plan, pointer, snapshot, catalog, selectedComponents } = reviewed;
+  check(/^[a-f0-9]{40}$/.test(sourceSha ?? '') && /^\d+$/.test(runId ?? '')
+    && /^\d+$/.test(runAttempt ?? ''), 'invocation-identity');
+  const deadline = now() + BATCH_LIMITS.milliseconds;
+  const budget = async () => {
+    check(!signal?.aborted && now() < deadline, 'interrupted-or-deadline');
+    const available = await disk(root);
+    check(available.bavail * available.bsize >= BATCH_LIMITS.reserve, 'free-disk-reserve');
+    check(!signal?.aborted && now() < deadline, 'interrupted-or-deadline');
+  };
+  const write = async (path, bytes) => { await budget(); const row = await save(root, path, bytes); await budget(); return row; };
+  await budget();
+  check(pointer.equals(await client.get(DATA, 'catalogs/current.json', LIMITS.pointer)), 'catalog-rotated');
+  check(snapshot.equals(await client.get(DATA, `catalogs/snapshots/${plan.catalogId}.json`, LIMITS.snapshot)), 'snapshot-changed');
+  for (const prefix of ['core', 'original']) {
+    await write(`${prefix}/catalog-pointer.json`, pointer); await write(`${prefix}/catalog-snapshot.json`, snapshot);
+  }
+  const receipts = [];
+  for (const item of selectedComponents) {
+    await budget();
+    const entry = catalog.components[item.id], raw = Buffer.from(item.manifestBase64, 'base64'), manifest = json(raw);
+    check(raw.equals(await client.get(COMPONENTS, entry.manifestKey, LIMITS.manifest)), 'manifest-changed');
+    await write(`original/components/${item.id}/component.json`, raw);
+    const core = CORE.includes(item.id.replace(/^point-/, ''));
+    if (core) await write(`core/components/${item.id}/manifest.json`, raw);
+    const rows = []; let cursor = 0, hasFailure = false, firstError;
+    const fail = error => {
+      if (!hasFailure) { hasFailure = true; firstError = error; try { cancel(); } catch {} }
+    };
+    const worker = async () => {
+      try {
+        while (!hasFailure && cursor < item.objects.length) {
+          const object = item.objects[cursor++];
+          await budget(); if (hasFailure) break;
+          const bytes = await client.get(COMPONENTS, object.key, Math.min(object.bytes, LIMITS.object));
+          if (hasFailure) break;
+          await budget(); if (hasFailure) break;
+          check(bytes.length === object.bytes, 'object-changed');
+          const path = safeKey(object.key.slice(entry.rootPrefix.length));
+          const row = { path, size: bytes.length, sha256: hash(bytes) };
+          await write(`original/components/${item.id}/payload/${path}`, bytes);
+          if (hasFailure) break;
+          if (core) await write(`core/components/${item.id}/payload/${path}`, bytes);
+          rows.push(row);
+        }
+      } catch (error) { fail(error); }
+    };
+    // A rejected read/write never leaves live workers racing caller-owned cleanup.
+    await Promise.all(Array.from({ length: BATCH_LIMITS.workers }, worker));
+    if (hasFailure) throw firstError;
+    await budget(); rows.sort(producerOrder);
+    check(rows.length === manifest.objectCount && hash(JSON.stringify(rows)) === manifest.inventorySha256,
+      'original-inventory-hash');
+    receipts.push({ componentId: item.id, manifestSha256: hash(raw), inventorySha256: manifest.inventorySha256,
+      objectCount: rows.length, bytes: rows.reduce((sum, row) => sum + row.size, 0) });
+  }
+  check(pointer.equals(await client.get(DATA, 'catalogs/current.json', LIMITS.pointer)), 'catalog-rotated');
+  await budget();
+  return { schemaVersion: 1, kind: 'weatherx-train3-original-baseline-batch-v1', completeBaselineEligible: false,
+    coreSealSha256: null, catalogId: plan.catalogId, reviewedPlanSha256: reviewed.reviewedPlanSha256,
+    reviewedBatchPlanSha256: reviewed.reviewedBatchPlanSha256, batchId: reviewed.batchId,
+    catalogSha256: json(pointer).catalogSha256, sourceSha, runId, runAttempt, components: receipts,
+    scientificValidationPerformed: false, publicationAuthorized: false };
+}
+
 async function runPreparation({ env = process.env, clientFactory = readClient, now = Date.now,
-  milliseconds = LIMITS.milliseconds } = {}, context) {
+  milliseconds } = {}, context) {
   const { operation, catalogId } = gate(env);
-  const deadline = now() + milliseconds; context.phase = 'scratch-admission';
-  const parent = resolve(env.RUNNER_TEMP), destination = join(parent, 'train3-baseline-preparation');
-  check((await lstat(parent)).isDirectory() && !(await lstat(parent)).isSymbolicLink(), 'temporary-root');
-  try { await lstat(destination); throw refusal('existing-output'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  let reviewed;
-  if (operation === 'export') {
+  const maximumMilliseconds = operation === 'batch-export' ? BATCH_LIMITS.totalMilliseconds : LIMITS.milliseconds;
+  check(milliseconds === undefined || Number.isSafeInteger(milliseconds) && milliseconds > 0
+    && milliseconds <= maximumMilliseconds, 'preparation-time-budget');
+  const deadline = now() + (milliseconds ?? maximumMilliseconds);
+  let reviewed, planBytes, batchBytes, toolchain, recipient, encryption;
+  if (['export', 'batch-export'].includes(operation)) {
     context.phase = 'plan-admission';
     const path = resolve('ops/train3-baseline/export-plan.json'), info = await lstat(path);
     check(info.isFile() && !info.isSymbolicLink() && info.nlink === 1 && info.size <= LIMITS.plan, 'plan-file');
-    reviewed = exportPlan(await readFile(path), env.REVIEWED_PLAN_SHA256, catalogId);
+    planBytes = await readFile(path);
+    if (operation === 'batch-export') {
+      const batchPath = resolve('ops/train3-baseline/batch-plan.json'), batchInfo = await lstat(batchPath);
+      check(batchInfo.isFile() && !batchInfo.isSymbolicLink() && batchInfo.nlink === 1
+        && batchInfo.size <= BATCH_LIMITS.plan, 'batch-plan-file');
+      batchBytes = await readFile(batchPath);
+      reviewed = batchPlan(planBytes, env.REVIEWED_PLAN_SHA256, batchBytes,
+        env.REVIEWED_BATCH_PLAN_SHA256, env.BATCH_ID, catalogId);
+    } else reviewed = exportPlan(planBytes, env.REVIEWED_PLAN_SHA256, catalogId);
   }
+  if (operation === 'batch-export') {
+    context.phase = 'recipient-admission';
+    check(env.OWNER_RECIPIENT_CONFIRMED === 'true', 'owner-recipient-confirmation');
+    encryption = await import('./train3-baseline-encrypt.mjs');
+    toolchain = await encryption.verifyAgeToolchain({ ageBinary: env.TRAIN3_AGE_BINARY,
+      ageKeygenBinary: env.TRAIN3_AGE_KEYGEN_BINARY, distributionArchive: env.TRAIN3_AGE_DISTRIBUTION_ARCHIVE });
+    recipient = await encryption.validateRecipient({ ownerConfirmed: true,
+      recipientId: env.RECIPIENT_ID, expectedRecipientId: env.REVIEWED_RECIPIENT_ID,
+      recipient: env.AGE_RECIPIENT, expectedRecipient: env.REVIEWED_AGE_RECIPIENT,
+      expectedRecipientSha256: env.REVIEWED_AGE_RECIPIENT_SHA256, toolchain });
+    encryption.validateArchivePlan(reviewed);
+  }
+  context.phase = 'scratch-admission';
+  const parent = resolve(env.RUNNER_TEMP), destination = join(parent, 'train3-baseline-preparation');
+  check((await lstat(parent)).isDirectory() && !(await lstat(parent)).isSymbolicLink(), 'temporary-root');
+  try { await lstat(destination); throw refusal('existing-output'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   context.phase = 'scratch-admission';
   const disk = await statfs(parent); check(disk.bavail * disk.bsize >= (reviewed ? 4 * reviewed.total : LIMITS.plan * 2) + 1024 ** 3, 'free-disk-budget');
   const work = join(parent, `train3-baseline-work-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}`);
@@ -391,26 +526,51 @@ async function runPreparation({ env = process.env, clientFactory = readClient, n
     context.phase = 'reader-init';
     client = trackedReader(await clientFactory(env, operation, abort.signal), context);
     const result = operation === 'metadata' ? await metadataAudit(client, catalogId, env.GITHUB_SHA)
-      : operation === 'inventory' ? await inventory(client, catalogId, env.GITHUB_SHA) : await exportBaseline(client, reviewed, work);
+      : operation === 'inventory' ? await inventory(client, catalogId, env.GITHUB_SHA)
+      : operation === 'batch-export' ? await exportBatch(client, reviewed, work, { signal: abort.signal, cancel,
+        sourceSha: env.GITHUB_SHA, runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT, now })
+      : await exportBaseline(client, reviewed, work);
     checkBudget(); context.phase = 'output-finalization';
     await save(work, operation === 'metadata' ? 'metadata-audit.json' : operation === 'inventory'
-      ? 'inventory-plan.json' : 'export-receipt.json', Buffer.from(JSON.stringify(result) + '\n'));
+      ? 'inventory-plan.json' : operation === 'batch-export' ? 'batch-receipt.json' : 'export-receipt.json', Buffer.from(JSON.stringify(result) + '\n'));
     await save(work, 'acquisition-receipt.json', Buffer.from(JSON.stringify({ operation, catalogId,
-      sourceSha: env.GITHUB_SHA, ...client.stats(), publicationAuthorized: false }) + '\n'));
-    checkBudget(); await rename(work, destination); ownsDestination = true;
-    checkBudget(); complete = true; return result;
+      sourceSha: env.GITHUB_SHA, ...(operation === 'batch-export' ? { batchId: reviewed.batchId,
+        reviewedPlanSha256: reviewed.reviewedPlanSha256, reviewedBatchPlanSha256: reviewed.reviewedBatchPlanSha256 } : {}),
+      ...client.stats(), publicationAuthorized: false }) + '\n'));
+    let publicResult = result;
+    if (operation === 'batch-export') {
+      context.phase = 'batch-verification';
+      const { verifyBatch } = await import('./train3-baseline-join.mjs');
+      const verifiedBatch = await verifyBatch({ planBytes, planSha256: env.REVIEWED_PLAN_SHA256,
+        batchPlanBytes: batchBytes, batchPlanSha256: env.REVIEWED_BATCH_PLAN_SHA256,
+        batchDirectory: work, expectedSourceSha: env.GITHUB_SHA }, { budget: checkBudget });
+      checkBudget(); context.phase = 'encryption';
+      context.encryptionCleanup = 'not-completed';
+      publicResult = await encryption.encryptBatch({ verifiedBatch, recipient, toolchain,
+        destination, signal: abort.signal }, { now,
+        onCleanup(status) { context.encryptionCleanup = status; },
+        milliseconds: Math.min(encryption.ENCRYPTION_LIMITS.milliseconds, Math.max(1, deadline - now())) });
+      ownsDestination = true;
+      // No plaintext survives into the only directory the workflow uploads.
+      await rm(work, { recursive: true, force: true });
+    } else { checkBudget(); await rename(work, destination); ownsDestination = true; }
+    checkBudget(); complete = true; return publicResult;
   } catch (error) {
     context.hasPrimaryFailure = true; context.failurePhase = context.phase; captureCounts(client, context); throw error;
   } finally {
-    clearTimeout(timer); process.removeListener('SIGINT', cancel); process.removeListener('SIGTERM', cancel);
-    let cleanupError;
-    try { client?.close(); } catch (error) { cleanupError = error; }
-    try { await rm(work, { recursive: true, force: true }); } catch (error) { cleanupError ??= error; }
-    if (ownsDestination && (!complete || cleanupError)) {
-      try { await rm(destination, { recursive: true, force: true }); } catch (error) { cleanupError ??= error; }
+    let cleanupError, hasCleanupFailure = false;
+    const recordCleanup = error => { if (!hasCleanupFailure) cleanupError = error; hasCleanupFailure = true; };
+    try { client?.close(); } catch (error) { recordCleanup(error); }
+    try { await rm(work, { recursive: true, force: true }); } catch (error) { recordCleanup(error); }
+    if (ownsDestination && (!complete || hasCleanupFailure || abort.signal.aborted || now() >= deadline)) {
+      try { await rm(destination, { recursive: true, force: true }); } catch (error) { recordCleanup(error); }
     }
-    context.cleanup = cleanupError ? 'failed' : 'passed';
-    if (cleanupError && !context.hasPrimaryFailure) { context.failurePhase = 'cleanup'; captureCounts(client, context); throw cleanupError; }
+    if ((abort.signal.aborted || now() >= deadline) && !context.hasPrimaryFailure)
+      recordCleanup(refusal('interrupted-or-deadline'));
+    clearTimeout(timer); process.removeListener('SIGINT', cancel); process.removeListener('SIGTERM', cancel);
+    context.cleanup = hasCleanupFailure || context.encryptionCleanup === 'failed' ? 'failed'
+      : context.encryptionCleanup === 'not-completed' ? 'unknown' : 'passed';
+    if (hasCleanupFailure && !context.hasPrimaryFailure) { context.failurePhase = 'cleanup'; captureCounts(client, context); throw cleanupError; }
   }
 }
 export async function preparation(options) {

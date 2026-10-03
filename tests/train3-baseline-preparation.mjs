@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { Readable } from 'node:stream';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseWorkflow } from '../tools/workflow-inventory.mjs';
-import { ACCOUNT, BoundedReadHandler, COMPONENTS, DATA, IDS, LIMITS, bodyBytes, exportBaseline,
+import { ACCOUNT, BATCH_LIMITS, BoundedReadHandler, COMPONENTS, DATA, IDS, LIMITS, batchPlan, bodyBytes, exportBaseline, exportBatch,
   exportPlan, failureDiagnostic, gate, hash, inventory, metadataAudit, preparation, producerOrder, readClient } from '../tools/train3-baseline-preparation.mjs';
 
 const SOURCE = 'a'.repeat(40), CATALOG = '1395-fixture';
@@ -43,7 +44,8 @@ function fixture() {
     async get(bucket, key, cap) { calls.push(['get', bucket, key]); const bytes = objects.get(`${bucket}/${key}`);
       assert.ok(bytes && bytes.length <= cap); return bytes; },
     async list(prefix) { calls.push(['list', prefix]); return { IsTruncated: false, Contents: prefixes.get(prefix) }; },
-    stats() { return { requests: calls.length, wireBytes: 0 }; }, close() {},
+    stats() { return { requests: calls.length, wireBytes: calls.filter(c => c[0] === 'get')
+      .reduce((sum, c) => sum + objects.get(`${c[1]}/${c[2]}`).length, 0) }; }, close() {},
   };
   return { objects, prefixes, components, calls, client };
 }
@@ -51,6 +53,37 @@ async function planned(f = fixture()) {
   const plan = await inventory(f.client, CATALOG, SOURCE), bytes = json(plan);
   return { f, plan, bytes, reviewed: exportPlan(bytes, hash(bytes), CATALOG) };
 }
+function partition(plan) {
+  const groups = [IDS.slice(0, 7), IDS.slice(7, 14), IDS.slice(14)];
+  return { schemaVersion: 1, kind: 'weatherx-train3-baseline-batches-v1', catalogId: CATALOG,
+    reviewedInventorySha256: hash(json(plan)), batches: groups.map((ids, i) => {
+      const items = ids.map(id => plan.components.find(item => item.id === id));
+      return { id: `batch-${i + 1}`, componentIds: ids,
+        payloadObjects: items.reduce((sum, item) => sum + item.objects.length, 0),
+        payloadBytes: items.reduce((sum, item) => sum + item.objects.reduce((n, row) => n + row.bytes, 0), 0) };
+    }) };
+}
+async function batched(f = fixture()) {
+  const result = await planned(f), batches = partition(result.plan), batchBytes = json(batches);
+  return { ...result, batches, batchBytes,
+    reviewed: batchPlan(result.bytes, hash(result.bytes), batchBytes, hash(batchBytes), 'batch-1', CATALOG) };
+}
+function morePayloads() {
+  const f = fixture(), prefix = 'components/ecmwf/artifact-ecmwf/';
+  const rows = Array.from({ length: 20 }, (_, i) => {
+    const path = `part-${i}.txt`, bytes = Buffer.from(`fixture ${i}`);
+    f.objects.set(`${COMPONENTS}/${prefix}${path}`, bytes);
+    return { path, size: bytes.length, sha256: hash(bytes) };
+  }).sort(producerOrder);
+  const manifest = JSON.parse(f.objects.get(`${COMPONENTS}/${prefix}component.json`));
+  manifest.objectCount = rows.length; manifest.inventorySha256 = hash(JSON.stringify(rows));
+  const raw = json(manifest); f.objects.set(`${COMPONENTS}/${prefix}component.json`, raw);
+  changeCatalogDescriptor(f, entry => Object.assign(entry, manifest, { manifestSha256: hash(raw) }));
+  f.prefixes.set(prefix, [{ Key: prefix + 'component.json', Size: raw.length },
+    ...rows.map(row => ({ Key: prefix + row.path, Size: row.size }))]);
+  return f;
+}
+const invocation = { sourceSha: SOURCE, runId: '1', runAttempt: '1' };
 function largeInventory(payloadCount) {
   const f = fixture(), prefix = 'components/ecmwf/artifact-ecmwf/', key = `${COMPONENTS}/${prefix}component.json`;
   const manifest = JSON.parse(f.objects.get(key)); manifest.objectCount = payloadCount;
@@ -71,6 +104,14 @@ test('workflow is manual, disabled by default, pinned, read-only, and retains su
   const source = await readFile(new URL('../' + path, import.meta.url), 'utf8'), workflow = parseWorkflow(source, path).data;
   assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch']);
   assert.equal(workflow.on.workflow_dispatch.inputs.enable_preparation.default, false);
+  assert.deepEqual(workflow.on.workflow_dispatch.inputs.operation.options, ['metadata', 'inventory', 'batch-export']);
+  assert.equal(workflow.on.workflow_dispatch.inputs.reviewed_plan_sha256.type, 'string');
+  assert.equal(workflow.on.workflow_dispatch.inputs.reviewed_batch_plan_sha256.type, 'string');
+  assert.deepEqual(workflow.on.workflow_dispatch.inputs.batch_id.options, ['', 'batch-1', 'batch-2', 'batch-3']);
+  assert.equal(workflow.on.workflow_dispatch.inputs.batch_id.default, '');
+  assert.equal(workflow.on.workflow_dispatch.inputs.owner_recipient_confirmed.default, false);
+  for (const input of ['reviewed_recipient_id', 'reviewed_age_recipient', 'reviewed_age_recipient_sha256'])
+    assert.equal(workflow.on.workflow_dispatch.inputs[input].default, '');
   assert.deepEqual(workflow.permissions, { contents: 'read' });
   assert.equal(workflow.concurrency['cancel-in-progress'], false);
   const job = workflow.jobs.prepare; assert.deepEqual(job.environment, { name: 'data-staging' }); assert.equal(job['timeout-minutes'], 45);
@@ -81,7 +122,19 @@ test('workflow is manual, disabled by default, pinned, read-only, and retains su
   const checkout = job.steps.find(step => step.uses?.startsWith('actions/checkout@'));
   assert.equal(checkout.with['persist-credentials'], false); assert.equal(checkout.with.ref, '${{ github.sha }}');
   const reader = job.steps.findIndex(step => step.run === 'node tools/train3-baseline-preparation.mjs');
-  assert.ok(reader > job.steps.findIndex(step => step.run === 'node --test tests/train3-baseline-preparation.mjs'));
+  const fixtureIndex = job.steps.findIndex(step => step.run === 'node --test tests/train3-baseline-preparation.mjs tests/train3-baseline-join.mjs tests/train3-baseline-encrypt.mjs tests/train3-baseline-decrypt.mjs');
+  assert.ok(fixtureIndex >= 0); assert.ok(reader > fixtureIndex);
+  const toolIndex = job.steps.findIndex(step => step.run?.startsWith('node tools/train3-baseline-encrypt.mjs prepare-toolchain'));
+  assert.ok(toolIndex >= 0 && toolIndex < fixtureIndex);
+  const readEnv = job.steps[reader].env;
+  assert.equal(readEnv.OWNER_RECIPIENT_CONFIRMED, '${{ inputs.owner_recipient_confirmed }}');
+  assert.equal(readEnv.REVIEWED_AGE_RECIPIENT_SHA256, '${{ inputs.reviewed_age_recipient_sha256 }}');
+  assert.equal(readEnv.AGE_RECIPIENT, readEnv.REVIEWED_AGE_RECIPIENT);
+  assert.equal(readEnv.RECIPIENT_ID, readEnv.REVIEWED_RECIPIENT_ID);
+  assert.equal(job.steps[reader].env.PREPARATION_OPERATION, '${{ inputs.operation }}');
+  assert.equal(job.steps[reader].env.REVIEWED_PLAN_SHA256, '${{ inputs.reviewed_plan_sha256 }}');
+  assert.equal(job.steps[reader].env.REVIEWED_BATCH_PLAN_SHA256, '${{ inputs.reviewed_batch_plan_sha256 }}');
+  assert.equal(job.steps[reader].env.BATCH_ID, '${{ inputs.batch_id }}');
   const upload = job.steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
   assert.equal(upload.if, undefined); assert.equal(upload.with['retention-days'], 1); assert.equal(upload.with['compression-level'], 0);
   assert.ok(job.steps.filter(step => step.uses).every(step => /@[a-f0-9]{40}$/.test(step.uses)));
@@ -263,6 +316,23 @@ test('reader close failure preserves the primary failure and removes its private
     assert.deepEqual(await readdir(root), []);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+test('a falsy reader close failure remains a cleanup failure and cannot retain output', async () => {
+  for (const primaryFailure of [true, false]) {
+    const root = await mkdtemp(join(tmpdir(), 'train3-falsy-close-')), f = fixture();
+    const originalGet = f.client.get;
+    f.client.get = (...args) => { if (primaryFailure) throw new Error('read-failure'); return originalGet(...args); };
+    f.client.close = () => { throw 0; };
+    try {
+      await assert.rejects(preparation({ env: { ...env, RUNNER_TEMP: root }, clientFactory: () => f.client }), error => {
+        assert.equal(failureDiagnostic(error).cleanup, 'failed');
+        assert.equal(failureDiagnostic(error).phase, primaryFailure ? 'pointer-before' : 'cleanup');
+        if (primaryFailure) assert.match(error.message, /read-failure/);
+        return true;
+      });
+      assert.deepEqual(await readdir(root), []);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
 test('whole-helper deadline prevents retaining output after the final response', async () => {
   const root = await mkdtemp(join(tmpdir(), 'train3-deadline-test-')), f = fixture(); let now = 0, pointers = 0;
   const original = f.client.get;
@@ -412,4 +482,229 @@ test('stats accessor values cannot replace a failure or enter diagnostics', asyn
   const stats = Object.defineProperty({}, 'requests', { get() { called = true; throw new Error(NO_DETAILS); } });
   const record = await failedPreparation(() => ({ get() { throw new Error(NO_DETAILS); }, stats() { return stats; }, close() {} }));
   assert.equal(called, false); assert.equal(record.requests, null); assert.equal(record.category, 'unknown');
+});
+
+test('batch admission validates the whole plan before selecting an exact disjoint partition', async () => {
+  const { plan, bytes, batches, batchBytes } = await batched();
+  assert.throws(() => batchPlan(bytes, 'b'.repeat(64), batchBytes, hash(batchBytes), 'batch-1', CATALOG), /reviewed-plan-hash/);
+  assert.throws(() => batchPlan(bytes, hash(bytes), batchBytes, 'b'.repeat(64), 'batch-1', CATALOG), /reviewed-batch-plan-hash/);
+  for (const mutate of [p => { p.reviewedInventorySha256 = 'b'.repeat(64); }, p => { p.catalogId = 'other'; },
+    p => p.batches.pop(), p => p.batches[0].componentIds.pop(), p => p.batches[1].componentIds.push('ecmwf'),
+    p => { p.batches[1].id = 'batch-1'; }, p => { p.batches[0].payloadBytes++; },
+    p => p.batches[0].componentIds.push('unknown')]) {
+    const copy = structuredClone(batches); mutate(copy); const raw = json(copy);
+    assert.throws(() => batchPlan(bytes, hash(bytes), raw, hash(raw), 'batch-1', CATALOG));
+  }
+  // An unselected component's manifest/identity/count still has to pass full admission.
+  for (const mutate of [p => { p.components.at(-1).manifestBase64 = Buffer.from('{}').toString('base64'); },
+    p => { p.components.at(-1).layout = 'schema2'; }, p => p.components.at(-1).objects.pop(), p => p.objectCount++]) {
+    const copy = structuredClone(plan); mutate(copy); const raw = json(copy), definitions = json(partition(copy));
+    assert.throws(() => batchPlan(raw, hash(raw), definitions, hash(definitions), 'batch-1', CATALOG));
+  }
+});
+test('real fixed three-batch measured plan is metadata-only and legacy full export remains refused', async () => {
+  const bytes = await readFile(new URL('../ops/train3-baseline/export-plan.json', import.meta.url));
+  const batchBytes = await readFile(new URL('../ops/train3-baseline/batch-plan.json', import.meta.url));
+  const catalogId = JSON.parse(bytes).catalogId;
+  assert.throws(() => exportPlan(bytes, hash(bytes), catalogId), /payload-budget/);
+  for (const batchId of ['batch-1', 'batch-2', 'batch-3']) {
+    const reviewed = batchPlan(bytes, hash(bytes), batchBytes, hash(batchBytes), batchId, catalogId);
+    assert.equal(reviewed.plan.components.length, 22);
+    assert.ok(reviewed.total <= LIMITS.payload);
+    assert.ok(reviewed.selectedComponents.reduce((n, c) => n + c.objects.length, 0) <= LIMITS.objects);
+  }
+  const changed = JSON.parse(batchBytes); changed.batches[0].payloadObjects = LIMITS.objects + 1;
+  const raw = json(changed); assert.throws(() => batchPlan(bytes, hash(bytes), raw, hash(raw), 'batch-2', catalogId), /batch-payload-budget/);
+});
+test('larger full-plan envelope never widens selected payload or object caps', async () => {
+  for (const payloadCount of [25_000, 45_000]) {
+    const plan = await inventory(largeInventory(payloadCount).client, CATALOG, SOURCE);
+    const bytes = json(plan), batchBytes = json(partition(plan));
+    assert.throws(() => batchPlan(bytes, hash(bytes), batchBytes, hash(batchBytes), 'batch-3', CATALOG),
+      payloadCount === 25_000 ? /batch-payload-budget/ : /payload-budget/);
+  }
+  const bytes = await readFile(new URL('../ops/train3-baseline/export-plan.json', import.meta.url));
+  const definitions = JSON.parse(await readFile(new URL('../ops/train3-baseline/batch-plan.json', import.meta.url)));
+  for (const extraRows of [6, 20]) {
+    const plan = JSON.parse(bytes), selected = plan.components.find(item => item.id === 'gfs');
+    for (let i = 0; i < extraRows; i++) selected.objects[i].bytes = LIMITS.object;
+    plan.payloadBytes = plan.components.reduce((sum, item) => sum + item.objects.reduce((n, row) => n + row.bytes, 0), 0);
+    const raw = json(plan), batches = structuredClone(definitions); batches.reviewedInventorySha256 = hash(raw);
+    batches.batches[0].payloadBytes = batches.batches[0].componentIds.reduce((sum, id) =>
+      sum + plan.components.find(item => item.id === id).objects.reduce((n, row) => n + row.bytes, 0), 0);
+    const batchBytes = json(batches);
+    assert.throws(() => batchPlan(raw, hash(raw), batchBytes, hash(batchBytes), 'batch-3', plan.catalogId),
+      extraRows === 6 ? /batch-payload-budget/ : /payload-budget/);
+  }
+});
+test('batch export uses at most eight GET/write workers and authenticates out-of-order completion without a seal', async () => {
+  const { f, reviewed } = await batched(morePayloads()), root = await mkdtemp(join(tmpdir(), 'train3-batch-pool-'));
+  const original = f.client.get, keys = []; let active = 0, maximum = 0;
+  f.client.get = async (...args) => {
+    if (args[0] !== COMPONENTS || args[1].endsWith('/component.json')) return original(...args);
+    keys.push(args[1]); maximum = Math.max(maximum, ++active);
+    await new Promise(resolve => setTimeout(resolve, 10 - keys.length % 8));
+    try { return await original(...args); } finally { active--; }
+  };
+  try {
+    const receipt = await exportBatch(f.client, reviewed, root, invocation);
+    assert.equal(maximum, 8); assert.equal(active, 0); assert.equal(keys.length, new Set(keys).size);
+    assert.equal(receipt.kind, 'weatherx-train3-original-baseline-batch-v1');
+    assert.equal(receipt.completeBaselineEligible, false); assert.equal(receipt.coreSealSha256, null);
+    assert.equal(receipt.scientificValidationPerformed, false); assert.equal(receipt.publicationAuthorized, false);
+    assert.deepEqual(receipt.components.map(c => c.componentId), reviewed.selectedComponents.map(c => c.id));
+    assert.equal(receipt.reviewedBatchPlanSha256, reviewed.reviewedBatchPlanSha256);
+    await assert.rejects(readFile(join(root, 'core/seal.json')), { code: 'ENOENT' });
+    assert.deepEqual(await readFile(join(root, 'original/components/ecmwf/payload/part-0.txt')),
+      await readFile(join(root, 'core/components/ecmwf/payload/part-0.txt')));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+test('first falsy failure cancels in-flight reads, drains all workers and permits cleanup without late writes', async () => {
+  const { f, reviewed } = await batched(morePayloads()), root = await mkdtemp(join(tmpdir(), 'train3-batch-abort-'));
+  const abort = new AbortController(), original = f.client.get;
+  let started = 0, settled = 0, cancelled = 0, release;
+  const allStarted = new Promise(resolve => { release = resolve; });
+  f.client.get = async (...args) => {
+    if (args[0] !== COMPONENTS || args[1].endsWith('/component.json')) return original(...args);
+    const n = ++started; if (started === 8) release();
+    if (n === 1) { await allStarted; settled++; throw ''; }
+    await new Promise(resolve => abort.signal.addEventListener('abort', resolve, { once: true }));
+    await new Promise(resolve => setTimeout(resolve, 10)); settled++; return original(...args);
+  };
+  try {
+    let rejected = false;
+    try { await exportBatch(f.client, reviewed, root, { ...invocation, signal: abort.signal,
+      cancel() { cancelled++; abort.abort(); } }); }
+    catch (error) { rejected = true; assert.equal(error, ''); }
+    assert.equal(rejected, true); assert.equal(cancelled, 1); assert.equal(started, 8); assert.equal(settled, 8);
+    await assert.rejects(readdir(join(root, 'original/components/ecmwf/payload')), { code: 'ENOENT' });
+    await rm(root, { recursive: true, force: true });
+    await new Promise(resolve => setTimeout(resolve, 15));
+    await assert.rejects(readdir(root), { code: 'ENOENT' }); assert.equal(started, 8);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+test('batch payload hash, pointer rotation, disk reserve and deadline failures cannot produce a receipt or seal', async () => {
+  for (const scenario of ['hash', 'pointer', 'disk', 'deadline']) {
+    const { f, reviewed } = await batched(), root = await mkdtemp(join(tmpdir(), 'train3-batch-refusal-'));
+    let now = 0, diskLow = false, pointers = 0;
+    const original = f.client.get;
+    f.client.get = async (...args) => {
+      const bytes = await original(...args);
+      if (scenario === 'pointer' && args[1] === 'catalogs/current.json' && ++pointers === 2) return Buffer.concat([bytes, Buffer.from(' ')]);
+      if (args[0] === COMPONENTS && !args[1].endsWith('/component.json')) {
+        if (scenario === 'disk') diskLow = true;
+        if (scenario === 'deadline') now = BATCH_LIMITS.milliseconds;
+        if (scenario === 'hash') return Buffer.alloc(bytes.length);
+      }
+      return bytes;
+    };
+    try {
+      await assert.rejects(exportBatch(f.client, reviewed, root, { ...invocation, now: () => now,
+        disk: async () => ({ bavail: diskLow ? 0 : 2 * BATCH_LIMITS.reserve, bsize: 1 }) }));
+      await assert.rejects(readFile(join(root, 'core/seal.json')), { code: 'ENOENT' });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
+test('exclusive payload write failure preserves its error and invokes cancellation before worker completion', async () => {
+  const { f, reviewed } = await batched(), root = await mkdtemp(join(tmpdir(), 'train3-batch-write-'));
+  const path = join(root, 'original/components/ecmwf/payload/A');
+  await mkdir(path, { recursive: true }); await writeFile(join(path, '1.txt'), 'owned fixture');
+  const abort = new AbortController(); let cancelled = 0;
+  try {
+    await assert.rejects(exportBatch(f.client, reviewed, root, { ...invocation, signal: abort.signal,
+      cancel() { cancelled++; abort.abort(); } }), { code: 'EEXIST' });
+    assert.equal(cancelled, 1);
+    await assert.rejects(readFile(join(root, 'core/seal.json')), { code: 'ENOENT' });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+test('batch CLI refuses unconfirmed recipients before a reader and retains only encrypted verified bytes', async () => {
+  const { f, bytes, batchBytes } = await batched(), root = await realpath(await mkdtemp(join(tmpdir(), 'train3-batch-cli-')));
+  const previous = process.cwd(), repo = join(root, 'repo');
+  await mkdir(join(repo, 'ops/train3-baseline'), { recursive: true });
+  await writeFile(join(repo, 'ops/train3-baseline/export-plan.json'), bytes);
+  await writeFile(join(repo, 'ops/train3-baseline/batch-plan.json'), batchBytes);
+  const batchEnv = { ...env, RUNNER_TEMP: root, PREPARATION_OPERATION: 'batch-export', BATCH_ID: 'batch-1',
+    REVIEWED_PLAN_SHA256: hash(bytes), REVIEWED_BATCH_PLAN_SHA256: hash(batchBytes) };
+  try {
+    process.chdir(repo);
+    for (const change of [{ REVIEWED_BATCH_PLAN_SHA256: '' }, { BATCH_ID: 'other' }, { REVIEWED_PLAN_SHA256: 'b'.repeat(64) },
+      { REVIEWED_BATCH_PLAN_SHA256: 'b'.repeat(64) }]) {
+      let called = false;
+      await assert.rejects(preparation({ env: { ...batchEnv, ...change }, clientFactory() { called = true; } }));
+      assert.equal(called, false); assert.deepEqual(await readdir(root), ['repo']);
+    }
+    let called = false;
+    await assert.rejects(preparation({ env: batchEnv, clientFactory() { called = true; } }), /owner-recipient-confirmation/);
+    assert.equal(called, false); assert.deepEqual(await readdir(root), ['repo']);
+    called = false;
+    await assert.rejects(preparation({ env: { ...batchEnv, PREPARATION_OPERATION: 'export' },
+      clientFactory() { called = true; } }), /legacy-export-needs-confidential-transport/);
+    assert.equal(called, false); assert.deepEqual(await readdir(root), ['repo']);
+    const { verifyAgeToolchain } = await import('../tools/train3-baseline-encrypt.mjs');
+    const toolchain = await verifyAgeToolchain({ ageBinary: process.env.TRAIN3_AGE_BINARY,
+      ageKeygenBinary: process.env.TRAIN3_AGE_KEYGEN_BINARY, distributionArchive: process.env.TRAIN3_AGE_DISTRIBUTION_ARCHIVE });
+    const keyPath = join(root, 'synthetic-identity.txt'), childEnv = { PATH: '/nonexistent', HOME: root, TMPDIR: root, LANG: 'C' };
+    execFileSync(toolchain.ageKeygenBinary, ['-o', keyPath], { env: childEnv, stdio: 'pipe', timeout: 10_000 });
+    const recipient = execFileSync(toolchain.ageKeygenBinary, ['-y', keyPath], { env: childEnv, stdio: 'pipe', timeout: 10_000 }).toString().trim();
+    const confirmed = { ...batchEnv, OWNER_RECIPIENT_CONFIRMED: 'true', RECIPIENT_ID: 'synthetic-fixture',
+      REVIEWED_RECIPIENT_ID: 'synthetic-fixture', AGE_RECIPIENT: recipient, REVIEWED_AGE_RECIPIENT: recipient,
+      REVIEWED_AGE_RECIPIENT_SHA256: hash(Buffer.from(recipient)), TRAIN3_AGE_BINARY: toolchain.ageBinary,
+      TRAIN3_AGE_KEYGEN_BINARY: toolchain.ageKeygenBinary, TRAIN3_AGE_DISTRIBUTION_ARCHIVE: toolchain.distributionArchive };
+    for (const change of [{ REVIEWED_RECIPIENT_ID: 'different' }, { REVIEWED_AGE_RECIPIENT_SHA256: 'b'.repeat(64) },
+      { OWNER_RECIPIENT_CONFIRMED: 'false' }, { TRAIN3_AGE_BINARY: '/nonexistent/age' }]) {
+      called = false;
+      await assert.rejects(preparation({ env: { ...confirmed, ...change }, clientFactory() { called = true; } }));
+      assert.equal(called, false);
+    }
+    f.calls.length = 0;
+    await preparation({ env: confirmed, clientFactory: () => f.client });
+    const output = join(root, 'train3-baseline-preparation');
+    assert.deepEqual((await readdir(output)).sort(), ['batch.age', 'encrypted-receipt.json']);
+    const receipt = JSON.parse(await readFile(join(output, 'encrypted-receipt.json')));
+    assert.equal(receipt.kind, 'weatherx-train3-encrypted-baseline-batch-v1');
+    assert.equal(receipt.completeBaselineEligible, false); assert.equal(receipt.publicationAuthorized, false);
+    assert.equal(receipt.recipientSha256, hash(Buffer.from(recipient)));
+    assert.equal(receipt.ciphertextSha256, hash(await readFile(join(output, 'batch.age'))));
+    for (const field of ['catalogId', 'sourceSha', 'batchId', 'reviewedPlanSha256', 'reviewedBatchPlanSha256']) assert.equal(receipt[field], undefined);
+    const archive = execFileSync(toolchain.ageBinary, ['--decrypt', '--identity', keyPath, join(output, 'batch.age')],
+      { env: childEnv, stdio: 'pipe', timeout: 10_000, maxBuffer: 1024 ** 2 });
+    assert.ok(archive.includes(Buffer.from('batch-receipt.json')));
+    assert.ok(archive.includes(Buffer.from(hash(batchBytes))));
+    assert.ok(archive.includes(Buffer.from('original ecmwf')));
+    assert.equal(f.calls.filter(c => c[0] === 'list').length, 0);
+    await assert.rejects(readFile(join(output, 'core/seal.json')), { code: 'ENOENT' });
+    await assert.rejects(readdir(join(root, 'train3-baseline-work-1-1')), { code: 'ENOENT' });
+    await rm(output, { recursive: true });
+    // Change only a disposable exact tool copy after recipient admission. A real
+    // encryption process failure must leave neither ciphertext nor plaintext upload output.
+    const localTools = join(root, 'synthetic-tools'); await mkdir(localTools, { mode: 0o700 });
+    for (const [name, source] of [['age', toolchain.ageBinary], ['age-keygen', toolchain.ageKeygenBinary],
+      ['distribution.tar.gz', toolchain.distributionArchive]]) {
+      await copyFile(source, join(localTools, name)); await chmod(join(localTools, name), name.endsWith('.gz') ? 0o600 : 0o700);
+    }
+    f.calls.length = 0; called = false;
+    await assert.rejects(preparation({ env: { ...confirmed, TRAIN3_AGE_BINARY: join(localTools, 'age'),
+      TRAIN3_AGE_KEYGEN_BINARY: join(localTools, 'age-keygen'), TRAIN3_AGE_DISTRIBUTION_ARCHIVE: join(localTools, 'distribution.tar.gz') },
+      async clientFactory() { called = true; await chmod(join(localTools, 'age'), 0o600); return f.client; } }));
+    assert.equal(called, true); assert.ok(f.calls.length > 0);
+    await assert.rejects(readdir(output), { code: 'ENOENT' });
+    await assert.rejects(readdir(join(root, 'train3-baseline-work-1-1')), { code: 'ENOENT' });
+  } finally { process.chdir(previous); await rm(root, { recursive: true, force: true }); }
+});
+test('batch transport retains request/wire caps, allows payload GET but no LIST, and has a separate thirty-minute deadline', async () => {
+  let calls = 0, now = 0;
+  const inner = { metadata: {}, async handle() { calls++; return { response: { body: Readable.from(['x']) } }; } };
+  const request = { protocol: 'https:', hostname: `${ACCOUNT}.r2.cloudflarestorage.com`, method: 'GET',
+    path: `/${COMPONENTS}/components/ecmwf/a/payload.bin`, query: {} };
+  const handler = new BoundedReadHandler(inner, { operation: 'batch-export', now: () => now });
+  assert.equal(handler.deadline, 30 * 60_000);
+  await assert.rejects(handler.handle({ ...request, path: `/${COMPONENTS}/`,
+    query: { 'list-type': '2', 'max-keys': '1000', prefix: 'components/ecmwf/a/' } }, {}), /unscoped-list/);
+  const response = await handler.handle(request, {}); await bodyBytes(response.response.body, LIMITS.object); assert.equal(calls, 1);
+  handler.requests = LIMITS.exportRequests;
+  await assert.rejects(handler.handle(request, {}), /request-or-time-budget/); assert.equal(calls, 1);
+  handler.requests = 0; handler.bytes = LIMITS.payload + LIMITS.metadata;
+  const excess = await handler.handle(request, {}); await assert.rejects(bodyBytes(excess.response.body, LIMITS.object), /wire-budget/);
+  now = BATCH_LIMITS.milliseconds; await assert.rejects(handler.handle(request, {}), /request-or-time-budget/);
+  assert.equal(new BoundedReadHandler(inner, { operation: 'export', now: () => 0 }).deadline, 43 * 60_000);
 });

@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `9c8012ab00942f0e3115a1c2facf9ff0f19473e264942946f5b3e19de19a3c36`.
+Source digest (registry and workflow bytes): `b4a7d133f54eddd20c904d309ff1bb161901d4d010ce485272e4b09171896b7f`.
 
 61 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -67,7 +67,7 @@ Source digest (registry and workflow bytes): `9c8012ab00942f0e3115a1c2facf9ff0f1
 | [staging-wind100-preflight](#staging-wind100-preflight) | staging / Native wind | diagnostic | Check recurring staging wind credentials through the existing check-only path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [staging-wind100-recurring](#staging-wind100-recurring) | staging / Native wind | recurring | Maintain the isolated recurring staging native wind selection. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [staging-wind100](#staging-wind100) | staging / Native wind | manual-supported | Qualify isolated native 100 metre wind for staging. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
-| [train3-baseline-preparation](#train3-baseline-preparation) | staging / Train 3 baseline preparation | diagnostic | Assess original Train 3 metadata, inventory and export bytes only after separate bounded manual approvals. | [guide](../docs/train3-baseline-preparation.md) |
+| [train3-baseline-preparation](#train3-baseline-preparation) | staging / Train 3 baseline preparation | diagnostic | Assess original Train 3 metadata/inventory or retain recipient-encrypted payload batches after separate bounded manual approvals. | [guide](../docs/train3-baseline-preparation.md) |
 | [ui-layer-diagnostics](#ui-layer-diagnostics) | releases / UI release diagnostics | diagnostic | Collect bounded read-only layer-switch evidence against the exact reviewed staging or failed preview artifact. | [guide](../docs/ui-layer-diagnostics.md) |
 | [ui-release](#ui-release) | releases / Application shell | manual-supported | Promote an eligible immutable application candidate through production guards. | [guide](../docs/production-safe-controller-20260907.md) |
 | [ui-staging-tc](#ui-staging-tc) | staging / Application shell | manual-supported | Build an isolated staging shell with reviewed tropical cyclone guidance. | [guide](../docs/STAGING_TC_GUIDANCE.md) |
@@ -1456,23 +1456,23 @@ Variable references (declared names only; values and activation unknown): [STAGI
 
 [.github/workflows/train3-baseline-preparation.yml](../.github/workflows/train3-baseline-preparation.yml#L1) · <code>WeatherX Train 3 baseline preparation</code>
 
-Declared triggers: [workflow_dispatch](../.github/workflows/train3-baseline-preparation.yml#L4); input names <code>["enable_preparation","operation","reviewed_source_sha","expected_catalog_id","reviewed_plan_sha256"]</code>.
+Declared triggers: [workflow_dispatch](../.github/workflows/train3-baseline-preparation.yml#L4); input names <code>["enable_preparation","operation","reviewed_source_sha","expected_catalog_id","reviewed_plan_sha256","reviewed_batch_plan_sha256","batch_id","owner_recipient_confirmed","reviewed_recipient_id","reviewed_age_recipient","reviewed_age_recipient_sha256"]</code>.
 
 Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-train3-baseline-preparation","cancel-in-progress":false}</code>.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [prepare](../.github/workflows/train3-baseline-preparation.yml#L32) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"data-staging"}</code> | <code>45</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [prepare](../.github/workflows/train3-baseline-preparation.yml#L57) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"data-staging"}</code> | <code>45</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [prepare](../.github/workflows/train3-baseline-preparation.yml#L32): <code>${{ inputs.enable_preparation &amp;&amp; github.ref == 'refs/heads/main' &amp;&amp; inputs.reviewed_source_sha == github.sha }}</code>
+- [prepare](../.github/workflows/train3-baseline-preparation.yml#L57): <code>${{ inputs.enable_preparation &amp;&amp; github.ref == 'refs/heads/main' &amp;&amp; inputs.reviewed_source_sha == github.sha }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [prepare / step 1](../.github/workflows/train3-baseline-preparation.yml#L38) | caller repository (implicit) | <code>${{ github.sha }}</code> |
+| [prepare / step 1](../.github/workflows/train3-baseline-preparation.yml#L63) | caller repository (implicit) | <code>${{ github.sha }}</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
 

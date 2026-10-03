@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "kind": "weatherx-train3-baseline-batches-v1",
+  "catalogId": "1410-acb8a859-f0bd-4114-98a1-2b9b34b26499",
+  "reviewedInventorySha256": "9f1855cbdd4dde5f859421c806759d9d5c554bd7f3ab3482e960551f4308e93c",
+  "batches": [
+    {
+      "id": "batch-1",
+      "componentIds": [
+        "gfs",
+        "icon",
+        "nam",
+        "hrrr-ak",
+        "arome-antilles",
+        "point-nam",
+        "point-hrrr"
+      ],
+      "payloadObjects": 13027,
+      "payloadBytes": 1817160950
+    },
+    {
+      "id": "batch-2",
+      "componentIds": [
+        "ecmwf",
+        "hrrr",
+        "point-icon"
+      ],
+      "payloadObjects": 15464,
+      "payloadBytes": 1819719449
+    },
+    {
+      "id": "batch-3",
+      "componentIds": [
+        "point-ecmwf",
+        "point-gfs",
+        "point-aifs",
+        "hrdps",
+        "aifs",
+        "nam-ak",
+        "point-hrdps",
+        "point-nam-ak",
+        "point-hrrr-ak",
+        "point-arome-antilles",
+        "nam-hi",
+        "point-nam-hi"
+      ],
+      "payloadObjects": 15208,
+      "payloadBytes": 1813015223
+    }
+  ]
+}
