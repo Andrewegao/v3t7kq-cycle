@@ -13,7 +13,6 @@ const LEASE_MINUTES = 30;
 
 export const BACKEND_STAGES = Object.freeze([
   'configuration',
-  'backup',
   'migration',
   'worker-deploy',
   'worker-rollback',
@@ -92,6 +91,7 @@ export function validateDispatch(environment) {
   required(value.atmosphereSha, SHA40, 'Atmos candidate SHA');
   required(value.runId, RUN_NUMBER, 'GitHub run ID');
   required(value.runAttempt, RUN_NUMBER, 'GitHub run attempt');
+  if (value.stage === 'backup') fail('hosted staging backups are disabled pending approved private or encrypted retention');
   if (!BACKEND_STAGES.includes(value.stage)) fail('stage is not an allowed backend transaction stage');
   if (value.confirmation !== `RUN-STAGING:${value.stage}:${value.atmosphereSha}`) {
     fail('exact dispatch confirmation does not bind the selected stage and Atmos SHA');
@@ -128,7 +128,6 @@ export function prepareTransaction({ environment, outputDir, now = new Date() })
     expiresAt: new Date(issued.getTime() + LEASE_MINUTES * 60_000).toISOString(),
   };
   let stageArguments = {};
-  if (dispatch.stage === 'backup') stageArguments = { outputPath: resolve(root, 'd1-before.sql') };
   if (dispatch.stage === 'worker-rollback') stageArguments = {
     targetVersionId: dispatch.rollbackTargetVersionId,
     expectedCurrentVersionId: dispatch.rollbackExpectedCurrentVersionId,
