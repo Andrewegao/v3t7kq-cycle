@@ -32,13 +32,19 @@ the token. Do not add DNS, Pages edit, R2 edit, billing, or user permissions for
 ## Dispatch
 
 Use the workflow on Cycle `main`. Supply the exact 40-character SHA currently at Atmos `master`,
-choose one stage, and type `RUN-STAGING:<stage>:<atmos_sha>` exactly. The supported sequence is:
+choose one stage, and type `RUN-STAGING:<stage>:<atmos_sha>` exactly. Hosted `backup` is disabled:
+the dispatch helper rejects even stale callers before creating transaction files or exporting D1.
+It cannot be restored until private or encrypted backup retention is separately approved. A
+separately authorized local Atmos rehearsal backup remains available; this hosted change does not
+change that packet or provide migration approval. Obtain and verify an authorized recoverable
+backup through its approved private path before a migration that requires one.
+
+The supported hosted stages are:
 
 1. `configuration` checks required staging secret names without reading or changing values.
-2. `backup` exports the current staging D1 database and hashes the nonempty export.
-3. `migration` applies only the candidate's pending migrations to staging D1.
-4. `worker-deploy` verifies the staging config and deploys only the staging Worker.
-5. `worker-rollback` is an incident action and additionally requires the last-good version ID and
+2. `migration` applies only the candidate's pending migrations to staging D1.
+3. `worker-deploy` verifies the staging config and deploys only the staging Worker.
+4. `worker-rollback` is an incident action and additionally requires the last-good version ID and
    the exact single 100%-active current version ID from a fresh inventory.
 
 Review the prior stage artifact before approving the next dispatch. Never dispatch migration and
@@ -49,10 +55,19 @@ Each run creates a thirty-minute staging lease and a ten-minute stage authorizat
 before execution, the Atmos packet revalidates the authorization, lease, current inventory,
 canonical command digest, and rollback compare-and-swap where applicable. It writes a durable
 create-once intent before spawning a remote command and a separate create-once result afterward.
-The workflow uploads the plan, inventories, authorization, intent, result, and D1 backup when
-present as the uniquely named seven-day artifact
+Internal plans, inventories, authorization arguments, intent and result remain on the runner.
+An `always()` projection reads only bounded regular files at known evidence paths, validates their
+canonical JSON and receipt identities, and creates an exclusive public output directory. It retains
+only fixed metadata, validated transaction status and intent/result linkage, plus evidence size/hash
+commitments. It never copies raw evidence, database exports, source, logs, unknown files, symlinks,
+or failure messages. Internal digests and objects remain unchanged. The workflow uploads only the
+generated `summary.json`, and only after the projection succeeds, as the uniquely named seven-day artifact
 `platform-staging-<stage>-<run-id>-<run-attempt>`.
 
-An intent without a result is an ambiguous outcome. Do not retry. Inspect current staging state,
-preserve the artifact, and create a new dispatch only after reconciliation. A successful staging
+Missing, malformed, partial, failed or unbound evidence produces `reconciliation-required`, never
+a retry or success claim. Complete bound successful receipts produce `reported-success`; that
+label describes the internal result, not a new independent live verification. If projection itself
+fails, no artifact is uploaded. An intent without a result is an ambiguous outcome. Do not retry.
+Inspect current staging state, preserve available commitments, and create a new dispatch only
+after reconciliation. A successful staging
 stage does not authorize another stage, a Pages release, an Atmos merge, or any production action.

@@ -11,7 +11,7 @@ on:
         description: Execute exactly one backend staging stage
         required: true
         type: choice
-        options: [configuration, backup, migration, worker-deploy, worker-rollback]
+        options: [configuration, migration, worker-deploy, worker-rollback]
       confirm:
         description: Exact RUN-STAGING:<stage>:<atmos_sha>
         required: true
@@ -144,12 +144,22 @@ jobs:
             --authorization "$RUNNER_TEMP/platform-staging-transaction/authorization.json" \
             --confirm "$confirmation" \
             --receipt "$RUNNER_TEMP/platform-staging-transaction/stage-intent.json"
-      - name: Retain append-only staging transaction evidence
+      - name: Project public staging transaction summary
+        id: public_summary
         if: ${{ always() }}
+        env:
+          ATMOS_SHA: ${{ inputs.atmos_sha }}
+          TRANSACTION_STAGE: ${{ inputs.stage }}
+        run: |
+          node cycle/tools/platform-staging-public-summary.mjs \
+            --input-dir "$RUNNER_TEMP/platform-staging-transaction" \
+            --output-dir "$RUNNER_TEMP/platform-staging-public"
+      - name: Retain public staging transaction summary
+        if: ${{ always() && steps.public_summary.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: platform-staging-${{ inputs.stage }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/platform-staging-transaction
+          path: ${{ runner.temp }}/platform-staging-public/summary.json
           if-no-files-found: warn
           retention-days: 7
           compression-level: 6
