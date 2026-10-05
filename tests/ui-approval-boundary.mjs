@@ -27,6 +27,20 @@ function assertDataOnly(source, allowedKeys) {
 }
 
 function assertBakeDataOnly(source) {
+  // Provider access is confined to this execution step; it is not a shared data credential.
+  const text = executable(source);
+  const marker = '      - name: bake → gate → publish immutable data release\n';
+  const parts = text.split(marker);
+  assert.equal(parts.length, 2, 'one whole-bake execution step is required');
+  const execution = parts[1].split(/^      - /m)[0];
+  const envs = [...execution.matchAll(/^        env:\n((?:^          .*\n|^\s*\n)*)/gm)];
+  assert.equal(envs.length, 1, 'one whole-bake execution environment is required');
+  const providerLine = '          OPENAQ_API_KEY: ${{ secrets.OPENAQ_API_KEY }}\n';
+  assert.ok(envs[0][1].includes(providerLine), 'OpenAQ key belongs only in the execution env');
+  assert.match(execution, /^        run: bash ops\/bake-weatherx\.sh$/m);
+  const withoutProvider = text.replace(providerLine, '');
+  assert.doesNotMatch(withoutProvider, /\bOPENAQ_API_KEY\b/, 'OpenAQ reference outside its one execution env');
+  source = withoutProvider;
   const blocks = [...source.matchAll(/^  staging-wind100:\n[\s\S]*?(?=^  [a-z][a-z0-9-]*:|$(?![\s\S]))/gm)];
   assert.equal(blocks.length, 1, 'one isolated recurring wind caller is required');
   const block = blocks[0][0];
@@ -62,6 +76,34 @@ test('both data bakes and legacy backfill have no UI credential or dispatch capa
     'PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID', 'PRODUCTION_WIND100_GC_DELETE_SECRET_ACCESS_KEY']);
   assert.match(workflows['bake.yml'], /DATA_PUBLISH_MODE: r2-release/);
   assert.match(workflows['catalog-bake.yml'], /bash ops\/bake-model-component\.sh/);
+});
+
+test('OpenAQ provider key is accepted only in its exact whole-bake execution environment', () => {
+  const source = workflows['bake.yml'];
+  const line = '          OPENAQ_API_KEY: ${{ secrets.OPENAQ_API_KEY }}\n';
+  assertBakeDataOnly(source);
+  const without = source.replace(line, '');
+  for (const [name, changed] of [
+    ['unnamed following consumer', source.replace(/(      - name: bake → gate → publish immutable data release\n[^]*?)        env:\n(?:          .*\n)+?(?=        run: bash ops\/bake-weatherx\.sh)/,
+      '$1').replace('        run: bash ops/bake-weatherx.sh\n',
+      '        run: bash ops/bake-weatherx.sh\n      - uses: actions/example@v1\n        env:\n' + line)],
+    ['missing', without],
+    ['duplicate', source.replace(line, line + line)],
+    ['global', source + '\nenv:\n' + line],
+    ['moved to diagnostics', without.replace('          ATMOS_SHA:', line + '          ATMOS_SHA:')],
+    ['not a secret', source.replace('secrets.OPENAQ_API_KEY', 'vars.OPENAQ_API_KEY')],
+    ['new secret', source.replace('secrets.OPENAQ_API_KEY', 'secrets.OTHER_PROVIDER_KEY')],
+    ['dynamic secret', source.replace('secrets.OPENAQ_API_KEY', 'secrets[inputs.key]')],
+    ['different env key', source.replace('OPENAQ_API_KEY:', 'OTHER_KEY:')],
+    ['wrong execution', source.replace('run: bash ops/bake-weatherx.sh', 'run: bash ops/other.sh')],
+    ['not in env', source.replace(line, '').replace('        run: bash ops/bake-weatherx.sh',
+      '        with:\n' + line + '        run: bash ops/bake-weatherx.sh')],
+    ['extra UI key inside allowed step', source.replace(line, line + '          TOKEN: ${{ secrets.UI_PRODUCTION_PAGES_TOKEN }}\n')],
+  ]) assert.throws(() => assertBakeDataOnly(changed), name);
+  for (const [name, allowed] of [['catalog-bake.yml', componentKeys],
+    ['publish-current-model-production.yml', maintenanceKeys], ['resume-model-publication.yml', maintenanceKeys]]) {
+    assert.throws(() => assertDataOnly(workflows[name] + '\n' + line, allowed), name);
+  }
 });
 
 test('boundary contracts reject legacy key, new UI key, dispatch, inherited secrets and direct upload', () => {
