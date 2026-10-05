@@ -91,7 +91,7 @@
       ]
     },
     {
-      "pin": "16a1c4ca25e19ed9032f73f0b897a7fe675efaef",
+      "pin": "5e68af94c24517eaaaf6a9d25aec0cadc3d9b135",
       "files": [
         "app/e2e/layer-switch-surface.mjs",
         "app/e2e/layer-switch-tint.mjs",
@@ -124,7 +124,7 @@
   ],
   "stagingBuild": {
     "profile": "production-account-ru-kk-wind100-onboarding-v2",
-    "pin": "16a1c4ca25e19ed9032f73f0b897a7fe675efaef",
+    "pin": "5e68af94c24517eaaaf6a9d25aec0cadc3d9b135",
     "paths": [
       ".gitignore",
       "platform/edge/package.json",
@@ -132,6 +132,6 @@
       "ops/release/build-release-receipt.mjs"
     ],
     "coneMode": false,
-    "provenance": "Merged PR #468 source preserves the four-path sparse build closure; only ops/release/build-release-receipt.mjs bytes differ from accepted S8. The public journey harness and receipt builder/test differ within the existing 21-file qualification controller inventory. Historical S5/S6/S8 runtime receipts remain historical evidence; hosted sparse checkout, current qualification and new artifact evidence are required; new-source staging acceptance remains pending. This does not qualify deployment or claim a hosted performance saving. See docs/ui-public-combined.md."
+    "provenance": "Merged PR #477 Search source has the same 21-file qualification controller inventory and four-path sparse build closure bytes as prior PR #468 pin 16a1c4ca25e19ed9032f73f0b897a7fe675efaef and premerge master 5fee7947bb399b44051cc2000d9b5900046453f1. All 43 reviewed account/onboarding source hashes are unchanged, and platform/edge has no delta against either boundary. Historical S5/S6/S8 and PR #468 receipts retain their original source identities. A fresh hosted staging candidate, pipeline digest, Search acceptance and same-release native100m Wind/CF acceptance remain required. Local sparse/source checks do not qualify deployment or claim a hosted performance saving. See docs/ui-public-combined.md."
   }
 }
