@@ -3,7 +3,7 @@
   "targetOrigin": "https://weatherx.org",
   "model": "ecmwf",
   "sourceSha": "9174329db6ca8527569e67f14ef70406dedefb69",
-  "coreSourceSha": "7a50f19714f22e04dc610a5aa33d311b7d1dc673",
+  "coreSourceSha": "5e68af94c24517eaaaf6a9d25aec0cadc3d9b135",
   "dataBucket": "weatherx-data-production",
   "componentBucket": "weatherx-components-production",
   "pointerKey": "production-candidates/wind100/current-v1.json",
