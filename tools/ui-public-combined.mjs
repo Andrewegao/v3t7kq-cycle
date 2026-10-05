@@ -10,7 +10,7 @@ export const PUBLIC_COMBINED_LOCALE_RECEIPT = 'ru-kk-public-beta-v1';
 export const PUBLIC_COMBINED_INTRO_SOURCE_SHA256 = '8f9d8a33cc8b634a89025b02fd45fb7b75a23ff2a87bbd7439bfc60b945d15d7';
 export const PUBLIC_COMBINED_ACCOUNT_SOURCES = Object.freeze({
   'client.ts': 'a06ec9e7d56551dae4fbf07ae552cf296365e5749d5c7e9f47b080f481588f1a',
-  'pointSeriesContract.ts': '8a3ae4af11d87a37e954891bbdb43b0907c591c65ca902852bc5a13e2af7d36e',
+  'pointSeriesContract.ts': '79ba3804276045cb20fa923559bcf7c702c598c573fa5100ee33639e7754da10',
   'session.ts': '9896c3b9382f5a64e2bad0d43c298c2a4af670cb3e645874d08629caf343e6b3',
   'PlatformAccount.tsx': 'e5ecfde7cddb409fdf6786c98eabf29227ea582e4e0a089bac5bbb2e529e993e',
   'accountEntry.ts': '5e168d190409e503cf12ef3501893bf6a757c37fe3558d8e29e018fbbdab532c',
@@ -56,7 +56,8 @@ export const PUBLIC_COMBINED_ONBOARDING_SOURCES = Object.freeze({
   'onboarding/useObData.ts': '84696745e68d6c2a5b927439183751e53a3cd65604b619833899e1741ee936b3',
 });
 export const PUBLIC_COMBINED_SIDECAR = 'assets/weatherx-production-account-build-v1.json';
-export const PUBLIC_COMBINED_ATMOS_SHA = '8e41652f01d73969af5a71e4daf2e4bbf5be97b8';
+// Reviewed merged PR #468 source; new-source staging acceptance remains pending.
+export const PUBLIC_COMBINED_ATMOS_SHA = '16a1c4ca25e19ed9032f73f0b897a7fe675efaef';
 
 export function assertPublicCombinedReady() {
   assert.match(PUBLIC_COMBINED_ATMOS_SHA, /^[a-f0-9]{40}$/);
