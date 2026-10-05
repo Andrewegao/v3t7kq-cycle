@@ -91,7 +91,7 @@
       ]
     },
     {
-      "pin": "8e41652f01d73969af5a71e4daf2e4bbf5be97b8",
+      "pin": "16a1c4ca25e19ed9032f73f0b897a7fe675efaef",
       "files": [
         "app/e2e/layer-switch-surface.mjs",
         "app/e2e/layer-switch-tint.mjs",
@@ -124,7 +124,7 @@
   ],
   "stagingBuild": {
     "profile": "production-account-ru-kk-wind100-onboarding-v2",
-    "pin": "8e41652f01d73969af5a71e4daf2e4bbf5be97b8",
+    "pin": "16a1c4ca25e19ed9032f73f0b897a7fe675efaef",
     "paths": [
       ".gitignore",
       "platform/edge/package.json",
@@ -132,6 +132,6 @@
       "ops/release/build-release-receipt.mjs"
     ],
     "coneMode": false,
-    "provenance": "Exact merged PR #451 pin retains the four byte-identical accepted S6 sparse build inputs. Historical S5/S6 sparse-layout and runtime receipts remain historical evidence; current source qualification, actual hosted sparse checkout and new artifact evidence are required. This does not qualify deployment or claim a hosted performance saving. See docs/ui-public-combined.md."
+    "provenance": "Merged PR #468 source preserves the four-path sparse build closure; only ops/release/build-release-receipt.mjs bytes differ from accepted S8. The public journey harness and receipt builder/test differ within the existing 21-file qualification controller inventory. Historical S5/S6/S8 runtime receipts remain historical evidence; hosted sparse checkout, current qualification and new artifact evidence are required; new-source staging acceptance remains pending. This does not qualify deployment or claim a hosted performance saving. See docs/ui-public-combined.md."
   }
 }
