@@ -5,8 +5,8 @@ import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Reviewed merged PR #468 source; retain the exact-current-master and clean-checkout guard.
-export const UI_SOURCE = '16a1c4ca25e19ed9032f73f0b897a7fe675efaef';
+// Reviewed merged PR #477 Search source; retain the exact-current-master and clean-checkout guard.
+export const UI_SOURCE = '5e68af94c24517eaaaf6a9d25aec0cadc3d9b135';
 export const REVIEWED_MASTER = UI_SOURCE;
 export const EDGE_ONLY_DIFF = Object.freeze([]);
 
