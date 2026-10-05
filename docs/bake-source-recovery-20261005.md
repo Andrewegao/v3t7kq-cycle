@@ -35,6 +35,12 @@ specified stale GEOS-CF or unavailable RTOFS add-ons. Core forecast fields do no
 Producer or API failure can retain old/absent data: successful execution alone cannot prove every
 observation family refreshed.
 
+OpenAQ reads its provider key only from `OPENAQ_API_KEY` on the bake host. The production
+whole-bake step passes the existing GitHub secret of that name only to its own environment;
+collectors and public diagnostics receive no such key. This source wiring does not create,
+read or validate a provider credential. Secret presence and valid provider access remain an
+independent operational prerequisite, and a failed OpenAQ pull keeps its actual last-good data.
+
 The old Oct5 bake hydrated production `cycle-33979262543` (Sep5), then failed its Weather Lab gate
 at 11:16:23 UTC after 133 seconds, before whole-pointer publication. The exact failing assertion
 remains in an owner-key encrypted diagnostic, not recovered here. Current Atmos master implements

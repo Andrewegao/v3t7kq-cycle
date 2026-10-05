@@ -461,6 +461,7 @@ jobs:
       - name: bake → gate → publish immutable data release
         if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         env:
+          OPENAQ_API_KEY: ${{ secrets.OPENAQ_API_KEY }}
           WEATHERX_BAKE_LIVE_PROGRESS: '1'
           WEATHERX_LIVE_ORIGIN: https://weatherx.org
           REGIONAL_PACKS_DIR: ${{ runner.temp }}/regional-packs

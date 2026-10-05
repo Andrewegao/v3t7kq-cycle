@@ -132,3 +132,31 @@ test('Wind100 ordinary input pins and policies cannot drift or move the qualifie
       [member]: {...closure[member], sourceSha: source}}), /backend does not move/);
   }
 });
+
+function validateObservationCredentialScope(text) {
+  const marker = '      - name: bake → gate → publish immutable data release\n';
+  const block = text.split(marker)[1]?.split('      - name:')[0];
+  assert.ok(block, 'production observation bake step must exist');
+  assert.match(block, /^          OPENAQ_API_KEY: \$\{\{ secrets\.OPENAQ_API_KEY \}\}$/m,
+    'OpenAQ requires its server-side key in the production bake step environment');
+  assert.match(block, /^        env:$/m);
+  assert.match(block, /^        run: bash ops\/bake-weatherx\.sh$/m);
+  assert.doesNotMatch(text.replace(marker + block, ''), /\bOPENAQ_API_KEY\b/,
+    'OpenAQ key must not be supplied to collectors, public diagnostics or other steps');
+  assert.equal((block.match(/^          OPENAQ_API_KEY:/gm) ?? []).length, 1);
+}
+
+test('OpenAQ key reaches only the production observation bake environment', () => {
+  validateObservationCredentialScope(workflow);
+});
+
+test('missing, misplaced and non-secret OpenAQ injection is refused', () => {
+  const line = '          OPENAQ_API_KEY: ${{ secrets.OPENAQ_API_KEY }}\n';
+  const withoutKey = workflow.replace(/^          OPENAQ_API_KEY:.*\n/gm, '');
+  const scoped = withoutKey.replace('          WEATHERX_BAKE_LIVE_PROGRESS:', line + '          WEATHERX_BAKE_LIVE_PROGRESS:');
+  validateObservationCredentialScope(scoped);
+  for (const candidate of [withoutKey, scoped + '\n' + line,
+    scoped.replace('secrets.OPENAQ_API_KEY', 'vars.OPENAQ_API_KEY'), scoped.replace(line, line + line)]) {
+    assert.throws(() => validateObservationCredentialScope(candidate));
+  }
+});
