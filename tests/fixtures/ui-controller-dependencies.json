@@ -91,11 +91,12 @@
       ]
     },
     {
-      "pin": "248abd180ff95b4ada641c3eee7bf155f766091d",
+      "pin": "547a8e1e54a7e46b211ea0770d895b6cc46c8afd",
       "files": [
         "app/e2e/layer-switch-surface.mjs",
         "app/e2e/layer-switch-tint.mjs",
         "app/e2e/public-release-journeys.mjs",
+        "app/e2e/staging-account-qualification.mjs",
         "app/e2e/weather-lab-only-runtime.mjs",
         "app/package-lock.json",
         "app/package.json",
@@ -128,7 +129,7 @@
   ],
   "stagingBuild": {
     "profile": "production-account-ru-kk-wind100-onboarding-v2",
-    "pin": "248abd180ff95b4ada641c3eee7bf155f766091d",
+    "pin": "547a8e1e54a7e46b211ea0770d895b6cc46c8afd",
     "paths": [
       ".gitignore",
       "platform/edge/package.json",
@@ -136,6 +137,6 @@
       "ops/release/build-release-receipt.mjs"
     ],
     "coneMode": false,
-    "provenance": "Merged Atmos PR #481 source 248abd180ff95b4ada641c3eee7bf155f766091d, tree 8db0d2fc570ff21232bb6038b6607a11dbda864e, matches qualified head 05fb9164852a497edc3eeda450ca3398a493e481. Actual Git blob comparison confirms all 43 reviewed account/onboarding source hashes and the four-path sparse build closure are unchanged versus prior UI pin 0b270cb7c8855170783a6f885aedbc33cf321016. The 21-file qualification inventory paths are unchanged: 20 file blobs are identical, while app/e2e/layer-switch-tint.mjs changes only the stronger natural bare-map precondition for observing cloud Deck fade. Platform/edge bytes are unchanged versus 0b270cb7c8855170783a6f885aedbc33cf321016; the inherited PR #480 five-path delta versus accepted Search source remains governed by its separate Worker receipt. Original staging run 37394570824 attempt 1 remains failed at the Weather Lab gate before any UI artifact/deployment, despite successful application tests; those receipts retain their source identities. A fresh exact-source hosted staging candidate, pipeline digest, layer-menu/Search acceptance and same-release native100m Wind/CF acceptance remain required. No deployment or performance/memory completion is established by these local closure checks. See docs/ui-public-combined.md."
+    "provenance": "Merged Atmos PR #484 source 547a8e1e54a7e46b211ea0770d895b6cc46c8afd, tree 5d56ae4a1f5eda363df2730cf535394afee94789, merged at 2026-10-06 04:12:29 UTC; its tree exactly matches reviewed and hosted-tested head 020d471b3a4797bb5034a1c8a05a325e82cfff58. Actual Git blob comparison confirms all 43 reviewed account/onboarding digests, the original 21 qualification input blobs, both current release layer hashes, and the four-file sparse build closure are unchanged versus 248abd180ff95b4ada641c3eee7bf155f766091d. The combined qualification inventory additionally records the active app/e2e/staging-account-qualification.mjs harness (SHA256 28afd87c9b90dceb3e9dbcab66c51e27042ce0d036edb33b37f0dbaaac61e746); it changes to retain truthful failed numeric diagnostics without relaxing lifecycle/weather limits. This 22-file inventory is not a claim that all active harnesses are unchanged. Runtime candidate combines PR #466 timebar, PR #482 radiosonde scope, PR #483 failed numeric evidence and quietIdle/layerMenuWarm fixes. Platform/edge and ops/release blobs are unchanged versus 248; existing Worker build-input/config correspondence and rollback identity still require their own admission. Run 37401175445 remains failed with verified rollback and fuse #378; fresh exact-source staging acceptance remains required. No deployment or performance/memory completion is established by these closure checks. See docs/ui-public-combined.md."
   }
 }
