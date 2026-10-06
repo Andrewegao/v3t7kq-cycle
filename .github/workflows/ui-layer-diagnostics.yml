@@ -7,7 +7,7 @@ on:
         type: choice
         required: true
         default: staging
-        options: [staging, failed-preview]
+        options: [staging, failed-preview, recovery-preview]
       mode:
         description: Original guard or additional exact paint diagnostics
         type: choice
@@ -39,7 +39,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          ref: 5b622f594b107e105dae9ee6b494c20ff8d0699a
+          ref: ${{ inputs.target == 'recovery-preview' && '547a8e1e54a7e46b211ea0770d895b6cc46c8afd' || '5b622f594b107e105dae9ee6b494c20ff8d0699a' }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
           path: control

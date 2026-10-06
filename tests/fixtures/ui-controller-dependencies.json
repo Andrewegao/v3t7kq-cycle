@@ -91,11 +91,12 @@
       ]
     },
     {
-      "pin": "5e68af94c24517eaaaf6a9d25aec0cadc3d9b135",
+      "pin": "b3f63183dbcde01e388fda7720726cc53f28134b",
       "files": [
         "app/e2e/layer-switch-surface.mjs",
         "app/e2e/layer-switch-tint.mjs",
         "app/e2e/public-release-journeys.mjs",
+        "app/e2e/staging-account-qualification.mjs",
         "app/e2e/weather-lab-only-runtime.mjs",
         "app/package-lock.json",
         "app/package.json",
@@ -119,12 +120,16 @@
         "pixelmatch",
         "playwright",
         "pngjs"
-      ]
+      ],
+      "releaseLayerFiles": {
+        "app/e2e/layer-switch-tint.mjs": "df65cf5409c67f0001a6cbf5edf7847c0d1798a2bf437714b9035b06d8d2c67a",
+        "app/e2e/layer-switch-surface.mjs": "441de2a52996646a8540a6df2f7f346c143f6efcd41daf3d9ab4c6ddf4ca9809"
+      }
     }
   ],
   "stagingBuild": {
     "profile": "production-account-ru-kk-wind100-onboarding-v2",
-    "pin": "5e68af94c24517eaaaf6a9d25aec0cadc3d9b135",
+    "pin": "b3f63183dbcde01e388fda7720726cc53f28134b",
     "paths": [
       ".gitignore",
       "platform/edge/package.json",
@@ -132,6 +137,6 @@
       "ops/release/build-release-receipt.mjs"
     ],
     "coneMode": false,
-    "provenance": "Merged PR #477 Search source has the same 21-file qualification controller inventory and four-path sparse build closure bytes as prior PR #468 pin 16a1c4ca25e19ed9032f73f0b897a7fe675efaef and premerge master 5fee7947bb399b44051cc2000d9b5900046453f1. All 43 reviewed account/onboarding source hashes are unchanged, and platform/edge has no delta against either boundary. Historical S5/S6/S8 and PR #468 receipts retain their original source identities. A fresh hosted staging candidate, pipeline digest, Search acceptance and same-release native100m Wind/CF acceptance remain required. Local sparse/source checks do not qualify deployment or claim a hosted performance saving. See docs/ui-public-combined.md."
+    "provenance": "Merged Atmos PR #486 source b3f63183dbcde01e388fda7720726cc53f28134b, tree 5b21adbc7904655c98f400129bce3c238ed8bf3c, merged at 2026-10-06T06:30:14Z; tree equals independently reviewed final head f3620f20309a6bd122497bfb300f1d235d2c2666 and required hosted-CI merge tree. Relative to historical 547a8e1 source, only the two active Wind capture harnesses, their existing regression fixture and the task record change. All 43 account/onboarding digests, the other 20 of 22 qualification inputs, four sparse build paths, frontend/Functions/Worker/config/lockfile/release-builder closures are unchanged. This fixes demonstrated scheduled-versus-painted and renderer-owner capture races while retaining strict opacity, source bytes, pixels, roundtrip, deadlines and isolation. Original failed run 37413651923 remains failed; its discarded child throw is unknown. Real canonical-backend read-only replay and local profile-specific evidence passed but do not constitute deployed acceptance. Historical diagnosis bindings remain fixed. Existing Worker requires no deployment for this input delta. Fresh controller CI, current-base/source admission, recovery checks and one new exact-source guarded staging run remain required; no generated-byte equality, production deployment or data publication is asserted."
   }
 }

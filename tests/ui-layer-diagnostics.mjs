@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import * as diagnostics from '../tools/ui-layer-diagnostics.mjs';
 import test from 'node:test';
 import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
@@ -69,7 +70,7 @@ test('workflow has no publish authority, arbitrary target/source or production a
  const workflow=read('.github/workflows/ui-layer-diagnostics.yml');
  assert.match(workflow,/permissions:\n  contents: read/);
  assert.match(workflow,/github.event_name == 'workflow_dispatch' && github.ref == 'refs\/heads\/main'/);
- assert.ok(workflow.includes('ref: '+SOURCE));
+ assert.ok(workflow.includes("' || '"+SOURCE+"' }}"));
  assert.deepEqual([...new Set([...workflow.matchAll(/secrets\.([A-Z_]+)/g)].map(m=>m[1]))],['ATMOS_DEPLOY_KEY']);
  assert.match(workflow,/^    environment:\n      name: staging\n      deployment: false$/m);
  assert.equal((workflow.match(/^    environment:/gm)||[]).length,1);
@@ -177,4 +178,93 @@ test('failure classification separates strict diagnostics while preserving deadl
  assert.equal(diagnosticFailure(result,'original'),'original-guard-failed');
  assert.equal(diagnosticFailure({...result,identityAfter:{ok:false}},'strict-paint'),'post-run-identity-failed');
  assert.equal(diagnosticFailure({...result,deadlineExceeded:true,identityAfter:{ok:false}},'strict-paint'),'process-deadline');
+});
+
+
+test('recovery preview selects only the fixed failed staging identity and preserves historical diagnostics',()=>{
+ assert.equal(SOURCE,'5b622f594b107e105dae9ee6b494c20ff8d0699a');
+ assert.equal(FILES['app/e2e/layer-switch-tint.mjs'],'6bc8e5cc54190678cdcfbdc181dcde8832a38f02e481495946e142365e4259ef');
+ assert.equal(diagnostics.RECOVERY_SOURCE,'547a8e1e54a7e46b211ea0770d895b6cc46c8afd');
+ assert.equal(diagnostics.RECOVERY_RELEASE,'git-547a8e1e54a7-run-37413651923');
+ assert.equal(diagnostics.RECOVERY_INDEX,'1183bb846808b0d628333c17cbbb6e1edfead1b74afbdc194710fd1c321ad697');
+ assert.equal(TARGETS['recovery-preview'],'https://2fd3d799.weatherx-platform-staging.pages.dev');
+ const recovery=diagnostics.diagnosticContext('recovery-preview');
+ assert.equal(recovery.source,diagnostics.RECOVERY_SOURCE);
+ assert.equal(recovery.files['app/e2e/layer-switch-tint.mjs'],'d686f763ce892d2b6288c8caafa0924bf0bef6328847ad3806bd0f395b8e632b');
+ assert.equal(recovery.files['app/e2e/layer-switch-surface.mjs'],FILES['app/e2e/layer-switch-surface.mjs']);
+ assert.ok(Object.isFrozen(recovery)&&Object.isFrozen(recovery.files));
+ for(const target of ['staging','failed-preview'])assert.equal(diagnostics.diagnosticContext(target).source,SOURCE);
+ for(const target of ['https://evil.test','production','__proto__',undefined])assert.throws(()=>diagnostics.diagnosticContext(target));
+ const index=Buffer.from('identity test HTML');
+ const receipt={gitSha:recovery.source,releaseId:recovery.release,indexSha256:recovery.index};
+ assert.throws(()=>assertIdentity(receipt,index));
+ assert.throws(()=>assertIdentity(receipt,index,recovery));
+ assert.throws(()=>assertIdentity({gitSha:SOURCE,releaseId:RELEASE,indexSha256:INDEX},index,recovery));
+ const workflow=read('.github/workflows/ui-layer-diagnostics.yml');
+ assert.match(workflow,/options: \[staging, failed-preview, recovery-preview\]/);
+ assert.ok(workflow.includes("inputs.target == 'recovery-preview' && '"+diagnostics.RECOVERY_SOURCE+"' || '"+SOURCE+"'"));
+});
+test('stage anchors fail closed and record original checkpoint lines without changing original code',()=>{
+ assert.equal(typeof diagnostics.addStageDiagnostics,'function');
+ const anchors=diagnostics.STAGE_ANCHORS;
+ const source='// fixed guard fixture\n'+anchors.map(row=>row.anchor).join('\n');
+ const staged=diagnostics.addStageDiagnostics(source);
+ assert.equal(staged.split('\n').filter(line=>!line.includes('diagnosticStage(')).join('\n'),source);
+ for(const {stage,anchor} of anchors){
+  const line=source.slice(0,source.indexOf(anchor)).split('\n').length;
+  assert.ok(staged.includes('diagnosticStage('+JSON.stringify(stage)+', '+line+');\n'+anchor));
+  assert.throws(()=>diagnostics.addStageDiagnostics(source.replace(anchor,'')));
+  assert.throws(()=>diagnostics.addStageDiagnostics(source+'\n'+anchor));
+ }
+ assert.ok(anchors.some(row=>row.stage==='baseline-capture'&&row.anchor==='const baselineState = await snapshot();'));
+ assert.ok(anchors.some(row=>row.stage==='startup-app-ready'&&row.anchor.includes("classList.contains('wl-lit')")));
+});
+test('fatal diagnostics retain stage, original checkpoint line and exact fixed refusal codes, never raw errors',async()=>{
+ const logs=[],monitors={};
+ const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
+ const stage=await new AsyncFunction('context','page','process','console','BASE',
+  read('tools/ui-layer-diagnostics-browser.txt')+'\nreturn diagnosticStage;')
+ ({route:async()=>{}},{on:()=>{}},{on:(event,handler)=>{monitors[event]=handler;}},
+  {log:row=>logs.push(JSON.parse(row.slice(20)))},TARGETS.staging);
+ stage('baseline-capture',236);
+ const captureErrors=[
+  ['wind capture timed out','wind-capture-timeout'],
+  ['wind capture intent changed','wind-capture-intent-changed'],
+  ['wind capture intent unavailable','wind-capture-intent-unavailable'],
+  ['invalid wind capture deadline','wind-capture-deadline-invalid'],
+  ['unsupported Deck wind domain','wind-deck-domain-unsupported'],
+  ['Deck draw source differs from capture source','wind-deck-draw-source-mismatch'],
+ ];
+ const captureCases=captureErrors.flatMap(([message,code])=>[
+  [message,code],
+  ['page.evaluate: Error: '+message+'\n    at private (https://private.test/source.js?secret=value:4:8)',code],
+  [message+' private-value',null],
+  ['private-prefix '+message,null],
+  ['page.evaluate: Error: '+message+' private-value',null],
+  ['private-prefix page.evaluate: Error: '+message,null],
+ ]);
+ for(const [message,code] of [
+  ['unsupported or fractional Deck wind proof','wind-deck-unsupported-or-fractional'],
+  ['page.evaluate: Error: Deck inputs are hidden, stale, mixed, or unbound\n    at private (https://private.test/source.js?secret=value:4:8)','wind-deck-inputs-unproven'],
+  ['scheduled Deck endpoint has no newer completed draw','wind-deck-new-draw-unproven'],
+  ['strict-paint-baseline-unavailable','strict-paint-baseline-unavailable'],
+  ['strict-paint-baseline-timeout','strict-paint-baseline-timeout'],
+  ['unknown secret https://private.test?token=value',null],
+  ['Deck inputs are hidden, stale, mixed, or unbound private-value',null],
+  ['private-prefix Deck inputs are hidden, stale, mixed, or unbound',null],
+  ...captureCases,
+ ]){
+  const error={name:'Error',message,stack:'private source code https://private.test?secret=value'};
+  monitors.uncaughtExceptionMonitor(error);
+  assert.equal(logs.at(-1).stage,'baseline-capture');
+  assert.equal(logs.at(-1).originalSourceLine,236);
+  assert.equal(logs.at(-1).failureCode,code);
+ }
+ stage('startup-app-ready',57);
+ monitors.uncaughtExceptionMonitor({name:'TimeoutError',message:'private timeout call log'});
+ assert.equal(logs.at(-1).category,'timeout');
+ assert.equal(logs.at(-1).stage,'startup-app-ready');
+ assert.equal(logs.at(-1).originalSourceLine,57);
+ assert.equal(logs.at(-1).failureCode,null);
+ assert.doesNotMatch(JSON.stringify(logs),/private|source code|secret|token|call log|https:/);
 });

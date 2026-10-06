@@ -5,7 +5,8 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {PUBLIC_COMBINED_ATMOS_SHA} from '../tools/ui-public-combined.mjs';
-import {layerGuardContext,layerGuardIdentity,layerGuardSource,layerGuardChildEnvironment,layerGuardPaintEvidence,runReleaseLayerGuard,waitForLayerGuardChild,layerGuardSucceeded} from '../tools/ui-release-layer-guard.mjs';
+import {RELEASE_LAYER_FILES,layerGuardSourceHashes,layerGuardContext,layerGuardIdentity,layerGuardSource,layerGuardChildEnvironment,layerGuardPaintEvidence,runReleaseLayerGuard,waitForLayerGuardChild,layerGuardSucceeded} from '../tools/ui-release-layer-guard.mjs';
+import {FILES as HISTORICAL_LAYER_FILES,SOURCE as HISTORICAL_SOURCE} from '../tools/ui-layer-diagnostics.mjs';
 import {POLICY_FILES} from '../tools/ui-release.mjs';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 function fixture(){
@@ -15,6 +16,31 @@ function fixture(){
  const receipt=Buffer.from(JSON.stringify({gitSha:context.sourceSha,releaseId:context.releaseId,indexSha256:context.indexSha256}));
  context.receiptSha256=hash(receipt);return {context,receipt,index};
 }
+test('current release harness hashes follow the pinned controller inventory, independently of historical diagnostics',()=>{
+ const inventory=JSON.parse(readFileSync(new URL('./fixtures/ui-controller-dependencies.json',import.meta.url)));
+ const controller=inventory.controllers.find(row=>row.pin===PUBLIC_COMBINED_ATMOS_SHA);
+ assert.ok(controller?.releaseLayerFiles,'current controller must record exact release harness inputs');
+ assert.deepEqual(RELEASE_LAYER_FILES,controller.releaseLayerFiles);
+ assert.equal(HISTORICAL_SOURCE,'5b622f594b107e105dae9ee6b494c20ff8d0699a');
+ assert.equal(HISTORICAL_LAYER_FILES['app/e2e/layer-switch-tint.mjs'],'6bc8e5cc54190678cdcfbdc181dcde8832a38f02e481495946e142365e4259ef');
+ assert.doesNotThrow(()=>layerGuardSourceHashes(controller.releaseLayerFiles));
+ assert.throws(()=>layerGuardSourceHashes(HISTORICAL_LAYER_FILES),/controller hash mismatch/);
+ for(const path of Object.keys(controller.releaseLayerFiles)){
+  assert.throws(()=>layerGuardSourceHashes({...controller.releaseLayerFiles,[path]:'0'.repeat(64)}),/controller hash mismatch/);
+  const missing={...controller.releaseLayerFiles};delete missing[path];
+  assert.throws(()=>layerGuardSourceHashes(missing),/inventory mismatch/);
+ }
+ assert.throws(()=>layerGuardSourceHashes({...controller.releaseLayerFiles,extra:'0'.repeat(64)}),/inventory mismatch/);
+});
+test('combined staging admits actual candidate harness bytes before installing dependencies or building',()=>{
+ const workflow=readFileSync(new URL('../.github/workflows/ui-staging.yml',import.meta.url),'utf8');
+ const preflight=workflow.split('      - name: verify combined-profile layer harness source before dependency install\n')[1];
+ assert.ok(preflight,'early release harness admission missing');
+ assert.match(preflight.split('      - name: install locked dependencies and browsers')[0],/if: \$\{\{ needs\.profile\.outputs\.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2' \}\}/);
+ assert.match(preflight,/run: node cycle\/tools\/ui-release-layer-guard\.mjs source "\$\{\{ github\.workspace \}\}\/atmos" "\$ATMOS_SHA"/);
+ assert.ok(workflow.indexOf('checkout exact candidate Atmos source')<workflow.indexOf('verify combined-profile layer harness source before dependency install'));
+ assert.ok(workflow.indexOf('verify combined-profile layer harness source before dependency install')<workflow.indexOf('      - name: Weather Lab release gate'));
+});
 test('only fixed release origins, reviewed source, and fully bound identities are admitted',()=>{
  const {context}=fixture();
  assert.equal(layerGuardContext(context),'https://staging.weatherx.org');
@@ -64,7 +90,7 @@ test('corrected runner and transitive source are pipeline-bound inside candidate
  assert.match(verify,/if\(publicCombinedProfile\(c.profile\)\)await runReleaseLayerGuard/);
  assert.match(verify,/else run\('node',\[resolve\(CONTROL,'app\/e2e\/layer-switch-tint.mjs'\)\]/);
  const runner=readFileSync(new URL('../tools/ui-release-layer-guard.mjs',import.meta.url),'utf8');
- assert.ok(runner.includes("addDiagnostics(source,runtime,'strict-paint')"));
+ assert.ok(runner.includes("addDiagnostics(addStageDiagnostics(source),runtime,'strict-paint')"));
  assert.match(runner,/finally\{[\s\S]*identity\(\);result.identityAfter/);
  assert.ok(runner.includes('15*60_000'));assert.ok(runner.includes('1024*1024'));
  assert.ok(runner.includes('kill(-child.pid)'));
