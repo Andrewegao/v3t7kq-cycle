@@ -11,7 +11,7 @@ code in artifacts, the release guard's automatic rollback and fuse. The backgrou
 
 | Workflow | Triggers | Notes |
 | --- | --- | --- |
-| `ui-staging.yml` (WeatherX UI staging qualification) | `workflow_dispatch` on `main` only | Inputs: `atmos_sha` (required, exact 40-hex current Atmos master SHA), `model_selection_sha256` (optional, default `approved`). Dispatched by hand, by `staging-follow-master.yml`, or by Atmos CI's `ci-verdict` step. |
+| `ui-staging.yml` (WeatherX UI staging qualification) | `workflow_dispatch` on `main` only | Inputs: `atmos_sha` (required, exact 40-hex current Atmos master SHA), `model_selection_sha256` (optional, default `default`: the armed `UI_AUTO_PROMOTE_PROFILE` while `UI_AUTO_PROMOTE_ENABLED == 'true'`, otherwise `approved`; an armed but unrecognised profile fails the run). Dispatched by hand, by `staging-follow-master.yml`, or by Atmos CI's `ci-verdict` step, which send only `atmos_sha`. |
 | `ui-release.yml` (WeatherX UI production promotion) | `workflow_dispatch` (unchanged inputs) **and** `workflow_run` on the staging workflow, `types: [completed]`, `branches: [main]` | The `resolve` job runs only when the staging run concluded `success`, was itself a `main` dispatch, and `UI_AUTO_PROMOTE_ENABLED == 'true'`. |
 
 Staging dispatchers must follow the follower's rule (`tools/staging-follow-master.mjs`): one
@@ -71,11 +71,35 @@ instead.
 - Approving the `ui-production` environment deployment (Andrew as required reviewer). Automatic
   promotion only removes typing the three values; it does not remove the approval.
 - Arming and disarming, activation variables, freeze dates, and clearing a fuse after diagnosis.
-- Choosing a production profile for staging: staging dispatched with only `atmos_sha` resolves
-  `approved` to a hash-pinned staging-only profile, which is never promotable.
+- Choosing and reviewing the production profile: while disarmed, staging dispatched with only
+  `atmos_sha` resolves `approved` to a hash-pinned staging-only profile, which is never promotable.
+
+## The combined profile's single reviewed SHA and the release ritual
+
+`production-account-ru-kk-wind100-onboarding-v2` is pinned to one reviewed Atmos commit.
+`tools/ui-combined-source-guard.mjs` (`UI_SOURCE`, `assertCombinedSource`) and `sourceIdentity`
+in `tools/ui-release.mjs` (with `PUBLIC_COMBINED_ATMOS_SHA` in `tools/ui-public-combined.mjs`)
+require the candidate to be exactly that SHA **and** Atmos `origin/master` to equal it with no
+intervening diff; the three literal controller refs in both workflows name it too. Any later
+master push therefore cannot qualify this profile until the new source is reviewed and re-pinned.
+The release ritual with this profile armed is:
+
+1. Review the new Atmos source.
+2. Land the re-pin PR in this repository (source guard, combined SHA, controller refs, docs).
+3. The Atmos master push's `ci-verdict` step dispatches staging with only `atmos_sha`.
+4. Staging resolves `default` to the armed profile and qualifies it.
+5. Promotion is routed automatically and waits for the `ui-production` approval.
+
+Side effects while armed: dispatches that omit the selection stop qualifying the hash-pinned
+staging model-selection experiment (dispatch it explicitly with `approved` to keep it), and with
+the combined profile armed only the pinned SHA can pass; every other master push fails at the
+source guard before any deployment and uses up that SHA's single follower attempt. Arming
+`none` or `production-account-billing-v1` would qualify any current master automatically, but
+promoting either removes features the combined profile serves.
 
 ## Arm / disarm
 
+Arming also changes what staging qualifies for dispatches that omit the selection (above).
 Arm (repository variables, Settings → Secrets and variables → Actions → Variables):
 `UI_AUTO_PROMOTE_ENABLED=true` and `UI_AUTO_PROMOTE_PROFILE=<none | production-account-billing-v1 |
 production-account-ru-kk-beta-v1 | production-account-ru-kk-wind100-onboarding-v2>`. The

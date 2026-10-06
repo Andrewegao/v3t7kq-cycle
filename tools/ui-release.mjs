@@ -18,7 +18,7 @@ import { controlShaFor, TC_CONTROL_SHA, REPOSITORY, MAX_BYTES, gate, hash, creat
   readTree, validateFiles, seal, unseal, restore, eligibleRun } from './ui-candidate.mjs';
 import { packBuild, unpackBuild, eligibleBuild } from './ui-build-transfer.mjs';
 import { verifyAppTestReceipt, appTestEvidenceFromEnvironment } from './ui-app-test-receipt.mjs';
-import {profileFor,validateProfile,selectionProfile,coreReleaseProfile,publicLocaleBetaProfile,publicCombinedProfile,accountServingProductionProfile,tcGuidanceProfile,canonical as profileCanonical,readSelection,readTcSelection,requireUiProductionProfile,requireStagingApproval,resolveWind100BuildPin,SELECTION_ASSET,TC_SELECTION_ASSET,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt} from './ui-staging-models.mjs';
+import {profileFor,validateProfile,selectionProfile,coreReleaseProfile,publicLocaleBetaProfile,publicCombinedProfile,accountServingProductionProfile,tcGuidanceProfile,canonical as profileCanonical,readSelection,readTcSelection,requireUiProductionProfile,requireStagingApproval,resolveWind100BuildPin,SELECTION_ASSET,TC_SELECTION_ASSET,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt,RELEASE_PROFILES} from './ui-staging-models.mjs';
 import {LANE_B_CONTRACT,PRODUCTION_ACCOUNT_APPROVAL,validateProductionPagesConfiguration} from './production-account-contract.mjs';
 import {assertPublicLocaleBetaReady} from './ui-public-locale-beta.mjs';
 import {assertPublicCombinedReady,PUBLIC_COMBINED_WIND100_RECEIPT} from './ui-public-combined.mjs';
@@ -145,9 +145,7 @@ export function requireReleaseProfileBinding(candidateProfile,selection=process.
     'production candidate profile differs from requested release profile');
   return candidateProfile;
 }
-// The four exact release profiles a production promotion may name (ui-release.yml choices).
-export const RELEASE_PROFILES = Object.freeze(['none','production-account-billing-v1',
-  'production-account-ru-kk-beta-v1','production-account-ru-kk-wind100-onboarding-v2']);
+export { RELEASE_PROFILES };
 export const releaseProfileName = profile => RELEASE_PROFILES.find(name => isDeepStrictEqual(profileFor(name), profile)) ?? null;
 const RUN_NUMBER = /^[1-9][0-9]{0,19}$/;
 // Manual dispatch keeps the unchanged manual gate. The only other admitted event is the owner-armed

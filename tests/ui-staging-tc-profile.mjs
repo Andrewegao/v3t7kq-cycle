@@ -101,7 +101,7 @@ test('separate workflow has exact pins, current-master guard, encrypted output a
   assert.match(workflow,/npm run --prefix atmos\/app preview -- --host 127\.0\.0\.1 --port 4166 --strictPort/);
   assert.match(workflow,/ui-staging-tc-proof\.mjs/);assert.match(workflow,/ui-release\.mjs pack-build/);assert.match(workflow,/ui-tc-build-/);
   assert.doesNotMatch(workflow,/UI_STAGING_PAGES_TOKEN|CLOUDFLARE_API_TOKEN|UI_CANDIDATE_KEY|ui-release\.mjs deploy|wrangler pages deploy|weatherx-platform-staging/);
-  assert.match(shared,/default: approved/);assert.doesNotMatch(shared,/release-roster-core-tc-v1|UI_STAGING_TC_PROFILE_APPROVED/);
+  assert.match(shared,/default: default\n/);assert.doesNotMatch(shared,/release-roster-core-tc-v1|UI_STAGING_TC_PROFILE_APPROVED/);
   assert.ok(POLICY_FILES.includes('.github/workflows/ui-staging-tc.yml'));assert.ok(POLICY_FILES.includes('tools/ui-staging-tc-proof.mjs'));
   assert.notEqual(pipelineDigest(TC_RELEASE_PROFILE),pipelineDigest(CORE_RELEASE_PROFILE));
 });

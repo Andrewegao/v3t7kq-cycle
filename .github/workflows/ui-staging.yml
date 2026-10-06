@@ -9,9 +9,9 @@ on:
         required: true
         type: string
       model_selection_sha256:
-        description: approved/hash uses a pinned selection; production-account-billing-v1 selects the reviewed production account UI; production-account-ru-kk-beta-v1 adds the exact RU/KK public locale beta; production-account-ru-kk-wind100-onboarding-v2 adds native production Wind100 and onboarding with billing UI off; release-roster-core-v1 enables reviewed core expansion plus release roster; release-roster-core-br11-v1 adds separately approved staging-only static compression; release-roster-core-account-v1 preserves separately approved staging accounts with standard compression; none selects baseline
+        description: default (omitted) qualifies the armed UI_AUTO_PROMOTE_PROFILE while UI_AUTO_PROMOTE_ENABLED is true, otherwise approved; approved/hash uses a pinned selection; production-account-billing-v1 selects the reviewed production account UI; production-account-ru-kk-beta-v1 adds the exact RU/KK public locale beta; production-account-ru-kk-wind100-onboarding-v2 adds native production Wind100 and onboarding with billing UI off; release-roster-core-v1 enables reviewed core expansion plus release roster; release-roster-core-br11-v1 adds separately approved staging-only static compression; release-roster-core-account-v1 preserves separately approved staging accounts with standard compression; none selects baseline
         required: false
-        default: approved
+        default: default
         type: string
 permissions:
   contents: read
@@ -46,6 +46,8 @@ jobs:
         id: selection
         env:
           REQUESTED_SELECTION: ${{ inputs.model_selection_sha256 }}
+          UI_AUTO_PROMOTE_ENABLED: ${{ vars.UI_AUTO_PROMOTE_ENABLED }}
+          UI_AUTO_PROMOTE_PROFILE: ${{ vars.UI_AUTO_PROMOTE_PROFILE }}
           APPROVED_SELECTION: ${{ vars.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256 }}
           APPROVED_CORE_PROFILE: ${{ vars.UI_STAGING_CORE_PROFILE_APPROVED }}
           APPROVED_STATIC_COMPRESSION: ${{ vars.UI_STAGING_STATIC_COMPRESSION_APPROVED }}
@@ -61,8 +63,10 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import { appendFileSync } from 'node:fs';
-          import { profileFor, resolveSelectionRequest, resolveWind100BuildPin } from './cycle/tools/ui-staging-models.mjs';
-          const selection = resolveSelectionRequest(process.env.REQUESTED_SELECTION,process.env.APPROVED_SELECTION,process.env.APPROVED_CORE_PROFILE,process.env.APPROVED_STATIC_COMPRESSION,process.env.APPROVED_ACCOUNT_PROFILE,undefined,process.env.APPROVED_PRODUCTION_ACCOUNT_PROFILE,{approvedPublicLocaleBeta:process.env.APPROVED_PUBLIC_LOCALE_BETA,approvedPublicCombined:process.env.APPROVED_PUBLIC_COMBINED});
+          import { profileFor, resolveDispatchSelection, resolveSelectionRequest, resolveWind100BuildPin } from './cycle/tools/ui-staging-models.mjs';
+          const requested = resolveDispatchSelection(process.env.REQUESTED_SELECTION,process.env.UI_AUTO_PROMOTE_ENABLED,process.env.UI_AUTO_PROMOTE_PROFILE);
+          console.log(`Staging selection request: ${process.env.REQUESTED_SELECTION} -> ${requested}`);
+          const selection = resolveSelectionRequest(requested,process.env.APPROVED_SELECTION,process.env.APPROVED_CORE_PROFILE,process.env.APPROVED_STATIC_COMPRESSION,process.env.APPROVED_ACCOUNT_PROFILE,undefined,process.env.APPROVED_PRODUCTION_ACCOUNT_PROFILE,{approvedPublicLocaleBeta:process.env.APPROVED_PUBLIC_LOCALE_BETA,approvedPublicCombined:process.env.APPROVED_PUBLIC_COMBINED});
           // Wind100 approval belongs only to the staging account profile. Protected
           // environment variables may remain enabled while a production-account
           // candidate is built, so remove them before resolving that distinct profile.

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { autoRouteRun, autoRouteSummary, releaseProfileName, RELEASE_PROFILES } from '../tools/ui-release.mjs';
-import { profileFor } from '../tools/ui-staging-models.mjs';
+import { profileFor, resolveDispatchSelection, resolveSelectionRequest } from '../tools/ui-staging-models.mjs';
 import { REPOSITORY } from '../tools/ui-candidate.mjs';
 
 const SHA='c'.repeat(40), DIGEST='d'.repeat(64);
@@ -70,4 +70,32 @@ test('promotion re-audits the routed attempt and keeps every existing guard',()=
     "STAGING_RUN_ID: ${{ github.event.workflow_run.id }}","STAGING_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}",
     'run: node cycle/tools/ui-release.mjs resolve-auto'])
     assert.ok(release.includes(line),line);
+});
+
+test('omitted staging selection qualifies the armed profile, else approved; explicit values unchanged',()=>{
+  for(const profile of RELEASE_PROFILES) assert.equal(resolveDispatchSelection('default','true',profile),profile,'armed');
+  for(const enabled of [undefined,'','false','TRUE','1']){
+    assert.equal(resolveDispatchSelection('default',enabled,'production-account-ru-kk-wind100-onboarding-v2'),'approved',`not armed: ${enabled}`);
+    assert.equal(resolveDispatchSelection('default',enabled,'not-a-profile'),'approved');
+  }
+  for(const explicit of ['approved','none','production-account-billing-v1','release-roster-core-v1','a'.repeat(64),''])
+    for(const enabled of ['true','false']) assert.equal(resolveDispatchSelection(explicit,enabled,'none'),explicit,explicit);
+  // The resolved value still passes the unchanged protected-approval resolver.
+  assert.equal(resolveSelectionRequest(resolveDispatchSelection('default','false','none'),'b'.repeat(64)),'b'.repeat(64));
+  assert.equal(resolveSelectionRequest(resolveDispatchSelection('default','true','none'),'b'.repeat(64)),'none');
+  assert.throws(()=>resolveSelectionRequest('default','b'.repeat(64)),/invalid staging selection request/,'sentinel never reaches approvals unresolved');
+});
+test('armed with an unrecognised profile fails closed, never silently approved',()=>{
+  for(const bad of [undefined,'','approved','default','release-roster-core-v1','a'.repeat(64),'None',' none'])
+    assert.throws(()=>resolveDispatchSelection('default','true',bad),
+      /UI_AUTO_PROMOTE_ENABLED is true but UI_AUTO_PROMOTE_PROFILE .* is not one of none, production-account-billing-v1, production-account-ru-kk-beta-v1, production-account-ru-kk-wind100-onboarding-v2; refusing to fall back to approved/,String(bad));
+});
+test('profile job resolves the sentinel before approvals using only the arming variables',()=>{
+  const staging=readFileSync(new URL('../.github/workflows/ui-staging.yml',import.meta.url),'utf8');
+  const profile=staging.split('\n  profile:\n')[1].split('\n  build:\n')[0];
+  assert.match(staging,/      model_selection_sha256:\n        description: default \(omitted\) qualifies the armed UI_AUTO_PROMOTE_PROFILE[^\n]*\n        required: false\n        default: default\n/);
+  assert.match(profile,/UI_AUTO_PROMOTE_ENABLED: \$\{\{ vars\.UI_AUTO_PROMOTE_ENABLED \}\}\n\s+UI_AUTO_PROMOTE_PROFILE: \$\{\{ vars\.UI_AUTO_PROMOTE_PROFILE \}\}/);
+  const resolveAt=profile.indexOf('const requested = resolveDispatchSelection(process.env.REQUESTED_SELECTION,process.env.UI_AUTO_PROMOTE_ENABLED,process.env.UI_AUTO_PROMOTE_PROFILE);');
+  assert.ok(resolveAt>0&&resolveAt<profile.indexOf('const selection = resolveSelectionRequest(requested,'));
+  assert.doesNotMatch(profile,/secrets\./);
 });
