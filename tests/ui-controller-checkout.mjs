@@ -154,7 +154,7 @@ test('qualify, candidate and Cycle checkouts and the actual controller guard rem
   for(const job of ['build','app-tests']){
     const block=staging.split(`\n  ${job}:\n`)[1].split('\n  '+(job==='build'?'app-tests':'qualify')+':\n')[0];
     const uses=[...block.matchAll(/uses: (actions\/cache[^@]*)@([a-f0-9]{40}) # v4\n\s+with:\n\s+path: ([^\n]+)\n\s+key: ([^\n]+)\n\s+restore-keys: ([^\n]+)\n/g)];
-    assert.deepEqual(uses.map(m=>[m[1],m[2],m[3],m[4],m[5]]),[['actions/cache','0057852bfaa89a56745cba8c7296529d2fc39830','~/.npm',
+    assert.deepEqual(uses.map(m=>[m[1],m[2],m[3],m[4],m[5]]),[['actions/cache','0057852bfaa89a56745cba8c7296529d2fc39830','~/.npm/_cacache',
       "ui-candidate-npm-${{ runner.os }}-${{ hashFiles('atmos/app/package-lock.json', 'control/platform/edge/package-lock.json') }}",
       'ui-candidate-npm-${{ runner.os }}-']],job);
     assert.equal((block.match(/actions\/cache/g)||[]).length,1,job);

@@ -74,7 +74,11 @@ test('promotion re-audits the routed attempt and keeps every existing guard',()=
     'run: node cycle/tools/ui-release.mjs resolve-auto'])
     assert.ok(release.includes(line),line);
   // The approver sees the source, profile and staging run/attempt for either entry point.
-  const runName=release.match(/^run-name: (.+)$/m)?.[1]??'';
+  const runName=release.match(/^run-name: "(\$\{\{ .+ \}\})"$/m)?.[1]??'';
+  // Skipped automatic runs read as such; an unset profile never renders as "as  (auto".
+  for(const title of ["staging did not succeed, skipped","not armed, skipped","armed without a profile, refused"]) assert.ok(runName.includes(title),title);
+  assert.ok(runName.indexOf("vars.UI_AUTO_PROMOTE_ENABLED != 'true'")<runName.indexOf("(auto, staging run"));
+  assert.ok(runName.indexOf("vars.UI_AUTO_PROMOTE_PROFILE == ''")<runName.indexOf("(auto, staging run"));
   for(const part of ['github.event.workflow_run.display_title','vars.UI_AUTO_PROMOTE_PROFILE','github.event.workflow_run.id',
     'github.event.workflow_run.run_attempt','inputs.atmos_sha','inputs.release_profile','inputs.staging_run_id'])
     assert.ok(runName.includes(part),part);

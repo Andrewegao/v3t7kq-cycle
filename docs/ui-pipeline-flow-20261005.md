@@ -30,44 +30,49 @@ evidence for the exact source** selects one path and publishes it as job outputs
   `completed/success`, and that run attempt has exactly one `ci-verdict` job that is
   `completed/success` for the same SHA, run and attempt. API reads are bounded (2 MiB), redirects
   are refused and the token is never logged or put in a URL. `app-tests` then runs the local
-  gate: it checks that `ops/release/public-beta-ci-manifest.json` is tracked at the candidate,
-  runs `WX_CI_PROFILE=public-beta-ci-lab-road-security-v1 npm run gates --prefix atmos/app`,
-  then `npm run test:certify --prefix atmos/app` and `npx playwright test` (in `atmos/app`).
-  The accepted evidence covers Atmos's own CI environment, not this staging environment: Atmos
-  master CI selects its public-beta CI profile whenever that manifest is tracked
-  (`tools/ci-fast-evidence.mjs`), which swaps `check-i18n` for `check-public-beta-i18n` and runs
-  Vitest without the staging build flags. The local static gates therefore run under that same
-  public-beta profile (recorded as `gatesCiProfile` in the receipt), and the complete Vitest
-  suite is not re-run with the staging flags on this path.
-  **The full-profile `check-i18n` gate is currently red on Atmos master** (about 3 940 fuzzy draft
-  entries in `app/src/locales/zh/messages.po`, pre-existing). Neither Atmos CI nor this gate runs
-  it, and the full-local fallback (`npm test`, full profile for non-beta selections) would fail
-  on it. Whether that gate must be green before release is an Atmos owner decision; the
-  controller does not hide it, it records which profile ran.
+  gate: `npm run gates --prefix atmos/app`, `npm run test:certify --prefix atmos/app` and
+  `npx playwright test` (in `atmos/app`). The accepted evidence covers Atmos's own CI
+  environment, not this staging environment: Atmos master CI runs its public-beta CI profile
+  while `ops/release/public-beta-ci-manifest.json` is tracked (`tools/ci-fast-evidence.mjs`), and
+  runs Vitest without the staging build flags; on this path the complete Vitest suite is not
+  re-run with the staging flags.
 - **full-local**: the unchanged complete `npm test --prefix atmos/app`. Chosen whenever
-  `ATMOS_CI_READ_TOKEN` is absent, the staging profile uses the beta CI profile (the API cannot
-  prove which CI profile Atmos ran), or any evidence check fails. The log prints which path ran
+  `ATMOS_CI_READ_TOKEN` is absent or any evidence check fails. The log prints which path ran
   and why.
 
+**Static-gate (i18n) profile follows the selection, not the evidence path.** Both paths use the
+same job-level `WX_CI_PROFILE`: `public-beta-ci-lab-road-security-v1` for the two RU/KK selections
+(`production-account-ru-kk-beta-v1`, `production-account-ru-kk-wind100-onboarding-v2`), which on
+the atmos-ci path first checks that the manifest justifying that profile is tracked at the
+candidate; the full profile for every other selection. Whether the token is provisioned can never
+change which i18n gate runs. The receipt records `ciProfile` and, on the atmos-ci path,
+`gatesCiProfile`. Consequence: with `none`, `production-account-billing-v1` or a staging-only
+selection such as `approved`, both paths
+run the full-profile `check-i18n` gate, which is red on Atmos master (4 748 missing translation
+approvals, red since at least 2026-09-25) until Atmos fixes it. That is an Atmos owner decision;
+the controller neither hides nor works around it.
+
 The receipt (schema 2) records `evidence: {path, repository, workflow, job, runId, attempt,
-commands}` or `{path: 'full-local', commands}`. `app-tests` and `qualify` read the path, run id
+gatesCiProfile, commands}` or `{path: 'full-local', commands}`. `app-tests` and `qualify` read the path, run id
 and attempt from the `atmos-evidence` job outputs; `qualify` rebuilds the expected receipt from
 them and requires GitHub's jobs API to report that the `atmos-evidence` job (and its evidence
 step) and the selected `app-tests` gate step succeeded in the same run attempt.
-The sealed candidate's qualification carries `appTestEvidence`.
+The sealed candidate's qualification carries `appTestEvidence`, and `fullTests` is `true` only on
+the full-local path (`false` on atmos-ci); staging and production audits enforce that pairing.
 
 ## Caches
 
 Only the candidate-domain jobs (`build`, `app-tests`) use a cache: an explicit `actions/cache`
-of `~/.npm` with key `ui-candidate-npm-<os>-<hash of atmos/app and control/platform/edge
-lockfiles>` and restore prefix `ui-candidate-npm-<os>-` (in `app-tests` only the Atmos lockfile
-exists, so its key hashes that file). No other workflow uses this prefix, so publisher workflows
-never restore it, and setup-node's generic `cache: npm` key (shared with publisher workflows) is
-not used. npm ci still verifies every tarball against the lockfile integrity. There is no browser
-cache: Playwright is installed fresh in every job, because a cached browser written after
-candidate code ran would outlive its candidate. The publisher jobs (`qualify`, `promote`) hold
-Pages tokens and candidate keys and restore **no** cache; they install their two locked
-dependency trees concurrently instead.
+of `~/.npm/_cacache` (the integrity-checked tarball store only; `~/.npm/_npx` is not cached) with
+key `ui-candidate-npm-<os>-<hash of atmos/app and control/platform/edge lockfiles>` and restore
+prefix `ui-candidate-npm-<os>-` (in `app-tests` only the Atmos lockfile exists, so its key hashes
+that file). No other workflow uses this prefix, so publisher workflows never restore it, and
+setup-node's generic `cache: npm` key (shared with publisher workflows) is not used. npm ci
+verifies every tarball against the lockfile integrity. There is no browser cache: Playwright is
+installed fresh in every job, because a cached browser written after candidate code ran would
+outlive its candidate. The publisher jobs (`qualify`, `promote`) hold Pages tokens and candidate
+keys and restore **no** cache; they install their two locked dependency trees concurrently
+instead.
 
 ## Automatic promotion (decision C)
 
@@ -77,7 +82,9 @@ dependency trees concurrently instead.
    `Staging <sha>`. It downloads only the public
    `ui-candidate-summary-R-A` artifact. If its `releaseProfile` differs from
    `UI_AUTO_PROMOTE_PROFILE` (including any staging-only profile), the run ends as skipped.
-2. The run name shows the source, profile and staging run/attempt to the approver.
+2. The run name shows the source, profile and staging run/attempt to the approver; automatic runs
+   that do not promote read "not armed, skipped", "staging did not succeed, skipped" or "armed
+   without a profile, refused".
    `promote` waits for the `ui-production` environment (required reviewer), then runs the same
    `ui-release.mjs gate`: the automatic event is admitted only when armed for the exact routed
    profile and attempt; everything else is the unchanged manual gate (activation, isolation,

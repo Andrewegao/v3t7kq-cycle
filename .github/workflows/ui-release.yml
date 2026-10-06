@@ -6,7 +6,7 @@
 # exact-attempt artifact audit and the release guard's rollback + fuse.
 name: WeatherX UI production promotion
 # Shown to the ui-production approver: what source and profile this run would promote.
-run-name: ${{ github.event_name == 'workflow_run' && format('Promote {0} as {1} (auto, staging run {2} attempt {3})', github.event.workflow_run.display_title, vars.UI_AUTO_PROMOTE_PROFILE, github.event.workflow_run.id, github.event.workflow_run.run_attempt) || format('Promote Staging {0} as {1} (manual, staging run {2})', inputs.atmos_sha, inputs.release_profile, inputs.staging_run_id) }}
+run-name: "${{ github.event_name != 'workflow_run' && format('Promote Staging {0} as {1} (manual, staging run {2})', inputs.atmos_sha, inputs.release_profile, inputs.staging_run_id) || github.event.workflow_run.conclusion != 'success' && format('Promote {0}: staging did not succeed, skipped', github.event.workflow_run.display_title) || vars.UI_AUTO_PROMOTE_ENABLED != 'true' && format('Promote {0}: not armed, skipped', github.event.workflow_run.display_title) || vars.UI_AUTO_PROMOTE_PROFILE == '' && format('Promote {0}: armed without a profile, refused', github.event.workflow_run.display_title) || format('Promote {0} as {1} (auto, staging run {2} attempt {3})', github.event.workflow_run.display_title, vars.UI_AUTO_PROMOTE_PROFILE, github.event.workflow_run.id, github.event.workflow_run.run_attempt) }}"
 on:
   workflow_dispatch:
     inputs:

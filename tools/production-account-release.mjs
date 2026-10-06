@@ -13,6 +13,7 @@ import {
   validateProductionPagesConfiguration,
 } from './production-account-contract.mjs';
 import {validateCandidate} from './ui-candidate.mjs';
+import {requireAppTestQualification} from './ui-app-test-receipt.mjs';
 import {PRODUCTION_ACCOUNT_PROFILE, profileDigest, requireProductionProfile} from './ui-staging-models.mjs';
 
 const SHA = /^[a-f0-9]{40}$/;
@@ -145,7 +146,7 @@ function validateQualification(candidate, qualification) {
     'qualification receipt differs from the validated candidate');
   assert.equal(qualification.origin, 'https://staging.weatherx.org');
   assert.equal(qualification.artifactDigest, candidate.artifactDigest);
-  assert.equal(qualification.fullTests, true);
+  requireAppTestQualification(qualification, candidate.profile);
   assert.equal(qualification.weatherLab, true);
   assert.equal(qualification.builtRuntime, true);
   assert.equal(qualification.probes, 3);

@@ -3,8 +3,9 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { appTestReceipt, verifyAppTestReceipt, receiptForEnvironment, appTestEvidence, appTestEvidenceFromEnvironment,
   boundedJson, selectAtmosCiRun, requireAtmosVerdict, atmosCiEvidence, decideEvidence,
-  APP_TEST_STEP, EVIDENCE_STEP, EVIDENCE_JOB, LOCAL_GATE_STEP, LOCAL_GATE_COMMANDS, ATMOS_API_MAX_BYTES,
-  ATMOS_GATES_CI_PROFILE } from '../tools/ui-app-test-receipt.mjs';
+  APP_TEST_STEP, EVIDENCE_STEP, EVIDENCE_JOB, LOCAL_GATE_STEP, ATMOS_API_MAX_BYTES,
+  localGateCommands, ciProfileFor, requireAppTestQualification, BETA_CI_PROFILE, FULL_CI_PROFILE } from '../tools/ui-app-test-receipt.mjs';
+import { profileFor } from '../tools/ui-staging-models.mjs';
 
 const SHA='a'.repeat(40);
 const FULL={path:'full-local'}, CI={path:'atmos-ci',runId:'987',attempt:'2'};
@@ -36,13 +37,21 @@ test('receipt binds exact source/profile/workflow/run/attempt and the evidence p
   const ci=appTestReceipt(ciContext());
   assert.equal(ci.schemaVersion,2);
   assert.deepEqual(ci.evidence,{path:'atmos-ci',repository:'weatherx-hq/atmos',workflow:'.github/workflows/ci.yml',
-    job:'ci-verdict',runId:'987',attempt:'2',gatesCiProfile:'public-beta-ci-lab-road-security-v1',commands:[...LOCAL_GATE_COMMANDS]});
-  assert.equal(ATMOS_GATES_CI_PROFILE,'public-beta-ci-lab-road-security-v1');
-  assert.deepEqual(LOCAL_GATE_COMMANDS,['git -C atmos ls-files --error-unmatch ops/release/public-beta-ci-manifest.json',
-    'WX_CI_PROFILE=public-beta-ci-lab-road-security-v1 npm run gates --prefix atmos/app',
-    'npm run test:certify --prefix atmos/app','npx playwright test']);
-  // A receipt claiming the full-profile gates (or no profile) is not the evidence this run produced.
-  for(const gatesCiProfile of ['full-ci-lab-road-security-v3','',undefined]){
+    job:'ci-verdict',runId:'987',attempt:'2',gatesCiProfile:'full-ci-lab-road-security-v3',
+    commands:['npm run gates --prefix atmos/app','npm run test:certify --prefix atmos/app','npx playwright test']});
+  // The gates profile follows the selection, never the token: RU/KK selections use public-beta
+  // (after the manifest check) on both paths; every other selection uses the full profile.
+  assert.equal(BETA_CI_PROFILE,'public-beta-ci-lab-road-security-v1'); assert.equal(FULL_CI_PROFILE,'full-ci-lab-road-security-v3');
+  assert.deepEqual(localGateCommands(BETA_CI_PROFILE),['git -C atmos ls-files --error-unmatch ops/release/public-beta-ci-manifest.json',
+    'npm run gates --prefix atmos/app','npm run test:certify --prefix atmos/app','npx playwright test']);
+  assert.throws(()=>localGateCommands('full-ci-lab-road-security-v3'));
+  const beta=appTestReceipt(context(CI));
+  assert.equal(beta.ciProfile,BETA_CI_PROFILE); assert.equal(beta.evidence.gatesCiProfile,BETA_CI_PROFILE);
+  assert.deepEqual(beta.evidence.commands,localGateCommands(BETA_CI_PROFILE));
+  assert.deepEqual(receiptForEnvironment(env({UI_APP_TEST_EVIDENCE_PATH:'atmos-ci',UI_APP_TEST_ATMOS_RUN_ID:'987',UI_APP_TEST_ATMOS_RUN_ATTEMPT:'2'}),SHA,'b'.repeat(40)),beta);
+  assert.equal(appTestReceipt(context(FULL)).ciProfile,beta.ciProfile,'same selection, same gates profile on both paths');
+  // A receipt claiming another gates profile (or none) is not the evidence this run produced.
+  for(const gatesCiProfile of ['public-beta-ci-lab-road-security-v1','',undefined]){
     const forged={...ci,evidence:{...ci.evidence,gatesCiProfile}};
     assert.throws(()=>verifyAppTestReceipt(JSON.stringify(forged),jobs('atmos-ci'),ciContext()));
   }
@@ -52,8 +61,7 @@ test('receipt binds exact source/profile/workflow/run/attempt and the evidence p
   // The largest profile still fits the bounded receipt.
   assert.ok(Buffer.byteLength(raw())<=4096);
 });
-test('beta CI profiles cannot rely on Atmos evidence; evidence fields are exact',()=>{
-  assert.throws(()=>appTestReceipt(context(CI)),/complete local suite/);
+test('evidence fields are exact',()=>{
   for(const bad of [{},{path:'cached'},{path:'atmos-ci'},{path:'atmos-ci',runId:'0',attempt:'1'},{path:'atmos-ci',runId:'1',attempt:'x'},
     {path:'full-local',runId:'1',attempt:'1'}]) assert.throws(()=>appTestEvidence(bad),JSON.stringify(bad));
   assert.deepEqual(appTestEvidenceFromEnvironment({UI_APP_TEST_EVIDENCE_PATH:'full-local',UI_APP_TEST_ATMOS_RUN_ID:'',UI_APP_TEST_ATMOS_RUN_ATTEMPT:''}),
@@ -108,7 +116,8 @@ test('receipt producer rejects wrong checkout, runner, activation, CI profile an
   assert.throws(()=>receiptForEnvironment(env(),'c'.repeat(40),'b'.repeat(40)));
   assert.throws(()=>receiptForEnvironment(env(),SHA,'c'.repeat(40)));
   assert.throws(()=>receiptForEnvironment({...env(),WX_CI_PROFILE:'full'},SHA,'b'.repeat(40)));
-  assert.throws(()=>receiptForEnvironment(env({UI_APP_TEST_EVIDENCE_PATH:'atmos-ci',UI_APP_TEST_ATMOS_RUN_ID:'1',UI_APP_TEST_ATMOS_RUN_ATTEMPT:'1'}),SHA,'b'.repeat(40)),/complete local suite/);
+  // The job-level CI profile must match the selection on the atmos-ci path too.
+  assert.throws(()=>receiptForEnvironment(env({WX_CI_PROFILE:'',UI_APP_TEST_EVIDENCE_PATH:'atmos-ci',UI_APP_TEST_ATMOS_RUN_ID:'1',UI_APP_TEST_ATMOS_RUN_ATTEMPT:'1'}),SHA,'b'.repeat(40)),/profile differs/);
   assert.throws(()=>receiptForEnvironment(env({MODEL_SELECTION_SHA256:'none',WX_CI_PROFILE:'',UI_APP_TEST_EVIDENCE_PATH:'atmos-ci'}),SHA,'b'.repeat(40)));
 });
 
@@ -183,10 +192,9 @@ test('redirects, non-200, oversized and non-object bodies are refused without ex
   await assert.rejects(atmosCiEvidence(SHA,'t',{fetcher:async()=>{throw new TypeError('fetch failed: redirect mode is set to error');}}));
   assert.deepEqual(await boundedJson(url,'t',{fetcher:async()=>response({ok:1},{chunks:[Buffer.from('{"ok"'),Buffer.from(':1}')]})}),{ok:1});
 });
-test('evidence decision falls back to the complete local suite, never to a weaker gate',async()=>{
-  const base={ATMOS_SHA:SHA,WX_CI_PROFILE:''};
+test('evidence decision falls back to the complete local suite unless Atmos CI evidence is proven',async()=>{
+  const base={ATMOS_SHA:SHA};
   assert.deepEqual(await decideEvidence({...base,ATMOS_CI_READ_TOKEN:''}),{path:'full-local',reason:'ATMOS_CI_READ_TOKEN is not provisioned'});
-  assert.equal((await decideEvidence({...base,ATMOS_CI_READ_TOKEN:'t',WX_CI_PROFILE:'public-beta-ci-lab-road-security-v1'},{fetcher:()=>{throw Error('no network expected');}})).path,'full-local');
   for(const bodies of [[listing(ciRun({status:'in_progress',conclusion:null}))],[listing(ciRun({head_sha:'c'.repeat(40)}))],
     [listing(ciRun({conclusion:'failure'}))],[listing(ciRun()),jobsListing()],[()=>response('',{status:302})],
     [()=>response('',{chunks:[Buffer.alloc(ATMOS_API_MAX_BYTES+1)]})]]){
@@ -226,13 +234,14 @@ test('evidence job has no candidate; app-tests runs one selected gate; qualify b
   assert.equal((app.match(/persist-credentials: false/g)||[]).length,2);
   assert.deepEqual([...new Set([...app.matchAll(/secrets\.([A-Za-z0-9_]+)/g)].map(m=>m[1]))],['ATMOS_READONLY_KEY']);
   assert.doesNotMatch(app,/CLOUDFLARE|PRIVATE_KEY|CANDIDATE_KEY|ATMOS_DEPLOY_KEY|pack-build|deploy staging|steps\.atmos_ci|ui-app-test-receipt\.mjs evidence/);
-  // The static gates run with the exact CI profile Atmos master used, only while its manifest is tracked.
-  assert.match(app,/name: local certification and visual gate\n\s+if: \$\{\{ needs\.atmos-evidence\.outputs\.path == 'atmos-ci' \}\}\n\s+run: \|\n\s+git -C atmos ls-files --error-unmatch ops\/release\/public-beta-ci-manifest\.json\n\s+WX_CI_PROFILE=public-beta-ci-lab-road-security-v1 npm run gates --prefix atmos\/app\n\s+npm run test:certify --prefix atmos\/app\n\s+cd atmos\/app && npx playwright test\n/);
+  // The static gates take the job-level, selection-derived WX_CI_PROFILE (the same one the full
+  // suite uses); only RU/KK proves the manifest first. No inline profile override exists.
+  assert.match(app,/name: local certification and visual gate\n\s+if: \$\{\{ needs\.atmos-evidence\.outputs\.path == 'atmos-ci' \}\}\n\s+run: \|\n\s+if \[ -n "\$WX_CI_PROFILE" \]; then git -C atmos ls-files --error-unmatch ops\/release\/public-beta-ci-manifest\.json; fi\n\s+npm run gates --prefix atmos\/app\n\s+npm run test:certify --prefix atmos\/app\n\s+cd atmos\/app && npx playwright test\n/);
   assert.equal((app.match(/npm run gates/g)||[]).length,1);
-  assert.doesNotMatch(app,/^\s+npm run gates/m,'gates never run without the Atmos CI profile');
-  const gateStep=app.split('name: local certification and visual gate')[1].split('      - name:')[0];
-  for(const command of LOCAL_GATE_COMMANDS.filter(c=>c!=='npx playwright test')) assert.ok(gateStep.includes(command),command);
-  assert.match(app,/name: full application test gate\n\s+if: \$\{\{ needs\.atmos-evidence\.outputs\.path == 'full-local' \}\}\n\s+run: npm test --prefix atmos\/app/);
+  assert.doesNotMatch(app,/WX_CI_PROFILE=/,'no inline profile override');
+  assert.equal((app.match(/^      WX_CI_PROFILE: /gm)||[]).length,1,'one job-level selection-derived profile');
+  assert.match(app,/^      WX_CI_PROFILE: \$\{\{ \(needs\.profile\.outputs\.model_selection_sha256 == 'production-account-ru-kk-beta-v1' \|\| needs\.profile\.outputs\.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2'\) && 'public-beta-ci-lab-road-security-v1' \|\| '' \}\}$/m);
+  assert.doesNotMatch(evidence,/WX_CI_PROFILE/);
   assert.ok(app.indexOf('ui-app-test-receipt.mjs emit')>app.indexOf('npm test --prefix atmos/app'));
   assert.ok(app.indexOf('ui-app-test-receipt.mjs emit')>app.indexOf('npx playwright test'));
   for(const line of ['UI_APP_TEST_EVIDENCE_PATH: ${{ needs.atmos-evidence.outputs.path }}',
@@ -248,7 +257,8 @@ test('evidence job has no candidate; app-tests runs one selected gate; qualify b
   const receive=source.split('async function receiveBuild()')[1].split('\nfunction environment(')[0];
   assert.ok(receive.indexOf('verifyAppTestReceipt(')<receive.indexOf('unpackBuild('));
   assert.match(receive,/evidence:appTestEvidenceFromEnvironment\(process\.env\)/);
-  assert.match(source,/fullTests:true,weatherLab:true,builtRuntime:true,probes:3,\n\s+appTestEvidence:appTestEvidenceFromEnvironment\(process\.env\)/);
+  assert.match(source,/const appTestEvidence=appTestEvidenceFromEnvironment\(process\.env,ciProfileFor\(c\.profile\)\);/);
+  assert.match(source,/fullTests:appTestEvidence\.path==='full-local',\n\s+weatherLab:true,builtRuntime:true,probes:3,appTestEvidence\};/);
   const policy=source.split('const POLICY_FILES')[1].split(';')[0];
   assert.ok(policy.includes('tools/ui-app-test-receipt.mjs')); assert.ok(!policy.includes('ui-ci-cache'));
 });
@@ -273,4 +283,22 @@ test('real GitHub attempt metadata carries workflow SHA, numeric attempt and com
   // The evidence job postdates this record; synthesise it from the same real field types.
   const evidence={...historical,name:EVIDENCE_JOB,steps:[{...gate,name:EVIDENCE_STEP}]};
   assert.deepEqual(verifyAppTestReceipt(receipt,[evidence,{...historical,name:'app-tests'}],c),appTestReceipt(c));
+});
+
+test('sealed qualification: fullTests reflects the evidence path, never claims the full suite on atmos-ci',()=>{
+  const none=profileFor('none'),beta=profileFor('production-account-ru-kk-wind100-onboarding-v2');
+  const full={fullTests:true,appTestEvidence:appTestEvidence(FULL)};
+  const ci={fullTests:false,appTestEvidence:appTestEvidence(CI,'')};
+  const betaCi={fullTests:false,appTestEvidence:appTestEvidence(CI,BETA_CI_PROFILE)};
+  requireAppTestQualification(full,none); requireAppTestQualification(full,beta);
+  requireAppTestQualification(ci,none); requireAppTestQualification(betaCi,beta);
+  requireAppTestQualification({fullTests:true},none); // pre-evidence candidates stay full-suite only
+  for(const [q,p] of [[{fullTests:false},none],[{},none],[{...ci,fullTests:true},none],[{...full,fullTests:false},none],
+    [ci,beta],[betaCi,none],[{...ci,appTestEvidence:{...ci.appTestEvidence,commands:[]}},none],
+    [{...ci,appTestEvidence:{...ci.appTestEvidence,extra:1}},none]])
+    assert.throws(()=>requireAppTestQualification(q,p),JSON.stringify(q).slice(0,80));
+  assert.equal(ciProfileFor(beta),BETA_CI_PROFILE); assert.equal(ciProfileFor(none),'');
+  const read=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
+  assert.match(read('tools/ui-candidate.mjs'),/requireAppTestQualification\(q, candidate\.profile\); assert\.equal\(q\?\.weatherLab, true\)/);
+  assert.match(read('tools/production-account-release.mjs'),/requireAppTestQualification\(qualification, candidate\.profile\);/);
 });

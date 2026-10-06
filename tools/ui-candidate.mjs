@@ -10,6 +10,7 @@ import {LANE_B_CONTRACT} from './production-account-contract.mjs';
 import {PUBLIC_LOCALE_BETA_ATMOS_SHA,PUBLIC_LOCALE_BETA_RECEIPT,assertPublicLocaleBetaReady} from './ui-public-locale-beta.mjs';
 import {PUBLIC_COMBINED_ATMOS_SHA,assertPublicCombinedReady,validateCombinedBuild} from './ui-public-combined.mjs';
 import {validateCompressionFiles} from './ui-static-compression.mjs';
+import {requireAppTestQualification} from './ui-app-test-receipt.mjs';
 
 export const CONTROL_SHA = '25c402db5149daa018e349a34a4beeba1f2dca45';
 // Reviewed staging controller with the MapLibre 6-compatible exact Deck-layer diagnostic.
@@ -275,7 +276,7 @@ export function eligibleRun(run, artifacts, { runId, sourceSha, digest, pipeline
   assert.equal(matches[0].expired, false); assert.ok(Date.parse(matches[0].expires_at) > now, 'candidate expired');
   const q = candidate.qualification;
   assert.equal(q?.origin, 'https://staging.weatherx.org'); assert.equal(q?.artifactDigest, digest);
-  assert.equal(q?.fullTests, true); assert.equal(q?.weatherLab, true); assert.equal(q?.builtRuntime, true);
+  requireAppTestQualification(q, candidate.profile); assert.equal(q?.weatherLab, true); assert.equal(q?.builtRuntime, true);
   assert.equal(q?.probes, 3); assert.match(q?.deploymentId ?? '', /^[a-f0-9-]{36}$/);
   assert.ok(Date.parse(q.qualifiedAt) <= now && now - Date.parse(q.qualifiedAt) < 30 * 86400000, 'staging qualification is stale');
   if(publicCombinedProfile(candidate.profile)){

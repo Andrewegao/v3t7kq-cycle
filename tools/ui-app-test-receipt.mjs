@@ -3,11 +3,13 @@
 //
 // Two evidence paths exist (owner decision B, 2026-10-05):
 //   atmos-ci   Atmos's own `ci` workflow already ran the complete suite for this exact
-//              source SHA (verified read-only through the GitHub API, before any
-//              candidate code runs here), plus a shorter local gate in this trust domain.
+//              source SHA in Atmos's CI environment (verified read-only through the GitHub
+//              API by a job that never runs candidate code), plus a shorter local gate here:
+//              the static gates under this selection's CI profile, certification and visual
+//              tests. The complete Vitest suite is not re-run with the staging build flags.
 //   full-local The complete `npm test` suite runs here, exactly as before. This is the
-//              fallback whenever the read token is absent or the evidence is not proven,
-//              so misconfiguration can never make the pipeline weaker.
+//              fallback whenever the read token is absent or the evidence is not proven.
+// For a given selection both paths run the same static-gate (i18n) profile.
 import assert from 'node:assert/strict';
 import { appendFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -22,25 +24,29 @@ export const APP_TEST_STEP = 'full application test gate';
 export const APP_TEST_COMMAND = 'npm test --prefix atmos/app';
 export const EVIDENCE_STEP = 'verify Atmos CI evidence for the exact source';
 export const LOCAL_GATE_STEP = 'local certification and visual gate';
-// Atmos master CI selects its public-beta CI profile whenever this manifest is tracked
-// (tools/ci-fast-evidence.mjs); the local static gates run under that same profile, after
-// checking the manifest is tracked at the candidate, then certification and visual tests.
-export const ATMOS_GATES_CI_PROFILE = 'public-beta-ci-lab-road-security-v1';
+// The local static gates follow the selection, exactly like the full-local suite: the job-level
+// WX_CI_PROFILE is public-beta for the two RU/KK selections and empty (full profile) otherwise,
+// so the token's presence never changes which i18n gate runs. The public-beta profile is only
+// justified while Atmos tracks its manifest (tools/ci-fast-evidence.mjs), so RU/KK checks it.
+export const BETA_CI_PROFILE = 'public-beta-ci-lab-road-security-v1';
+export const FULL_CI_PROFILE = 'full-ci-lab-road-security-v3';
 export const ATMOS_BETA_MANIFEST = 'ops/release/public-beta-ci-manifest.json';
-export const LOCAL_GATE_COMMANDS = Object.freeze([
-  `git -C atmos ls-files --error-unmatch ${ATMOS_BETA_MANIFEST}`,
-  `WX_CI_PROFILE=${ATMOS_GATES_CI_PROFILE} npm run gates --prefix atmos/app`,
-  'npm run test:certify --prefix atmos/app', 'npx playwright test']);
+export const BETA_MANIFEST_CHECK = `git -C atmos ls-files --error-unmatch ${ATMOS_BETA_MANIFEST}`;
+export const ciProfileFor = profile => (publicLocaleBetaProfile(profile) ? BETA_CI_PROFILE : '');
+export function localGateCommands(ciProfile) {
+  assert.ok(ciProfile === '' || ciProfile === BETA_CI_PROFILE, 'unknown CI profile');
+  return [...(ciProfile ? [BETA_MANIFEST_CHECK] : []), 'npm run gates --prefix atmos/app',
+    'npm run test:certify --prefix atmos/app', 'npx playwright test'];
+}
 export const ATMOS_REPOSITORY = 'weatherx-hq/atmos';
 export const ATMOS_CI_WORKFLOW = '.github/workflows/ci.yml';
 export const ATMOS_CI_VERDICT_JOB = 'ci-verdict';
 export const ATMOS_API_MAX_BYTES = 2 * 1024 * 1024;
-const BETA = 'public-beta-ci-lab-road-security-v1';
 const PATHS = ['atmos-ci', 'full-local'];
 const sha = value => assert.match(value ?? '', /^[a-f0-9]{40}$/);
 const numeric = value => assert.match(value ?? '', /^[1-9][0-9]{0,19}$/);
 
-export function appTestEvidence({ path, runId, attempt } = {}) {
+export function appTestEvidence({ path, runId, attempt } = {}, ciProfile = '') {
   assert.ok(PATHS.includes(path), 'unknown app test evidence path');
   if (path === 'full-local') {
     assert.ok(!runId && !attempt, 'full-local evidence cannot name an Atmos run');
@@ -48,13 +54,25 @@ export function appTestEvidence({ path, runId, attempt } = {}) {
   }
   numeric(runId); numeric(attempt);
   return { path, repository: ATMOS_REPOSITORY, workflow: ATMOS_CI_WORKFLOW, job: ATMOS_CI_VERDICT_JOB,
-    runId, attempt, gatesCiProfile: ATMOS_GATES_CI_PROFILE, commands: [...LOCAL_GATE_COMMANDS] };
+    runId, attempt, gatesCiProfile: ciProfile || FULL_CI_PROFILE, commands: localGateCommands(ciProfile) };
 }
 
 // Job outputs of the separate evidence job, which never checks out or runs candidate code.
-export function appTestEvidenceFromEnvironment(env) {
+export function appTestEvidenceFromEnvironment(env, ciProfile = '') {
   return appTestEvidence({ path: env.UI_APP_TEST_EVIDENCE_PATH,
-    runId: env.UI_APP_TEST_ATMOS_RUN_ID || undefined, attempt: env.UI_APP_TEST_ATMOS_RUN_ATTEMPT || undefined });
+    runId: env.UI_APP_TEST_ATMOS_RUN_ID || undefined, attempt: env.UI_APP_TEST_ATMOS_RUN_ATTEMPT || undefined }, ciProfile);
+}
+
+// Sealed qualification: fullTests is true only when the complete suite ran here; the atmos-ci
+// path records fullTests:false plus its exact evidence. Pre-evidence candidates must be full.
+export function requireAppTestQualification(qualification, profile) {
+  if (qualification?.appTestEvidence === undefined) {
+    assert.equal(qualification?.fullTests, true, 'complete app tests required'); return qualification;
+  }
+  const evidence = appTestEvidence(qualification.appTestEvidence, ciProfileFor(profile));
+  assert.deepEqual(qualification.appTestEvidence, evidence, 'qualification app test evidence is malformed');
+  assert.equal(qualification.fullTests, evidence.path === 'full-local', 'fullTests must reflect the app test evidence path');
+  return qualification;
 }
 
 export function appTestReceipt(context) {
@@ -62,15 +80,10 @@ export function appTestReceipt(context) {
   sha(sourceSha); sha(workflowSha); numeric(runId); numeric(attempt);
   assert.equal(typeof selection, 'string');
   const profile = profileFor(selection);
-  const ciProfile = publicLocaleBetaProfile(profile) ? BETA : '';
-  const evidence = appTestEvidence(context.evidence);
-  assert.ok(evidence.path === 'full-local' || atmosEvidenceEligible(ciProfile), 'CI profile requires the complete local suite');
+  const ciProfile = ciProfileFor(profile);
+  const evidence = appTestEvidence(context.evidence, ciProfile);
   return { schemaVersion: 2, sourceSha, workflowSha, runId, attempt, profile, ciProfile, evidence };
 }
-
-// Atmos master CI selects its own CI profile from the commit; the API cannot prove which one
-// ran. Only the default profile may rely on Atmos evidence; beta profiles keep the full suite.
-export const atmosEvidenceEligible = ciProfile => ciProfile === '';
 
 function oneJob(jobs, name, context) {
   const matches = jobs.filter(job => job.name === name);
@@ -187,11 +200,10 @@ export async function atmosCiEvidence(sourceSha, token, options = {}) {
   return requireAtmosVerdict(jobs, sourceSha, run);
 }
 
-// Never weaker than before: anything short of proven evidence selects the complete local suite.
+// Anything short of proven Atmos CI evidence selects the complete local suite.
 export async function decideEvidence(env, options = {}) {
   sha(env.ATMOS_SHA);
   if (!env.ATMOS_CI_READ_TOKEN) return { path: 'full-local', reason: 'ATMOS_CI_READ_TOKEN is not provisioned' };
-  if (!atmosEvidenceEligible(env.WX_CI_PROFILE ?? '')) return { path: 'full-local', reason: `CI profile ${env.WX_CI_PROFILE} requires the complete local suite` };
   try { return await atmosCiEvidence(env.ATMOS_SHA, env.ATMOS_CI_READ_TOKEN, options); }
   catch (error) { return { path: 'full-local', reason: `Atmos CI evidence not proven: ${String(error?.message ?? 'error').split('\n')[0].slice(0, 160)}` }; }
 }
@@ -208,7 +220,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const token = process.env.ATMOS_CI_READ_TOKEN;
     const reason = token ? (decision.reason ?? '').replaceAll(token, '***') : decision.reason;
     console.log(evidence.path === 'atmos-ci'
-      ? `App test evidence path: atmos-ci (${ATMOS_REPOSITORY} ${ATMOS_CI_WORKFLOW} run ${evidence.runId} attempt ${evidence.attempt}, job ${ATMOS_CI_VERDICT_JOB}); local gate: ${LOCAL_GATE_COMMANDS.join(' && ')}`
+      ? `App test evidence path: atmos-ci (${ATMOS_REPOSITORY} ${ATMOS_CI_WORKFLOW} run ${evidence.runId} attempt ${evidence.attempt}, job ${ATMOS_CI_VERDICT_JOB}); app-tests runs the local gate`
       : `App test evidence path: full-local (${reason}); running ${APP_TEST_COMMAND}`);
     appendFileSync(process.env.GITHUB_OUTPUT, `path=${evidence.path}\natmos_run_id=${evidence.runId ?? ''}\natmos_run_attempt=${evidence.attempt ?? ''}\n`);
   } else {

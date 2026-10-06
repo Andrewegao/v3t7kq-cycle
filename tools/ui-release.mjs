@@ -17,7 +17,7 @@ import {PUBLIC_JOURNEY_PROOF_MAX_BYTES,runPublicReleaseJourneys,readPublicJourne
 import { controlShaFor, TC_CONTROL_SHA, REPOSITORY, MAX_BYTES, gate, hash, createCandidate, validateCandidate,
   readTree, validateFiles, seal, unseal, restore, eligibleRun } from './ui-candidate.mjs';
 import { packBuild, unpackBuild, eligibleBuild } from './ui-build-transfer.mjs';
-import { verifyAppTestReceipt, appTestEvidenceFromEnvironment } from './ui-app-test-receipt.mjs';
+import { verifyAppTestReceipt, appTestEvidenceFromEnvironment, ciProfileFor } from './ui-app-test-receipt.mjs';
 import {profileFor,validateProfile,selectionProfile,coreReleaseProfile,publicLocaleBetaProfile,publicCombinedProfile,accountServingProductionProfile,tcGuidanceProfile,canonical as profileCanonical,readSelection,readTcSelection,requireUiProductionProfile,requireStagingApproval,resolveWind100BuildPin,SELECTION_ASSET,TC_SELECTION_ASSET,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt,RELEASE_PROFILES} from './ui-staging-models.mjs';
 import {LANE_B_CONTRACT,PRODUCTION_ACCOUNT_APPROVAL,validateProductionPagesConfiguration} from './production-account-contract.mjs';
 import {assertPublicLocaleBetaReady} from './ui-public-locale-beta.mjs';
@@ -806,9 +806,11 @@ async function deploy(stage) {
     const selection=requireStagingApproval(c,process.env),modelProof=c.profile.stagingOnly?readFileSync(resolve(process.env.RUNNER_TEMP,'ui-model-browser.json')):null;
     if(modelProof&&selectionProfile(c.profile))validateBrowserReceipt(modelProof,selection,{sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId,selectionSha256:c.profile.modelSelectionSha256});
     if(modelProof&&coreReleaseProfile(c.profile))validateCoreBrowserReceipt(modelProof,{sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId});
+    // fullTests is true only when the complete suite ran here; atmos-ci evidence is recorded exactly.
+    const appTestEvidence=appTestEvidenceFromEnvironment(process.env,ciProfileFor(c.profile));
     c.qualification = {origin:ORIGINS.staging, deploymentId,
-      artifactDigest:c.artifactDigest,qualifiedAt:new Date().toISOString(),fullTests:true,weatherLab:true,builtRuntime:true,probes:3,
-      appTestEvidence:appTestEvidenceFromEnvironment(process.env)};
+      artifactDigest:c.artifactDigest,qualifiedAt:new Date().toISOString(),fullTests:appTestEvidence.path==='full-local',
+      weatherLab:true,builtRuntime:true,probes:3,appTestEvidence};
     if(wind100)Object.assign(c.qualification,{wind100});
     if(modelProof&&selectionProfile(c.profile))Object.assign(c.qualification,{modelSelectionSha256:c.profile.modelSelectionSha256,modelBrowserReceiptSha256:hash(modelProof),modelBrowserModels:selection.entries.length});
     if(modelProof&&coreReleaseProfile(c.profile))Object.assign(c.qualification,{coreProfile:c.profile.releaseRosterCore,coreBrowserReceiptSha256:hash(modelProof),coreBrowserModels:2});

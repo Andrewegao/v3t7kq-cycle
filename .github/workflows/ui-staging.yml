@@ -101,7 +101,6 @@ jobs:
       atmos_run_attempt: ${{ steps.atmos_ci.outputs.atmos_run_attempt }}
     env:
       ATMOS_SHA: ${{ inputs.atmos_sha }}
-      WX_CI_PROFILE: ${{ (needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' || needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2') && 'public-beta-ci-lab-road-security-v1' || '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { path: cycle, persist-credentials: false }
@@ -205,13 +204,13 @@ jobs:
       - name: verify combined-profile layer harness source before dependency install
         if: ${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2' }}
         run: node cycle/tools/ui-release-layer-guard.mjs source "${{ github.workspace }}/atmos" "$ATMOS_SHA"
-      # Candidate-domain npm download cache under its own key prefix: only build/app-tests ever
-      # restore it (never setup-node's generic key shared with publisher workflows). npm ci
-      # still verifies every tarball against the lockfile integrity.
+      # Candidate-domain npm tarball cache under its own key prefix: only build/app-tests ever
+      # restore it (never setup-node's generic key shared with publisher workflows). Only the
+      # integrity-checked _cacache store; npm ci verifies every tarball against the lockfile.
       - name: restore candidate-only npm download cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ~/.npm
+          path: ~/.npm/_cacache
           key: ui-candidate-npm-${{ runner.os }}-${{ hashFiles('atmos/app/package-lock.json', 'control/platform/edge/package-lock.json') }}
           restore-keys: ui-candidate-npm-${{ runner.os }}-
       - name: install locked dependencies and browsers
@@ -309,13 +308,13 @@ jobs:
           else
             test "$ATMOS_SHA" = "$(git rev-parse origin/master)"
           fi
-      # Candidate-domain npm download cache under its own key prefix: only build/app-tests ever
-      # restore it (never setup-node's generic key shared with publisher workflows). npm ci
-      # still verifies every tarball against the lockfile integrity.
+      # Candidate-domain npm tarball cache under its own key prefix: only build/app-tests ever
+      # restore it (never setup-node's generic key shared with publisher workflows). Only the
+      # integrity-checked _cacache store; npm ci verifies every tarball against the lockfile.
       - name: restore candidate-only npm download cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ~/.npm
+          path: ~/.npm/_cacache
           key: ui-candidate-npm-${{ runner.os }}-${{ hashFiles('atmos/app/package-lock.json', 'control/platform/edge/package-lock.json') }}
           restore-keys: ui-candidate-npm-${{ runner.os }}-
       - name: install locked app test dependencies and browsers
@@ -325,16 +324,17 @@ jobs:
           cd atmos/app && npx playwright install --with-deps chromium
       # atmos-ci path: Atmos already ran the complete suite for this exact SHA in its own CI
       # environment; keep a shorter gate that still executes the candidate in this trust domain.
-      # Static gates run under the CI profile Atmos master used (public-beta while its manifest
-      # is tracked); the full-profile i18n gate is an Atmos owner decision, not hidden here.
+      # Static gates follow the selection exactly like the full-local suite (job-level
+      # WX_CI_PROFILE: public-beta for RU/KK, full otherwise), so the token never changes which
+      # i18n gate runs. RU/KK first proves Atmos still tracks the manifest that justifies it.
       - name: local certification and visual gate
         if: ${{ needs.atmos-evidence.outputs.path == 'atmos-ci' }}
         run: |
-          git -C atmos ls-files --error-unmatch ops/release/public-beta-ci-manifest.json
-          WX_CI_PROFILE=public-beta-ci-lab-road-security-v1 npm run gates --prefix atmos/app
+          if [ -n "$WX_CI_PROFILE" ]; then git -C atmos ls-files --error-unmatch ops/release/public-beta-ci-manifest.json; fi
+          npm run gates --prefix atmos/app
           npm run test:certify --prefix atmos/app
           cd atmos/app && npx playwright test
-      # full-local path: unchanged complete suite (token absent, beta CI profile, or unproven evidence).
+      # full-local path: unchanged complete suite (token absent or evidence not proven).
       - name: full application test gate
         if: ${{ needs.atmos-evidence.outputs.path == 'full-local' }}
         run: npm test --prefix atmos/app
