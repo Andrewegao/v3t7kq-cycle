@@ -91,7 +91,7 @@
       ]
     },
     {
-      "pin": "547a8e1e54a7e46b211ea0770d895b6cc46c8afd",
+      "pin": "b3f63183dbcde01e388fda7720726cc53f28134b",
       "files": [
         "app/e2e/layer-switch-surface.mjs",
         "app/e2e/layer-switch-tint.mjs",
@@ -122,14 +122,14 @@
         "pngjs"
       ],
       "releaseLayerFiles": {
-        "app/e2e/layer-switch-tint.mjs": "d686f763ce892d2b6288c8caafa0924bf0bef6328847ad3806bd0f395b8e632b",
-        "app/e2e/layer-switch-surface.mjs": "3e6244dc1df4529174cf8e5a65668706f542931d685169d54b88c71c34f8fbe4"
+        "app/e2e/layer-switch-tint.mjs": "df65cf5409c67f0001a6cbf5edf7847c0d1798a2bf437714b9035b06d8d2c67a",
+        "app/e2e/layer-switch-surface.mjs": "441de2a52996646a8540a6df2f7f346c143f6efcd41daf3d9ab4c6ddf4ca9809"
       }
     }
   ],
   "stagingBuild": {
     "profile": "production-account-ru-kk-wind100-onboarding-v2",
-    "pin": "547a8e1e54a7e46b211ea0770d895b6cc46c8afd",
+    "pin": "b3f63183dbcde01e388fda7720726cc53f28134b",
     "paths": [
       ".gitignore",
       "platform/edge/package.json",
@@ -137,6 +137,6 @@
       "ops/release/build-release-receipt.mjs"
     ],
     "coneMode": false,
-    "provenance": "Merged Atmos PR #484 source 547a8e1e54a7e46b211ea0770d895b6cc46c8afd, tree 5d56ae4a1f5eda363df2730cf535394afee94789, merged at 2026-10-06 04:12:29 UTC; its tree exactly matches reviewed and hosted-tested head 020d471b3a4797bb5034a1c8a05a325e82cfff58. Actual Git blob comparison confirms all 43 reviewed account/onboarding digests, the original 21 qualification input blobs, both current release layer hashes, and the four-file sparse build closure are unchanged versus 248abd180ff95b4ada641c3eee7bf155f766091d. The combined qualification inventory additionally records the active app/e2e/staging-account-qualification.mjs harness (SHA256 28afd87c9b90dceb3e9dbcab66c51e27042ce0d036edb33b37f0dbaaac61e746); it changes to retain truthful failed numeric diagnostics without relaxing lifecycle/weather limits. This 22-file inventory is not a claim that all active harnesses are unchanged. Runtime candidate combines PR #466 timebar, PR #482 radiosonde scope, PR #483 failed numeric evidence and quietIdle/layerMenuWarm fixes. Platform/edge and ops/release blobs are unchanged versus 248; existing Worker build-input/config correspondence and rollback identity still require their own admission. Run 37401175445 remains failed with verified rollback and fuse #378; fresh exact-source staging acceptance remains required. No deployment or performance/memory completion is established by these closure checks. See docs/ui-public-combined.md."
+    "provenance": "Merged Atmos PR #486 source b3f63183dbcde01e388fda7720726cc53f28134b, tree 5b21adbc7904655c98f400129bce3c238ed8bf3c, merged at 2026-10-06T06:30:14Z; tree equals independently reviewed final head f3620f20309a6bd122497bfb300f1d235d2c2666 and required hosted-CI merge tree. Relative to historical 547a8e1 source, only the two active Wind capture harnesses, their existing regression fixture and the task record change. All 43 account/onboarding digests, the other 20 of 22 qualification inputs, four sparse build paths, frontend/Functions/Worker/config/lockfile/release-builder closures are unchanged. This fixes demonstrated scheduled-versus-painted and renderer-owner capture races while retaining strict opacity, source bytes, pixels, roundtrip, deadlines and isolation. Original failed run 37413651923 remains failed; its discarded child throw is unknown. Real canonical-backend read-only replay and local profile-specific evidence passed but do not constitute deployed acceptance. Historical diagnosis bindings remain fixed. Existing Worker requires no deployment for this input delta. Fresh controller CI, current-base/source admission, recovery checks and one new exact-source guarded staging run remain required; no generated-byte equality, production deployment or data publication is asserted."
   }
 }

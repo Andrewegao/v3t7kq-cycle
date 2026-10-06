@@ -84,6 +84,12 @@ const diagnosticKnownErrors = new Map([
   ['Temperature did not paint before Wind ABA','temperature-before-aba-unproven'],
   ['strict-paint-baseline-unavailable','strict-paint-baseline-unavailable'],
   ['strict-paint-baseline-timeout','strict-paint-baseline-timeout'],
+  ['wind capture timed out','wind-capture-timeout'],
+  ['wind capture intent changed','wind-capture-intent-changed'],
+  ['wind capture intent unavailable','wind-capture-intent-unavailable'],
+  ['invalid wind capture deadline','wind-capture-deadline-invalid'],
+  ['unsupported Deck wind domain','wind-deck-domain-unsupported'],
+  ['Deck draw source differs from capture source','wind-deck-draw-source-mismatch'],
 ]);
 function diagnosticErrorCode(error) {
   if (typeof error?.message !== 'string') return null;
