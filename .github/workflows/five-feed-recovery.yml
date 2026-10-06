@@ -1,0 +1,114 @@
+name: Recover five observation and fire components
+permissions:
+  contents: read
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Enter RECOVER FIVE OBSERVATION FEEDS after reviewing the exact source and operation
+        type: string
+        required: true
+jobs:
+  recover:
+    environment: production
+    concurrency:
+      group: weatherx-data-maintenance
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      ATMOS_SHA: 5e68af94c24517eaaaf6a9d25aec0cadc3d9b135
+      APPROVED_SHA: ${{ vars.CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA }}
+      CATALOG_ENDPOINT: https://weatherx.org/api/platform/internal/catalog
+    steps:
+      - name: Require manual main and existing approved production source before credentials
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          ENABLED: ${{ vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED }}
+        run: |
+          test "$GITHUB_REPOSITORY" = Andrewegao/v3t7kq-cycle
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_WORKFLOW_REF" = Andrewegao/v3t7kq-cycle/.github/workflows/five-feed-recovery.yml@refs/heads/main
+          test "$CONFIRMATION" = 'RECOVER FIVE OBSERVATION FEEDS'
+          test "$ENABLED" = true
+          test "$APPROVED_SHA" = "$ATMOS_SHA"
+      - name: Checkout exact recovery controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Andrewegao/v3t7kq-cycle
+          ref: ${{ github.sha }}
+          path: cycle
+          persist-credentials: false
+      - name: Checkout unchanged qualified five-feed producers
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: weatherx-hq/atmos
+          ref: 5e68af94c24517eaaaf6a9d25aec0cadc3d9b135
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: atmos
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with: {python-version: '3.12'}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: {node-version: '22'}
+      - name: Provision only locked data runtime and hash-locked existing R2 transport
+        timeout-minutes: 10
+        run: |
+          test "$(git -C cycle rev-parse HEAD)" = "$GITHUB_SHA"
+          git -C cycle diff --quiet HEAD
+          test "$(git -C atmos rev-parse HEAD)" = "$ATMOS_SHA"
+          git -C atmos diff --quiet HEAD
+          python -m venv atmos/data/.venv
+          atmos/data/.venv/bin/pip install --require-hashes --only-binary=:all: -r atmos/data/requirements.lock
+          archive="$RUNNER_TEMP/rclone-v1.75.0-linux-amd64.zip"
+          curl --fail --silent --show-error --location --max-time 120 \
+            https://github.com/rclone/rclone/releases/download/v1.75.0/rclone-v1.75.0-linux-amd64.zip --output "$archive"
+          printf '%s  %s\n' aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa "$archive" | sha256sum --check --status
+          unzip -q "$archive" -d "$RUNNER_TEMP"
+          sudo install -m 0755 "$RUNNER_TEMP/rclone-v1.75.0-linux-amd64/rclone" /usr/local/bin/rclone
+          rclone version | head -1 | grep -Fx 'rclone v1.75.0'
+      - name: Authenticate predecessor catalog release and complete mount inventories
+        timeout-minutes: 8
+        env:
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+        run: node cycle/tools/five-feed-recovery.mjs snapshot "$GITHUB_WORKSPACE/atmos" "$RUNNER_TEMP/five-feed-state"
+      - name: Collect all five independent families with three workers and fixed provider deadlines
+        timeout-minutes: 23
+        env:
+          OPENAQ_API_KEY: ${{ secrets.OPENAQ_API_KEY }}
+        run: |
+          atmos/data/.venv/bin/python -I cycle/tools/five-feed-collect.py collect \
+            "$GITHUB_WORKSPACE/atmos" "$RUNNER_TEMP/five-feed-stage"
+      - name: Stage verify atomic five-component CAS and verify genuine public aliases
+        timeout-minutes: 18
+        env:
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+          CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+        run: |
+          export FIVE_FEED_PUBLICATION_DEADLINE_MS="$(( $(date +%s) * 1000 + 18 * 60 * 1000 ))"
+          node cycle/tools/five-feed-recovery.mjs stage "$GITHUB_WORKSPACE/atmos" "$RUNNER_TEMP/five-feed-state" "$RUNNER_TEMP/five-feed-stage"
+          node cycle/tools/five-feed-recovery.mjs promote "$GITHUB_WORKSPACE/atmos" "$RUNNER_TEMP/five-feed-state" "$RUNNER_TEMP/five-feed-stage"
+          node cycle/tools/five-feed-recovery.mjs readback "$GITHUB_WORKSPACE/atmos" "$RUNNER_TEMP/five-feed-state" "$RUNNER_TEMP/five-feed-stage"
+      - name: Retain only aggregate public acceptance and family outcomes
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: five-feed-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/five-feed-state/acceptance.json
+            ${{ runner.temp }}/five-feed-state/public-promotion-intent.json
+            ${{ runner.temp }}/five-feed-state/public-promotion-result.json
+            ${{ runner.temp }}/five-feed-stage/collection-outcomes.json
+          if-no-files-found: ignore
+          retention-days: 7

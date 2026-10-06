@@ -1,0 +1,51 @@
+# Manual five-feed component recovery
+
+This manual production-data lane refreshes METAR, SYNOP, buoys, licensed OpenAQ observations, and satellite fire detections without collecting models. It adds no schedule, UI deployment, Worker deployment, setting, secret, tide operation, or whole-release promotion. Production data is also the staging reader's shared source; authenticated public aliases on both origins must read back the exact new bytes. Browser verification remains a separate owner-controlled step.
+
+The unchanged producers and generic component publisher are pinned to Atmos `5e68af94c24517eaaaf6a9d25aec0cadc3d9b135`. Existing `CURRENT_RUN_COMPONENT_PUBLISH_ENABLED=true` and `CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA` must approve that exact source before credentials are used. Dispatch is restricted to the repository's main branch and the literal confirmation `RECOVER FIVE OBSERVATION FEEDS`. Source review and required hosted CI must complete before the owner authorizes an actual dispatch.
+
+## Collection and qualification
+
+The Ubuntu 24.04 job has a 60-minute outer limit and the existing `weatherx-data-maintenance` lock with cancellation disabled. Python 3.12 uses the unchanged fully hash-locked data requirements; rclone 1.75.0 has the existing fixed distribution hash. Three independent collectors may run concurrently. Native producer stdout/stderr is suppressed, and failures retain only family names, fixed stages and controller-authored safe outcome codes. No observation bodies, provider logs, credentials, or private publication state are uploaded.
+
+| Family | Producer deadline | Admitted object/row bound | Current-record admission |
+| --- | --- | --- | --- |
+| METAR | 3 min | 6 MiB, 25,000 rows | At least one real report within 90 min; honestly retained older reports are counted separately. |
+| SYNOP | 7 min | 6 MiB, 30,000 rows | At least one real report within 360 min; unchanged native feed freshness, floor, and geography guards apply. |
+| Buoys | 7 min | 4 MiB, 20,000 rows | At least one current report: NDBC 90 min or DWD 180 min; native collection requires both source legs. |
+| OpenAQ | 15 min | 8 MiB, 30,000 rows | At least one current station and licensed reading; encoded reading age plus elapsed bake time must be within 180 min. Native licensing, units, parameters and throttling remain unchanged. |
+| Fires | 5 min | legacy 32 MiB; index 512 KiB; overview/tile 4 MiB | Current detections within 24 h in legacy, overview and detail; retained detail/overview detections stay within an additional 36 h acquisition-age cap. The existing reader also refuses packs baked more than 36 h ago; it does not filter every detection by acquisition age. |
+
+The fire family inventory is capped at 256 MiB and 651 declared payload files. With the other four object caps, the entire admitted stage is bounded by 280 MiB. Hashing streams files after checking declared size; it does not allocate an unexpected unbounded file.
+
+Each producer must independently exit successfully and pass its original schema validator. All outputs must be newly baked during this attempt, nonempty, within byte/row limits, and contain actual current records. Older rows near a producer's cutoff may age during publication; their ages are preserved, they are excluded from current counts, and the app's existing stale presentation/filtering remains authoritative. This does not assert every station or pollutant is current or that global coverage is complete. Fires preserve truthful `missing_feeds` and the original brightest-FRP thinning receipts; no missing provider is filled synthetically.
+
+The fire gate additionally binds the exact index/overview/legacy/declared-tile set, same bake timestamps, 10-degree cell geometry, per-cell counts, detected/retained totals and thinning receipts. Its local inventory hashes bind every admitted object. Unchanged native producer guards remain necessary; the controller does not replace provider authorization or schema checks.
+
+## Publication boundaries
+
+Only these five components and exact mounts may change:
+
+- `obs-metar`: `data-atmos/stations/`, only `metar.json`.
+- `obs-synop`: `data-atmos/synop/`, only `stations.json`.
+- `obs-buoys`: `data-atmos/buoys/`, only `stations.json`.
+- `obs-openaq`: `data-atmos/openaq/`, only `stations.json`.
+- `obs-fires`: `data-atmos/fires/`, `fires.json`, `index.json`, `overview.json`, and all and only the tiles declared by the new index.
+
+Before collection, authenticate the current catalog and whole-release pointers/manifests and complete predecessor mount path inventories. Authenticated schema-1 component manifests commit the predecessor inventory hashes; shadow checks enumerate all remote paths without downloading old payloads repeatedly. Any broader/overlapping component mount or unrelated whole-release file beneath a target mount refuses the operation. The five original component descriptors/hashes and rollback epoch become the target conflict boundary.
+
+After collection, reauthenticate a fresh complete baseline. Unrelated model promotions during collection are permitted, while any target descriptor/hash/mount or rollback epoch change refuses. Whole-release changes during collection may enter that authenticated stage baseline. The release pointer must then remain unchanged through staging, promotion and readback.
+
+Stage all five immutable components through the unchanged publisher with `PROMOTE=0`, unique run/attempt artifact IDs, exact inventory-hash and manifest readback, and no pointer mutation. Immediately before promotion, authenticate the current catalog/mount inventory again and retain a fresh baseline with the same original target descriptors and rollback epoch. Preserve that fresh baseline's unrelated components. A promotion reserve guard requires at least eleven minutes remaining in the eighteen-minute publication step before any mutation. Public readback is also bounded by that fixed step deadline, and stops outstanding requests on failure. One existing `promote-set` operation carries all five expected predecessor hashes and the rollback epoch; there is no retry/rebase after a target conflict and no repeated collection in the attempt.
+
+Persist the promotion intent before the request. The always-retained public intent/result summaries contain only run/source identities, target manifest hashes, rollback epoch and public catalog/release identifiers, so a later acceptance refusal cannot conceal that a mutation was requested; private catalog bodies, manifest keys and raw transport responses stay out of public artifacts. Any collection, qualification or staging failure leaves active pointers unchanged. A mutation timeout or post-promotion readback failure is ambiguous or incomplete acceptance: inspect the retained private intent/result and authenticated catalog before considering another operation. Do not blindly repeat a mutation or automatically roll back over later updates. Existing rollback procedures require fresh ownership/source review.
+
+Acceptance requires the exact atomic successor, unchanged unrelated components/whole release, and bounded hash readback of every published alias (at most three concurrent GETs, 20 seconds per GET and eight minutes overall) on production and canonical staging. Recheck all five current-record counts afterward. A competing catalog mutation in the small final CAS/readback window causes conservative acceptance refusal rather than a claim that unrelated changes were preserved. The uploaded receipt contains only public paths/hashes, aggregate counts and source/run identities. It does not qualify continuous renewal or prove map/card rendering.
+
+## Local contracts and hosted CI
+
+Required scheduler CI runs `node --test tests/five-feed-recovery.mjs` and `python3 -I tests/test_five_feed_collect.py`. Offline fixtures cover authenticated hashes, full mount shadow rejection, exact five-target CAS, immutable manifest ordering, candidate tampering, unrelated catalog concurrency, rollback conflicts, source/time/byte/nonempty failures, cumulative OpenAQ ages, fire tile/count/geometry/thinning boundaries and credential isolation. No provider request or production mutation is part of these tests.
+
+## Owned task state
+
+This source-only recovery task is owned by the root recovery coordinator. The isolated checkout includes actual Cycle main `521f67f05bb8bc85504688b9a622b808547a92ae` as an ancestor; its base tree matches the independently qualified producer admission controller. Local offline checks passed eight controller contracts, eight collector contracts, fifteen inventory/timing contracts, actionlint, generated inventory verification and whitespace checks. An unchanged-source offline fixture also proves the older four-observation wrapper exits successfully when METAR alone succeeds, while the new five-family gate refuses that incomplete outcome. The historical whole-bake GFS failure is preserved; this lane makes no claim to repair model horizons. Required hosted CI, independent exact-source review, any actual dispatch/publication, canonical live readback and map/card acceptance remain pending.
