@@ -30,13 +30,20 @@ evidence for the exact source** selects one path and publishes it as job outputs
   `completed/success`, and that run attempt has exactly one `ci-verdict` job that is
   `completed/success` for the same SHA, run and attempt. API reads are bounded (2 MiB), redirects
   are refused and the token is never logged or put in a URL. `app-tests` then runs the local
-  gate: `npm run gates --prefix atmos/app` (full-profile static gates), `npm run test:certify
-  --prefix atmos/app` and `npx playwright test` (in `atmos/app`).
+  gate: it checks that `ops/release/public-beta-ci-manifest.json` is tracked at the candidate,
+  runs `WX_CI_PROFILE=public-beta-ci-lab-road-security-v1 npm run gates --prefix atmos/app`,
+  then `npm run test:certify --prefix atmos/app` and `npx playwright test` (in `atmos/app`).
   The accepted evidence covers Atmos's own CI environment, not this staging environment: Atmos
-  master CI runs its public-beta CI profile (the manifest is tracked), which swaps `check-i18n`
-  for `check-public-beta-i18n` and runs Vitest without the staging build flags. The local gate
-  re-runs the full-profile gates on the candidate; the complete Vitest suite is not re-run with
-  the staging flags on this path.
+  master CI selects its public-beta CI profile whenever that manifest is tracked
+  (`tools/ci-fast-evidence.mjs`), which swaps `check-i18n` for `check-public-beta-i18n` and runs
+  Vitest without the staging build flags. The local static gates therefore run under that same
+  public-beta profile (recorded as `gatesCiProfile` in the receipt), and the complete Vitest
+  suite is not re-run with the staging flags on this path.
+  **The full-profile `check-i18n` gate is currently red on Atmos master** (about 3 940 fuzzy draft
+  entries in `app/src/locales/zh/messages.po`, pre-existing). Neither Atmos CI nor this gate runs
+  it, and the full-local fallback (`npm test`, full profile for non-beta selections) would fail
+  on it. Whether that gate must be green before release is an Atmos owner decision; the
+  controller does not hide it, it records which profile ran.
 - **full-local**: the unchanged complete `npm test --prefix atmos/app`. Chosen whenever
   `ATMOS_CI_READ_TOKEN` is absent, the staging profile uses the beta CI profile (the API cannot
   prove which CI profile Atmos ran), or any evidence check fails. The log prints which path ran

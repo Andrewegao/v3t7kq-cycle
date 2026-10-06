@@ -324,12 +324,14 @@ jobs:
           npm ci --prefix atmos/app
           cd atmos/app && npx playwright install --with-deps chromium
       # atmos-ci path: Atmos already ran the complete suite for this exact SHA in its own CI
-      # environment; keep a shorter gate (full-profile static gates, certification tests,
-      # visual tests) that still executes the candidate in this trust domain.
+      # environment; keep a shorter gate that still executes the candidate in this trust domain.
+      # Static gates run under the CI profile Atmos master used (public-beta while its manifest
+      # is tracked); the full-profile i18n gate is an Atmos owner decision, not hidden here.
       - name: local certification and visual gate
         if: ${{ needs.atmos-evidence.outputs.path == 'atmos-ci' }}
         run: |
-          npm run gates --prefix atmos/app
+          git -C atmos ls-files --error-unmatch ops/release/public-beta-ci-manifest.json
+          WX_CI_PROFILE=public-beta-ci-lab-road-security-v1 npm run gates --prefix atmos/app
           npm run test:certify --prefix atmos/app
           cd atmos/app && npx playwright test
       # full-local path: unchanged complete suite (token absent, beta CI profile, or unproven evidence).

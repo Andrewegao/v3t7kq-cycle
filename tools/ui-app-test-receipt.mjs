@@ -22,9 +22,14 @@ export const APP_TEST_STEP = 'full application test gate';
 export const APP_TEST_COMMAND = 'npm test --prefix atmos/app';
 export const EVIDENCE_STEP = 'verify Atmos CI evidence for the exact source';
 export const LOCAL_GATE_STEP = 'local certification and visual gate';
-// Atmos master CI runs its own (public-beta) CI profile and environment; these local commands
-// re-run the full-profile static gates, certification tests and visual tests on the candidate.
-export const LOCAL_GATE_COMMANDS = Object.freeze(['npm run gates --prefix atmos/app',
+// Atmos master CI selects its public-beta CI profile whenever this manifest is tracked
+// (tools/ci-fast-evidence.mjs); the local static gates run under that same profile, after
+// checking the manifest is tracked at the candidate, then certification and visual tests.
+export const ATMOS_GATES_CI_PROFILE = 'public-beta-ci-lab-road-security-v1';
+export const ATMOS_BETA_MANIFEST = 'ops/release/public-beta-ci-manifest.json';
+export const LOCAL_GATE_COMMANDS = Object.freeze([
+  `git -C atmos ls-files --error-unmatch ${ATMOS_BETA_MANIFEST}`,
+  `WX_CI_PROFILE=${ATMOS_GATES_CI_PROFILE} npm run gates --prefix atmos/app`,
   'npm run test:certify --prefix atmos/app', 'npx playwright test']);
 export const ATMOS_REPOSITORY = 'weatherx-hq/atmos';
 export const ATMOS_CI_WORKFLOW = '.github/workflows/ci.yml';
@@ -43,7 +48,7 @@ export function appTestEvidence({ path, runId, attempt } = {}) {
   }
   numeric(runId); numeric(attempt);
   return { path, repository: ATMOS_REPOSITORY, workflow: ATMOS_CI_WORKFLOW, job: ATMOS_CI_VERDICT_JOB,
-    runId, attempt, commands: [...LOCAL_GATE_COMMANDS] };
+    runId, attempt, gatesCiProfile: ATMOS_GATES_CI_PROFILE, commands: [...LOCAL_GATE_COMMANDS] };
 }
 
 // Job outputs of the separate evidence job, which never checks out or runs candidate code.

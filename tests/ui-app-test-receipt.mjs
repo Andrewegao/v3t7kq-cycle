@@ -3,7 +3,8 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { appTestReceipt, verifyAppTestReceipt, receiptForEnvironment, appTestEvidence, appTestEvidenceFromEnvironment,
   boundedJson, selectAtmosCiRun, requireAtmosVerdict, atmosCiEvidence, decideEvidence,
-  APP_TEST_STEP, EVIDENCE_STEP, EVIDENCE_JOB, LOCAL_GATE_STEP, LOCAL_GATE_COMMANDS, ATMOS_API_MAX_BYTES } from '../tools/ui-app-test-receipt.mjs';
+  APP_TEST_STEP, EVIDENCE_STEP, EVIDENCE_JOB, LOCAL_GATE_STEP, LOCAL_GATE_COMMANDS, ATMOS_API_MAX_BYTES,
+  ATMOS_GATES_CI_PROFILE } from '../tools/ui-app-test-receipt.mjs';
 
 const SHA='a'.repeat(40);
 const FULL={path:'full-local'}, CI={path:'atmos-ci',runId:'987',attempt:'2'};
@@ -35,8 +36,16 @@ test('receipt binds exact source/profile/workflow/run/attempt and the evidence p
   const ci=appTestReceipt(ciContext());
   assert.equal(ci.schemaVersion,2);
   assert.deepEqual(ci.evidence,{path:'atmos-ci',repository:'weatherx-hq/atmos',workflow:'.github/workflows/ci.yml',
-    job:'ci-verdict',runId:'987',attempt:'2',commands:[...LOCAL_GATE_COMMANDS]});
-  assert.deepEqual(LOCAL_GATE_COMMANDS,['npm run gates --prefix atmos/app','npm run test:certify --prefix atmos/app','npx playwright test']);
+    job:'ci-verdict',runId:'987',attempt:'2',gatesCiProfile:'public-beta-ci-lab-road-security-v1',commands:[...LOCAL_GATE_COMMANDS]});
+  assert.equal(ATMOS_GATES_CI_PROFILE,'public-beta-ci-lab-road-security-v1');
+  assert.deepEqual(LOCAL_GATE_COMMANDS,['git -C atmos ls-files --error-unmatch ops/release/public-beta-ci-manifest.json',
+    'WX_CI_PROFILE=public-beta-ci-lab-road-security-v1 npm run gates --prefix atmos/app',
+    'npm run test:certify --prefix atmos/app','npx playwright test']);
+  // A receipt claiming the full-profile gates (or no profile) is not the evidence this run produced.
+  for(const gatesCiProfile of ['full-ci-lab-road-security-v3','',undefined]){
+    const forged={...ci,evidence:{...ci.evidence,gatesCiProfile}};
+    assert.throws(()=>verifyAppTestReceipt(JSON.stringify(forged),jobs('atmos-ci'),ciContext()));
+  }
   assert.deepEqual(verifyAppTestReceipt(JSON.stringify(ci),jobs('atmos-ci'),ciContext()),ci);
   assert.deepEqual(receiptForEnvironment(env({MODEL_SELECTION_SHA256:'none',WX_CI_PROFILE:'',UI_APP_TEST_EVIDENCE_PATH:'atmos-ci',
     UI_APP_TEST_ATMOS_RUN_ID:'987',UI_APP_TEST_ATMOS_RUN_ATTEMPT:'2'}),SHA,'b'.repeat(40)),ci);
@@ -217,7 +226,12 @@ test('evidence job has no candidate; app-tests runs one selected gate; qualify b
   assert.equal((app.match(/persist-credentials: false/g)||[]).length,2);
   assert.deepEqual([...new Set([...app.matchAll(/secrets\.([A-Za-z0-9_]+)/g)].map(m=>m[1]))],['ATMOS_READONLY_KEY']);
   assert.doesNotMatch(app,/CLOUDFLARE|PRIVATE_KEY|CANDIDATE_KEY|ATMOS_DEPLOY_KEY|pack-build|deploy staging|steps\.atmos_ci|ui-app-test-receipt\.mjs evidence/);
-  assert.match(app,/name: local certification and visual gate\n\s+if: \$\{\{ needs\.atmos-evidence\.outputs\.path == 'atmos-ci' \}\}\n\s+run: \|\n\s+npm run gates --prefix atmos\/app\n\s+npm run test:certify --prefix atmos\/app\n\s+cd atmos\/app && npx playwright test\n/);
+  // The static gates run with the exact CI profile Atmos master used, only while its manifest is tracked.
+  assert.match(app,/name: local certification and visual gate\n\s+if: \$\{\{ needs\.atmos-evidence\.outputs\.path == 'atmos-ci' \}\}\n\s+run: \|\n\s+git -C atmos ls-files --error-unmatch ops\/release\/public-beta-ci-manifest\.json\n\s+WX_CI_PROFILE=public-beta-ci-lab-road-security-v1 npm run gates --prefix atmos\/app\n\s+npm run test:certify --prefix atmos\/app\n\s+cd atmos\/app && npx playwright test\n/);
+  assert.equal((app.match(/npm run gates/g)||[]).length,1);
+  assert.doesNotMatch(app,/^\s+npm run gates/m,'gates never run without the Atmos CI profile');
+  const gateStep=app.split('name: local certification and visual gate')[1].split('      - name:')[0];
+  for(const command of LOCAL_GATE_COMMANDS.filter(c=>c!=='npx playwright test')) assert.ok(gateStep.includes(command),command);
   assert.match(app,/name: full application test gate\n\s+if: \$\{\{ needs\.atmos-evidence\.outputs\.path == 'full-local' \}\}\n\s+run: npm test --prefix atmos\/app/);
   assert.ok(app.indexOf('ui-app-test-receipt.mjs emit')>app.indexOf('npm test --prefix atmos/app'));
   assert.ok(app.indexOf('ui-app-test-receipt.mjs emit')>app.indexOf('npx playwright test'));
