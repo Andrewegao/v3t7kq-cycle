@@ -22,7 +22,7 @@ The refresh job uses `weatherx-observation-components-production` (cancel-in-pro
 The `plan` job has no environment, lock or secret (it reads the Actions API with `actions: read`). In order it:
 
 - refuses a manual dispatch without the literal confirmation (red, nothing refreshed);
-- lists jobs holding `weatherx-observation-components-production` (this lane's `refresh`, the recovery's `recover`) and turns red when one has waited at the production environment gate for more than 30 minutes, measured from that deployment's `waiting` status rather than from when the job queued behind the lock — the owner must cancel that run;
+- lists jobs holding `weatherx-observation-components-production` (this lane's `refresh`, the recovery's `recover`) and turns red when one has waited at the production environment gate for more than 30 minutes, measured from that deployment's `waiting` status rather than from when the job queued behind the lock — the owner must cancel that run. Only the newest 100 production deployments for the holder's SHA are read; when its deployment or `waiting` status is not among them, the age is measured from the job's own start (an upper bound), so a waiting holder is never reported as not stuck merely because its deployment is unknown. This check runs before the recovery check, so a recovery stuck at the gate is `BLOCKED` (red), never `SKIPPED`;
 - reports `SKIPPED` when `OBSERVATION_REFRESH_ENABLED` is not `true`;
 - reports `SKIPPED` while a `five-feed-recovery.yml` run is queued, pending, waiting or in progress, so the schedule cannot cancel it. If the Actions API is unavailable it notes that and refreshes anyway.
 
@@ -38,15 +38,18 @@ The public artifact `five-feed-acceptance-<run>-<attempt>` keeps `acceptance.jso
 
 Every ordinary production producer runs the one Atmos commit declared in [`ops/atmos-production-source.json`](../ops/atmos-production-source.json). Workflow checkouts keep literal refs; `node tools/atmos-source-pin.mjs --check` proves every listed literal equals the declaration and that every other 40-hex value in workflows and tools is classified (another qualified Atmos pin in its listed files, or a known non-Atmos hash; `uses:` action pins excepted), so a new pin site cannot appear unnoticed; add `--atmos-repo <atmos clone>` to also prove the classification against Atmos history, and `node tools/atmos-source-pin.mjs --set <sha>` moves all of them together. The five-feed tools and the staging Wind100 policy check read the declaration directly.
 
+The Wind100 digests below apply only to enabled lanes; both Wind100 lanes are disabled today (their enabling variables unset or false), so only `CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA` must move now.
+
 Moving the pin always requires these protected values to change at the same time as the merge (setting them earlier refuses current main; later refuses the new main):
 
 - `production` environment variable `CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA` = the new declared SHA (model publishers and this lane).
-- `data-staging` environment variable `STAGING_WIND100_CONTROLLER_SHA256` = `node -e "import('./tools/staging-wind100.mjs').then(m=>console.log(m.controllerDigest()))"` at the merged commit (the policy's `coreSourceSha` is in that digest).
+- `data-staging` environment variable `STAGING_WIND100_CONTROLLER_SHA256` = `node -e "import('./tools/staging-wind100.mjs').then(m=>console.log(m.controllerDigest()))"` at the merged commit (the policy's `coreSourceSha` is in that digest), only when the staging Wind100 lane is enabled.
 - `data-production-wind100` variables `PRODUCTION_WIND100_CONTROLLER_SHA256` and `PRODUCTION_WIND100_GC_READY_SHA256` = the production controller digest, only when that disabled lane is enabled (its digest also covers `bake.yml`).
 
 ## Owner controls
 
 - Repository variable `OBSERVATION_REFRESH_ENABLED=true` turns the schedule on; any other value reports SKIPPED.
+- After a catalog rollback, first set `OBSERVATION_REFRESH_ENABLED` to anything but `true`; otherwise this lane republishes fresh observations over the rolled-back catalog within 30 minutes.
 - The `production` environment currently has only a protected-branch policy (no required reviewers, no wait timer), so scheduled runs do not wait for approval. If reviewers are ever added, every scheduled run will wait for approval while holding this lane's lock; exempt the schedule or approve runs. Nothing in this repository bypasses an approval.
 - GitHub may delay or drop scheduled events. Only a real run proves timing; the external scheduler can dispatch this workflow in a later, separately reviewed change.
 
@@ -66,3 +69,13 @@ Runs to cancel (the owner cancels; nothing here cancels, approves or dispatches)
 | `34673546279` | `scheduler-deploy.yml` | zombie run, `queued` | 2026-09-12 04:38Z |
 
 The one-shot manual five-feed recovery (`five-feed-recovery.yml`) can run today from main, which pins Atmos `5e68af94c24517eaaaf6a9d25aec0cadc3d9b135`; the `production` variable `CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA` already matches that pin. Move that variable to `18fb5074d7472ffc5549704c0874f6e35516cef5` only when #386 merges (see [Source pin](#source-pin)); moving it earlier makes main's recovery and publishers refuse.
+
+Flip procedure. A run's workflow file and its literal Atmos pin are fixed when the run is created, so any `bake.yml`, `five-feed-recovery.yml` or `resume-model-publication.yml` run created from the old main that reaches a publisher after `CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA` is flipped refuses every one of its model publications. Therefore:
+
+1. Cancel, or let finish, every in-flight run created from the old main (today `37521254217` and `37478458131`).
+2. Merge #386 in a window between whole bakes (they start at :30 past 02, 08, 14 and 20 UTC).
+3. Flip `CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA` to `18fb5074d7472ffc5549704c0874f6e35516cef5` immediately after the merge.
+
+Merging without flipping makes every model publish from the new main, and every observation run, refuse.
+
+Pin move `5e68af94` → `18fb5074d7` beyond data and ops: besides the 4 `data/`/`ops/` files, 180 `app/src` and 16 `app/e2e` files changed between the two SHAs (290 files, 24 commits). They reach the whole bake's blocking `npx vite build` (`bake.yml` line 445) and its non-blocking Weather Lab gate. `app/package.json` and `app/package-lock.json` are unchanged and Atmos CI is green at `18fb5074d7`, but a passing whole bake at the new pin is unverified until one runs.

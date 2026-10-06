@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "atmosSha": "18fb5074d7472ffc5549704c0874f6e35516cef5",
-  "atmosSubject": "weatherx-hq/atmos master merge of PR #489 (seal the reviewed GFS point horizon with its map run), 2026-10-06. Moving from 5e68af94c24517eaaaf6a9d25aec0cadc3d9b135 spans 24 commits / 290 files; under data/ and ops/ only data/add_geoscf.py, ops/core_model_artifact.py and their tests changed. The five observation producers, data/requirements.lock, ops/platform/publish-r2-component.sh, ops/bake-weatherx.sh and ops/bake-observation-points.sh are byte-identical.",
+  "atmosSubject": "weatherx-hq/atmos master merge of PR #489 (seal the reviewed GFS point horizon with its map run), 2026-10-06. Moving from 5e68af94c24517eaaaf6a9d25aec0cadc3d9b135 spans 24 commits / 290 files; under data/ and ops/ only data/add_geoscf.py, ops/core_model_artifact.py and their tests changed. The five observation producers, data/requirements.lock, ops/platform/publish-r2-component.sh, ops/bake-weatherx.sh and ops/bake-observation-points.sh are byte-identical. Outside data/ and ops/, 180 app/src and 16 app/e2e files changed; they reach the whole bake's blocking npx vite build (bake.yml) and its non-blocking Weather Lab gate. app/package.json and app/package-lock.json are unchanged and Atmos CI is green at this SHA, but a passing whole bake at this pin is unverified until one runs.",
   "approvalVariables": {
     "production/CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA": "atmosSha"
   },
