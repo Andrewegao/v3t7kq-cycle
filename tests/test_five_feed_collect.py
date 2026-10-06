@@ -28,6 +28,23 @@ def fires(root):
     write(root/'index.json',{**envelope,'schemaVersion':1,'cell_deg':10,'overview':'overview.json','tiles':'tiles/',
           'total':1,'detected_total':1,'overview_rows':1,'cells':{'18_9':1}})
 
+# Two exact decoded rows/native bins from the retained official Suomi NPP CSV.
+# CSV SHA25656c9603e65f4ed42d9832235baaf5439aca9d4170b6c42026adfa6584452d122;
+# sampled2026-10-06T16:24:16.518582Z. Offline fixture, not live bake/coverage proof.
+AUTHENTIC_NOW=datetime(2026,10,6,16,24,16,518582,tzinfo=timezone.utc)
+AUTHENTIC_FIRES=[dict(lon=16.479,lat=-16.505,frp=0.84,acq='2026-10-05T01:17:00Z',sat='N'),
+    dict(lon=145.602,lat=-32.297,frp=0.78,acq='2026-10-05T16:35:00Z',sat='N')]
+def authentic_fires(root):
+    envelope=dict(baked_at=iso(AUTHENTIC_NOW-timedelta(minutes=1)),source='NASA FIRMS · VIIRS (Suomi NPP) 24h 活跃火点',
+                  attribution='Active fires: NASA FIRMS · VIIRS (Suomi NPP), public domain',missing_feeds=['NOAA-20','NOAA-21'])
+    rows=[dict(row) for row in AUTHENTIC_FIRES]
+    write(root/'fires.json',{**envelope,'fires':rows})
+    write(root/'overview.json',{**envelope,'fires':[{**row,'count':1} for row in rows]})
+    # Exact native build_progressive bins; independent of controller implementation.
+    for key,row in zip(['19_7','32_5'],rows):write(root/('tiles/'+key+'.json'),{'baked_at':envelope['baked_at'],'fires':[row]})
+    write(root/'index.json',{**envelope,'schemaVersion':1,'cell_deg':10,'overview':'overview.json','tiles':'tiles/',
+          'total':2,'detected_total':2,'overview_rows':2,'cells':{'19_7':1,'32_5':1}})
+
 class AdmissionTests(unittest.TestCase):
     def test_each_family_needs_new_nonempty_real_current_records(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -85,6 +102,48 @@ class AdmissionTests(unittest.TestCase):
                     write(p/'tiles/18_9.json',t)
                 with self.subTest(change=change),self.assertRaises((ValueError,FileNotFoundError)):r.validate_family('fires',p,START,NOW)
                 if (p/'tiles/17_9.json').exists():(p/'tiles/17_9.json').unlink()
+    def test_authentic_older_tail_is_preserved_and_never_counted_as_current(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp);authentic_fires(p);before={f.relative_to(p):f.read_bytes() for f in p.rglob('*.json')}
+            actual=r.validate_family('fires',p,AUTHENTIC_NOW-timedelta(minutes=2),AUTHENTIC_NOW)
+            self.assertEqual(actual['rows'],2);self.assertEqual(actual['currentRecords'],1)
+            self.assertEqual(actual['fireRecords'],{kind:{'retained':2,'current24h':1} for kind in ['legacy','detail','overview']})
+            self.assertEqual(before,{f.relative_to(p):f.read_bytes() for f in p.rglob('*.json')})
+            # The same real timestamps age past24h naturally; a fresh baked_at is insufficient.
+            with self.assertRaisesRegex(ValueError,'no-current-real-record'):
+                r.validate_family('fires',p,AUTHENTIC_NOW-timedelta(minutes=2),AUTHENTIC_NOW+timedelta(minutes=11))
+
+    def test_retained_fire_tail_does_not_hide_future_or_invalid_source_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp)
+            for change,code in [('future-tile','fire-tile-future'),('future-overview','fire-overview-future'),
+                                ('cell','fire-tile-cell'),('satellite','fire-tile-satellite'),('timestamp','')]:
+                authentic_fires(p)
+                path=p/('overview.json' if change=='future-overview' else 'tiles/19_7.json')
+                doc=json.loads(path.read_text())
+                if change.startswith('future'):doc['fires'][0]['acq']=iso(AUTHENTIC_NOW+timedelta(minutes=16))
+                elif change=='cell':doc['fires'][0]['lon']=26.479
+                elif change=='satellite':doc['fires'][0]['sat']=20
+                else:doc['fires'][0]['acq']='not-a-time'
+                write(path,doc)
+                with self.subTest(change=change),self.assertRaisesRegex(ValueError,code):
+                    r.validate_family('fires',p,AUTHENTIC_NOW-timedelta(minutes=2),AUTHENTIC_NOW)
+
+    def test_each_fire_view_requires_current_records_and_refuses_future_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp)
+            for view,filename,stale_code,future_code in [('legacy','fires.json','no-current-real-record','future-record'),
+                    ('detail','tiles/32_5.json','no-current-fire-detail','fire-tile-future'),
+                    ('overview','overview.json','no-current-fire-overview','fire-overview-future')]:
+                for scenario,code in [('all-stale',stale_code),('future',future_code)]:
+                    authentic_fires(p);path=p/filename;doc=json.loads(path.read_text())
+                    if scenario=='all-stale':
+                        for row in doc['fires']:row['acq']=AUTHENTIC_FIRES[0]['acq']
+                    else:doc['fires'][0]['acq']=iso(AUTHENTIC_NOW+timedelta(minutes=16))
+                    write(path,doc)
+                    with self.subTest(view=view,scenario=scenario),self.assertRaisesRegex(ValueError,code):
+                        r.validate_family('fires',p,AUTHENTIC_NOW-timedelta(minutes=2),AUTHENTIC_NOW)
+
     def test_fire_thinning_preserves_detected_counts_and_fixed_rule(self):
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp)
@@ -118,7 +177,8 @@ class AdmissionTests(unittest.TestCase):
                 rows[family]=r.validate_family(family,stage/family,START,NOW)
             receipt['families']=rows
             with patch.object(r,'native_validate') as native:
-                r.validate_all(Path('/none'),stage,receipt,NOW);self.assertEqual(native.call_count,5)
+                current=r.validate_all(Path('/none'),stage,receipt,NOW);self.assertEqual(native.call_count,5)
+                self.assertEqual(current['fires']['fireRecords'],{view:{'retained':1,'current24h':1} for view in ['legacy','detail','overview']})
                 doc=json.loads((stage/'metar/metar.json').read_text());doc['source']='changed';write(stage/'metar/metar.json',doc)
                 with self.assertRaisesRegex(ValueError,'bytes-changed'):r.validate_all(Path('/none'),stage,receipt,NOW)
     def test_collector_subprocess_environment_excludes_writer_keys(self):

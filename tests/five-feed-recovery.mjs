@@ -1,4 +1,5 @@
 import test from 'node:test';
+import * as controller from '../tools/five-feed-recovery.mjs';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
@@ -129,4 +130,35 @@ test('all public bytes on both genuine origins are checked with at most three ac
     await assert.rejects(()=>readPublicAliases(altered,Date.now()+18*60*1000));
     await assert.rejects(()=>readPublicAliases(receipt,Date.now()));
   } finally {globalThis.fetch=original;}
+});
+
+test('fixed cache settling preserves stale-before refusal and exact current-after hashes',async()=>{
+  const originalNow=Date.now,originalTimer=globalThis.setTimeout,originalFetch=globalThis.fetch;
+  let now=Date.parse('2026-10-06T17:00:00Z'),requests=0;const cachedUntil=now+30000,deadline=now+18*60*1000,sleeps=[];
+  const fresh=Buffer.from('fresh'),stale=Buffer.from('stale');
+  const receipt={families:Object.fromEntries(Object.keys(FEEDS).map(f=>[f,{files:[{path:f==='metar'?'metar.json':f==='fires'?'index.json':'stations.json',size:fresh.length,sha256:digest(fresh)}]}]))};
+  Date.now=()=>now;globalThis.setTimeout=(callback,ms)=>{sleeps.push(ms);now+=ms;queueMicrotask(callback);return 1;};
+  globalThis.fetch=async()=>{requests++;return new Response(now<cachedUntil?stale:fresh);};
+  try {
+    await assert.rejects(()=>readPublicAliases(receipt,deadline),/complete-public-alias-readback/);
+    await controller.settleCatalogCache(deadline);
+    assert.deepEqual(sleeps,[31000]);assert.equal(now,cachedUntil+1000);
+    assert.equal((await readPublicAliases(receipt,deadline)).length,10);
+    const count=requests;
+    await assert.rejects(()=>controller.settleCatalogCache(now+31000+9*60*1000),/catalog-cache-settle-budget/);
+    assert.deepEqual(sleeps,[31000]);assert.equal(requests,count);
+  } finally {Date.now=originalNow;globalThis.setTimeout=originalTimer;globalThis.fetch=originalFetch;}
+});
+
+test('cache settling refuses elapsed deadline and main keeps acknowledgement and successor before aliases',async()=>{
+  const originalNow=Date.now,originalTimer=globalThis.setTimeout;let now=1000000;
+  Date.now=()=>now;globalThis.setTimeout=(callback,ms)=>{assert.equal(ms,31000);now+=30*60*1000;queueMicrotask(callback);return 1;};
+  try {await assert.rejects(()=>controller.settleCatalogCache(now+18*60*1000),/catalog-cache-settle-budget/);}
+  finally {Date.now=originalNow;globalThis.setTimeout=originalTimer;}
+  const helper=readFileSync(new URL('../tools/five-feed-recovery.mjs',import.meta.url),'utf8');
+  const readback=helper.slice(helper.indexOf("fail(existsSync(join(work,'promotion-intent.json'))"));
+  assert.match(readback,/existsSync\(join\(work,'promotion-result.json'\)\)/);
+  assert.ok(readback.indexOf('verifySuccessor(')<readback.indexOf('await settleCatalogCache('));
+  assert.ok(readback.indexOf('await settleCatalogCache(')<readback.indexOf('await readPublicAliases('));
+  assert.match(readback,/catalog-changed-during-readback/);
 });

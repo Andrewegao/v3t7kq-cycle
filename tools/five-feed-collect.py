@@ -141,10 +141,12 @@ def validate_family(family, root, started, now):
                     and math.isfinite(row[k]) for k in ("lat", "lon", "frp")) and row["frp"] >= 0,
                     "fire-tile-record")
                 require(-90 <= row["lat"] <= 90 and -180 <= row["lon"] <= 180, "fire-tile-coordinate")
-                current_tiles += age_minutes(row.get("acq"), now) <= 1440
                 cell = f"{min(35, max(0, math.floor((row['lon'] + 180) / 10)))}_{min(17, max(0, math.floor((row['lat'] + 90) / 10)))}"
-                require(cell == key and -15 <= age_minutes(row.get("acq"), now) <= 2160
-                        and isinstance(row.get("sat"), str), "fire-tile-source-age")
+                require(cell == key, "fire-tile-cell")
+                require(isinstance(row.get("sat"), str), "fire-tile-satellite")
+                acquisition_age = age_minutes(row.get("acq"), now)
+                require(acquisition_age >= -15, "fire-tile-future")
+                current_tiles += acquisition_age <= 1440
             receipt = thinned.get("cells", {}).get(key)
             require(tile.get("thinned") == receipt, "fire-tile-thinning-receipt")
             if receipt:
@@ -172,11 +174,12 @@ def validate_family(family, root, started, now):
                     and thinned["overview"]["detected"] >= len(overview_rows) and thinned["overview"].get("rule") == THIN_RULE, "fire-overview-thinning-count")
         current_overview = 0
         for row in overview_rows:
-            current_overview += age_minutes(row.get("acq"), now) <= 1440
             require(all(isinstance(row.get(k), (int, float)) and not isinstance(row[k], bool)
                     and math.isfinite(row[k]) for k in ("lat", "lon", "frp")) and row["frp"] >= 0
-                    and -90 <= row["lat"] <= 90 and -180 <= row["lon"] <= 180
-                    and -15 <= age_minutes(row.get("acq"), now) <= 2160, "fire-overview-record")
+                    and -90 <= row["lat"] <= 90 and -180 <= row["lon"] <= 180, "fire-overview-record")
+            acquisition_age = age_minutes(row.get("acq"), now)
+            require(acquisition_age >= -15, "fire-overview-future")
+            current_overview += acquisition_age <= 1440
             require(type(row.get("count")) is int and row["count"] > 0, "fire-overview-count")
         require(current_overview > 0, "no-current-fire-overview")
         overview_total = sum(row["count"] for row in overview_rows)
@@ -186,9 +189,14 @@ def validate_family(family, root, started, now):
         expected |= {"index.json", "overview.json"}
     files = inventory(root)
     require({r["path"] for r in files} == expected, "unexpected-or-missing-mount-file")
-    return dict(family=family, componentId="obs-" + family, mount="data-atmos/" + FAMILIES[family][0],
+    result = dict(family=family, componentId="obs-" + family, mount="data-atmos/" + FAMILIES[family][0],
                 generationTime=doc["baked_at"], rows=len(rows), currentRecords=fresh,
                 currentReadings=fresh_readings if family == "openaq" else None, missingFeeds=missing, files=files)
+    if family == "fires":
+        result["fireRecords"] = {"legacy": dict(retained=len(rows), current24h=fresh),
+                                 "detail": dict(retained=total, current24h=current_tiles),
+                                 "overview": dict(retained=len(overview_rows), current24h=current_overview)}
+    return result
 
 
 def native_validate(atmos, family, path, env):
@@ -208,6 +216,8 @@ def validate_all(atmos, stage, receipt, now=None):
         actual = validate_family(family, root, stamp(receipt["startedAt"]), now)
         require(actual["files"] == expected["files"] and actual["generationTime"] == expected["generationTime"], "collected-bytes-changed")
         current[family] = dict(rows=actual["rows"], currentRecords=actual["currentRecords"], currentReadings=actual["currentReadings"], missingFeeds=actual["missingFeeds"])
+        if family == "fires":
+            current[family]["fireRecords"] = actual["fireRecords"]
     return current
 
 

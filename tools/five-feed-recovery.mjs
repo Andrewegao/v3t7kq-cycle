@@ -182,6 +182,17 @@ function baseEnv() {
   return Object.fromEntries(Object.entries(process.env).filter(([k])=>['PATH','HOME','TMPDIR'].includes(k)));
 }
 
+export const CATALOG_CACHE_SETTLE_MS = 31_000;
+export async function settleCatalogCache(publicationDeadline) {
+  // The accepted reader caches a normal catalog pointer for30s independently of mutation.
+  // Retain the existing eight-minute hash-readback budget and one-minute final-state reserve.
+  const readbackReserve=9*60*1000;
+  fail(Number.isSafeInteger(publicationDeadline) &&
+    publicationDeadline>Date.now()+CATALOG_CACHE_SETTLE_MS+readbackReserve,'catalog-cache-settle-budget');
+  await new Promise(resolve=>setTimeout(resolve,CATALOG_CACHE_SETTLE_MS));
+  fail(publicationDeadline>Date.now()+readbackReserve,'catalog-cache-settle-budget');
+}
+
 export async function readPublicAliases(receipt,publicationDeadline) {
   const publicObjects=[];
   const jobs=[];
@@ -254,7 +265,7 @@ export async function main(argv) {
     const promotionBaseline=refreshBaseline(baseline,snapshot(),load(join(work,'stage-baseline.json')));
     verifyCollected(atmos,stage);
     const publicationDeadline=Number(process.env.FIVE_FEED_PUBLICATION_DEADLINE_MS);
-    fail(Number.isSafeInteger(publicationDeadline) && publicationDeadline>Date.now()+11*60*1000 &&
+    fail(Number.isSafeInteger(publicationDeadline) && publicationDeadline>Date.now()+11*60*1000+CATALOG_CACHE_SETTLE_MS &&
       publicationDeadline<=Date.now()+18*60*1000,'readback-budget-required-before-promotion');
     save(join(work,'promotion-baseline.json'),promotionBaseline);
     save(join(work,'promotion-intent.json'),{operation:'promote-set',candidates,sourceSha:SOURCE,
@@ -271,10 +282,11 @@ export async function main(argv) {
     save(join(work,'public-promotion-result.json'),{schemaVersion:1,status:'request-completed',sourceSha:SOURCE,
       runId:process.env.GITHUB_RUN_ID,runAttempt:Number(process.env.GITHUB_RUN_ATTEMPT)});return;
   }
-  fail(existsSync(join(work,'promotion-intent.json')),'recorded-promotion-required');
+  fail(existsSync(join(work,'promotion-intent.json')) && existsSync(join(work,'promotion-result.json')),'acknowledged-promotion-required');
   const promotionBaseline=load(join(work,'promotion-baseline.json'));
   const after=snapshot();assert.deepEqual(after.releasePointer,promotionBaseline.releasePointer,'whole-release-pointer-changed');
   verifySuccessor({...promotionBaseline.catalog,catalogId:promotionBaseline.pointer.catalogId},after.catalog,candidates);
+  await settleCatalogCache(Number(process.env.FIVE_FEED_PUBLICATION_DEADLINE_MS));
   const publicObjects=await readPublicAliases(receipt,Number(process.env.FIVE_FEED_PUBLICATION_DEADLINE_MS));
   const qualified=verifyCollected(atmos,stage);const final=snapshot(false);assert.deepEqual(final,after,'catalog-changed-during-readback');
   save(join(work,'acceptance.json'),{schemaVersion:1,status:'passed',sourceSha:SOURCE,runId:process.env.GITHUB_RUN_ID,
