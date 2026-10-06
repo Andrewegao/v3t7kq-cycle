@@ -227,6 +227,22 @@ test('fatal diagnostics retain stage, original checkpoint line and exact fixed r
  ({route:async()=>{}},{on:()=>{}},{on:(event,handler)=>{monitors[event]=handler;}},
   {log:row=>logs.push(JSON.parse(row.slice(20)))},TARGETS.staging);
  stage('baseline-capture',236);
+ const captureErrors=[
+  ['wind capture timed out','wind-capture-timeout'],
+  ['wind capture intent changed','wind-capture-intent-changed'],
+  ['wind capture intent unavailable','wind-capture-intent-unavailable'],
+  ['invalid wind capture deadline','wind-capture-deadline-invalid'],
+  ['unsupported Deck wind domain','wind-deck-domain-unsupported'],
+  ['Deck draw source differs from capture source','wind-deck-draw-source-mismatch'],
+ ];
+ const captureCases=captureErrors.flatMap(([message,code])=>[
+  [message,code],
+  ['page.evaluate: Error: '+message+'\n    at private (https://private.test/source.js?secret=value:4:8)',code],
+  [message+' private-value',null],
+  ['private-prefix '+message,null],
+  ['page.evaluate: Error: '+message+' private-value',null],
+  ['private-prefix page.evaluate: Error: '+message,null],
+ ]);
  for(const [message,code] of [
   ['unsupported or fractional Deck wind proof','wind-deck-unsupported-or-fractional'],
   ['page.evaluate: Error: Deck inputs are hidden, stale, mixed, or unbound\n    at private (https://private.test/source.js?secret=value:4:8)','wind-deck-inputs-unproven'],
@@ -236,6 +252,7 @@ test('fatal diagnostics retain stage, original checkpoint line and exact fixed r
   ['unknown secret https://private.test?token=value',null],
   ['Deck inputs are hidden, stale, mixed, or unbound private-value',null],
   ['private-prefix Deck inputs are hidden, stale, mixed, or unbound',null],
+  ...captureCases,
  ]){
   const error={name:'Error',message,stack:'private source code https://private.test?secret=value'};
   monitors.uncaughtExceptionMonitor(error);
