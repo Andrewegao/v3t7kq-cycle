@@ -30,6 +30,9 @@ test('routes only the exact successful staging attempt with its armed profile',(
 });
 test('a re-run, staging-only profile or different armed profile is skipped, never substituted',()=>{
   assert.equal(autoRouteRun(env(),run({run_attempt:3}),artifacts(3)).promote,false);
+  // A re-run still in progress (or already failed) supersedes the routed attempt: skip, never fail red.
+  for(const change of [{status:'in_progress',conclusion:null},{status:'queued',conclusion:null},{status:'completed',conclusion:'failure'}])
+    assert.equal(autoRouteRun(env(),run({run_attempt:3,...change}),artifacts(2)).promote,false,JSON.stringify(change));
   const route=autoRouteRun(env(),run(),artifacts());
   assert.equal(autoRouteSummary(route,summary({releaseProfile:null}),env().UI_AUTO_PROMOTE_PROFILE).promote,false);
   assert.equal(autoRouteSummary(route,summary({releaseProfile:'none'}),env().UI_AUTO_PROMOTE_PROFILE).promote,false);
@@ -70,6 +73,13 @@ test('promotion re-audits the routed attempt and keeps every existing guard',()=
     "STAGING_RUN_ID: ${{ github.event.workflow_run.id }}","STAGING_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}",
     'run: node cycle/tools/ui-release.mjs resolve-auto'])
     assert.ok(release.includes(line),line);
+  // The approver sees the source, profile and staging run/attempt for either entry point.
+  const runName=release.match(/^run-name: (.+)$/m)?.[1]??'';
+  for(const part of ['github.event.workflow_run.display_title','vars.UI_AUTO_PROMOTE_PROFILE','github.event.workflow_run.id',
+    'github.event.workflow_run.run_attempt','inputs.atmos_sha','inputs.release_profile','inputs.staging_run_id'])
+    assert.ok(runName.includes(part),part);
+  assert.doesNotMatch(release,/never follows master implicitly/);
+  assert.match(release,/master push -> staging qualification ->\n# a production promotion pending ui-production approval is the intended flow/);
 });
 
 test('omitted staging selection qualifies the armed profile, else approved; explicit values unchanged',()=>{

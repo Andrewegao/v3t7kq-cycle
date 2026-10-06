@@ -170,8 +170,10 @@ export function autoRouteRun(env, run, artifacts) {
   assert.match(id ?? '', RUN_NUMBER); assert.match(attempt ?? '', RUN_NUMBER);
   assert.equal(String(run.id), id); assert.equal(run.repository?.full_name, REPOSITORY);
   assert.equal(run.path, '.github/workflows/ui-staging.yml'); assert.equal(run.event, 'workflow_dispatch');
-  assert.equal(run.head_branch, 'main'); assert.equal(run.status, 'completed'); assert.equal(run.conclusion, 'success');
+  assert.equal(run.head_branch, 'main');
+  // Before status: a re-run already in progress is a superseded route to skip, not a failure.
   if (String(run.run_attempt) !== attempt) return { promote: false, reason: `staging run ${id} has a newer attempt ${run.run_attempt}` };
+  assert.equal(run.status, 'completed'); assert.equal(run.conclusion, 'success');
   const source = /^Staging ([a-f0-9]{40})$/.exec(run.display_title ?? '');
   assert.ok(source, 'unattributed staging run');
   assert.ok(Array.isArray(artifacts) && artifacts.length <= 100);

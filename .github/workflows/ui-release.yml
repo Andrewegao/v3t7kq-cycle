@@ -1,9 +1,12 @@
-# Exact-artifact promotion. Never builds Atmos and never follows master implicitly.
-# Entry points: manual dispatch, or (owner decision C) the successful completion of a
-# staging qualification run, but only while the owner has armed automatic promotion.
-# Both paths pass the same activation/freeze gate, the protected ui-production
-# environment, the exact-attempt artifact audit and the release guard's rollback + fuse.
+# Exact-artifact promotion. Never builds Atmos. Entry points: manual dispatch, or (owner
+# decision C) the successful completion of a staging qualification run while the owner has
+# armed automatic promotion. When armed, an Atmos master push -> staging qualification ->
+# a production promotion pending ui-production approval is the intended flow. Both paths
+# pass the same activation/freeze gate, the protected ui-production environment, the
+# exact-attempt artifact audit and the release guard's rollback + fuse.
 name: WeatherX UI production promotion
+# Shown to the ui-production approver: what source and profile this run would promote.
+run-name: ${{ github.event_name == 'workflow_run' && format('Promote {0} as {1} (auto, staging run {2} attempt {3})', github.event.workflow_run.display_title, vars.UI_AUTO_PROMOTE_PROFILE, github.event.workflow_run.id, github.event.workflow_run.run_attempt) || format('Promote Staging {0} as {1} (manual, staging run {2})', inputs.atmos_sha, inputs.release_profile, inputs.staging_run_id) }}
 on:
   workflow_dispatch:
     inputs:
