@@ -228,6 +228,11 @@ def one_step(job, name):
     return rows[0]
 
 
+# GitHub's documented workflow-run statuses (non-terminal and terminal). The
+# aggregate conclusion is deliberately not read; the collector job's is.
+RUN_STATUSES = frozenset(("requested", "queued", "waiting", "pending", "in_progress", "completed"))
+
+
 def exact_run(client, run_id, attempt, controller_sha, workflow=WORKFLOW):
     try:
         run = client.json(f"/actions/runs/{run_id}")
@@ -236,10 +241,13 @@ def exact_run(client, run_id, attempt, controller_sha, workflow=WORKFLOW):
     require(run.get("id") == int(run_id) and run.get("run_attempt") == attempt
             and run.get("head_sha") == controller_sha and run.get("path") == workflow
             and run.get("event") in ("schedule", "workflow_dispatch")
-            # GitHub reports the whole run as pending while other per-model
-            # concurrency groups wait, even after this collector completed.
-            # Authority still requires this exact producer job and upload below.
-            and run.get("status") in ("pending", "in_progress", "completed")
+            # The aggregate run status says nothing about this collector: GitHub
+            # reports pending/queued while other per-model concurrency groups
+            # wait and waiting while another job sits at an environment gate,
+            # even after this collector completed. Accept only GitHub's
+            # documented run statuses; authority still requires this exact
+            # producer job (completed + success) and upload below.
+            and run.get("status") in RUN_STATUSES
             and run.get("repository", {}).get("id") == REPO_ID
             and run.get("repository", {}).get("full_name") == REPO
             and run.get("head_repository", {}).get("id") == REPO_ID

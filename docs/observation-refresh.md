@@ -49,3 +49,20 @@ Moving the pin always requires these protected values to change at the same time
 - Repository variable `OBSERVATION_REFRESH_ENABLED=true` turns the schedule on; any other value reports SKIPPED.
 - The `production` environment currently has only a protected-branch policy (no required reviewers, no wait timer), so scheduled runs do not wait for approval. If reviewers are ever added, every scheduled run will wait for approval while holding this lane's lock; exempt the schedule or approve runs. Nothing in this repository bypasses an approval.
 - GitHub may delay or drop scheduled events. Only a real run proves timing; the external scheduler can dispatch this workflow in a later, separately reviewed change.
+
+## Owner actions (2026-10-06)
+
+Live audit at about 23:00 UTC. Until 2026-10-06 the model publishers' handoff (`tools/current-model-artifact.py`) accepted only the run statuses `pending`, `in_progress` and `completed`. Bake run `37521254217` sat in `waiting` because its `regional (nam-hi)` collector was held at the production gate, so every publisher that started afterwards refused `collector-run-provenance`: ICON 12z (20:03), AROME-Antilles 12z (19:52), HRRR-AK 18z (19:55), AIFS and NAM. This branch accepts GitHub's documented run statuses (`requested`, `queued`, `waiting`, `pending`, `in_progress`, `completed`); run id, attempt, head SHA, workflow path, event, repository and the collector job's own `completed`/`success` stay exactly as strict.
+
+Runs to cancel (the owner cancels; nothing here cancels, approves or dispatches):
+
+| Run | Workflow | Stuck job | Waiting since |
+| --- | --- | --- | --- |
+| `37478458131` | `bake.yml` | `publish-ecmwf` at the production gate | 2026-10-06 14:46Z |
+| `36762426044` | `catalog-bake.yml` | `model (hrrr)` | 2026-09-30 18:58Z |
+| `37516521961` | `catalog-bake.yml` | `model (gfs)` | 2026-10-06 19:07Z |
+| `37521254217` | `bake.yml` (schedule) | `regional (nam-hi)` collector; `nam-ak` publisher | 19:44Z; 19:47Z (2026-10-06) |
+| `34748974221` | `catalog-bake.yml` | zombie run, `queued` | 2026-09-13 09:07Z |
+| `34673546279` | `scheduler-deploy.yml` | zombie run, `queued` | 2026-09-12 04:38Z |
+
+The one-shot manual five-feed recovery (`five-feed-recovery.yml`) can run today from main, which pins Atmos `5e68af94c24517eaaaf6a9d25aec0cadc3d9b135`; the `production` variable `CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA` already matches that pin. Move that variable to `18fb5074d7472ffc5549704c0874f6e35516cef5` only when #386 merges (see [Source pin](#source-pin)); moving it earlier makes main's recovery and publishers refuse.

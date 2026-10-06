@@ -197,6 +197,65 @@ class CurrentModelArtifactTests(unittest.TestCase):
         self.assertEqual((job["id"], artifact["id"]), (1234, 5678))
         self.assertIn(f"/attempts/{ATTEMPT}/jobs", client.suffixes[1])
 
+    def test_gate_held_waiting_aggregate_passes_when_everything_else_matches(self):
+        # Live 2026-10-06: bake run37521254217 sat in `waiting` because its
+        # regional (nam-hi) collector was held at the production gate, and every
+        # later publisher refused collector-run-provenance for a status string.
+        for status in ("requested", "queued", "waiting", "pending", "in_progress", "completed"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                run, jobs, artifacts = metadata()
+                run["status"], run["conclusion"] = status, None
+                self.assertEqual(subject.exact_run(Client([run]), RUN_ID, ATTEMPT, CONTROLLER), run)
+                client = Client([run, jobs, artifacts], core_archive())
+                with patch.object(subject, "assert_clean_checkout"):
+                    handoff = subject.transfer(args(Path(directory)), client, NOW)
+                self.assertEqual((handoff["origin"]["runId"], handoff["origin"]["jobId"]), (RUN_ID, 1234))
+
+    def test_waiting_aggregate_keeps_every_other_run_assertion_strict(self):
+        for key, value in (("id", int(RUN_ID) + 1), ("run_attempt", 1), ("head_sha", "e" * 40),
+                           ("path", ".github/workflows/other.yml"), ("event", "push"),
+                           ("event", "workflow_run"),
+                           ("repository", {"id": subject.REPO_ID + 1, "full_name": subject.REPO}),
+                           ("repository", {"id": subject.REPO_ID, "full_name": "fork/cycle"}),
+                           ("head_repository", {"id": subject.REPO_ID + 1, "full_name": subject.REPO}),
+                           ("head_repository", {"id": subject.REPO_ID, "full_name": "fork/cycle"})):
+            run, _, _ = metadata()
+            run["status"] = "waiting"
+            run[key] = value
+            with self.subTest(key=key, value=value), \
+                    self.assertRaisesRegex(subject.Refusal, "collector-run-provenance"):
+                subject.exact_run(Client([run]), RUN_ID, ATTEMPT, CONTROLLER)
+
+    def test_unknown_or_missing_run_status_still_refuses(self):
+        for status in ("cancelled_by_owner", "", None, "WAITING", "cancelled", "failure", " waiting", 0):
+            run, _, _ = metadata()
+            run["status"] = status
+            with self.subTest(status=status), \
+                    self.assertRaisesRegex(subject.Refusal, "collector-run-provenance"):
+                subject.exact_run(Client([run]), RUN_ID, ATTEMPT, CONTROLLER)
+        run, _, _ = metadata()
+        del run["status"]
+        with self.assertRaisesRegex(subject.Refusal, "collector-run-provenance"):
+            subject.exact_run(Client([run]), RUN_ID, ATTEMPT, CONTROLLER)
+
+    def test_failed_collector_still_withholds_under_any_accepted_aggregate(self):
+        # Widening the aggregate status never widens the collector: a completed
+        # job with failure (or a gate-held job) is withheld exactly as before,
+        # and no artifact is read.
+        for status in ("waiting", "completed"):
+            for job_status, conclusion in (("completed", "failure"), ("completed", "cancelled"),
+                                           ("waiting", None), ("in_progress", None)):
+                with self.subTest(run=status, job=job_status, conclusion=conclusion), \
+                        tempfile.TemporaryDirectory() as directory:
+                    run, jobs, artifacts = metadata(overall="failure")
+                    run["status"] = status
+                    jobs["jobs"][0].update(status=job_status, conclusion=conclusion)
+                    client = Client([run, jobs, artifacts], core_archive())
+                    with patch.object(subject, "assert_clean_checkout"), \
+                            self.assertRaisesRegex(subject.Withheld, "collector-job-not-successful"):
+                        subject.transfer(args(Path(directory)), client, NOW)
+                    self.assertEqual(len(client.suffixes), 2)
+
     def test_publisher_retry_reuses_the_prior_successful_collector_without_recollection(self):
         _, jobs, artifacts = metadata()
         jobs['jobs'][0]['run_attempt'] = 1
