@@ -4,8 +4,14 @@ import {createHash,randomUUID} from 'node:crypto';
 import {execFileSync,spawn} from 'node:child_process';
 import {readFileSync,writeFileSync,mkdirSync,lstatSync,unlinkSync} from 'node:fs';
 import {resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {PUBLIC_COMBINED_ATMOS_SHA} from './ui-public-combined.mjs';
-import {FILES,addDiagnostics,filterLine,diagnosticFailure} from './ui-layer-diagnostics.mjs';
+import {addDiagnostics,filterLine,diagnosticFailure} from './ui-layer-diagnostics.mjs';
+// Current release admission is independent of the historical diagnostics target.
+export const RELEASE_LAYER_FILES=Object.freeze({
+ 'app/e2e/layer-switch-tint.mjs':'d686f763ce892d2b6288c8caafa0924bf0bef6328847ad3806bd0f395b8e632b',
+ 'app/e2e/layer-switch-surface.mjs':'3e6244dc1df4529174cf8e5a65668706f542931d685169d54b88c71c34f8fbe4',
+});
 const ORIGINS=Object.freeze({staging:'https://staging.weatherx.org',production:'https://weatherx.org'});
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 export function layerGuardContext(context){
@@ -26,10 +32,17 @@ export function layerGuardSource(root,sourceSha){
  assert.equal(sourceSha,PUBLIC_COMBINED_ATMOS_SHA);
  assert.equal(execFileSync('git',['-C',root,'rev-parse','HEAD'],{encoding:'utf8',stdio:'pipe'}).trim(),sourceSha);
  execFileSync('git',['-C',root,'diff','--exit-code','HEAD'],{stdio:'pipe'});
- for(const [path,expected]of Object.entries(FILES)){
+ const hashes={};
+ for(const path of Object.keys(RELEASE_LAYER_FILES)){
   assert.ok(lstatSync(resolve(root,path)).isFile());
-  assert.equal(hash(readFileSync(resolve(root,path))),expected,'layer guard controller hash mismatch');
+  hashes[path]=hash(readFileSync(resolve(root,path)));
  }
+ layerGuardSourceHashes(hashes);
+}
+export function layerGuardSourceHashes(hashes){
+ assert.deepEqual(Object.keys(hashes).sort(),Object.keys(RELEASE_LAYER_FILES).sort(),'layer guard source inventory mismatch');
+ for(const [path,expected]of Object.entries(RELEASE_LAYER_FILES))
+  assert.equal(hashes[path],expected,'layer guard controller hash mismatch');
 }
 export function layerGuardChildEnvironment(env,base){
  assert.ok(Object.values(ORIGINS).includes(base));
@@ -115,4 +128,11 @@ export async function runReleaseLayerGuard(context){
  }
  assert.equal(result.ok,true,`release layer proof failed: ${result.failure}`);
  return result;
+}
+// Cheap source-only admission before build work; never fetches an origin or launches a browser.
+if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
+ assert.equal(process.argv[2],'source','unsupported layer guard command');
+ assert.equal(process.argv.length,5,'source command requires checkout and exact SHA');
+ layerGuardSource(resolve(process.argv[3]),process.argv[4]);
+ console.log(JSON.stringify({sourceSha:process.argv[4],files:RELEASE_LAYER_FILES,sourceAdmission:true,browserExecuted:false}));
 }

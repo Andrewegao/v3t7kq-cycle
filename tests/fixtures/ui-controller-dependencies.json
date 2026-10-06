@@ -119,7 +119,11 @@
         "pixelmatch",
         "playwright",
         "pngjs"
-      ]
+      ],
+      "releaseLayerFiles": {
+        "app/e2e/layer-switch-tint.mjs": "d686f763ce892d2b6288c8caafa0924bf0bef6328847ad3806bd0f395b8e632b",
+        "app/e2e/layer-switch-surface.mjs": "3e6244dc1df4529174cf8e5a65668706f542931d685169d54b88c71c34f8fbe4"
+      }
     }
   ],
   "stagingBuild": {

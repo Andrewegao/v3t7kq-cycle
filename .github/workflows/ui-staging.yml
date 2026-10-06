@@ -170,6 +170,9 @@ jobs:
           else
             test "$ATMOS_SHA" = "$(git rev-parse origin/master)"
           fi
+      - name: verify combined-profile layer harness source before dependency install
+        if: ${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2' }}
+        run: node cycle/tools/ui-release-layer-guard.mjs source "${{ github.workspace }}/atmos" "$ATMOS_SHA"
       - name: install locked dependencies and browsers
         run: |
           python3.11 -m pip install pillow
