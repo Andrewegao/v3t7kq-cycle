@@ -23,6 +23,7 @@ RUN_ID = "33999999999"
 ATTEMPT = 2
 CONTROLLER = "a" * 40
 SOURCE = "b" * 40
+DECLARED_SOURCE = json.loads((Path(__file__).resolve().parents[1] / "ops/atmos-production-source.json").read_text())["atmosSha"]
 
 
 def zip_bytes(entries):
@@ -160,13 +161,13 @@ class CurrentModelArtifactTests(unittest.TestCase):
             subject.atmos_refs(workflow.replace("ref: " + SOURCE, "ref: main", 1))
 
     def test_versioned_reusable_workflow_closure_is_exact(self):
-        pinned = "5e68af94c24517eaaaf6a9d25aec0cadc3d9b135"
+        pinned = DECLARED_SOURCE
         subject.verify_workflow_closure(pinned)
         with self.assertRaisesRegex(subject.Refusal, "source-mismatch"):
             subject.verify_workflow_closure("0" * 40)
 
     def test_each_reusable_source_ref_is_required_once_and_cannot_drift(self):
-        pinned = "5e68af94c24517eaaaf6a9d25aec0cadc3d9b135"
+        pinned = DECLARED_SOURCE
         documents = {name: (subject.REPO_ROOT / name).read_text() for name in subject.WORKFLOW_CLOSURE}
         for name in subject.WORKFLOW_CLOSURE:
             for defect in ("drift", "missing", "duplicate"):

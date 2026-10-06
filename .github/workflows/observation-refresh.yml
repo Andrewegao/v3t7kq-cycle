@@ -1,19 +1,46 @@
-# Manual recovery of all five observation and fire components (all five or nothing). Its recover
-# job is the observation lane's refresh job with FIVE_FEED_MODE recovery; tests/five-feed-recovery.mjs
-# keeps the two byte-identical apart from that mode and the schedule gate.
-name: Recover five observation and fire components
-run-name: 'observations: manual five-family recovery (all five or nothing)'
+# Observation and fire component lane. It never waits for, or depends on, any model collector:
+# METAR, SYNOP, buoys, OpenAQ and FIRMS fires refresh here on their own schedule, through the
+# five-feed controller's exact producer admission, immutable staging, one CAS promote-set and
+# public hash readback. Scheduled runs publish each admitted family on its own and turn red when
+# any family is refused. five-feed-recovery.yml runs this same refresh job (kept byte-identical
+# apart from its mode, checked by tests/five-feed-recovery.mjs) with the all-five contract.
+name: Refresh observation and fire components
+run-name: "${{ github.event_name == 'schedule' && 'observations: scheduled refresh of METAR, SYNOP, buoys, OpenAQ and fires' || 'observations: manually started refresh of METAR, SYNOP, buoys, OpenAQ and fires' }}"
 permissions:
   contents: read
 on:
+  schedule:
+    # Every 30 minutes, offset from the component bake (8-59/10 and :07), the archive (:23),
+    # the external Wind100 dispatch (:35) and the whole bake (:30 at 02, 08, 14 and 20 UTC).
+    - cron: '14,44 * * * *'
   workflow_dispatch:
-    inputs:
-      confirmation:
-        description: Enter RECOVER FIVE OBSERVATION FEEDS after reviewing the exact source and operation
-        type: string
-        required: true
 jobs:
-  recover:
+  plan:
+    # No environment and no lock: a disabled schedule is reported as skipped, never as a refresh.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+    steps:
+      - name: Decide whether this run refreshes observations
+        id: plan
+        env:
+          ENABLED: ${{ vars.OBSERVATION_REFRESH_ENABLED }}
+        run: |
+          if [ "$ENABLED" != true ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Observation refresh: SKIPPED"
+              echo
+              echo "Nothing was refreshed. The repository variable OBSERVATION_REFRESH_ENABLED is not \`true\`;"
+              echo "METAR, SYNOP, buoys, OpenAQ and fires keep their previously published data."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+  refresh:
+    needs: plan
+    if: ${{ needs.plan.outputs.run == 'true' }}
     environment: production
     # Every obs-* component writer (this lane and five-feed-recovery.yml) shares this lock.
     # It is deliberately not weatherx-data-maintenance: GitHub keeps one pending job per group,
@@ -29,7 +56,7 @@ jobs:
       ATMOS_SHA: 18fb5074d7472ffc5549704c0874f6e35516cef5
       APPROVED_SHA: ${{ vars.CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA }}
       CATALOG_ENDPOINT: https://weatherx.org/api/platform/internal/catalog
-      FIVE_FEED_MODE: recovery
+      FIVE_FEED_MODE: scheduled
     steps:
       - name: Require main, an admitted caller and the approved production source before credentials
         id: source

@@ -360,8 +360,12 @@ test('bake staging-only pilot can start only the fresh ECMWF collector and recur
     'publish-ecmwf', 'publish-gfs', 'publish-hrrr', 'publish-aifs',
     'publish-icon', 'publish-hrdps', 'publish-arome-antilles', 'publish-hrrr-ak',
     'publish-nam', 'publish-nam-hi', 'publish-nam-ak',
-    'component-publish-status', 'bake', 'model-status',
+    'component-publish-status', 'bake', 'model-status', 'run-summary',
   ]);
+  // The run summary must also run in a staging-only pilot (to say maintenance was skipped); it
+  // is reporting-only: no secrets, environment, lock, reusable workflow or write permission.
+  assert.doesNotMatch(jobs['run-summary'], /secrets\.|environment:|concurrency:|uses: \.\/|: write/);
+  assert.match(jobs['run-summary'], /^    if: \$\{\{ always\(\) \}\}$/m);
   assert.match(jobs['core-ecmwf'], /inputs\.staging_wind100_only == true && github\.event_name == 'workflow_dispatch' && inputs\.model == 'ecmwf' && inputs\.recovery_run_id == ''/);
   assert.match(jobs['core-ecmwf'], /inputs\.staging_wind100_only != true && \(inputs\.model == '' \|\| inputs\.model == 'all' \|\| inputs\.model == 'ecmwf'\)/);
   assert.match(jobs['staging-wind100'], /needs\.core-ecmwf\.result == 'success'/);
@@ -370,7 +374,7 @@ test('bake staging-only pilot can start only the fresh ECMWF collector and recur
   assert.doesNotMatch(jobs['staging-wind100'], /secrets: inherit/);
   assert.doesNotMatch(jobs['staging-wind100'], /R2_PRODUCTION|CATALOG_ENDPOINT_PRODUCTION|CATALOG_PROMOTION_KEY_PRODUCTION/);
   for (const [name, block] of Object.entries(jobs)) {
-    if (name === 'core-ecmwf' || name === 'staging-wind100') continue;
+    if (name === 'core-ecmwf' || name === 'staging-wind100' || name === 'run-summary') continue;
     assert.match(block, /^    if: \$\{\{ inputs\.staging_wind100_only != true && \(/m,
       `${name} can start during a staging-only pilot`);
   }
@@ -713,7 +717,7 @@ test('synthetic pack layout matches the pinned producer bytes apart from gzip OS
 test('policy fixes one reviewed ECMWF source, exact semantics and dependency closure', () => {
   const policy = readPolicy();
   assert.equal(policy.sourceSha, SOURCE_SHA);
-  assert.equal(policy.coreSourceSha, '5e68af94c24517eaaaf6a9d25aec0cadc3d9b135');
+  assert.equal(policy.coreSourceSha, JSON.parse(readFileSync(new URL('../ops/atmos-production-source.json', import.meta.url), 'utf8')).atmosSha);
   assert.equal(policy.sourceClosure['ops/bake-model-component.sh'],
     '22edd3ddb42a094fe1816ef0ed50557e5329ab6e7efddf1393537a8e63486aec');
   assert.equal(policy.recurringPublicationMode, 'point-only-recurring-v1');

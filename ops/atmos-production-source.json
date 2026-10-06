@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "atmosSha": "18fb5074d7472ffc5549704c0874f6e35516cef5",
+  "atmosSubject": "weatherx-hq/atmos master merge of PR #489 (seal the reviewed GFS point horizon with its map run), 2026-10-06",
+  "approvalVariables": {
+    "production/CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA": "atmosSha"
+  },
+  "pins": [
+    {"path": ".github/workflows/bake.yml", "occurrences": 3},
+    {"path": ".github/workflows/collect-core-model.yml", "occurrences": 2},
+    {"path": ".github/workflows/collect-regional-model.yml", "occurrences": 2},
+    {"path": ".github/workflows/publish-current-model-production.yml", "occurrences": 2},
+    {"path": ".github/workflows/observation-refresh.yml", "occurrences": 2},
+    {"path": ".github/workflows/five-feed-recovery.yml", "occurrences": 2},
+    {"path": ".github/workflows/staging-wind100-recurring.yml", "occurrences": 2},
+    {"path": ".github/workflows/production-wind100-recurring.yml", "occurrences": 2},
+    {"path": "tools/staging-wind100-policy.json", "occurrences": 1},
+    {"path": "tools/production-wind100-policy.json", "occurrences": 1}
+  ]
+}

@@ -214,7 +214,8 @@ test('summary keeps each model outcome independent',()=>{
 test('aggregate cost receipts are optional and retained only after successful production publication',()=>{
   for(const source of [publisher,catalog]){
     assert.equal((source.match(/POINT_COMPONENT_PUBLISH_METRICS_FILE:/g)||[]).length,1);
-    const receipt=source.split('      - name: retain aggregate point costs only after successful')[1].split('\n      - name:')[0];
+    // The step ends at the next step or the next job (catalog-bake now ends with a summary job).
+    const receipt=source.split('      - name: retain aggregate point costs only after successful')[1].split('\n      - name:')[0].split(/\n  [a-z][a-z0-9-]*:\n/)[0];
     assert.ok(receipt);
     assert.match(receipt,/continue-on-error: true/);
     assert.match(receipt,/actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/);

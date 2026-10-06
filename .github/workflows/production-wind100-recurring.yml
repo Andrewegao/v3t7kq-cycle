@@ -35,7 +35,7 @@ jobs:
       credentials_ready: ${{ steps.production_credentials.outputs.ready }}
     env:
       ATMOS_SHA: 9174329db6ca8527569e67f14ef70406dedefb69
-      CORE_ATMOS_SHA: 5e68af94c24517eaaaf6a9d25aec0cadc3d9b135
+      CORE_ATMOS_SHA: 18fb5074d7472ffc5549704c0874f6e35516cef5
       MODEL_ID: ecmwf
       WIND100_PRODUCTION_ENVIRONMENT: data-production-wind100
       PRODUCTION_WIND100_APPROVED_SOURCE_SHA: ${{ vars.PRODUCTION_WIND100_APPROVED_SOURCE_SHA }}
@@ -77,7 +77,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: weatherx-hq/atmos
-          ref: 5e68af94c24517eaaaf6a9d25aec0cadc3d9b135
+          ref: 18fb5074d7472ffc5549704c0874f6e35516cef5
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: atmos-core
           persist-credentials: false
