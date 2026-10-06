@@ -5,8 +5,8 @@ import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Reviewed merged layer recovery source; retain the exact-current-master and clean-checkout guard.
-export const UI_SOURCE = '0b270cb7c8855170783a6f885aedbc33cf321016';
+// Reviewed merged layer recovery and cloud fade gate source; retain the exact-current-master and clean-checkout guard.
+export const UI_SOURCE = '248abd180ff95b4ada641c3eee7bf155f766091d';
 export const REVIEWED_MASTER = UI_SOURCE;
 export const EDGE_ONLY_DIFF = Object.freeze([]);
 

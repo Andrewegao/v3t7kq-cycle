@@ -91,7 +91,7 @@
       ]
     },
     {
-      "pin": "0b270cb7c8855170783a6f885aedbc33cf321016",
+      "pin": "248abd180ff95b4ada641c3eee7bf155f766091d",
       "files": [
         "app/e2e/layer-switch-surface.mjs",
         "app/e2e/layer-switch-tint.mjs",
@@ -124,7 +124,7 @@
   ],
   "stagingBuild": {
     "profile": "production-account-ru-kk-wind100-onboarding-v2",
-    "pin": "0b270cb7c8855170783a6f885aedbc33cf321016",
+    "pin": "248abd180ff95b4ada641c3eee7bf155f766091d",
     "paths": [
       ".gitignore",
       "platform/edge/package.json",
@@ -132,6 +132,6 @@
       "ops/release/build-release-receipt.mjs"
     ],
     "coneMode": false,
-    "provenance": "Merged Atmos PR #480 source 0b270cb7c8855170783a6f885aedbc33cf321016, tree 9bb6fad774fc2c61d83a9d3310977fce50f9317a, matches qualified head 2f7be66021f648c411047829e36e5fa7cdf81f7a. Actual Git blob comparison confirms all 43 reviewed account/onboarding hashes, the 21-file qualification controller inventory and four-path sparse build closure are unchanged versus accepted Search source 5e68af94c24517eaaaf6a9d25aec0cadc3d9b135. Platform/edge has a separate five-path runtime/test delta and requires its own staging receipt. Historical fixture/build/deployment results retain their original identities. A fresh hosted staging candidate, pipeline digest, layer-menu/Search acceptance and same-release native100m Wind/CF acceptance remain required. Local closure checks do not qualify deployment or performance/memory completion. See docs/ui-public-combined.md."
+    "provenance": "Merged Atmos PR #481 source 248abd180ff95b4ada641c3eee7bf155f766091d, tree 8db0d2fc570ff21232bb6038b6607a11dbda864e, matches qualified head 05fb9164852a497edc3eeda450ca3398a493e481. Actual Git blob comparison confirms all 43 reviewed account/onboarding source hashes and the four-path sparse build closure are unchanged versus prior UI pin 0b270cb7c8855170783a6f885aedbc33cf321016. The 21-file qualification inventory paths are unchanged: 20 file blobs are identical, while app/e2e/layer-switch-tint.mjs changes only the stronger natural bare-map precondition for observing cloud Deck fade. Platform/edge bytes are unchanged versus 0b270cb7c8855170783a6f885aedbc33cf321016; the inherited PR #480 five-path delta versus accepted Search source remains governed by its separate Worker receipt. Original staging run 37394570824 attempt 1 remains failed at the Weather Lab gate before any UI artifact/deployment, despite successful application tests; those receipts retain their source identities. A fresh exact-source hosted staging candidate, pipeline digest, layer-menu/Search acceptance and same-release native100m Wind/CF acceptance remain required. No deployment or performance/memory completion is established by these local closure checks. See docs/ui-public-combined.md."
   }
 }
