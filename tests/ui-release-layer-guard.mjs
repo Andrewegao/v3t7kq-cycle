@@ -90,7 +90,7 @@ test('corrected runner and transitive source are pipeline-bound inside candidate
  assert.match(verify,/if\(publicCombinedProfile\(c.profile\)\)await runReleaseLayerGuard/);
  assert.match(verify,/else run\('node',\[resolve\(CONTROL,'app\/e2e\/layer-switch-tint.mjs'\)\]/);
  const runner=readFileSync(new URL('../tools/ui-release-layer-guard.mjs',import.meta.url),'utf8');
- assert.ok(runner.includes("addDiagnostics(source,runtime,'strict-paint')"));
+ assert.ok(runner.includes("addDiagnostics(addStageDiagnostics(source),runtime,'strict-paint')"));
  assert.match(runner,/finally\{[\s\S]*identity\(\);result.identityAfter/);
  assert.ok(runner.includes('15*60_000'));assert.ok(runner.includes('1024*1024'));
  assert.ok(runner.includes('kill(-child.pid)'));
