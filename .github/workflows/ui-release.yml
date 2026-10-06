@@ -1,4 +1,8 @@
-# Manual promotion ONLY. Never builds Atmos and never follows master implicitly.
+# Exact-artifact promotion. Never builds Atmos and never follows master implicitly.
+# Entry points: manual dispatch, or (owner decision C) the successful completion of a
+# staging qualification run, but only while the owner has armed automatic promotion.
+# Both paths pass the same activation/freeze gate, the protected ui-production
+# environment, the exact-attempt artifact audit and the release guard's rollback + fuse.
 name: WeatherX UI production promotion
 on:
   workflow_dispatch:
@@ -25,15 +29,54 @@ on:
           - production-account-billing-v1
           - production-account-ru-kk-beta-v1
           - production-account-ru-kk-wind100-onboarding-v2
+  workflow_run:
+    # Matched by name; resolve re-checks the run's workflow path, event, branch and attempt.
+    workflows: [WeatherX UI staging qualification]
+    types: [completed]
+    branches: [main]
 permissions:
   contents: read
   actions: read
   issues: write # existing guarded rollback fuse, never automatic approval
-concurrency:
-  group: weatherx-ui-production
-  cancel-in-progress: false
 jobs:
+  resolve:
+    # Automatic path only. Routes the exact staging run attempt that just succeeded; it has
+    # no environment, no Pages or candidate key, and its outputs are re-audited by promote.
+    if: ${{ github.event_name == 'workflow_run' && github.ref == 'refs/heads/main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.head_branch == 'main' && vars.UI_AUTO_PROMOTE_ENABLED == 'true' }}
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      promote: ${{ steps.route.outputs.promote }}
+      staging_run_id: ${{ steps.route.outputs.staging_run_id }}
+      staging_run_attempt: ${{ steps.route.outputs.staging_run_attempt }}
+      atmos_sha: ${{ steps.route.outputs.atmos_sha }}
+      candidate_digest: ${{ steps.route.outputs.candidate_digest }}
+      release_profile: ${{ steps.route.outputs.release_profile }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: route only the exact successful staging attempt and its armed profile
+        id: route
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          STAGING_RUN_ID: ${{ github.event.workflow_run.id }}
+          STAGING_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          UI_AUTO_PROMOTE_ENABLED: ${{ vars.UI_AUTO_PROMOTE_ENABLED }}
+          UI_AUTO_PROMOTE_PROFILE: ${{ vars.UI_AUTO_PROMOTE_PROFILE }}
+        run: node cycle/tools/ui-release.mjs resolve-auto
   promote:
+    needs: resolve
+    # Manual dispatch as before; automatic only after resolve admitted this exact attempt.
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && needs.resolve.result == 'success' && needs.resolve.outputs.promote == 'true')) }}
+    # Job-level, so a skipped automatic run never displaces a pending manual promotion.
+    concurrency:
+      group: weatherx-ui-production
+      cancel-in-progress: false
     environment:
       name: ui-production
       url: https://weatherx.org
@@ -43,10 +86,13 @@ jobs:
       UI_RELEASES_ENABLED: ${{ vars.UI_RELEASES_ENABLED }}
       UI_ISOLATION_APPROVED: ${{ vars.UI_ISOLATION_APPROVED }}
       UI_DEPLOYMENT_HOLD_UNTIL: ${{ vars.UI_DEPLOYMENT_HOLD_UNTIL }}
-      ATMOS_SHA: ${{ inputs.atmos_sha }}
-      STAGING_RUN_ID: ${{ inputs.staging_run_id }}
-      CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
-      MODEL_SELECTION_SHA256: ${{ inputs.release_profile }}
+      UI_AUTO_PROMOTE_ENABLED: ${{ vars.UI_AUTO_PROMOTE_ENABLED }}
+      UI_AUTO_PROMOTE_PROFILE: ${{ vars.UI_AUTO_PROMOTE_PROFILE }}
+      ATMOS_SHA: ${{ github.event_name == 'workflow_run' && needs.resolve.outputs.atmos_sha || inputs.atmos_sha }}
+      STAGING_RUN_ID: ${{ github.event_name == 'workflow_run' && needs.resolve.outputs.staging_run_id || inputs.staging_run_id }}
+      STAGING_RUN_ATTEMPT: ${{ github.event_name == 'workflow_run' && needs.resolve.outputs.staging_run_attempt || '' }}
+      CANDIDATE_DIGEST: ${{ github.event_name == 'workflow_run' && needs.resolve.outputs.candidate_digest || inputs.candidate_digest }}
+      MODEL_SELECTION_SHA256: ${{ github.event_name == 'workflow_run' && needs.resolve.outputs.release_profile || inputs.release_profile }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { path: cycle, fetch-depth: 0, persist-credentials: false }
@@ -54,7 +100,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          ref: ${{ inputs.release_profile == 'production-account-ru-kk-wind100-onboarding-v2' && '248abd180ff95b4ada641c3eee7bf155f766091d' || inputs.release_profile == 'production-account-ru-kk-beta-v1' && 'b9db38dd22eed1da56c6c4dd4140480da7e89153' || inputs.release_profile == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || '25c402db5149daa018e349a34a4beeba1f2dca45' }}
+          ref: ${{ env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-wind100-onboarding-v2' && '248abd180ff95b4ada641c3eee7bf155f766091d' || env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-beta-v1' && 'b9db38dd22eed1da56c6c4dd4140480da7e89153' || env.MODEL_SELECTION_SHA256 == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || '25c402db5149daa018e349a34a4beeba1f2dca45' }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
           path: control

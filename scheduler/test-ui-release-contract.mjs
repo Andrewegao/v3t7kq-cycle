@@ -93,13 +93,17 @@ assert.match(ui, /environment:[\s\S]*?name: ui-production/);
 assert.match(staging, /environment:[\s\S]*?name: ui-staging/);
 for (const workflow of [ui, staging]) {
   assert.match(workflow, /^on:\n  workflow_dispatch:/m);
-  assert.doesNotMatch(workflow, /^  (push|schedule|workflow_run|repository_dispatch|workflow_call|pull_request):/m);
+  assert.doesNotMatch(workflow, /^  (push|schedule|repository_dispatch|workflow_call|pull_request):/m);
   assert.match(workflow, /UI_RELEASES_ENABLED: \$\{\{ vars.UI_RELEASES_ENABLED \}\}/);
   assert.match(workflow, /UI_DEPLOYMENT_HOLD_UNTIL:/);
   assert.match(workflow, /UI_ISOLATION_APPROVED:/);
   assert.doesNotMatch(workflow, /secrets\.CLOUDFLARE_API_TOKEN\b/,'legacy repo-wide Pages key must not bypass environment boundaries');
   assert.match(workflow, /persist-credentials: false/);
 }
+assert.doesNotMatch(staging, /^  workflow_run:/m, 'staging qualification is dispatched, never chained');
+// Promotion may follow only a successful staging qualification, behind the armed gate and environment.
+assert.match(ui, /^  workflow_run:\n(?:    #[^\n]*\n)?    workflows: \[WeatherX UI staging qualification\]\n    types: \[completed\]\n    branches: \[main\]\n/m);
+assert.match(ui, /vars\.UI_AUTO_PROMOTE_ENABLED == 'true'/);
 for (const input of ['atmos_sha','staging_run_id','candidate_digest']) assert.ok(ui.includes(`${input}:`));
 assert.match(ui, /node cycle\/tools\/ui-release.mjs download/);
 assert.match(ui, /node cycle\/tools\/ui-release.mjs deploy production/);

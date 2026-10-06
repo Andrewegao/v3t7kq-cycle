@@ -428,6 +428,15 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           compression-level: 0
+      # Public routing hint for automatic promotion: the same summary.json (source, run,
+      # attempt, digest, release profile name). Promotion re-audits it against the sealed candidate.
+      - name: retain public promotion routing summary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ui-candidate-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ui-sealed/summary.json
+          if-no-files-found: error
+          retention-days: 90
       - name: retain automatic rollback evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

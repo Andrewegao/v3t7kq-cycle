@@ -49,5 +49,8 @@ test('follower protects source key but has no Cloudflare credentials, publicatio
   const stage=readFileSync(new URL('../.github/workflows/ui-staging.yml',import.meta.url),'utf8');
   assert.match(stage,/run-name: Staging \$\{\{ inputs.atmos_sha \}\}/);
   const production=readFileSync(new URL('../.github/workflows/ui-release.yml',import.meta.url),'utf8');
-  assert.doesNotMatch(production,/schedule:|workflow_run:|repository_dispatch:/);
+  assert.doesNotMatch(production,/schedule:|repository_dispatch:/);
+  // The follower itself never reaches production; only a successful staging run can, when armed.
+  assert.match(production,/\n  workflow_run:\n    # [^\n]*\n    workflows: \[WeatherX UI staging qualification\]\n    types: \[completed\]\n    branches: \[main\]\n/);
+  assert.doesNotMatch(production,/WeatherX follow master/);
 });

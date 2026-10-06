@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { gate, FREEZE_UNTIL, REPOSITORY } from '../tools/ui-candidate.mjs';
+import { releaseGate, RELEASE_PROFILES } from '../tools/ui-release.mjs';
 
 const directory = new URL('../.github/workflows/', import.meta.url);
 const workflows = Object.fromEntries(readdirSync(directory).filter(n => /\.ya?ml$/.test(n))
@@ -91,14 +92,47 @@ test('only the protected promotion workflow references the production UI credent
   assert.match(workflows['gdacs-feed-release.yml'], /PAGES_TOKEN: \$\{\{ secrets.PAGES_READ_TOKEN \}\}/);
 });
 
-test('both UI entry points are manual only; bake completion cannot trigger promotion', () => {
-  for (const name of ['ui-release.yml', 'ui-staging.yml']) {
-    const source = workflows[name];
-    const events = source.slice(source.indexOf('\non:\n') + 1, source.indexOf('\npermissions:'));
-    assert.match(events, /^on:\n  workflow_dispatch:/);
-    assert.deepEqual(events.split('\n').filter(l => /^  [a-z_]+:/.test(l)).map(l => l.trim().split(':')[0]),
-      ['workflow_dispatch']);
-  }
+const eventsOf = source => source.slice(source.indexOf('\non:\n') + 1, source.indexOf('\npermissions:'));
+const topEvents = events => events.split('\n').filter(l => /^  [a-z_]+:/.test(l)).map(l => l.trim().split(':')[0]);
+export function assertReleaseEvents(source) {
+  const events = eventsOf(source);
+  assert.match(events, /^on:\n  workflow_dispatch:/);
+  assert.deepEqual(topEvents(events), ['workflow_dispatch', 'workflow_run']);
+  // Only the successful completion of staging qualification on main; never a bake or other workflow.
+  assert.equal(events.split('\n  workflow_run:\n')[1].split('\n').filter(l => !/^\s*#/.test(l)).join('\n'),
+    '    workflows: [WeatherX UI staging qualification]\n    types: [completed]\n    branches: [main]');
+  const resolve = source.split('\n  resolve:\n')[1].split('\n  promote:\n')[0];
+  for (const condition of ["github.event_name == 'workflow_run'", "github.ref == 'refs/heads/main'",
+    "github.event.workflow_run.conclusion == 'success'", "github.event.workflow_run.event == 'workflow_dispatch'",
+    "github.event.workflow_run.head_branch == 'main'", "vars.UI_AUTO_PROMOTE_ENABLED == 'true'"])
+    assert.ok(resolve.split('\n').find(l => l.startsWith('    if: ')).includes(condition), condition);
+  assert.doesNotMatch(resolve, /secrets\.|environment:|CLOUDFLARE|ui-release\.mjs (?:download|deploy|gate)|write/);
+  assert.match(resolve, /permissions:\n      contents: read\n      actions: read\n/);
+  const promote = source.split('\n  promote:\n')[1];
+  assert.match(promote, /^    if: \$\{\{ !cancelled\(\) && \(github\.event_name == 'workflow_dispatch' \|\| \(github\.event_name == 'workflow_run' && needs\.resolve\.result == 'success' && needs\.resolve\.outputs\.promote == 'true'\)\) \}\}$/m);
+  assert.match(promote, /\n    environment:\n      name: ui-production\n/);
+  assert.match(promote, /run: node cycle\/tools\/ui-release\.mjs gate\n/);
+}
+
+test('staging is manual only; promotion is manual or the armed successful-staging follow-up', () => {
+  assert.match(eventsOf(workflows['ui-staging.yml']), /^on:\n  workflow_dispatch:/);
+  assert.deepEqual(topEvents(eventsOf(workflows['ui-staging.yml'])), ['workflow_dispatch']);
+  assertReleaseEvents(workflows['ui-release.yml']);
+  const release = workflows['ui-release.yml'];
+  for (const defect of [
+    release.replace('    types: [completed]', '    types: [completed, requested]'),
+    release.replace('workflows: [WeatherX UI staging qualification]', 'workflows: [WeatherX bake]'),
+    release.replace('    branches: [main]\n', ''),
+    release.replace("vars.UI_AUTO_PROMOTE_ENABLED == 'true'", "true"),
+    release.replace("github.event.workflow_run.conclusion == 'success'", "true"),
+    release.replace('\n  workflow_run:\n', '\n  schedule:\n    - cron: "0 * * * *"\n  workflow_run:\n'),
+    release.replace("needs.resolve.outputs.promote == 'true'", "true"),
+    release.replace('      name: ui-production\n', '      name: ui-staging\n'),
+    release.replace('      contents: read\n      actions: read\n    runs-on', '      contents: read\n      actions: write\n    runs-on'),
+  ]) assert.throws(() => assertReleaseEvents(defect));
+  // Data bakes still cannot dispatch or chain into promotion.
+  for (const name of ['bake.yml', 'catalog-bake.yml', 'verify-backfill.yml'])
+    assert.doesNotMatch(executable(workflows[name]), /^\s*workflow_run:|ui-release\.mjs|uses:[^\n]*ui-release/m);
 });
 
 test('retained ground-package approval is scoped to staging and never production', () => {
@@ -116,4 +150,26 @@ test('runtime gate rejects every nonmanual event and every unprotected ref', () 
     assert.throws(() => gate({ ...env, GITHUB_EVENT_NAME: event }, now));
   for (const ref of ['refs/heads/feature', 'refs/tags/main', 'refs/pull/1/merge', ''])
     assert.throws(() => gate({ ...env, GITHUB_REF: ref }, now));
+});
+
+test('automatic promotion passes the unchanged manual gate only when armed for the exact routed profile', () => {
+  const manual = { GITHUB_REPOSITORY: REPOSITORY, GITHUB_EVENT_NAME: 'workflow_dispatch',
+    GITHUB_REF: 'refs/heads/main', UI_RELEASES_ENABLED: 'true', UI_ISOLATION_APPROVED: 'true',
+    UI_DEPLOYMENT_HOLD_UNTIL: FREEZE_UNTIL };
+  const now = Date.parse(FREEZE_UNTIL) + 1;
+  releaseGate(manual, now); // manual path is exactly gate()
+  const auto = { ...manual, GITHUB_EVENT_NAME: 'workflow_run', GITHUB_JOB: 'promote', UI_AUTO_PROMOTE_ENABLED: 'true',
+    UI_AUTO_PROMOTE_PROFILE: 'none', MODEL_SELECTION_SHA256: 'none', STAGING_RUN_ID: '123', STAGING_RUN_ATTEMPT: '1' };
+  releaseGate(auto, now);
+  for (const profile of RELEASE_PROFILES) releaseGate({ ...auto, UI_AUTO_PROMOTE_PROFILE: profile, MODEL_SELECTION_SHA256: profile }, now);
+  for (const change of [{ UI_AUTO_PROMOTE_ENABLED: '' }, { UI_AUTO_PROMOTE_ENABLED: 'false' }, { UI_AUTO_PROMOTE_PROFILE: '' },
+    { UI_AUTO_PROMOTE_PROFILE: 'a'.repeat(64), MODEL_SELECTION_SHA256: 'a'.repeat(64) }, { MODEL_SELECTION_SHA256: 'production-account-billing-v1' },
+    { GITHUB_JOB: 'qualify' }, { GITHUB_JOB: 'resolve' }, { STAGING_RUN_ID: '' }, { STAGING_RUN_ATTEMPT: '' }, { STAGING_RUN_ATTEMPT: '0' },
+    // Arming never bypasses activation, isolation, hold, freeze, repository or ref.
+    { UI_RELEASES_ENABLED: 'false' }, { UI_ISOLATION_APPROVED: 'false' }, { UI_DEPLOYMENT_HOLD_UNTIL: '' },
+    { GITHUB_REF: 'refs/heads/feature' }, { GITHUB_REPOSITORY: 'someone/fork' }])
+    assert.throws(() => releaseGate({ ...auto, ...change }, now), JSON.stringify(change));
+  assert.throws(() => releaseGate({ ...auto, UI_DEPLOYMENT_HOLD_UNTIL: new Date(now + 86400000).toISOString() }, now));
+  for (const event of ['schedule', 'push', 'workflow_call', 'repository_dispatch', 'pull_request', ''])
+    assert.throws(() => releaseGate({ ...auto, GITHUB_EVENT_NAME: event }, now), event);
 });

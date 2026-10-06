@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `08fea788c449a565241db634a0262a064241cac88465f42de1c5dfe97b898824`.
+Source digest (registry and workflow bytes): `b0488d3beca7fa9e71cc20e711efc6f06a8b995659c8d9b51fce70f895e988f2`.
 
 61 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -1507,22 +1507,29 @@ Variable references (declared names only; values and activation unknown): none d
 
 [.github/workflows/ui-release.yml](../.github/workflows/ui-release.yml#L1) · <code>WeatherX UI production promotion</code>
 
-Declared triggers: [workflow_dispatch](../.github/workflows/ui-release.yml#L5); input names <code>["staging_run_id","atmos_sha","candidate_digest","release_profile"]</code>.
+Declared triggers: [workflow_dispatch](../.github/workflows/ui-release.yml#L9); input names <code>["staging_run_id","atmos_sha","candidate_digest","release_profile"]</code>; [workflow_run](../.github/workflows/ui-release.yml#L34) <code>{"workflows":["WeatherX UI staging qualification"],"types":["completed"],"branches":["main"]}</code>.
 
-Workflow permissions: <code>{"contents":"read","actions":"read","issues":"write"}</code>. Workflow concurrency: <code>{"group":"weatherx-ui-production","cancel-in-progress":false}</code>.
+Workflow permissions: <code>{"contents":"read","actions":"read","issues":"write"}</code>. Workflow concurrency: not declared.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [promote](../.github/workflows/ui-release.yml#L37) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"ui-production","url":"https://weatherx.org"}</code> | <code>45</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [resolve](../.github/workflows/ui-release.yml#L45) ← no needs | <code>ubuntu-latest</code> | not declared | <code>5</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
+| [promote](../.github/workflows/ui-release.yml#L73) ← <code>resolve</code> | <code>ubuntu-latest</code> | <code>{"name":"ui-production","url":"https://weatherx.org"}</code> | <code>45</code> | <code>{"group":"weatherx-ui-production","cancel-in-progress":false}</code> | not declared | inherits workflow/default policy |
+
+Declared job conditions (additional step/helper checks may apply):
+
+- [resolve](../.github/workflows/ui-release.yml#L45): <code>${{ github.event_name == 'workflow_run' &amp;&amp; github.ref == 'refs/heads/main' &amp;&amp; github.event.workflow_run.conclusion == 'success' &amp;&amp; github.event.workflow_run.event == 'workflow_dispatch' &amp;&amp; github.event.workflow_run.head_branch == 'main' &amp;&amp; vars.UI_AUTO_PROMOTE_ENABLED == 'true' }}</code>
+- [promote](../.github/workflows/ui-release.yml#L75): <code>${{ !cancelled() &amp;&amp; (github.event_name == 'workflow_dispatch' &#124;&#124; (github.event_name == 'workflow_run' &amp;&amp; needs.resolve.result == 'success' &amp;&amp; needs.resolve.outputs.promote == 'true')) }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [promote / step 1](../.github/workflows/ui-release.yml#L51) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [promote / checkout reviewed release controller (not candidate source)](../.github/workflows/ui-release.yml#L53) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.release_profile == 'production-account-ru-kk-wind100-onboarding-v2' &amp;&amp; '248abd180ff95b4ada641c3eee7bf155f766091d' &#124;&#124; inputs.release_profile == 'production-account-ru-kk-beta-v1' &amp;&amp; 'b9db38dd22eed1da56c6c4dd4140480da7e89153' &#124;&#124; inputs.release_profile == 'production-account-billing-v1' &amp;&amp; '6fcec22638f6696be71daa2f2e974ebc4b24318e' &#124;&#124; '25c402db5149daa018e349a34a4beeba1f2dca45' }}</code> |
+| [resolve / step 1](../.github/workflows/ui-release.yml#L59) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [promote / step 1](../.github/workflows/ui-release.yml#L97) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [promote / checkout reviewed release controller (not candidate source)](../.github/workflows/ui-release.yml#L99) | <code>weatherx-hq/atmos</code> | <code>${{ env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-wind100-onboarding-v2' &amp;&amp; '248abd180ff95b4ada641c3eee7bf155f766091d' &#124;&#124; env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-beta-v1' &amp;&amp; 'b9db38dd22eed1da56c6c4dd4140480da7e89153' &#124;&#124; env.MODEL_SELECTION_SHA256 == 'production-account-billing-v1' &amp;&amp; '6fcec22638f6696be71daa2f2e974ebc4b24318e' &#124;&#124; '25c402db5149daa018e349a34a4beeba1f2dca45' }}</code> |
 
-Variable references (declared names only; values and activation unknown): [UI_DEPLOYMENT_HOLD_UNTIL](../.github/workflows/ui-release.yml#L45), [UI_ISOLATION_APPROVED](../.github/workflows/ui-release.yml#L44), [UI_PAGES_CONFIG_SHA256](../.github/workflows/ui-release.yml#L99), [UI_RELEASES_ENABLED](../.github/workflows/ui-release.yml#L43).
+Variable references (declared names only; values and activation unknown): [UI_AUTO_PROMOTE_ENABLED](../.github/workflows/ui-release.yml#L45), [UI_AUTO_PROMOTE_PROFILE](../.github/workflows/ui-release.yml#L70), [UI_DEPLOYMENT_HOLD_UNTIL](../.github/workflows/ui-release.yml#L88), [UI_ISOLATION_APPROVED](../.github/workflows/ui-release.yml#L87), [UI_PAGES_CONFIG_SHA256](../.github/workflows/ui-release.yml#L145), [UI_RELEASES_ENABLED](../.github/workflows/ui-release.yml#L86).
 
 
 ## ui-staging-tc
