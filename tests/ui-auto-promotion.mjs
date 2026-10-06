@@ -92,7 +92,7 @@ test('armed with an unrecognised profile fails closed, never silently approved',
 });
 test('profile job resolves the sentinel before approvals using only the arming variables',()=>{
   const staging=readFileSync(new URL('../.github/workflows/ui-staging.yml',import.meta.url),'utf8');
-  const profile=staging.split('\n  profile:\n')[1].split('\n  build:\n')[0];
+  const profile=staging.split('\n  profile:\n')[1].split('\n  atmos-evidence:\n')[0];
   assert.match(staging,/      model_selection_sha256:\n        description: default \(omitted\) qualifies the armed UI_AUTO_PROMOTE_PROFILE[^\n]*\n        required: false\n        default: default\n/);
   assert.match(profile,/UI_AUTO_PROMOTE_ENABLED: \$\{\{ vars\.UI_AUTO_PROMOTE_ENABLED \}\}\n\s+UI_AUTO_PROMOTE_PROFILE: \$\{\{ vars\.UI_AUTO_PROMOTE_PROFILE \}\}/);
   const resolveAt=profile.indexOf('const requested = resolveDispatchSelection(process.env.REQUESTED_SELECTION,process.env.UI_AUTO_PROMOTE_ENABLED,process.env.UI_AUTO_PROMOTE_PROFILE);');

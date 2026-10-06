@@ -9,18 +9,23 @@
 //              fallback whenever the read token is absent or the evidence is not proven,
 //              so misconfiguration can never make the pipeline weaker.
 import assert from 'node:assert/strict';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { profileFor, publicLocaleBetaProfile } from './ui-staging-models.mjs';
 
 export const APP_TEST_JOB = 'app-tests';
+// Separate job: no candidate checkout or code, and the only job that references the read token.
+export const EVIDENCE_JOB = 'atmos-evidence';
 export const APP_TEST_STEP = 'full application test gate';
 export const APP_TEST_COMMAND = 'npm test --prefix atmos/app';
 export const EVIDENCE_STEP = 'verify Atmos CI evidence for the exact source';
 export const LOCAL_GATE_STEP = 'local certification and visual gate';
-export const LOCAL_GATE_COMMANDS = Object.freeze(['npm run test:certify --prefix atmos/app', 'npx playwright test']);
+// Atmos master CI runs its own (public-beta) CI profile and environment; these local commands
+// re-run the full-profile static gates, certification tests and visual tests on the candidate.
+export const LOCAL_GATE_COMMANDS = Object.freeze(['npm run gates --prefix atmos/app',
+  'npm run test:certify --prefix atmos/app', 'npx playwright test']);
 export const ATMOS_REPOSITORY = 'weatherx-hq/atmos';
 export const ATMOS_CI_WORKFLOW = '.github/workflows/ci.yml';
 export const ATMOS_CI_VERDICT_JOB = 'ci-verdict';
@@ -41,7 +46,7 @@ export function appTestEvidence({ path, runId, attempt } = {}) {
     runId, attempt, commands: [...LOCAL_GATE_COMMANDS] };
 }
 
-// Job outputs written by the evidence step, which runs before any candidate code.
+// Job outputs of the separate evidence job, which never checks out or runs candidate code.
 export function appTestEvidenceFromEnvironment(env) {
   return appTestEvidence({ path: env.UI_APP_TEST_EVIDENCE_PATH,
     runId: env.UI_APP_TEST_ATMOS_RUN_ID || undefined, attempt: env.UI_APP_TEST_ATMOS_RUN_ATTEMPT || undefined });
@@ -62,6 +67,16 @@ export function appTestReceipt(context) {
 // ran. Only the default profile may rely on Atmos evidence; beta profiles keep the full suite.
 export const atmosEvidenceEligible = ciProfile => ciProfile === '';
 
+function oneJob(jobs, name, context) {
+  const matches = jobs.filter(job => job.name === name);
+  assert.equal(matches.length, 1, `one ${name} job required`);
+  const job = matches[0];
+  assert.equal(job.status, 'completed'); assert.equal(job.conclusion, 'success');
+  assert.equal(job.head_sha, context.workflowSha);
+  assert.equal(String(job.run_id), context.runId);
+  assert.equal(String(job.run_attempt), context.attempt);
+  return job;
+}
 function oneStep(steps, name) {
   const matches = steps?.filter(step => step.name === name) ?? [];
   assert.equal(matches.length, 1, `one "${name}" step required`);
@@ -74,15 +89,10 @@ export function verifyAppTestReceipt(raw, jobs, context) {
   assert.ok(Buffer.byteLength(raw) > 0 && Buffer.byteLength(raw) <= 4096, 'invalid app test receipt size');
   const receipt = JSON.parse(raw);
   assert.deepEqual(receipt, appTestReceipt(context), 'app tests source/profile/run/attempt/evidence differs');
-  const matches = jobs.filter(job => job.name === APP_TEST_JOB);
-  assert.equal(matches.length, 1, 'one app test job required');
-  const job = matches[0];
-  assert.equal(job.status, 'completed'); assert.equal(job.conclusion, 'success');
-  assert.equal(job.head_sha, context.workflowSha);
-  assert.equal(String(job.run_id), context.runId);
-  assert.equal(String(job.run_attempt), context.attempt);
-  // GitHub, not the candidate-reachable receipt, reports that the selected gate actually ran.
-  assert.equal(oneStep(job.steps, EVIDENCE_STEP).conclusion, 'success', 'evidence step did not succeed');
+  // GitHub, not the candidate-reachable receipt, reports that the evidence job and the selected
+  // gate actually ran in this same run attempt.
+  const evidenceJob = oneJob(jobs, EVIDENCE_JOB, context), job = oneJob(jobs, APP_TEST_JOB, context);
+  assert.equal(oneStep(evidenceJob.steps, EVIDENCE_STEP).conclusion, 'success', 'evidence step did not succeed');
   const gate = receipt.evidence.path === 'full-local' ? APP_TEST_STEP : LOCAL_GATE_STEP;
   assert.equal(oneStep(job.steps, gate).conclusion, 'success', `${gate} did not succeed`);
   return receipt;
@@ -186,7 +196,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   assert.equal(process.argv.length, 3);
   assert.ok(process.env.GITHUB_OUTPUT, 'job output path is required');
   if (command === 'evidence') {
-    assert.equal(process.env.GITHUB_JOB, APP_TEST_JOB);
+    assert.equal(process.env.GITHUB_JOB, EVIDENCE_JOB);
+    assert.ok(!existsSync('atmos'), 'the evidence job must not hold a candidate checkout');
     const decision = await decideEvidence(process.env);
     const evidence = appTestEvidence(decision);
     const token = process.env.ATMOS_CI_READ_TOKEN;

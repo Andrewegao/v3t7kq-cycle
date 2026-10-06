@@ -3,7 +3,7 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { appTestReceipt, verifyAppTestReceipt, receiptForEnvironment, appTestEvidence, appTestEvidenceFromEnvironment,
   boundedJson, selectAtmosCiRun, requireAtmosVerdict, atmosCiEvidence, decideEvidence,
-  APP_TEST_STEP, EVIDENCE_STEP, LOCAL_GATE_STEP, LOCAL_GATE_COMMANDS, ATMOS_API_MAX_BYTES } from '../tools/ui-app-test-receipt.mjs';
+  APP_TEST_STEP, EVIDENCE_STEP, EVIDENCE_JOB, LOCAL_GATE_STEP, LOCAL_GATE_COMMANDS, ATMOS_API_MAX_BYTES } from '../tools/ui-app-test-receipt.mjs';
 
 const SHA='a'.repeat(40);
 const FULL={path:'full-local'}, CI={path:'atmos-ci',runId:'987',attempt:'2'};
@@ -12,7 +12,10 @@ const context=(evidence=FULL)=>({sourceSha:SHA,workflowSha:'b'.repeat(40),runId:
 const ciContext=()=>({...context(CI),selection:'none'});
 const step=(name,conclusion='success')=>({name,status:'completed',conclusion});
 const job=(path='full-local')=>({name:'app-tests',head_sha:'b'.repeat(40),run_id:123,run_attempt:2,status:'completed',conclusion:'success',
-  steps:[step(EVIDENCE_STEP),step(LOCAL_GATE_STEP,path==='full-local'?'skipped':'success'),step(APP_TEST_STEP,path==='full-local'?'success':'skipped')]});
+  steps:[step(LOCAL_GATE_STEP,path==='full-local'?'skipped':'success'),step(APP_TEST_STEP,path==='full-local'?'success':'skipped')]});
+const evidenceJob=(change={})=>({name:EVIDENCE_JOB,head_sha:'b'.repeat(40),run_id:123,run_attempt:2,status:'completed',conclusion:'success',
+  steps:[step(EVIDENCE_STEP)],...change});
+const jobs=(path='full-local')=>[evidenceJob(),job(path)];
 const raw=(c=context())=>JSON.stringify(appTestReceipt(c));
 const env=(extra={})=>({GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',UI_BUILDS_ENABLED:'true',
   GITHUB_REPOSITORY:'Andrewegao/v3t7kq-cycle',GITHUB_EVENT_NAME:'workflow_dispatch',GITHUB_REF:'refs/heads/main',GITHUB_JOB:'app-tests',
@@ -21,11 +24,11 @@ const env=(extra={})=>({GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted'
   UI_APP_TEST_EVIDENCE_PATH:'full-local',UI_APP_TEST_ATMOS_RUN_ID:'',UI_APP_TEST_ATMOS_RUN_ATTEMPT:'',...extra});
 
 test('receipt binds exact source/profile/workflow/run/attempt and the evidence path',()=>{
-  assert.deepEqual(verifyAppTestReceipt(raw(),[job()],context()),appTestReceipt(context()));
+  assert.deepEqual(verifyAppTestReceipt(raw(),jobs(),context()),appTestReceipt(context()));
   assert.deepEqual(receiptForEnvironment(env(),SHA,'b'.repeat(40)),appTestReceipt(context()));
   for(const selection of ['none','production-account-billing-v1','production-account-ru-kk-beta-v1',context().selection]){
     const c={...context(),selection}; const receipt=appTestReceipt(c);
-    assert.deepEqual(verifyAppTestReceipt(JSON.stringify(receipt),[job()],c),receipt);
+    assert.deepEqual(verifyAppTestReceipt(JSON.stringify(receipt),jobs(),c),receipt);
     assert.equal(receipt.ciProfile,selection.includes('ru-kk')?'public-beta-ci-lab-road-security-v1':'');
     assert.deepEqual(receipt.evidence,{path:'full-local',commands:['npm test --prefix atmos/app']});
   }
@@ -33,8 +36,8 @@ test('receipt binds exact source/profile/workflow/run/attempt and the evidence p
   assert.equal(ci.schemaVersion,2);
   assert.deepEqual(ci.evidence,{path:'atmos-ci',repository:'weatherx-hq/atmos',workflow:'.github/workflows/ci.yml',
     job:'ci-verdict',runId:'987',attempt:'2',commands:[...LOCAL_GATE_COMMANDS]});
-  assert.deepEqual(LOCAL_GATE_COMMANDS,['npm run test:certify --prefix atmos/app','npx playwright test']);
-  assert.deepEqual(verifyAppTestReceipt(JSON.stringify(ci),[job('atmos-ci')],ciContext()),ci);
+  assert.deepEqual(LOCAL_GATE_COMMANDS,['npm run gates --prefix atmos/app','npm run test:certify --prefix atmos/app','npx playwright test']);
+  assert.deepEqual(verifyAppTestReceipt(JSON.stringify(ci),jobs('atmos-ci'),ciContext()),ci);
   assert.deepEqual(receiptForEnvironment(env({MODEL_SELECTION_SHA256:'none',WX_CI_PROFILE:'',UI_APP_TEST_EVIDENCE_PATH:'atmos-ci',
     UI_APP_TEST_ATMOS_RUN_ID:'987',UI_APP_TEST_ATMOS_RUN_ATTEMPT:'2'}),SHA,'b'.repeat(40)),ci);
   // The largest profile still fits the bounded receipt.
@@ -50,40 +53,45 @@ test('beta CI profiles cannot rely on Atmos evidence; evidence fields are exact'
 });
 test('missing, malformed, oversized or expanded receipts fail closed',()=>{
   for(const value of [undefined,'','null','{','x'.repeat(4097),JSON.stringify({...appTestReceipt(context()),extra:true})])
-    assert.throws(()=>verifyAppTestReceipt(value,[job()],context()));
+    assert.throws(()=>verifyAppTestReceipt(value,jobs(),context()));
   for(const field of Object.keys(appTestReceipt(context()))){
     const r=appTestReceipt(context()); delete r[field];
-    assert.throws(()=>verifyAppTestReceipt(JSON.stringify(r),[job()],context()),field);
+    assert.throws(()=>verifyAppTestReceipt(JSON.stringify(r),jobs(),context()),field);
   }
 });
 test('receipts cannot be reused across source, profile, workflow, run, retry or evidence path',()=>{
   for(const change of [{sourceSha:'c'.repeat(40)},{workflowSha:'c'.repeat(40)},{runId:'124'},{attempt:'3'},{selection:'none'}])
-    assert.throws(()=>verifyAppTestReceipt(raw(),[job()],{...context(),...change}));
+    assert.throws(()=>verifyAppTestReceipt(raw(),jobs(),{...context(),...change}));
   const r=appTestReceipt(context()); r.evidence.commands=['npm run test:fast --prefix atmos/app'];
-  assert.throws(()=>verifyAppTestReceipt(JSON.stringify(r),[job()],context()));
+  assert.throws(()=>verifyAppTestReceipt(JSON.stringify(r),jobs(),context()));
   // A retained prior-attempt output cannot pass even if a jobs listing reports a current attempt.
-  assert.throws(()=>verifyAppTestReceipt(JSON.stringify(appTestReceipt({...context(),attempt:'1'})),[job()],context()));
+  assert.throws(()=>verifyAppTestReceipt(JSON.stringify(appTestReceipt({...context(),attempt:'1'})),jobs(),context()));
   // A candidate-reachable receipt claiming Atmos evidence fails against the untampered job outputs, and vice versa.
   const claimed=JSON.stringify(appTestReceipt(ciContext()));
-  assert.throws(()=>verifyAppTestReceipt(claimed,[job('atmos-ci')],{...ciContext(),evidence:FULL}));
-  assert.throws(()=>verifyAppTestReceipt(claimed,[job('atmos-ci')],{...ciContext(),evidence:{...CI,runId:'988'}}));
-  assert.throws(()=>verifyAppTestReceipt(claimed,[job('atmos-ci')],{...ciContext(),evidence:{...CI,attempt:'1'}}));
+  assert.throws(()=>verifyAppTestReceipt(claimed,jobs('atmos-ci'),{...ciContext(),evidence:FULL}));
+  assert.throws(()=>verifyAppTestReceipt(claimed,jobs('atmos-ci'),{...ciContext(),evidence:{...CI,runId:'988'}}));
+  assert.throws(()=>verifyAppTestReceipt(claimed,jobs('atmos-ci'),{...ciContext(),evidence:{...CI,attempt:'1'}}));
 });
-test('GitHub must independently report the evidence step and the selected gate succeeded',()=>{
-  for(const jobs of [[],[job(),job()]]) assert.throws(()=>verifyAppTestReceipt(raw(),jobs,context()));
+test('GitHub must independently report the evidence job and the selected gate succeeded',()=>{
+  for(const list of [[],[job()],[evidenceJob()],[evidenceJob(),job(),job()],[evidenceJob(),evidenceJob(),job()]])
+    assert.throws(()=>verifyAppTestReceipt(raw(),list,context()),JSON.stringify(list.map(j=>j.name)));
   for(const change of [{conclusion:'failure'},{conclusion:'cancelled'},{conclusion:'skipped'},{status:'in_progress'},
     {head_sha:'c'.repeat(40)},{run_id:124},{run_attempt:1},{steps:[]},{steps:undefined},
     {steps:[...job().steps,...job().steps]},
-    {steps:[step(EVIDENCE_STEP),step(APP_TEST_STEP,'skipped')]},
-    {steps:[step(EVIDENCE_STEP),{name:APP_TEST_STEP,status:'in_progress',conclusion:null}]},
-    {steps:[step(EVIDENCE_STEP,'failure'),step(APP_TEST_STEP)]},
-    {steps:[step(APP_TEST_STEP)]}])
-    assert.throws(()=>verifyAppTestReceipt(raw(),[{...job(),...change}],context()),JSON.stringify(change));
+    {steps:[step(APP_TEST_STEP,'skipped')]},
+    {steps:[{name:APP_TEST_STEP,status:'in_progress',conclusion:null}]},
+    {steps:[step(LOCAL_GATE_STEP)]}])
+    assert.throws(()=>verifyAppTestReceipt(raw(),[evidenceJob(),{...job(),...change}],context()),JSON.stringify(change));
+  for(const change of [{conclusion:'failure'},{conclusion:'skipped'},{status:'in_progress'},{head_sha:'c'.repeat(40)},
+    {run_id:124},{run_attempt:1},{steps:[]},{steps:[step(EVIDENCE_STEP,'failure')]},{steps:[step(EVIDENCE_STEP),step(EVIDENCE_STEP)]},
+    {name:'app-tests'}])
+    assert.throws(()=>verifyAppTestReceipt(raw(),[evidenceJob(change),job()],context()),JSON.stringify(change));
+  // The evidence step inside a candidate job is not evidence.
+  assert.throws(()=>verifyAppTestReceipt(raw(),[{...job(),steps:[step(EVIDENCE_STEP),...job().steps]}],context()));
   const ci=JSON.stringify(appTestReceipt(ciContext()));
   // On the atmos-ci path a successful full gate is not a substitute for the local certification gate.
-  for(const steps of [[step(EVIDENCE_STEP),step(APP_TEST_STEP)],[step(EVIDENCE_STEP),step(LOCAL_GATE_STEP,'failure')],
-    [step(EVIDENCE_STEP),step(LOCAL_GATE_STEP,'skipped')],[step(LOCAL_GATE_STEP)]])
-    assert.throws(()=>verifyAppTestReceipt(ci,[{...job('atmos-ci'),steps}],ciContext()),JSON.stringify(steps));
+  for(const steps of [[step(APP_TEST_STEP)],[step(LOCAL_GATE_STEP,'failure')],[step(LOCAL_GATE_STEP,'skipped')],[]])
+    assert.throws(()=>verifyAppTestReceipt(ci,[evidenceJob(),{...job('atmos-ci'),steps}],ciContext()),JSON.stringify(steps));
 });
 test('receipt producer rejects wrong checkout, runner, activation, CI profile and evidence outputs',()=>{
   for(const field of Object.keys(env()).filter(k=>!k.startsWith('UI_APP_TEST_ATMOS')))
@@ -181,43 +189,46 @@ test('evidence decision falls back to the complete local suite, never to a weake
   await assert.rejects(decideEvidence({ATMOS_SHA:'main',ATMOS_CI_READ_TOKEN:''}));
 });
 
-test('app-tests: evidence first, then exact source, candidate-only caches, one selected gate, bound receipt',()=>{
+test('evidence job has no candidate; app-tests runs one selected gate; qualify binds the evidence job outputs',()=>{
   const read=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
   const workflow=read('.github/workflows/ui-staging.yml');
+  const evidence=workflow.split('\n  atmos-evidence:\n')[1].split('\n  build:\n')[0];
   const build=workflow.split('\n  build:\n')[1].split('\n  app-tests:\n')[0];
   const app=workflow.split('\n  app-tests:\n')[1].split('\n  qualify:\n')[0];
   const qualify=workflow.split('\n  qualify:\n')[1];
-  assert.match(build,/Weather Lab release gate/); assert.doesNotMatch(build,/npm test --prefix atmos\/app|test:certify|playwright test/);
-  assert.match(app,/needs: profile/); assert.match(app,/environment:\n      name: atmos-source-read-ui/);
+  // The read token exists in exactly one place: the evidence job, which never checks out or runs the candidate.
+  assert.equal((workflow.match(/ATMOS_CI_READ_TOKEN/g)||[]).length,2);
+  assert.equal((evidence.match(/ATMOS_CI_READ_TOKEN/g)||[]).length,2);
+  assert.match(evidence,new RegExp(`name: ${EVIDENCE_STEP}\\n\\s+id: atmos_ci\\n\\s+env:\\n\\s+ATMOS_CI_READ_TOKEN: \\$\\{\\{ secrets\\.ATMOS_CI_READ_TOKEN \\}\\}\\n\\s+run: node cycle/tools/ui-app-test-receipt\\.mjs evidence$`));
+  assert.deepEqual([...new Set([...evidence.matchAll(/secrets\.([A-Za-z0-9_]+)/g)].map(m=>m[1]))],['ATMOS_CI_READ_TOKEN']);
+  assert.doesNotMatch(evidence,/repository:|ssh-key|path: atmos|atmos\/app|npm |npx |actions\/cache|CLOUDFLARE|PRIVATE_KEY|CANDIDATE_KEY/);
+  assert.match(evidence,/environment:\n      name: atmos-ci-evidence\n/);
+  assert.match(evidence,/permissions:\n      contents: read\n/);
+  assert.match(evidence,/needs: profile\n/);
+  assert.equal((evidence.match(/uses: actions\/checkout@/g)||[]).length,1);
+  assert.match(evidence,/with: \{ path: cycle, persist-credentials: false \}/);
+  for(const output of ['path: ${{ steps.atmos_ci.outputs.path }}','atmos_run_id: ${{ steps.atmos_ci.outputs.atmos_run_id }}',
+    'atmos_run_attempt: ${{ steps.atmos_ci.outputs.atmos_run_attempt }}']) assert.ok(evidence.includes(output),output);
+  assert.match(build,/Weather Lab release gate/); assert.doesNotMatch(build,/npm test --prefix atmos\/app|test:certify|playwright test|npm run gates|ATMOS_CI/);
+  assert.match(app,/needs: \[profile, atmos-evidence\]/); assert.match(app,/environment:\n      name: atmos-source-read-ui/);
   assert.match(app,/permissions:\n      contents: read\n/);
   assert.match(app,/ref: \$\{\{ inputs.atmos_sha \}\}/);
   assert.match(app,/ui-combined-source-guard\.mjs/); assert.match(app,/git rev-parse origin\/master/);
   assert.equal((app.match(/persist-credentials: false/g)||[]).length,2);
-  assert.deepEqual([...new Set([...app.matchAll(/secrets\.([A-Za-z0-9_]+)/g)].map(m=>m[1]))],['ATMOS_READONLY_KEY','ATMOS_CI_READ_TOKEN']);
-  // The read token reaches exactly one step: the pinned evidence check, before any candidate script.
-  assert.equal((app.match(/ATMOS_CI_READ_TOKEN/g)||[]).length,2);
-  const evidence=app.indexOf(`name: ${EVIDENCE_STEP}`);
-  assert.match(app,new RegExp(`name: ${EVIDENCE_STEP}\\n\\s+id: atmos_ci\\n\\s+env:\\n\\s+ATMOS_CI_READ_TOKEN: \\$\\{\\{ secrets\\.ATMOS_CI_READ_TOKEN \\}\\}\\n\\s+run: node cycle/tools/ui-app-test-receipt\\.mjs evidence\\n`));
-  for(const later of ['npm ci --prefix atmos/app','npm run test:certify','npx playwright test','npm test --prefix atmos/app','ui-ci-cache.mjs'])
-    assert.ok(evidence>=0&&evidence<app.indexOf(later),`evidence precedes ${later}`);
-  assert.doesNotMatch(app,/CLOUDFLARE|PRIVATE_KEY|CANDIDATE_KEY|ATMOS_DEPLOY_KEY|pack-build|deploy staging/);
-  assert.match(app,/name: local certification and visual gate\n\s+if: \$\{\{ steps\.atmos_ci\.outputs\.path == 'atmos-ci' \}\}\n\s+run: \|\n\s+npm run test:certify --prefix atmos\/app\n\s+cd atmos\/app && npx playwright test\n/);
-  assert.match(app,/name: full application test gate\n\s+if: \$\{\{ steps\.atmos_ci\.outputs\.path == 'full-local' \}\}\n\s+run: npm test --prefix atmos\/app/);
+  assert.deepEqual([...new Set([...app.matchAll(/secrets\.([A-Za-z0-9_]+)/g)].map(m=>m[1]))],['ATMOS_READONLY_KEY']);
+  assert.doesNotMatch(app,/CLOUDFLARE|PRIVATE_KEY|CANDIDATE_KEY|ATMOS_DEPLOY_KEY|pack-build|deploy staging|steps\.atmos_ci|ui-app-test-receipt\.mjs evidence/);
+  assert.match(app,/name: local certification and visual gate\n\s+if: \$\{\{ needs\.atmos-evidence\.outputs\.path == 'atmos-ci' \}\}\n\s+run: \|\n\s+npm run gates --prefix atmos\/app\n\s+npm run test:certify --prefix atmos\/app\n\s+cd atmos\/app && npx playwright test\n/);
+  assert.match(app,/name: full application test gate\n\s+if: \$\{\{ needs\.atmos-evidence\.outputs\.path == 'full-local' \}\}\n\s+run: npm test --prefix atmos\/app/);
   assert.ok(app.indexOf('ui-app-test-receipt.mjs emit')>app.indexOf('npm test --prefix atmos/app'));
   assert.ok(app.indexOf('ui-app-test-receipt.mjs emit')>app.indexOf('npx playwright test'));
-  for(const output of ['receipt: ${{ steps.evidence.outputs.receipt }}','evidence_path: ${{ steps.atmos_ci.outputs.path }}',
-    'atmos_run_id: ${{ steps.atmos_ci.outputs.atmos_run_id }}','atmos_run_attempt: ${{ steps.atmos_ci.outputs.atmos_run_attempt }}'])
-    assert.ok(app.includes(output),output);
-  // Candidate-domain caches only: npm download cache keyed on the candidate lockfile, browsers by locked version.
-  assert.match(app,/actions\/setup-node@[a-f0-9]{40} # v4\n\s+with: \{ node-version: 22, cache: npm, cache-dependency-path: atmos\/app\/package-lock\.json \}/);
-  assert.match(app,/actions\/cache\/restore@[a-f0-9]{40} # v4\n\s+with:\n\s+path: ~\/\.cache\/ms-playwright\n\s+key: ui-candidate-playwright-/);
-  assert.ok(app.indexOf('actions/cache/save@')>app.indexOf('npx playwright install --with-deps chromium'));
-  assert.ok(app.indexOf('actions/cache/save@')<app.indexOf('npm run test:certify'));
-  assert.match(qualify,/needs: \[profile, build, app-tests\]/);
-  for(const line of ['UI_APP_TEST_RECEIPT: ${{ needs.app-tests.outputs.receipt }}','UI_APP_TEST_EVIDENCE_PATH: ${{ needs.app-tests.outputs.evidence_path }}',
-    'UI_APP_TEST_ATMOS_RUN_ID: ${{ needs.app-tests.outputs.atmos_run_id }}','UI_APP_TEST_ATMOS_RUN_ATTEMPT: ${{ needs.app-tests.outputs.atmos_run_attempt }}'])
-    assert.ok(qualify.includes(line),line);
-  // Publisher jobs never restore any cache.
+  for(const line of ['UI_APP_TEST_EVIDENCE_PATH: ${{ needs.atmos-evidence.outputs.path }}',
+    'UI_APP_TEST_ATMOS_RUN_ID: ${{ needs.atmos-evidence.outputs.atmos_run_id }}','UI_APP_TEST_ATMOS_RUN_ATTEMPT: ${{ needs.atmos-evidence.outputs.atmos_run_attempt }}']){
+    assert.ok(app.includes(line),line); assert.ok(qualify.includes(line),line);
+  }
+  assert.match(app,/receipt: \$\{\{ steps.evidence.outputs.receipt \}\}/);
+  assert.doesNotMatch(app,/evidence_path:|atmos_run_id: \$\{\{/,'candidate job never republishes the evidence outputs');
+  assert.match(qualify,/needs: \[profile, build, atmos-evidence, app-tests\]/);
+  assert.ok(qualify.includes('UI_APP_TEST_RECEIPT: ${{ needs.app-tests.outputs.receipt }}'));
   assert.doesNotMatch(qualify,/actions\/cache|cache: npm|cache-dependency-path/);
   const source=read('tools/ui-release.mjs');
   const receive=source.split('async function receiveBuild()')[1].split('\nfunction environment(')[0];
@@ -225,7 +236,7 @@ test('app-tests: evidence first, then exact source, candidate-only caches, one s
   assert.match(receive,/evidence:appTestEvidenceFromEnvironment\(process\.env\)/);
   assert.match(source,/fullTests:true,weatherLab:true,builtRuntime:true,probes:3,\n\s+appTestEvidence:appTestEvidenceFromEnvironment\(process\.env\)/);
   const policy=source.split('const POLICY_FILES')[1].split(';')[0];
-  assert.ok(policy.includes('tools/ui-app-test-receipt.mjs')); assert.ok(policy.includes('tools/ui-ci-cache.mjs'));
+  assert.ok(policy.includes('tools/ui-app-test-receipt.mjs')); assert.ok(!policy.includes('ui-ci-cache'));
 });
 
 test('real GitHub attempt metadata carries workflow SHA, numeric attempt and complete gate status',()=>{
@@ -244,7 +255,8 @@ test('real GitHub attempt metadata carries workflow SHA, numeric attempt and com
   // Old build success is not app-tests evidence. Adapt only the job name and add the evidence step
   // (which predates this record) to exercise the actual API field types; no cloud run is claimed.
   assert.throws(()=>verifyAppTestReceipt(receipt,[historical],c));
-  assert.throws(()=>verifyAppTestReceipt(receipt,[{...historical,name:'app-tests'}],c),/one "verify Atmos CI evidence/);
-  const adapted={...historical,name:'app-tests',steps:[...historical.steps,{...gate,name:EVIDENCE_STEP}]};
-  assert.deepEqual(verifyAppTestReceipt(receipt,[adapted],c),appTestReceipt(c));
+  assert.throws(()=>verifyAppTestReceipt(receipt,[{...historical,name:'app-tests'}],c),/one atmos-evidence job/);
+  // The evidence job postdates this record; synthesise it from the same real field types.
+  const evidence={...historical,name:EVIDENCE_JOB,steps:[{...gate,name:EVIDENCE_STEP}]};
+  assert.deepEqual(verifyAppTestReceipt(receipt,[evidence,{...historical,name:'app-tests'}],c),appTestReceipt(c));
 });

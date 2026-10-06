@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
 
 const read=path=>readFileSync(new URL('../'+path,import.meta.url),'utf8');
@@ -149,15 +149,18 @@ test('qualify, candidate and Cycle checkouts and the actual controller guard rem
   assert.doesNotMatch(qualify,/actions\/cache|cache: npm|cache-dependency-path/);
   const profileJob=staging.split('\n  profile:\n')[1].split('\n  build:\n')[0];
   assert.doesNotMatch(profileJob,/actions\/cache|cache: npm/);
+  // No browser cache anywhere: a planted browser would otherwise outlive its candidate.
+  assert.doesNotMatch(staging,/ms-playwright|actions\/cache\/(?:restore|save)|cache: npm|cache-dependency-path/);
   for(const job of ['build','app-tests']){
-    const block=staging.split(`\n  ${job}:\n`)[1].split(job==='build'?'\n  app-tests:\n':'\n  qualify:\n')[0];
-    const uses=[...block.matchAll(/uses: (actions\/cache[^@]*)@([a-f0-9]{40})/g)];
-    assert.deepEqual(uses.map(m=>m[1]),['actions/cache/restore','actions/cache/save'],job);
-    assert.ok(uses.every(m=>m[2]==='0057852bfaa89a56745cba8c7296529d2fc39830'),job);
-    assert.equal((block.match(/path: ~\/\.cache\/ms-playwright/g)||[]).length,2,job);
-    assert.match(block,/key: ui-candidate-playwright-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-chromium-\$\{\{ steps\.playwright\.outputs\.version \}\}/);
-    assert.match(block,/node cycle\/tools\/ui-ci-cache\.mjs playwright-version atmos\/app\/package-lock\.json/);
-    assert.ok(block.indexOf('actions/cache/save@')>block.indexOf('npx playwright install --with-deps chromium'),job);
-    assert.match(block,/cache: npm/);
+    const block=staging.split(`\n  ${job}:\n`)[1].split('\n  '+(job==='build'?'app-tests':'qualify')+':\n')[0];
+    const uses=[...block.matchAll(/uses: (actions\/cache[^@]*)@([a-f0-9]{40}) # v4\n\s+with:\n\s+path: ([^\n]+)\n\s+key: ([^\n]+)\n\s+restore-keys: ([^\n]+)\n/g)];
+    assert.deepEqual(uses.map(m=>[m[1],m[2],m[3],m[4],m[5]]),[['actions/cache','0057852bfaa89a56745cba8c7296529d2fc39830','~/.npm',
+      "ui-candidate-npm-${{ runner.os }}-${{ hashFiles('atmos/app/package-lock.json', 'control/platform/edge/package-lock.json') }}",
+      'ui-candidate-npm-${{ runner.os }}-']],job);
+    assert.equal((block.match(/actions\/cache/g)||[]).length,1,job);
+    assert.ok(block.indexOf('actions/cache@')<block.indexOf('npm ci --prefix atmos/app'),job);
   }
+  // The candidate npm key prefix is unique to the two candidate jobs across every workflow.
+  for(const name of readdirSync(new URL('../.github/workflows/',import.meta.url)))
+    if(name!=='ui-staging.yml')assert.doesNotMatch(read('.github/workflows/'+name),/ui-candidate-npm/,name);
 });

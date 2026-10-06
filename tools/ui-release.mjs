@@ -37,7 +37,7 @@ const DEPLOYMENT_ID = /^[a-f0-9-]{36}$/;
 const GUARD_SUCCESS_RECEIPT_MAX_BYTES = 4096;
 const CORE_CATALOG_MODELS = ['ecmwf','gfs'];
 export const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workflows/ui-staging-tc.yml', '.github/workflows/ui-release.yml',
-  'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-app-test-receipt.mjs', 'tools/ui-ci-cache.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh',
+  'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-app-test-receipt.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh',
   'tools/ui-release-profile-preflight.mjs','tools/ui-public-locale-beta.mjs','tools/ui-public-combined.mjs',
   'tools/ui-combined-source-guard.mjs','tools/ui-weather-feed-baseline.mjs',
   'tools/ui-release-layer-guard.mjs','tools/ui-layer-diagnostics.mjs','tools/ui-layer-diagnostics-browser.txt','tools/ui-layer-paint-proof.mjs',
