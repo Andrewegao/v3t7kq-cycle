@@ -2,9 +2,12 @@
 
 ## Safety boundary
 
-UI releases are never triggered by a push, merge, schedule, data bake, backfill, or another
-workflow. Both entry points use `workflow_dispatch` on protected `main`. Production is
-manually triggered when Andrew chooses (for example, on a weekend); there is no weekly cron.
+UI releases are never triggered by a push, merge, schedule, data bake or backfill. Staging uses
+`workflow_dispatch` on protected `main`. Production is dispatched manually when Andrew chooses,
+or, only while he has armed it, follows a successful staging qualification run and still waits
+for the `ui-production` environment approval; there is no weekly cron. See
+[UI staging → production flow](ui-pipeline-flow-20261005.md) for triggers, the app-test
+evidence path, caches and how to arm or disarm automatic promotion.
 
 This setup does not deploy or change either running website. Both new UI environments are
 disabled. The absolute deployment freeze is at least **2026-08-31 11:00 UTC**. Expiry does not
@@ -16,7 +19,9 @@ explicit approval. Normal data collection, scoring, archive and R2 publication a
 1. Run **WeatherX UI staging qualification** (`ui-staging.yml`) with the exact current Atmos
    master SHA (or the separately reviewed combined-profile source admitted by its existing guard).
    After resolving the protected profile, two source-read runners operate in parallel: `app-tests`
-   runs the complete `npm test --prefix atmos/app` command with the selected CI profile; `build`
+   either verifies Atmos CI's own successful run for the exact SHA and runs the local
+   certification and visual gate, or runs the complete `npm test --prefix atmos/app` command with
+   the selected CI profile (see the flow page); `build`
    preserves the live Weather Lab gates, then builds the public shell and Pages Functions once.
    Neither runner receives publication secrets. Qualification requires both jobs to succeed in
    the same run attempt, with an exact source/profile/controller receipt verified against GitHub's
