@@ -125,7 +125,8 @@ test('gate age ignores time queued behind the lock, so a normal waiting moment i
   assert.deepEqual(holders.map(h => [h.model, h.minutes, h.stuck]), [['ecmwf', 0, false]]);
   assert.ok(!requested.includes('/actions/runs/8/jobs?per_page=100'), 'staging-target component runs hold staging locks');
   delete responses['/deployments/700/statuses?per_page=30'];responses['/deployments/700/statuses?per_page=30'] = [];
-  assert.equal((await lockHolders({runId: '1', token: 'fixture', fetcher, now: NOW}))[0].stuck, false, 'no gate status: not stuck');
+  // No gate status found: measured from the job's own start (55 min), so it is stuck, never silently fine.
+  assert.deepEqual((await lockHolders({runId: '1', token: 'fixture', fetcher, now: NOW})).map(h => [h.minutes, h.gateUnknown, h.stuck]), [[55, true, true]]);
   // A staging-target summary never reports or fails on production locks.
   const env = {GITHUB_RUN_ID: '9', GITHUB_RUN_ATTEMPT: '1', GH_TOKEN: 'fixture', CATALOG_TARGET: 'staging', GITHUB_EVENT_NAME: 'workflow_dispatch'};
   requested.length = 0;
@@ -166,4 +167,38 @@ test('a single-model recovery says whole-data maintenance is skipped', () => {
   const bake = readFileSync(new URL('../.github/workflows/bake.yml', import.meta.url), 'utf8');
   assert.match(bake, /format\('bake: recovery of \{0\} from run \{1\} \(whole-data maintenance skipped\)', inputs\.model, inputs\.recovery_run_id\)/);
   assert.ok(bake.indexOf("recovery of {0} from run") < bake.indexOf("recovery of run {0} (all models"), 'the single-model case is decided first');
+});
+
+test('a holder whose deployment is older than the newest 100 is still stuck, and a stuck recovery is BLOCKED, not SKIPPED', async () => {
+  // Live shape: catalog-bake run 36762426044 model (hrrr) waiting since 2026-09-30 18:58Z while its SHA
+  // has >200 production deployments; page 1 (newest 100) spans only 10-01 08:28Z to 16:29Z.
+  const page1 = Array.from({length: 100}, (_, i) => ({id: 9000 + i,
+    created_at: new Date(Date.parse('2026-10-01T16:29:00Z') - i * (Date.parse('2026-10-01T16:29:00Z') - Date.parse('2026-10-01T08:28:00Z')) / 99).toISOString()}));
+  const responses = {
+    '/actions/runs?status=waiting&per_page=50': {workflow_runs: [{id: 36762426044, path: '.github/workflows/catalog-bake.yml', head_sha: 'b'.repeat(40)}]},
+    '/actions/runs?status=in_progress&per_page=50': {workflow_runs: []},
+    '/actions/runs/36762426044/jobs?per_page=100': {jobs: [{id: 110048100350, name: 'model (hrrr)', status: 'waiting', started_at: '2026-09-30T18:58:51Z'}]},
+    [`/deployments?environment=production&sha=${'b'.repeat(40)}&per_page=100`]: page1,
+  };
+  const fetcher = async url => { const path = url.replace('https://api.github.com/repos/Andrewegao/v3t7kq-cycle', '');
+    return responses[path] ? new Response(JSON.stringify(responses[path])) : new Response(JSON.stringify(path.includes('/statuses') ? [] : {workflow_runs: []})); };
+  const [hrrr] = await lockHolders({runId: '1', token: 'fixture', fetcher, now: NOW});
+  assert.deepEqual([hrrr.model, hrrr.gateUnknown, hrrr.stuck], ['hrrr', true, true]);
+  assert.equal(hrrr.minutes, 8581, 'measured from the job start 2026-09-30T18:58:51Z');
+  const {text, stuck} = componentMarkdown({target: 'production', event: 'schedule', holders: [hrrr], now: NOW, jobs: []});
+  assert.equal(stuck.length, 1);assert.match(text, /gate status not found; measured from job start\) — STUCK/);
+  // A recovery waiting at the gate past the bound with an unknown deployment: BLOCKED (red), never SKIPPED.
+  responses['/actions/runs?status=waiting&per_page=50'] = {workflow_runs: [{id: 60, path: '.github/workflows/five-feed-recovery.yml', head_sha: 'e'.repeat(40), run_started_at: at(45)}]};
+  responses['/actions/runs/60/jobs?per_page=100'] = {jobs: [{id: 600, name: 'recover', status: 'waiting', started_at: at(45)}]};
+  responses[`/deployments?environment=production&sha=${'e'.repeat(40)}&per_page=100`] = page1;
+  responses['/actions/workflows/five-feed-recovery.yml/runs?status=waiting&per_page=10'] = {workflow_runs: [{id: 60}]};
+  for (const ENABLED of ['true', 'false']) {
+    const plan = await observationPlan({env: {GITHUB_RUN_ID: '1', GITHUB_EVENT_NAME: 'schedule', ENABLED}, event: {}, token: 'fixture', fetcher, now: NOW});
+    assert.equal(plan.run, false);assert.equal(plan.code, 1);assert.match(plan.text, /BLOCKED/);assert.doesNotMatch(plan.text, /SKIPPED/);
+    assert.match(plan.text, /run 60 \(five-feed-recovery\.yml\) job "recover" has waited at the production environment gate for 45 min ago \(gate status not found/);
+  }
+  // Under the bound it is not stuck, and the schedule stands aside for the recovery (green SKIPPED).
+  responses['/actions/runs/60/jobs?per_page=100'] = {jobs: [{id: 600, name: 'recover', status: 'waiting', started_at: at(10)}]};
+  const aside = await observationPlan({env: {GITHUB_RUN_ID: '1', GITHUB_EVENT_NAME: 'schedule', ENABLED: 'true'}, event: {}, token: 'fixture', fetcher, now: NOW});
+  assert.equal(aside.code, 0);assert.match(aside.text, /Manual recovery run 60 is waiting/);
 });

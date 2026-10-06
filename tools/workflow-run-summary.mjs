@@ -147,9 +147,14 @@ export async function lockHolders({runId, token, fetcher = fetch, now, only = nu
         for (const job of jobs) {
           const model = holderJobName(job.name, workflow);
           if (!model || (only && !only.includes(model)) || !['waiting', 'in_progress'].includes(job.status)) continue;
-          const since = job.status === 'waiting' ? await gateWaitingSince({run, job, token, fetcher}) : job.started_at;
+          const gate = job.status === 'waiting' ? await gateWaitingSince({run, job, token, fetcher}) : null;
+          // gateWaitingSince reads only the newest 100 production deployments for the SHA; a holder
+          // whose gate status is not found there is measured from its own start (an upper bound), so a
+          // waiting holder is never reported as not stuck merely because its deployment is unknown.
+          const gateUnknown = job.status === 'waiting' && !gate;
+          const since = job.status === 'waiting' ? gate ?? job.started_at ?? job.created_at ?? run.run_started_at : job.started_at;
           const minutes = minutesSince(since, now);
-          holders.push({model, lock: lockName(model), runId: run.id, workflow, job: job.name, status: job.status, minutes,
+          holders.push({model, lock: lockName(model), runId: run.id, workflow, job: job.name, status: job.status, minutes, gateUnknown,
             stuck: job.status === 'waiting' && minutes !== null && minutes > STUCK_WAITING_MINUTES});
         }
       }
@@ -168,7 +173,7 @@ export async function observationPlan({env, event, token, fetcher = fetch, now})
     return {run: false, code: 1, text: `## Observation refresh: REFUSED\n\nA manual dispatch must enter \`${CONFIRMATION}\`. Nothing was refreshed.\n`};
   const holders = await lockHolders({runId: env.GITHUB_RUN_ID, token, fetcher, now, only: ['observations']});
   const stuck = (holders ?? []).filter(holder => holder.stuck);
-  for (const holder of stuck) lines.push(`- run ${holder.runId} (${holder.workflow}) job "${holder.job}" has waited at the production environment gate for ${ago(holder.minutes)}, holding ${OBSERVATION_LOCK}. The owner must cancel that run.`);
+  for (const holder of stuck) lines.push(`- run ${holder.runId} (${holder.workflow}) job "${holder.job}" has waited at the production environment gate for ${ago(holder.minutes)}${holder.gateUnknown ? ' (gate status not found; measured from job start)' : ''}, holding ${OBSERVATION_LOCK}. The owner must cancel that run.`);
   if (stuck.length) return {run: false, code: 1, text: ['## Observation refresh: BLOCKED (stuck writer lock)', '', ...lines, ''].join('\n')};
   let recovery = null;
   try {
@@ -203,7 +208,7 @@ export function componentMarkdown({jobs, target, event, holders, now}) {
   lines.push('', '### Writer locks');
   if (holders === null) lines.push('Lock holders could not be listed (Actions API unavailable).');
   else if (!holders.length) lines.push('No other run currently holds or waits on a component writer lock.');
-  else for (const holder of holders) lines.push(`- ${holder.lock}: run ${holder.runId} (${holder.workflow}) job "${holder.job}" is ${holder.status}${holder.status === 'waiting' ? ' at the environment gate' : ''} since ${ago(holder.minutes)}` +
+  else for (const holder of holders) lines.push(`- ${holder.lock}: run ${holder.runId} (${holder.workflow}) job "${holder.job}" is ${holder.status}${holder.status === 'waiting' ? ' at the environment gate' : ''} since ${ago(holder.minutes)}${holder.gateUnknown ? ' (gate status not found; measured from job start)' : ''}` +
     (holder.stuck ? ' — STUCK at the production environment gate; it holds the lock and every later run for this model is cancelled while queued. The owner must cancel that run.' : ''));
   return {text: [...lines, ''].join('\n'), stuck};
 }
