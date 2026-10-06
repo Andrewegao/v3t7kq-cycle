@@ -38,13 +38,14 @@ jobs:
         run: |
           test "$GITHUB_REPOSITORY" = Andrewegao/v3t7kq-cycle
           test "$GITHUB_REF" = refs/heads/main
-          # Recovery re-reads its literal confirmation from the dispatch event before any credential.
+          # Every manual dispatch re-reads its literal confirmation from the event before any credential.
           CONFIRMATION="$(jq -r '.inputs.confirmation // ""' "$GITHUB_EVENT_PATH")"
           case "$FIVE_FEED_MODE:$GITHUB_EVENT_NAME:$GITHUB_WORKFLOW_REF" in
             "recovery:workflow_dispatch:Andrewegao/v3t7kq-cycle/.github/workflows/five-feed-recovery.yml@refs/heads/main")
               test "$CONFIRMATION" = 'RECOVER FIVE OBSERVATION FEEDS' ;;
-            "scheduled:schedule:Andrewegao/v3t7kq-cycle/.github/workflows/observation-refresh.yml@refs/heads/main"|\
-            "scheduled:workflow_dispatch:Andrewegao/v3t7kq-cycle/.github/workflows/observation-refresh.yml@refs/heads/main") ;;
+            "scheduled:schedule:Andrewegao/v3t7kq-cycle/.github/workflows/observation-refresh.yml@refs/heads/main") ;;
+            "scheduled:workflow_dispatch:Andrewegao/v3t7kq-cycle/.github/workflows/observation-refresh.yml@refs/heads/main")
+              test "$CONFIRMATION" = 'RECOVER FIVE OBSERVATION FEEDS' ;;
             *) echo "refusing an unadmitted observation caller" >&2; exit 2 ;;
           esac
           test "$ENABLED" = true

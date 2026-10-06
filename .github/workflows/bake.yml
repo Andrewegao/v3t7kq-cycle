@@ -3,7 +3,7 @@
 # Pages credential and cannot deploy or overwrite the application shell.
 name: bake
 # The run title says what this run can refresh before any job starts; the final summary says what it did.
-run-name: "${{ inputs.staging_wind100_only == true && 'bake: staging Wind100 only (whole-data maintenance skipped)' || inputs.recovery_run_id != '' && format('bake: recovery of run {0} (all models + whole-data maintenance)', inputs.recovery_run_id) || (inputs.model != '' && inputs.model != 'all') && format('bake: {0} only (whole-data maintenance skipped)', inputs.model) || 'bake: all models + whole-data maintenance' }}"
+run-name: "${{ inputs.staging_wind100_only == true && 'bake: staging Wind100 only (whole-data maintenance skipped)' || (inputs.recovery_run_id != '' && inputs.model != '' && inputs.model != 'all') && format('bake: recovery of {0} from run {1} (whole-data maintenance skipped)', inputs.model, inputs.recovery_run_id) || inputs.recovery_run_id != '' && format('bake: recovery of run {0} (all models + whole-data maintenance)', inputs.recovery_run_id) || (inputs.model != '' && inputs.model != 'all') && format('bake: {0} only (whole-data maintenance skipped)', inputs.model) || 'bake: all models + whole-data maintenance' }}"
 permissions:
   contents: read
   actions: read

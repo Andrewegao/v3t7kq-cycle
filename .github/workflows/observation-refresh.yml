@@ -14,30 +14,37 @@ on:
     # the external Wind100 dispatch (:35) and the whole bake (:30 at 02, 08, 14 and 20 UTC).
     - cron: '14,44 * * * *'
   workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Enter RECOVER FIVE OBSERVATION FEEDS to publish every admitted family now (refused families keep served data)
+        type: string
+        required: true
 jobs:
   plan:
-    # No environment and no lock: a disabled schedule is reported as skipped, never as a refresh.
+    # No environment, no lock, no secret. Refuses an unconfirmed manual dispatch, turns red when a
+    # job holding the observation lock is stuck at the production gate, stands aside while a manual
+    # recovery is queued or running, and reports a disabled schedule as SKIPPED.
     runs-on: ubuntu-24.04
-    timeout-minutes: 2
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      actions: read
     outputs:
       run: ${{ steps.plan.outputs.run }}
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          sparse-checkout: tools/workflow-run-summary.mjs
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: {node-version: '22'}
       - name: Decide whether this run refreshes observations
         id: plan
         env:
           ENABLED: ${{ vars.OBSERVATION_REFRESH_ENABLED }}
-        run: |
-          if [ "$ENABLED" != true ]; then
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            {
-              echo "## Observation refresh: SKIPPED"
-              echo
-              echo "Nothing was refreshed. The repository variable OBSERVATION_REFRESH_ENABLED is not \`true\`;"
-              echo "METAR, SYNOP, buoys, OpenAQ and fires keep their previously published data."
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          fi
+          GH_TOKEN: ${{ github.token }}
+        run: node tools/workflow-run-summary.mjs observation-plan
   refresh:
     needs: plan
     if: ${{ needs.plan.outputs.run == 'true' }}
@@ -65,13 +72,14 @@ jobs:
         run: |
           test "$GITHUB_REPOSITORY" = Andrewegao/v3t7kq-cycle
           test "$GITHUB_REF" = refs/heads/main
-          # Recovery re-reads its literal confirmation from the dispatch event before any credential.
+          # Every manual dispatch re-reads its literal confirmation from the event before any credential.
           CONFIRMATION="$(jq -r '.inputs.confirmation // ""' "$GITHUB_EVENT_PATH")"
           case "$FIVE_FEED_MODE:$GITHUB_EVENT_NAME:$GITHUB_WORKFLOW_REF" in
             "recovery:workflow_dispatch:Andrewegao/v3t7kq-cycle/.github/workflows/five-feed-recovery.yml@refs/heads/main")
               test "$CONFIRMATION" = 'RECOVER FIVE OBSERVATION FEEDS' ;;
-            "scheduled:schedule:Andrewegao/v3t7kq-cycle/.github/workflows/observation-refresh.yml@refs/heads/main"|\
-            "scheduled:workflow_dispatch:Andrewegao/v3t7kq-cycle/.github/workflows/observation-refresh.yml@refs/heads/main") ;;
+            "scheduled:schedule:Andrewegao/v3t7kq-cycle/.github/workflows/observation-refresh.yml@refs/heads/main") ;;
+            "scheduled:workflow_dispatch:Andrewegao/v3t7kq-cycle/.github/workflows/observation-refresh.yml@refs/heads/main")
+              test "$CONFIRMATION" = 'RECOVER FIVE OBSERVATION FEEDS' ;;
             *) echo "refusing an unadmitted observation caller" >&2; exit 2 ;;
           esac
           test "$ENABLED" = true
