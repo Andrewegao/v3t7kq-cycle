@@ -325,7 +325,7 @@ export function readPolicy(path = policyPath()) {
   assert.equal(policy.schemaVersion, 3);
   assert.match(policy.sourceSha ?? '', COMMIT);
   assert.equal(policy.sourceSha, SOURCE_SHA);
-  assert.equal(policy.coreSourceSha, '7a50f19714f22e04dc610a5aa33d311b7d1dc673');
+  assert.equal(policy.coreSourceSha, '5e68af94c24517eaaaf6a9d25aec0cadc3d9b135');
   assert.equal(policy.recurringPublicationMode, RECURRING_PUBLICATION_MODE);
   assert.deepEqual(policy.recurringStorage, {
     componentObjectPrefix: RECURRING_COMPONENT_PREFIX,
