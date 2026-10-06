@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `d71c224d3afe30b8d18dc5dc6fb167127d442105fe8aef9c1c1138f632514770`.
+Source digest (registry and workflow bytes): `eb98f1b74e334e65fff27e5bec45dfc42eab3fe5d5afb1143945dc343993560b`.
 
 61 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -1498,7 +1498,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
 | [diagnose / step 1](../.github/workflows/ui-layer-diagnostics.yml#L34) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [diagnose / Checkout exact reviewed diagnostic controller](../.github/workflows/ui-layer-diagnostics.yml#L38) | <code>weatherx-hq/atmos</code> | <code>5b622f594b107e105dae9ee6b494c20ff8d0699a</code> |
+| [diagnose / Checkout exact reviewed diagnostic controller](../.github/workflows/ui-layer-diagnostics.yml#L38) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.target == 'recovery-preview' &amp;&amp; '547a8e1e54a7e46b211ea0770d895b6cc46c8afd' &#124;&#124; '5b622f594b107e105dae9ee6b494c20ff8d0699a' }}</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
 

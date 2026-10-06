@@ -41,8 +41,58 @@ page.on('console', message => {
     diagnosticKeep(diagnosticGpu, codes.slice(0, 8));
   }
 });
+// Only fixed checkpoint identifiers and numbers leave the child. The line is the original
+// harness checkpoint, not a claim to reconstruct the exact throwing line from a raw stack.
+const diagnosticStages = new Set(['startup-navigation','startup-app-ready','startup-opening-retired',
+  'baseline-wind-ready','baseline-url-restore','baseline-particles-hidden','baseline-full-field-paint',
+  'baseline-slider-ready','baseline-slider-bounds','baseline-field-commit','baseline-cursor-settled',
+  'baseline-ground-ready','baseline-map-tiles-ready','baseline-capture','baseline-idle-control',
+  'prefill-entry','texture-compaction','mid-fade-compaction','hostile-layer-sequence',
+  'temperature-before-aba','hostile-wind-temp-wind','final-capture','roundtrip-assertions',
+  'strict-paint-baseline','strict-paint-wait']);
+let diagnosticCheckpoint = {stage:null, originalSourceLine:null};
+function diagnosticStage(stage, line) {
+  diagnosticCheckpoint = {stage:diagnosticStages.has(stage)?stage:null,
+    originalSourceLine:Number.isInteger(line)&&line>0&&line<=10_000?line:null};
+  diagnosticEmit({event:'phase',phase:diagnosticCheckpoint.stage,...diagnosticCheckpoint});
+}
+// Fixed throws from the reviewed helper/harness only. Playwright's evaluate wrapper has a
+// known first-line prefix; any other prefix, suffix, dynamic throw, or unknown message is null.
+const diagnosticKnownErrors = new Map([
+  ['unsettled wind proof','wind-unsettled'],
+  ['invalid wind frame axis','wind-frame-axis-invalid'],
+  ['native identity raced capture','wind-native-identity-raced'],
+  ['unsupported or fractional Deck wind proof','wind-deck-unsupported-or-fractional'],
+  ['Deck inputs are hidden, stale, mixed, or unbound','wind-deck-inputs-unproven'],
+  ['Deck generation has no exact completed draw','wind-deck-generation-unproven'],
+  ['rendered Wind disappeared during draw proof','wind-deck-disappeared'],
+  ['not the full-resolution wind image','wind-image-resolution-unproven'],
+  ['missing Deck draw sequence','wind-deck-draw-sequence-missing'],
+  ['new Deck draw changed field','wind-deck-draw-field-changed'],
+  ['scheduled Deck endpoint has no newer completed draw','wind-deck-new-draw-unproven'],
+  ['Deck inputs changed across completed draw','wind-deck-inputs-changed'],
+  ['Deck image bytes changed across completed draw','wind-deck-image-bytes-changed'],
+  ['Deck identity raced capture','wind-deck-identity-raced'],
+  ['rendered wind bytes differ from exact source frame','wind-source-bytes-mismatch'],
+  ['wind raster missing from baseline or final state','wind-roundtrip-surface-missing'],
+  ['exact wind field identity changed during roundtrip','wind-roundtrip-identity-changed'],
+  ['wind surface lacks exact painted proof','wind-roundtrip-paint-unproven'],
+  ['wind surface changed without exact painted native-to-Deck field proof','wind-roundtrip-handoff-unproven'],
+  ['weather texture compaction did not complete','texture-compaction-incomplete'],
+  ['weather texture compaction did not exercise inactive texture cleanup','texture-compaction-cleanup-unproven'],
+  ['weather texture compaction replaced the map owner','texture-compaction-owner-changed'],
+  ['Temperature did not paint before Wind ABA','temperature-before-aba-unproven'],
+  ['strict-paint-baseline-unavailable','strict-paint-baseline-unavailable'],
+  ['strict-paint-baseline-timeout','strict-paint-baseline-timeout'],
+]);
+function diagnosticErrorCode(error) {
+  if (typeof error?.message !== 'string') return null;
+  const firstLine = error.message.split('\n',1)[0].replace(/^page\.evaluate: Error: /,'');
+  return diagnosticKnownErrors.get(firstLine) ?? null;
+}
 // The monitor observes fatal failure without catching it or changing the original exit status.
 process.on('uncaughtExceptionMonitor', error => diagnosticEmit({ event: 'fatal',
+  ...diagnosticCheckpoint, failureCode:diagnosticErrorCode(error),
   category: error?.name === 'TimeoutError' ? 'timeout' : error?.name === 'AssertionError' ? 'assertion' : 'runtime-error',
   pending: diagnosticPending(), network: diagnosticNetwork, gpu: diagnosticGpu, pageErrors: diagnosticPageErrors,
   writesBlocked: diagnosticWritesBlocked }));
@@ -85,6 +135,7 @@ async function diagnosticSnapshot(layer, phase, started) {
 // Strict mode adds a separate paint observation after the unchanged original prefill wait.
 // Baseline capture is before activation and refuses an unproven/stale semantic clock.
 async function diagnosticPaintBaseline(layer) {
+  diagnosticStage('strict-paint-baseline',diagnosticCheckpoint.originalSourceLine);
   let timer;
   try {
     return await Promise.race([page.evaluate(layer => {
@@ -108,6 +159,7 @@ async function diagnosticPaintBaseline(layer) {
   } finally {clearTimeout(timer);}
 }
 async function diagnosticWaitForPaint(expected, started) {
+  diagnosticStage('strict-paint-wait',diagnosticCheckpoint.originalSourceLine);
   diagnosticEmit({event:'prefill',layer:expected.layer,phase:'paint-wait',elapsedMs:Date.now()-started});
   try {
     const proof = await page.waitForFunction(diagnosticPaintPredicate,expected,{timeout:30_000,polling:250});
