@@ -6,9 +6,9 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `2bb7a66d5670bce99b08a28bdf6a113e27ec2b513350dd16dfcea53a1422994d`.
+Source digest (registry and workflow bytes): `591146edfad78df1cd105f3b9714e62360cd9bd5f6da2dd732826b9eaff8bd14`.
 
-61 workflows. Ordering and output are deterministic; no API request or clock is used.
+62 workflows. Ordering and output are deterministic; no API request or clock is used.
 
 | Workflow | Family / subsystem | Lifecycle | Purpose | Runbook |
 | --- | --- | --- | --- | --- |
@@ -25,6 +25,7 @@ Source digest (registry and workflow bytes): `2bb7a66d5670bce99b08a28bdf6a113e27
 | [consumer-refresh](#consumer-refresh) | releases / Production consumers | manual-supported | Refresh production consumers with guarded verification and rollback. | [guide](../CONSUMER_REFRESH.md) |
 | [data-edge-deploy](#data-edge-deploy) | releases / Production data edge | manual-supported | Deploy the selected production data-edge phase under its explicit guards. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [data-reader-refresh](#data-reader-refresh) | releases / Production data reader | manual-supported | Refresh the production data reader with compatible fallback recovery. | [guide](../docs/data-reader-refresh.md) |
+| [five-feed-recovery](#five-feed-recovery) | maintenance / Observation component recovery | manual-supported | Manually refresh five observation/fire components through exact producer admission and one atomic catalog promotion. | [guide](../docs/five-feed-recovery-20261006.md) |
 | [fusion-evaluate](#fusion-evaluate) | maintenance / Fusion evaluation | manual-supported | Evaluate retained fusion inputs through the existing guarded evaluation path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [fusion-infra](#fusion-infra) | control-plane / Fusion infrastructure | manual-supported | Deploy the exact isolated Fusion archive or complete infrastructure pair through explicit scope guards. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [fusion-issue](#fusion-issue) | maintenance / Fusion issuance | recurring | Record source-bound Fusion forecasts with canary/full completeness, exact archive readback, and a complete-network archive manifest. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
@@ -421,6 +422,28 @@ Checkout declarations (not a claim of approval or checkout success):
 | [data-reader-refresh / Checkout exact reviewed source](../.github/workflows/data-reader-refresh.yml#L54) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmosphere_sha }}</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
+
+
+## five-feed-recovery
+
+[.github/workflows/five-feed-recovery.yml](../.github/workflows/five-feed-recovery.yml#L1) · <code>Recover five observation and fire components</code>
+
+Declared triggers: [workflow_dispatch](../.github/workflows/five-feed-recovery.yml#L6); input names <code>["confirmation"]</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: not declared.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [recover](../.github/workflows/five-feed-recovery.yml#L13) ← no needs | <code>ubuntu-24.04</code> | <code>production</code> | <code>60</code> | <code>{"group":"weatherx-data-maintenance","cancel-in-progress":false}</code> | not declared | inherits workflow/default policy |
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [recover / Checkout exact recovery controller](../.github/workflows/five-feed-recovery.yml#L36) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
+| [recover / Checkout unchanged qualified five-feed producers](../.github/workflows/five-feed-recovery.yml#L43) | <code>weatherx-hq/atmos</code> | <code>5e68af94c24517eaaaf6a9d25aec0cadc3d9b135</code> |
+
+Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/five-feed-recovery.yml#L21), [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/five-feed-recovery.yml#L27).
 
 
 ## fusion-evaluate

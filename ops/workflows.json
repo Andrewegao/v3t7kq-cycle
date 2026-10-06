@@ -549,6 +549,15 @@
       "subsystem": "Train 3 baseline preparation",
       "lifecycle": "diagnostic",
       "runbook": "docs/train3-baseline-preparation.md"
+    },
+    {
+      "id": "five-feed-recovery",
+      "path": ".github/workflows/five-feed-recovery.yml",
+      "family": "maintenance",
+      "purpose": "Manually refresh five observation/fire components through exact producer admission and one atomic catalog promotion.",
+      "subsystem": "Observation component recovery",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/five-feed-recovery-20261006.md"
     }
   ]
 }

@@ -93,6 +93,10 @@ jobs:
           python3 -I tests/test_train3_offline_attestation.py
           node --test tests/nam-hi-diagnostic.mjs
           node --test tests/component-publish-diagnostic.mjs tests/resume-model-publication.mjs
+      - name: Manual five-feed collection and atomic promotion contracts
+        run: |
+          node --test tests/five-feed-recovery.mjs
+          python3 -I tests/test_five_feed_collect.py
       - name: Staged UI artifact, manual promotion and privacy contracts
         run: node --test tests/ui-*.mjs
       - name: Cloud-only staging data isolation and public-mode contracts
