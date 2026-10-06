@@ -1,20 +1,191 @@
 {
   "schemaVersion": 1,
   "atmosSha": "18fb5074d7472ffc5549704c0874f6e35516cef5",
-  "atmosSubject": "weatherx-hq/atmos master merge of PR #489 (seal the reviewed GFS point horizon with its map run), 2026-10-06",
+  "atmosSubject": "weatherx-hq/atmos master merge of PR #489 (seal the reviewed GFS point horizon with its map run), 2026-10-06. Moving from 5e68af94c24517eaaaf6a9d25aec0cadc3d9b135 spans 24 commits / 290 files; under data/ and ops/ only data/add_geoscf.py, ops/core_model_artifact.py and their tests changed. The five observation producers, data/requirements.lock, ops/platform/publish-r2-component.sh, ops/bake-weatherx.sh and ops/bake-observation-points.sh are byte-identical.",
   "approvalVariables": {
     "production/CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA": "atmosSha"
   },
   "pins": [
-    {"path": ".github/workflows/bake.yml", "occurrences": 3},
-    {"path": ".github/workflows/collect-core-model.yml", "occurrences": 2},
-    {"path": ".github/workflows/collect-regional-model.yml", "occurrences": 2},
-    {"path": ".github/workflows/publish-current-model-production.yml", "occurrences": 2},
-    {"path": ".github/workflows/observation-refresh.yml", "occurrences": 2},
-    {"path": ".github/workflows/five-feed-recovery.yml", "occurrences": 2},
-    {"path": ".github/workflows/staging-wind100-recurring.yml", "occurrences": 2},
-    {"path": ".github/workflows/production-wind100-recurring.yml", "occurrences": 2},
-    {"path": "tools/staging-wind100-policy.json", "occurrences": 1},
-    {"path": "tools/production-wind100-policy.json", "occurrences": 1}
-  ]
+    {
+      "path": ".github/workflows/bake.yml",
+      "occurrences": 3
+    },
+    {
+      "path": ".github/workflows/collect-core-model.yml",
+      "occurrences": 2
+    },
+    {
+      "path": ".github/workflows/collect-regional-model.yml",
+      "occurrences": 2
+    },
+    {
+      "path": ".github/workflows/publish-current-model-production.yml",
+      "occurrences": 2
+    },
+    {
+      "path": ".github/workflows/observation-refresh.yml",
+      "occurrences": 2
+    },
+    {
+      "path": ".github/workflows/five-feed-recovery.yml",
+      "occurrences": 2
+    },
+    {
+      "path": ".github/workflows/staging-wind100-recurring.yml",
+      "occurrences": 2
+    },
+    {
+      "path": ".github/workflows/production-wind100-recurring.yml",
+      "occurrences": 2
+    },
+    {
+      "path": "tools/staging-wind100-policy.json",
+      "occurrences": 1
+    },
+    {
+      "path": "tools/production-wind100-policy.json",
+      "occurrences": 1
+    }
+  ],
+  "otherAtmosCommits": {
+    "note": "Independently qualified Atmos pins that are NOT the ordinary producer source. Each may appear only in its listed files; a new Atmos SHA anywhere in .github/workflows or tools must be added here or declared above.",
+    "commits": {
+      "0024da5a06925140d9681ef46303f751fda9ef54": [
+        "tools/staging-place-renewal-policy.json"
+      ],
+      "0335a3b0a85b629c8659032a032bbc5ea0911eff": [
+        ".github/workflows/qualify-bake-throughput.yml",
+        "tools/qualify-bake-throughput.py"
+      ],
+      "0aa9fbed9e179ab2ccb6ac456727b9f33124ddb6": [
+        ".github/workflows/staging-consumer-refresh.yml",
+        "tools/staging-consumer.mjs"
+      ],
+      "0edbbe243589849c3d56c98b24e5d8b7ab96c522": [
+        ".github/workflows/production-account-audit.yml",
+        "tools/production-account-audit.mjs"
+      ],
+      "0eeec07e06e5e48b53d41bf3590218a856432b32": [
+        "tools/ui-release.mjs"
+      ],
+      "164a469189da2c8303c997d4020b3ae20da84cd7": [
+        "tools/ui-release.mjs"
+      ],
+      "18faa9b33084623ef2486a57134de2e8c8974b0c": [
+        ".github/workflows/catalog-bake.yml"
+      ],
+      "25c402db5149daa018e349a34a4beeba1f2dca45": [
+        ".github/workflows/source-checkout-probe.yml",
+        ".github/workflows/ui-release.yml",
+        ".github/workflows/ui-staging.yml",
+        "tools/ui-candidate.mjs"
+      ],
+      "3f7479573b990337c64643077720c39b361b6841": [
+        "tools/current-model-artifact.py"
+      ],
+      "48be0a6c7cef9a0c831831952cefd80ce967ad2d": [
+        "tools/qualify-bake-throughput.py"
+      ],
+      "49dc566625dfe284cb31c79ccdddfc06d47cc5c5": [
+        "tools/recover-model-inputs.py"
+      ],
+      "4dafd26387d5917604deb7379a8d45a994fc5b67": [
+        ".github/workflows/ui-staging.yml",
+        "tools/ui-candidate.mjs"
+      ],
+      "4ec0b8baa1d33ca56d50e5e9797eca74293bd19b": [
+        "tools/ui-release.mjs"
+      ],
+      "547a8e1e54a7e46b211ea0770d895b6cc46c8afd": [
+        ".github/workflows/ui-layer-diagnostics.yml",
+        "tools/ui-layer-diagnostics.mjs"
+      ],
+      "5b622f594b107e105dae9ee6b494c20ff8d0699a": [
+        ".github/workflows/ui-layer-diagnostics.yml",
+        "tools/ui-layer-diagnostics.mjs"
+      ],
+      "6fcec22638f6696be71daa2f2e974ebc4b24318e": [
+        ".github/workflows/ui-release.yml",
+        ".github/workflows/ui-staging.yml",
+        "tools/production-account-contract.mjs"
+      ],
+      "7497b9815f1f5ca657cda8ed24ad5894afa267e0": [
+        ".github/workflows/platform-production-feed-routes.yml",
+        ".github/workflows/platform-wind100-worker-release.yml",
+        "tools/platform-production-feed-routes.mjs",
+        "tools/platform-wind100-route.mjs",
+        "tools/platform-wind100-worker-release.mjs"
+      ],
+      "77487534a6ff0a17bf4e5d55f9ab5c06938138d4": [
+        ".github/workflows/nam-hi-diagnostic.yml",
+        ".github/workflows/publish-current-model-production.yml",
+        "tools/nam-hi-diagnostic.mjs"
+      ],
+      "9174329db6ca8527569e67f14ef70406dedefb69": [
+        ".github/workflows/production-wind100-recurring.yml",
+        ".github/workflows/production-wind100-retention.yml",
+        ".github/workflows/staging-wind100-recurring.yml",
+        "tools/production-wind100-policy.json",
+        "tools/staging-wind100-policy.json",
+        "tools/staging-wind100.mjs"
+      ],
+      "a58eff158b56ef2ba25189d2b859315b00893a14": [
+        ".github/workflows/staging-data-activate.yml",
+        ".github/workflows/staging-model-components.yml",
+        "tools/staging-live-proof.mjs",
+        "tools/staging-model-components.mjs"
+      ],
+      "b3f63183dbcde01e388fda7720726cc53f28134b": [
+        ".github/workflows/ui-release.yml",
+        ".github/workflows/ui-staging.yml",
+        "tools/ui-combined-source-guard.mjs",
+        "tools/ui-public-combined.mjs"
+      ],
+      "b9db38dd22eed1da56c6c4dd4140480da7e89153": [
+        ".github/workflows/ui-release.yml",
+        ".github/workflows/ui-staging.yml"
+      ],
+      "dbc97a26bc239398ffa9ec157a094148961b6451": [
+        ".github/workflows/staging-current-selection.yml",
+        ".github/workflows/staging-data.yml",
+        "tools/shared-data.mjs",
+        "tools/staging-current-selection.mjs"
+      ],
+      "dfa25e9f473f15d5e2f630fe78c268b73234bd3a": [
+        ".github/workflows/staging-search.yml",
+        "tools/staging-search-source.mjs"
+      ],
+      "e5bc38aeebb15515ad45ca5b2dfdef1cffba4deb": [
+        "tools/staging-place-renewal-policy.json"
+      ],
+      "f23664837274fc06a4a94b9bb0fc8d7fa1ee8c58": [
+        ".github/workflows/ui-staging-tc.yml",
+        "tools/ui-candidate.mjs"
+      ],
+      "f5dc141ef83f209a4cb7637447f87e1b43da7450": [
+        ".github/workflows/production-wind100-point-reader-release.yml",
+        "tools/production-wind100-point-reader-release.mjs"
+      ]
+    }
+  },
+  "otherHashes": {
+    "note": "40-hex values in workflows/tools that are not Atmos commits (Cycle commits, retained identities, null sentinel). Action pins on `uses:` lines are excluded automatically.",
+    "values": {
+      "0000000000000000000000000000000000000000": [
+        "tools/ui-public-locale-beta.mjs"
+      ],
+      "08151f2ea280c052759ff5c80525d40cdbd922ca": [
+        "tools/train3-baseline-join.mjs"
+      ],
+      "1999df9977d43972b8be9467df278cf13209e467": [
+        "tools/recover-model-inputs.py"
+      ],
+      "3ba5567c5c4307be27910129ddc37571b1b0b9f8": [
+        "tools/current-model-artifact.py"
+      ],
+      "e85a47db696957887d440e8b37c59fa935c33aae": [
+        "tools/staging-consumer-reuse.py"
+      ]
+    }
+  }
 }

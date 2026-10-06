@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import {cpSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
-import {ROOT, DECLARATION, readDeclaration, checkPins, setPins} from '../tools/atmos-source-pin.mjs';
+import {ROOT, DECLARATION, readDeclaration, checkPins, setPins, strayPins, scannedFiles} from '../tools/atmos-source-pin.mjs';
 
 const declaration = readDeclaration();
 function copy() {
   const root = mkdtempSync(join(tmpdir(), 'atmos-pin-'));
-  for (const path of [DECLARATION, ...declaration.pins.map(pin => pin.path)]) {
+  for (const path of [DECLARATION, ...scannedFiles()]) {
     mkdirSync(dirname(join(root, path)), {recursive: true});cpSync(join(ROOT, path), join(root, path));
   }
   return root;
@@ -37,4 +37,21 @@ test('a hand edit of one site or a stale literal is refused, and --set moves eve
   assert.deepEqual(setPins('c'.repeat(40), clean), []);
   assert.equal(readDeclaration(clean).atmosSha, 'c'.repeat(40));
   for (const {path} of declaration.pins) assert.ok(!readFileSync(join(clean, path), 'utf8').includes(declaration.atmosSha), path);
+});
+
+test('every 40-hex value in workflows and tools is classified, so a new or stray pin site cannot drift in', () => {
+  assert.deepEqual(strayPins(), []);
+  const old = '5e68af94c24517eaaaf6a9d25aec0cadc3d9b135';
+  for (const [path, line, code] of [
+    ['.github/workflows/hydrology.yml', `          ref: ${old}\n`, /unclassified 40-hex value 5e68af94/],
+    ['.github/workflows/hydrology.yml', `      ATMOS_SHA: ${declaration.atmosSha}\n`, /declared source in an unlisted pin site/],
+    ['.github/workflows/hydrology.yml', '          ref: 9174329db6ca8527569e67f14ef70406dedefb69\n', /Atmos commit 9174329d\w+ outside its listed files/],
+    ['tools/five-feed-recovery.mjs', `const SOURCE='${'e'.repeat(40)}';\n`, /tools\/five-feed-recovery\.mjs:\d+: unclassified/]]) {
+    const root = copy();const file = join(root, path);
+    writeFileSync(file, readFileSync(file, 'utf8') + line);
+    assert.match(strayPins(root).join('\n'), code, path);
+  }
+  const root = copy();const file = join(root, '.github/workflows/hydrology.yml');
+  writeFileSync(file, readFileSync(file, 'utf8') + `      - uses: actions/checkout@${'f'.repeat(40)} # v4\n`);
+  assert.deepEqual(strayPins(root), [], 'action pins on uses: lines are not Atmos pins');
 });

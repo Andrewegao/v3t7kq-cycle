@@ -6,14 +6,27 @@
 
 | Mode | Caller | Admission | Publication |
 | --- | --- | --- | --- |
-| `scheduled` | this workflow's schedule, or a dispatch of it | each family independently | every admitted family in one CAS `promote-set`; refused families keep their served component |
+| `scheduled` | this workflow's schedule, or a dispatch of it with the literal `RECOVER FIVE OBSERVATION FEEDS` | each family independently | every admitted family in one CAS `promote-set`; refused families keep their served component |
 | `recovery` | [`five-feed-recovery.yml`](../.github/workflows/five-feed-recovery.yml) dispatched with `RECOVER FIVE OBSERVATION FEEDS` | all five or nothing | all five in one CAS `promote-set` |
 
 The controller binds each mode to exactly one caller workflow ref and event set before any credential is used (`FIVE_FEED_MODE`, `GITHUB_EVENT_NAME`, `GITHUB_WORKFLOW_REF`). Both modes keep the unchanged guarantees of the five-feed controller: exact pinned producers, fixed per-family producer deadlines (METAR 3 min, SYNOP 7, buoys 7, OpenAQ 15, fires 5; 22 min overall), byte/row bounds, current-record admission, immutable staging with `PROMOTE=0`, authenticated predecessor/rollback-epoch CAS, release-pointer stability, the 31 s catalog-cache settle and hash readback of every public alias on both origins. In scheduled mode the successor check additionally requires every non-admitted `obs-*` component to be unchanged.
 
+Scheduled readback runs while the hourly component bake and the whole bake keep promoting unrelated models and releases. It therefore accepts unrelated catalog sequence advances and a new whole release during readback, and proves only what this lane owns: each admitted `obs-*` entry is exactly this run's candidate, each refused family's entry is unchanged, and the rollback epoch is unchanged; every snapshot re-runs the whole-release mount-shadow preflight. Manual recovery keeps the strict rule (exactly one successor, unchanged release pointer, unchanged catalog through readback). A `promotion-requested-not-accepted` result is still a real acceptance failure; the next scheduled run collects afresh and compare-and-swaps against the current predecessors rather than repeating the old request, but inspect the retained intent first.
+
 ## Lock
 
 The refresh job uses `weatherx-observation-components-production` (cancel-in-progress false), shared by every `obs-*` writer. It deliberately does not use `weatherx-data-maintenance`: GitHub keeps one pending job per concurrency group and cancels the older pending job, so a 30-minute schedule in the maintenance group would cancel the whole bake's queued maintenance job. Whole maintenance never promotes `obs-*` components (it publishes the whole release through `promote-release`, a separate pointer); a concurrent release-pointer or target change makes the observation lane refuse rather than overwrite.
+
+## Plan job
+
+The `plan` job has no environment, lock or secret (it reads the Actions API with `actions: read`). In order it:
+
+- refuses a manual dispatch without the literal confirmation (red, nothing refreshed);
+- lists jobs holding `weatherx-observation-components-production` (this lane's `refresh`, the recovery's `recover`) and turns red when one has waited at the production environment gate for more than 30 minutes, measured from that deployment's `waiting` status rather than from when the job queued behind the lock — the owner must cancel that run;
+- reports `SKIPPED` when `OBSERVATION_REFRESH_ENABLED` is not `true`;
+- reports `SKIPPED` while a `five-feed-recovery.yml` run is queued, pending, waiting or in progress, so the schedule cannot cancel it. If the Actions API is unavailable it notes that and refreshes anyway.
+
+Before dispatching a manual recovery, set `OBSERVATION_REFRESH_ENABLED` to anything but `true` (and restore it afterwards); that closes the remaining race between the plan check and the refresh job.
 
 ## Verdict and receipts
 
@@ -23,7 +36,7 @@ The public artifact `five-feed-acceptance-<run>-<attempt>` keeps `acceptance.jso
 
 ## Source pin
 
-Every ordinary production producer runs the one Atmos commit declared in [`ops/atmos-production-source.json`](../ops/atmos-production-source.json). Workflow checkouts keep literal refs; `node tools/atmos-source-pin.mjs --check` proves every listed literal equals the declaration, and `node tools/atmos-source-pin.mjs --set <sha>` moves all of them together. The five-feed tools and the staging Wind100 policy check read the declaration directly.
+Every ordinary production producer runs the one Atmos commit declared in [`ops/atmos-production-source.json`](../ops/atmos-production-source.json). Workflow checkouts keep literal refs; `node tools/atmos-source-pin.mjs --check` proves every listed literal equals the declaration and that every other 40-hex value in workflows and tools is classified (another qualified Atmos pin in its listed files, or a known non-Atmos hash; `uses:` action pins excepted), so a new pin site cannot appear unnoticed; add `--atmos-repo <atmos clone>` to also prove the classification against Atmos history, and `node tools/atmos-source-pin.mjs --set <sha>` moves all of them together. The five-feed tools and the staging Wind100 policy check read the declaration directly.
 
 Moving the pin always requires these protected values to change at the same time as the merge (setting them earlier refuses current main; later refuses the new main):
 
