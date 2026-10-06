@@ -87,8 +87,10 @@ test('observation lane owns its own lock, fixed source, scoped key, and stage th
   assert.match(workflow,/schedule:\n(?:\s+#.*\n)*\s+- cron: '14,44 \* \* \* \*'/);
   assert.doesNotMatch(workflow,/workflow_call:/);
   const plan=workflow.split('\n  plan:\n')[1].split('\n  refresh:\n')[0];
-  assert.doesNotMatch(plan,/environment:|concurrency:|secrets\./);
-  assert.match(plan,/OBSERVATION_REFRESH_ENABLED/);assert.match(plan,/Observation refresh: SKIPPED/);
+  assert.doesNotMatch(plan,/environment:|concurrency:|secrets\.|: write/);
+  assert.match(plan,/OBSERVATION_REFRESH_ENABLED/);assert.match(plan,/actions: read/);
+  assert.match(plan,/run: node tools\/workflow-run-summary\.mjs observation-plan/);
+  assert.match(workflow,/workflow_dispatch:\n    inputs:\n      confirmation:\n[\s\S]*?required: true/);
   const refresh=workflow.split('\n  refresh:\n')[1];
   assert.match(refresh,/environment: production/);
   assert.match(refresh,/group: weatherx-observation-components-production\n\s+cancel-in-progress: false/);
@@ -102,6 +104,9 @@ test('observation lane owns its own lock, fixed source, scoped key, and stage th
     '"scheduled:workflow_dispatch:Andrewegao/v3t7kq-cycle/.github/workflows/observation-refresh.yml@refs/heads/main"'])
     assert.ok(refresh.includes(caller),caller);
   assert.match(refresh,/test "\$CONFIRMATION" = 'RECOVER FIVE OBSERVATION FEEDS'/);
+  assert.match(refresh,/"scheduled:workflow_dispatch:[^"]+"\)\n\s+test "\$CONFIRMATION" = 'RECOVER FIVE OBSERVATION FEEDS' ;;/,
+    'a manual dispatch of the scheduled lane needs the literal confirmation; the schedule does not');
+  assert.match(refresh,/"scheduled:schedule:[^"]+"\) ;;/);
   const collect=refresh.split('      - name: Collect all five')[1].split('      - name:')[0];
   assert.match(collect,/OPENAQ_API_KEY/);assert.match(collect,/--mode "\$FIVE_FEED_MODE"/);
   assert.doesNotMatch(collect,/R2_|CATALOG_PROMOTION_KEY|DEPLOY_KEY/);
@@ -252,5 +257,37 @@ test('cache settling refuses elapsed deadline and main keeps acknowledgement and
   assert.match(readback,/existsSync\(join\(work,'promotion-result.json'\)\)/);
   assert.ok(readback.indexOf('verifySuccessor(')<readback.indexOf('await settleCatalogCache('));
   assert.ok(readback.indexOf('await settleCatalogCache(')<readback.indexOf('await readPublicAliases('));
-  assert.match(readback,/catalog-changed-during-readback/);
+  assert.match(readback,/verifyStableTargets\(mode,after,final\)/);
+});
+
+test('scheduled readback tolerates unrelated model and release promotions but never a changed obs target or epoch',()=>{
+  const {c}=catalog();
+  const servedFire={componentId:'obs-fires',manifestKey:'components/obs-fires/old/component.json',manifestSha256:'d'.repeat(64),mounts:[FEEDS.fires]};
+  const before={...c,components:{...c.components,'obs-fires':servedFire}};
+  const candidates=['metar','openaq'].map(f=>({manifestKey:`components/obs-${f}/obs-${f}-9-1/component.json`,manifestSha256:'c'.repeat(64)}));
+  const ours={...before,sequence:10,parentCatalogId:'original',components:{...before.components,
+    ...Object.fromEntries(candidates.map(row=>[row.manifestKey.split('/')[1],{...row}]))}};
+  // Race: the hourly GFS component bake promoted twice after our promote-set landed.
+  const raced=structuredClone(ours);raced.sequence=12;raced.parentCatalogId='gfs-11';raced.components.gfs.manifestSha256='f'.repeat(64);
+  assert.throws(()=>verifySuccessor({...before,catalogId:'original'},raced,candidates,['metar','openaq']),'manual rule stays strict');
+  controller.verifyScheduledReadback(before,raced,candidates,['metar','openaq']);
+  for (const mutate of [v=>v.rollbackEpoch++,v=>v.sequence=9,v=>v.components['obs-metar'].manifestSha256='e'.repeat(64),
+    v=>v.components['obs-fires'].manifestSha256='e'.repeat(64),v=>delete v.components['obs-openaq'],
+    v=>v.components['obs-synop']={componentId:'obs-synop',manifestKey:'components/obs-synop/x/component.json',manifestSha256:'e'.repeat(64),mounts:[FEEDS.synop]}]) {
+    const copy=structuredClone(raced);mutate(copy);assert.throws(()=>controller.verifyScheduledReadback(before,copy,candidates,['metar','openaq']));
+  }
+  // Final stability: unrelated advances and a new whole release during alias readback are accepted
+  // in scheduled mode; any obs-* or epoch change is not. Manual mode keeps exact equality.
+  const after={catalog:raced,releasePointer:{releaseId:'cycle-1'},pointer:{catalogId:'x'}};
+  const final=structuredClone(after);final.catalog.sequence=13;final.catalog.components.gfs.manifestSha256='a'.repeat(64);
+  final.releasePointer={releaseId:'cycle-2'};final.pointer.catalogId='y';
+  controller.verifyStableTargets('scheduled',after,final);
+  assert.throws(()=>controller.verifyStableTargets('recovery',after,final),/catalog-changed-during-readback/);
+  for (const mutate of [v=>v.catalog.rollbackEpoch++,v=>v.catalog.components['obs-metar'].manifestSha256='9'.repeat(64)]) {
+    const copy=structuredClone(final);mutate(copy);assert.throws(()=>controller.verifyStableTargets('scheduled',after,copy));
+  }
+  const helper=readFileSync(new URL('../tools/five-feed-recovery.mjs',import.meta.url),'utf8');
+  const readback=helper.slice(helper.indexOf("fail(existsSync(join(work,'promotion-intent.json'))"));
+  assert.match(readback,/if \(mode==='scheduled'\) verifyScheduledReadback/);
+  assert.match(readback,/whole-release-pointer-changed/);assert.match(readback,/verifyStableTargets\(mode,after,final\)/);
 });

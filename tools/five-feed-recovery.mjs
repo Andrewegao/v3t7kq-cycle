@@ -129,6 +129,33 @@ export function verifySuccessor(before, after, candidates, families = Object.key
   }
 }
 
+// Scheduled readback runs while the hourly component bake and the whole bake keep promoting
+// unrelated models and releases. It accepts those advances and proves only what this lane owns:
+// every admitted obs-* entry is exactly this run's candidate, every refused family's entry is the
+// predecessor it left, and the rollback epoch is unchanged. snapshot() re-runs the whole-release
+// mount-shadow preflight, so an advanced release still cannot place files under an obs mount.
+// Manual recovery keeps the strict single-successor, unchanged-release rule.
+export function verifyScheduledReadback(before, after, candidates, families) {
+  fail(Number.isSafeInteger(after.sequence) && after.sequence>=before.sequence+1 &&
+    (after.rollbackEpoch??0)===(before.rollbackEpoch??0),'scheduled-successor-envelope');
+  fail(families.length>0 && families.every(family=>Object.hasOwn(FEEDS,family)) &&
+    candidates.length===families.length && new Set(candidates.map(c=>c.manifestKey)).size===families.length,'exact-five-candidates');
+  for (const family of Object.keys(FEEDS)) {
+    const id=`obs-${family}`;
+    if (families.includes(family)) {
+      const candidate=candidates.find(row=>row.manifestKey?.split('/')[1]===id);
+      fail(candidate && after.components[id]?.manifestKey===candidate.manifestKey &&
+        after.components[id]?.manifestSha256===candidate.manifestSha256,'five-component-readback');
+    } else assert.deepEqual(after.components[id]??null,before.components[id]??null,'retained-target-changed');
+  }
+}
+export function verifyStableTargets(mode, after, final) {
+  if (mode!=='scheduled') {assert.deepEqual(final,after,'catalog-changed-during-readback');return;}
+  fail((final.catalog.rollbackEpoch??0)===(after.catalog.rollbackEpoch??0),'catalog-changed-during-readback');
+  for (const family of Object.keys(FEEDS)) assert.deepEqual(final.catalog.components[`obs-${family}`]??null,
+    after.catalog.components[`obs-${family}`]??null,'catalog-changed-during-readback');
+}
+
 function run(command,args,env=process.env,timeout=60000,maxBuffer=1024**2) {
   const r=spawnSync('timeout',['--signal=TERM','--kill-after=5s',`${Math.ceil(timeout/1000)}s`,command,...args],
     {env,timeout:timeout+10000,maxBuffer,encoding:null});
@@ -308,11 +335,15 @@ export async function main(argv) {
   }
   fail(existsSync(join(work,'promotion-intent.json')) && existsSync(join(work,'promotion-result.json')),'acknowledged-promotion-required');
   const promotionBaseline=load(join(work,'promotion-baseline.json'));
-  const after=snapshot();assert.deepEqual(after.releasePointer,promotionBaseline.releasePointer,'whole-release-pointer-changed');
-  verifySuccessor({...promotionBaseline.catalog,catalogId:promotionBaseline.pointer.catalogId},after.catalog,candidates,families);
+  const after=snapshot();
+  if (mode==='scheduled') verifyScheduledReadback(promotionBaseline.catalog,after.catalog,candidates,families);
+  else {
+    assert.deepEqual(after.releasePointer,promotionBaseline.releasePointer,'whole-release-pointer-changed');
+    verifySuccessor({...promotionBaseline.catalog,catalogId:promotionBaseline.pointer.catalogId},after.catalog,candidates,families);
+  }
   await settleCatalogCache(Number(process.env.FIVE_FEED_PUBLICATION_DEADLINE_MS));
   const publicObjects=await readPublicAliases(receipt,Number(process.env.FIVE_FEED_PUBLICATION_DEADLINE_MS));
-  const qualified=verifyCollected(atmos,stage,mode);const final=snapshot(false);assert.deepEqual(final,after,'catalog-changed-during-readback');
+  const qualified=verifyCollected(atmos,stage,mode);const final=snapshot(false);verifyStableTargets(mode,after,final);
   // A retained family still serves its authenticated predecessor; report that bake time, never relabel it.
   const retainedServed=Object.fromEntries(retained.map(family=>[family,{status:'retained',
     servedGenerationTime:after.targets?.[family]?.generationTime??null}]));
