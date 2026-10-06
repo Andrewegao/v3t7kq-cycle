@@ -2,10 +2,13 @@
 
 ## Safety boundary
 
-UI releases are never triggered by a push, merge, schedule, data bake or backfill. Staging uses
-`workflow_dispatch` on protected `main`. Production is dispatched manually when Andrew chooses,
-or, only while he has armed it, follows a successful staging qualification run and still waits
-for the `ui-production` environment approval; there is no weekly cron. See
+No data bake or backfill can start a UI workflow, and no UI workflow has a push or schedule
+trigger of its own. Staging runs only as `workflow_dispatch` on protected `main`: by hand, from the
+staging follower's schedule, or from Atmos CI's `ci-verdict` after a green master push. Production
+is dispatched manually when Andrew chooses, or, only while he has armed automatic promotion,
+starts after a successful staging qualification run. When armed, an Atmos master push → staging
+qualification → a production promotion pending the `ui-production` environment approval is the
+intended flow; nothing reaches production without that approval. See
 [UI staging → production flow](ui-pipeline-flow-20261005.md) for triggers, the app-test
 evidence path, caches and how to arm or disarm automatic promotion.
 

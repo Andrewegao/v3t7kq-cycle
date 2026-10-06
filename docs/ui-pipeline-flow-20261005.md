@@ -20,44 +20,58 @@ automatically. The build still refuses a SHA that is no longer `origin/master` w
 
 ## App-test evidence (decision B)
 
-`app-tests` first runs **verify Atmos CI evidence for the exact source** (pinned Cycle code,
-before any candidate script; the read token is visible to this step only). It selects one path:
+A separate `atmos-evidence` job (environment `atmos-ci-evidence`) checks out only Cycle, never the
+candidate, runs no candidate code, and is the only job that references the read token; candidate
+code in `app-tests` could otherwise read every secret its runner holds. Its step **verify Atmos CI
+evidence for the exact source** selects one path and publishes it as job outputs:
 
 - **atmos-ci**: the newest `weatherx-hq/atmos` run of `.github/workflows/ci.yml` for exactly
   `head_sha == atmos_sha`, event `push`, branch `master`, same-repository head, is
   `completed/success`, and that run attempt has exactly one `ci-verdict` job that is
   `completed/success` for the same SHA, run and attempt. API reads are bounded (2 MiB), redirects
-  are refused and the token is never logged or put in a URL. The local gate then runs
-  `npm run test:certify --prefix atmos/app` and `npx playwright test` (in `atmos/app`).
+  are refused and the token is never logged or put in a URL. `app-tests` then runs the local
+  gate: `npm run gates --prefix atmos/app` (full-profile static gates), `npm run test:certify
+  --prefix atmos/app` and `npx playwright test` (in `atmos/app`).
+  The accepted evidence covers Atmos's own CI environment, not this staging environment: Atmos
+  master CI runs its public-beta CI profile (the manifest is tracked), which swaps `check-i18n`
+  for `check-public-beta-i18n` and runs Vitest without the staging build flags. The local gate
+  re-runs the full-profile gates on the candidate; the complete Vitest suite is not re-run with
+  the staging flags on this path.
 - **full-local**: the unchanged complete `npm test --prefix atmos/app`. Chosen whenever
   `ATMOS_CI_READ_TOKEN` is absent, the staging profile uses the beta CI profile (the API cannot
   prove which CI profile Atmos ran), or any evidence check fails. The log prints which path ran
   and why.
 
 The receipt (schema 2) records `evidence: {path, repository, workflow, job, runId, attempt,
-commands}` or `{path: 'full-local', commands}`. `qualify` rebuilds the expected receipt from the
-evidence step's job outputs (written before candidate code ran) and requires GitHub's jobs API
-to report that the evidence step and the selected gate step succeeded in the same run attempt.
+commands}` or `{path: 'full-local', commands}`. `app-tests` and `qualify` read the path, run id
+and attempt from the `atmos-evidence` job outputs; `qualify` rebuilds the expected receipt from
+them and requires GitHub's jobs API to report that the `atmos-evidence` job (and its evidence
+step) and the selected `app-tests` gate step succeeded in the same run attempt.
 The sealed candidate's qualification carries `appTestEvidence`.
 
 ## Caches
 
-Only the candidate-domain jobs (`build`, `app-tests`) use caches: `setup-node` `cache: npm`
-keyed on the exact lockfiles (npm still verifies every tarball's integrity), and
-`~/.cache/ms-playwright` keyed by the locked `playwright-core` version, saved right after the
-browser download and before any candidate gate runs. The publisher jobs (`qualify`, `promote`)
-hold Pages tokens and candidate keys and restore **no** cache: any runner that executed candidate
-code could write a cache entry. They install their two locked dependency trees concurrently
-instead.
+Only the candidate-domain jobs (`build`, `app-tests`) use a cache: an explicit `actions/cache`
+of `~/.npm` with key `ui-candidate-npm-<os>-<hash of atmos/app and control/platform/edge
+lockfiles>` and restore prefix `ui-candidate-npm-<os>-` (in `app-tests` only the Atmos lockfile
+exists, so its key hashes that file). No other workflow uses this prefix, so publisher workflows
+never restore it, and setup-node's generic `cache: npm` key (shared with publisher workflows) is
+not used. npm ci still verifies every tarball against the lockfile integrity. There is no browser
+cache: Playwright is installed fresh in every job, because a cached browser written after
+candidate code ran would outlive its candidate. The publisher jobs (`qualify`, `promote`) hold
+Pages tokens and candidate keys and restore **no** cache; they install their two locked
+dependency trees concurrently instead.
 
 ## Automatic promotion (decision C)
 
 1. Staging run *R*, attempt *A* succeeds. `resolve` (no environment, no secrets, `actions: read`)
-   re-reads *R* from the API: same repository, `ui-staging.yml`, dispatch on `main`,
-   `completed/success`, still attempt *A*, title `Staging <sha>`. It downloads only the public
+   re-reads *R* from the API: same repository, `ui-staging.yml`, dispatch on `main`, still
+   attempt *A* (a newer attempt, even one still running, skips), `completed/success`, title
+   `Staging <sha>`. It downloads only the public
    `ui-candidate-summary-R-A` artifact. If its `releaseProfile` differs from
    `UI_AUTO_PROMOTE_PROFILE` (including any staging-only profile), the run ends as skipped.
-2. `promote` waits for the `ui-production` environment (required reviewer), then runs the same
+2. The run name shows the source, profile and staging run/attempt to the approver.
+   `promote` waits for the `ui-production` environment (required reviewer), then runs the same
    `ui-release.mjs gate`: the automatic event is admitted only when armed for the exact routed
    profile and attempt; everything else is the unchanged manual gate (activation, isolation,
    hold, freeze, repository, protected ref).
@@ -110,7 +124,8 @@ Disarm: set `UI_AUTO_PROMOTE_ENABLED` to anything other than `true` (or delete i
 `UI_DEPLOYMENT_HOLD_UNTIL` or `UI_RELEASES_ENABLED=false` stops manual and automatic promotion.
 Rejecting the pending environment approval stops one run.
 
-Secret for decision B: `ATMOS_CI_READ_TOKEN` in the `atmos-source-read-ui` environment, a
+Secret for decision B: `ATMOS_CI_READ_TOKEN` in the `atmos-ci-evidence` environment (protected
+branch `main`; it holds nothing else), a
 fine-grained token with resource owner `weatherx-hq`, repository `atmos` only, permission
 **Actions: read** (plus the mandatory metadata read). Remove it to return to full-local tests.
 
