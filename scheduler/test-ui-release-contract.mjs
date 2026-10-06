@@ -116,13 +116,17 @@ assert.doesNotMatch(staging, /UI_PRODUCTION_PAGES_TOKEN/);
 assert.match(ui, /secrets.UI_PRODUCTION_PAGES_TOKEN/);
 assert.doesNotMatch(ui, /UI_STAGING_PAGES_TOKEN/);
 assert.match(staging, /ui-sealed\/\*/);
-assert.doesNotMatch(staging, /path:.*(?:app\/dist|app\/functions|control\/|atmos\/)/);
+// Upload/checkout paths only; a lockfile used to key a download cache is not retained output.
+assert.doesNotMatch(staging, /(?<!cache-dependency-)path:.*(?:app\/dist|app\/functions|control\/|atmos\/)/);
+assert.doesNotMatch(staging, /cache-dependency-path:.*(?:dist|functions)/);
 assert.doesNotMatch(backfill, /CLOUDFLARE_API_TOKEN|deploy-atmos|deploy-code-only/,'archive backfill must not publish UI');
 assert.doesNotMatch(ui, /R2_PRODUCTION_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY)|publish-r2-release|bake-weatherx/,
   'the UI lane must not mutate model, ledger, or R2 release state');
 assert.match(staging, /node ops\/platform\/test-independent-ui-release\.mjs/);
 assert.match(staging, /name: full application test gate[\s\S]*?npm test --prefix atmos\/app/,
-  'the release job must independently rerun the complete application tests');
+  'without proven Atmos CI evidence the release job must independently rerun the complete application tests');
+assert.match(staging, /name: local certification and visual gate[\s\S]*?npm run test:certify --prefix atmos\/app[\s\S]*?npx playwright test/,
+  'Atmos CI evidence never replaces the local certification and visual gate');
 assert.match(staging, /name: Weather Lab release gate[\s\S]*?LIVE_DATA: '1'[\s\S]*?bash ops\/weather-lab-ready\.sh/,
   'the independent UI gate must exercise the live data edge without mirroring data into Pages');
 assert.match(ui, /actions\/upload-artifact@[a-f0-9]{40}[\s\S]*?ui-incidents/,

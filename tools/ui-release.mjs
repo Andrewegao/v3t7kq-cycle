@@ -16,7 +16,7 @@ import {PUBLIC_JOURNEY_PROOF_MAX_BYTES,runPublicReleaseJourneys,readPublicJourne
 import { controlShaFor, TC_CONTROL_SHA, REPOSITORY, MAX_BYTES, gate, hash, createCandidate, validateCandidate,
   readTree, validateFiles, seal, unseal, restore, eligibleRun } from './ui-candidate.mjs';
 import { packBuild, unpackBuild, eligibleBuild } from './ui-build-transfer.mjs';
-import { verifyAppTestReceipt } from './ui-app-test-receipt.mjs';
+import { verifyAppTestReceipt, appTestEvidenceFromEnvironment } from './ui-app-test-receipt.mjs';
 import {profileFor,validateProfile,selectionProfile,coreReleaseProfile,publicLocaleBetaProfile,publicCombinedProfile,accountServingProductionProfile,tcGuidanceProfile,canonical as profileCanonical,readSelection,readTcSelection,requireUiProductionProfile,requireStagingApproval,resolveWind100BuildPin,SELECTION_ASSET,TC_SELECTION_ASSET,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt} from './ui-staging-models.mjs';
 import {LANE_B_CONTRACT,PRODUCTION_ACCOUNT_APPROVAL,validateProductionPagesConfiguration} from './production-account-contract.mjs';
 import {assertPublicLocaleBetaReady} from './ui-public-locale-beta.mjs';
@@ -36,7 +36,7 @@ const DEPLOYMENT_ID = /^[a-f0-9-]{36}$/;
 const GUARD_SUCCESS_RECEIPT_MAX_BYTES = 4096;
 const CORE_CATALOG_MODELS = ['ecmwf','gfs'];
 export const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workflows/ui-staging-tc.yml', '.github/workflows/ui-release.yml',
-  'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-app-test-receipt.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh',
+  'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-app-test-receipt.mjs', 'tools/ui-ci-cache.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh',
   'tools/ui-release-profile-preflight.mjs','tools/ui-public-locale-beta.mjs','tools/ui-public-combined.mjs',
   'tools/ui-combined-source-guard.mjs','tools/ui-weather-feed-baseline.mjs',
   'tools/ui-release-layer-guard.mjs','tools/ui-layer-diagnostics.mjs','tools/ui-layer-diagnostics-browser.txt','tools/ui-layer-paint-proof.mjs',
@@ -642,7 +642,8 @@ async function receiveBuild() {
   const jobs=await gh(`actions/runs/${id}/attempts/${attempt}/jobs?per_page=100`);
   assert.ok(a.total_count<=100 && jobs.total_count<=100);
   verifyAppTestReceipt(process.env.UI_APP_TEST_RECEIPT,jobs.jobs,{runId:id,attempt,
-    sourceSha:process.env.ATMOS_SHA,workflowSha:process.env.GITHUB_SHA,selection:process.env.MODEL_SELECTION_SHA256});
+    sourceSha:process.env.ATMOS_SHA,workflowSha:process.env.GITHUB_SHA,selection:process.env.MODEL_SELECTION_SHA256,
+    evidence:appTestEvidenceFromEnvironment(process.env)});
   const name=`ui-build-${id}-${attempt}`, matches=a.artifacts.filter(x=>x.name===name);
   assert.equal(matches.length,1);assert.equal(matches[0].expired,false);
   assert.ok(matches[0].size_in_bytes<MAX_BYTES*2+1024);
@@ -736,7 +737,8 @@ async function deploy(stage) {
     if(modelProof&&selectionProfile(c.profile))validateBrowserReceipt(modelProof,selection,{sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId,selectionSha256:c.profile.modelSelectionSha256});
     if(modelProof&&coreReleaseProfile(c.profile))validateCoreBrowserReceipt(modelProof,{sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId});
     c.qualification = {origin:ORIGINS.staging, deploymentId,
-      artifactDigest:c.artifactDigest,qualifiedAt:new Date().toISOString(),fullTests:true,weatherLab:true,builtRuntime:true,probes:3};
+      artifactDigest:c.artifactDigest,qualifiedAt:new Date().toISOString(),fullTests:true,weatherLab:true,builtRuntime:true,probes:3,
+      appTestEvidence:appTestEvidenceFromEnvironment(process.env)};
     if(wind100)Object.assign(c.qualification,{wind100});
     if(modelProof&&selectionProfile(c.profile))Object.assign(c.qualification,{modelSelectionSha256:c.profile.modelSelectionSha256,modelBrowserReceiptSha256:hash(modelProof),modelBrowserModels:selection.entries.length});
     if(modelProof&&coreReleaseProfile(c.profile))Object.assign(c.qualification,{coreProfile:c.profile.releaseRosterCore,coreBrowserReceiptSha256:hash(modelProof),coreBrowserModels:2});

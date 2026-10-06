@@ -63,7 +63,7 @@ test('beta build keeps production account and disables staging-only UI',()=>{
   assert.match(staging,/WX_GROUND_QUALIFICATION_SCOPE: staging-qualification-only/);
   const appTests=staging.slice(staging.indexOf('\n  app-tests:\n'),staging.indexOf('\n  qualify:\n'));
   assert.match(appTests,/WX_CI_PROFILE: \$\{\{ \(needs\.profile\.outputs\.model_selection_sha256 == 'production-account-ru-kk-beta-v1' \|\| needs\.profile\.outputs\.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2'\) && 'public-beta-ci-lab-road-security-v1' \|\| '' \}\}/);
-  assert.match(appTests,/name: full application test gate\n\s+run: npm test --prefix atmos\/app/);
+  assert.match(appTests,/name: full application test gate\n\s+if: \$\{\{ steps\.atmos_ci\.outputs\.path == 'full-local' \}\}\n\s+run: npm test --prefix atmos\/app/);
   assert.doesNotMatch(production,/WX_GROUND_QUALIFICATION_SCOPE/);
   assert.match(production,/production-account-ru-kk-beta-v1/);
   assert.doesNotMatch(production,/VITE_PRO_PROTO|WIND100/);

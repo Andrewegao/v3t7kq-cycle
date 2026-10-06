@@ -62,7 +62,7 @@ test('locked dependency setup, exact artifact promotion and guarded probes remai
   for(const line of ['npm ci --prefix control/platform/edge','npm ci --prefix control/app',
     'cd control/app && npx playwright install --with-deps chromium','node cycle/tools/ui-release.mjs download',
     'node cycle/tools/ui-release.mjs deploy production']) assert.ok(workflow.includes(line),line);
-  assert.doesNotMatch(workflow,/actions\/cache|--omit=dev|npm run build|ui-release.mjs build/);
+  assert.doesNotMatch(workflow,/actions\/cache|cache: npm|cache-dependency-path|--omit=dev|npm run build|ui-release.mjs build/);
   const release=read('tools/ui-release.mjs');
   assert.match(release,/RELEASE_GUARD_VERIFY_REQUIRED_SUCCESSES:'3'/);
   assert.match(release,/if \(stage === 'production'\) \{ await auditRun\(c\); await exactStaging\(c\); \}/);
@@ -144,5 +144,20 @@ test('qualify, candidate and Cycle checkouts and the actual controller guard rem
     'npm ci --prefix control/app','npx playwright install --with-deps chromium',
     'node cycle/tools/ui-release.mjs deploy staging','bash ops/weather-lab-ready.sh'])
     assert.ok(staging.includes(command),command);
-  assert.doesNotMatch(staging,/actions\/cache|--omit=dev/);
+  assert.doesNotMatch(staging,/--omit=dev/);
+  // Caches live only in the candidate-domain jobs; the publisher never restores one.
+  assert.doesNotMatch(qualify,/actions\/cache|cache: npm|cache-dependency-path/);
+  const profileJob=staging.split('\n  profile:\n')[1].split('\n  build:\n')[0];
+  assert.doesNotMatch(profileJob,/actions\/cache|cache: npm/);
+  for(const job of ['build','app-tests']){
+    const block=staging.split(`\n  ${job}:\n`)[1].split(job==='build'?'\n  app-tests:\n':'\n  qualify:\n')[0];
+    const uses=[...block.matchAll(/uses: (actions\/cache[^@]*)@([a-f0-9]{40})/g)];
+    assert.deepEqual(uses.map(m=>m[1]),['actions/cache/restore','actions/cache/save'],job);
+    assert.ok(uses.every(m=>m[2]==='0057852bfaa89a56745cba8c7296529d2fc39830'),job);
+    assert.equal((block.match(/path: ~\/\.cache\/ms-playwright/g)||[]).length,2,job);
+    assert.match(block,/key: ui-candidate-playwright-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-chromium-\$\{\{ steps\.playwright\.outputs\.version \}\}/);
+    assert.match(block,/node cycle\/tools\/ui-ci-cache\.mjs playwright-version atmos\/app\/package-lock\.json/);
+    assert.ok(block.indexOf('actions/cache/save@')>block.indexOf('npx playwright install --with-deps chromium'),job);
+    assert.match(block,/cache: npm/);
+  }
 });

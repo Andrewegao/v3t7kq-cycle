@@ -76,11 +76,16 @@ jobs:
         with: { python-version: '3.12' }
       - name: enforce manual activation and freeze after environment approval
         run: node cycle/tools/ui-release.mjs gate
+      # No cache crosses into this production publisher. The two locked installs are
+      # independent, so the Functions toolchain installs concurrently with the app/browser.
       - name: install locked controller and verification tools (no application build)
         run: |
-          npm ci --prefix control/platform/edge
+          npm ci --prefix control/platform/edge >"$RUNNER_TEMP/npm-ci-edge.log" 2>&1 &
+          edge=$!
           npm ci --prefix control/app
-          cd control/app && npx playwright install --with-deps chromium
+          (cd control/app && npx playwright install --with-deps chromium)
+          if ! wait "$edge"; then cat "$RUNNER_TEMP/npm-ci-edge.log"; exit 1; fi
+          cat "$RUNNER_TEMP/npm-ci-edge.log"
       - name: download and authenticate exact successful staging artifact
         env:
           GITHUB_TOKEN: ${{ github.token }}
