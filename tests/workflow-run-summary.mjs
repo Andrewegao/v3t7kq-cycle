@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtempSync, readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {bakeMarkdown, bakeRows, bakeMode, componentMarkdown, componentPlan, lockHolders, holderJobName, main, MODELS, observationPlan, OBSERVATION_LOCK, CHAIN_CALLER} from '../tools/workflow-run-summary.mjs';
+import {bakeMarkdown, bakeRows, bakeMode, componentMarkdown, componentPlan, wholeBakeReasons, lockHolders, holderJobName, main, MODELS, observationPlan, OBSERVATION_LOCK, CHAIN_CALLER} from '../tools/workflow-run-summary.mjs';
 
 const NOW = Date.parse('2026-10-06T18:00:00Z');
 const at = minutes => new Date(NOW - minutes * 60000).toISOString();
@@ -107,7 +107,7 @@ test('both bakes and the observation lane declare a run name and a read-only fin
   for (const job of ['bake', 'staging-wind100', 'production-wind100', ...MODELS.map(m => `publish-${m}`)]) assert.ok(summary.includes(job), job);
   assert.doesNotMatch(summary, /secrets\.|environment:|concurrency:|: write/);
   const component = catalog.split('\n  summary:\n')[1];
-  assert.match(component, /needs: model/);assert.match(component, /always\(\)/);
+  assert.match(component, /needs: \[plan, model\]/);assert.match(component, /STOOD_ASIDE: \$\{\{ needs\.plan\.outputs\.stood_aside \}\}/);assert.match(component, /always\(\)/);
   assert.match(component, /actions: read/);assert.doesNotMatch(component, /secrets\.|environment:|concurrency:|: write/);
 });
 
@@ -277,51 +277,112 @@ test('a scheduled run stands aside (green SKIPPED) for another lane run that is 
 // Live shape of bake run 37679425040 (2026-10-07): publish-hrrr, publish-ecmwf and publish-gfs were queued
 // behind component jobs on weatherx-component-production-<model> and each was cancelled ("Canceling since a
 // higher priority waiting request ... exists") when the next routine component dispatch queued that model.
+const BAKE_RUNS = '/actions/workflows/bake.yml/runs?per_page=10';
+const RESUME_RUNS = '/actions/workflows/resume-model-publication.yml/runs?per_page=10';
+const jobsOf = (id, page = 1) => `/actions/runs/${id}/jobs?per_page=100&page=${page}`;
 const planResponses = () => ({
-  '/actions/workflows/bake.yml/runs?status=in_progress&per_page=10': {workflow_runs: [
-    {id: 37679425040, path: '.github/workflows/bake.yml', head_branch: 'main'},
-    {id: 5, path: '.github/workflows/bake.yml', head_branch: 'feature'}]},
-  '/actions/runs/37679425040/jobs?per_page=100': {jobs: [
+  // A run whose only live job waits on a lock may be listed as queued/pending, not in_progress.
+  [BAKE_RUNS]: {workflow_runs: [
+    {id: 37679425040, path: '.github/workflows/bake.yml', head_branch: 'main', status: 'queued'},
+    {id: 5, path: '.github/workflows/bake.yml', head_branch: 'feature', status: 'in_progress'},
+    {id: 4, path: '.github/workflows/bake.yml', head_branch: 'main', status: 'completed'}]},
+  [RESUME_RUNS]: {workflow_runs: []},
+  [jobsOf(37679425040)]: {total_count: 6, jobs: [
     {name: 'publish-hrrr / publisher', status: 'pending'}, {name: 'publish-gfs / publisher', status: 'queued'},
     {name: 'publish-ecmwf / publisher', status: 'in_progress'}, {name: 'publish-nam / publisher', status: 'pending'},
-    {name: 'core (aifs) / collector', status: 'in_progress'}]},
-  '/actions/runs/5/jobs?per_page=100': {jobs: [{name: 'publish-ecmwf / publisher', status: 'pending'}]},
+    {name: 'core (ecmwf) / collector', status: 'completed', conclusion: 'success'}, {name: 'core (hrrr) / collector', status: 'completed', conclusion: 'success'}]},
+  [jobsOf(5)]: {total_count: 1, jobs: [{name: 'publish-ecmwf / publisher', status: 'pending'}]},
+  [jobsOf(4)]: {total_count: 1, jobs: [{name: 'publish-ecmwf / publisher', status: 'pending'}]},
 });
 const planFetcher = (responses, requested = []) => async url => {
   const path = url.replace('https://api.github.com/repos/Andrewegao/v3t7kq-cycle', '');requested.push(path);
   return responses[path] ? new Response(JSON.stringify(responses[path])) : new Response('{}', {status: 500});
 };
+const planEnv = models => ({CATALOG_TARGET: 'production', REQUESTED_MODELS: JSON.stringify(models)});
 
 test('the component plan stands aside only for a model whose whole-bake publisher is queued on the same lock', async () => {
-  const env = models => ({CATALOG_TARGET: 'production', REQUESTED_MODELS: JSON.stringify(models)});
-  const hrrr = await componentPlan({env: env(['hrrr']), token: 'fixture', fetcher: planFetcher(planResponses())});
+  const calls = [];
+  const hrrr = await componentPlan({env: planEnv(['hrrr']), token: 'fixture', fetcher: planFetcher(planResponses(), calls)});
   assert.deepEqual(hrrr.models, []);
-  assert.match(hrrr.text, /hrrr: stood aside\. Whole-bake run 37679425040 job "publish-hrrr \/ publisher" is pending for weatherx-component-production-hrrr/);
+  assert.match(hrrr.text, /hrrr: stood aside\. Whole-bake run 37679425040 job "publish-hrrr \/ publisher" is pending; its publisher is waiting for weatherx-component-production-hrrr/);
+  assert.match(hrrr.text, /Component publishes for hrrr pause until that publisher has the lock/);
   assert.match(hrrr.text, /No model is published by this run/);
+  assert.ok(!calls.includes(jobsOf(4)), 'completed runs are skipped in code');assert.ok(calls.includes(RESUME_RUNS));
   // A running publisher already holds the lock (the component job just waits behind it), so ecmwf runs;
-  // a publisher on a non-main bake run and non-requested models (nam) are ignored.
-  const slow = await componentPlan({env: env(['ecmwf', 'gfs', 'aifs']), token: 'fixture', fetcher: planFetcher(planResponses())});
+  // publishers on non-main or completed runs and non-requested models (nam) are ignored.
+  const slow = await componentPlan({env: planEnv(['ecmwf', 'gfs', 'aifs']), token: 'fixture', fetcher: planFetcher(planResponses())});
   assert.deepEqual(slow.models, ['ecmwf', 'aifs']);assert.match(slow.text, /gfs: stood aside/);assert.doesNotMatch(slow.text, /nam|ecmwf: stood/);
-  const idle = planResponses();idle['/actions/runs/37679425040/jobs?per_page=100'] = {jobs: [{name: 'publish-hrrr / publisher', status: 'completed'}]};
-  assert.deepEqual(await componentPlan({env: env(['hrrr']), token: 'fixture', fetcher: planFetcher(idle)}), {models: ['hrrr'], text: ''});
+  assert.deepEqual(slow.aside.map(row => [row.model, row.runId, row.job]), [['gfs', 37679425040, 'publish-gfs / publisher']]);
+  const idle = planResponses();idle[jobsOf(37679425040)] = {total_count: 2, jobs: [{name: 'publish-hrrr / publisher', status: 'completed'}, {name: 'core (hrrr) / collector', status: 'completed', conclusion: 'success'}]};
+  assert.deepEqual(await componentPlan({env: planEnv(['hrrr']), token: 'fixture', fetcher: planFetcher(idle)}), {models: ['hrrr'], aside: [], text: ''});
+});
+
+test('the plan closes the gap before the publisher queues: it pauses a model while its whole-bake collector runs', async () => {
+  const responses = planResponses();
+  responses[jobsOf(37679425040)] = {total_count: 4, jobs: [
+    {name: 'core (gfs) / collector', status: 'in_progress'}, {name: 'core (aifs) / collector', status: 'queued'},
+    // Collector done, publisher not yet created: the publisher queues within seconds.
+    {name: 'core (ecmwf) / collector', status: 'completed', conclusion: 'success'},
+    {name: 'core (hrrr) / collector', status: 'completed', conclusion: 'failure'}]};
+  const plan = await componentPlan({env: planEnv(['ecmwf', 'gfs', 'hrrr', 'aifs']), token: 'fixture', fetcher: planFetcher(responses)});
+  assert.deepEqual(plan.models, ['hrrr'], 'a failed collector has no publisher to protect');
+  assert.match(plan.text, /gfs: stood aside\. Whole-bake run 37679425040 job "core \(gfs\) \/ collector" is in_progress; its collector runs first/);
+  assert.match(plan.text, /ecmwf: stood aside.*its collector just finished and its publisher is about to wait for weatherx-component-production-ecmwf/);
+  // Once the publisher is listed (here skipped, e.g. a staging Wind100-only run), the collector no longer holds the model.
+  responses[jobsOf(37679425040)].jobs.push({name: 'publish-ecmwf', status: 'completed', conclusion: 'skipped'});
+  assert.deepEqual((await componentPlan({env: planEnv(['ecmwf']), token: 'fixture', fetcher: planFetcher(responses)})).models, ['ecmwf']);
+  // Regional collectors are matched by bake.yml's job names too.
+  assert.deepEqual([...wholeBakeReasons([{name: 'regional (nam) / collector', status: 'in_progress'}]).keys()], ['nam']);
+});
+
+test('the plan stands aside for a queued resume publisher and pages long job lists', async () => {
+  const responses = planResponses();
+  responses[BAKE_RUNS] = {workflow_runs: []};
+  responses[RESUME_RUNS] = {workflow_runs: [{id: 77, path: '.github/workflows/resume-model-publication.yml', head_branch: 'main', status: 'waiting'}]};
+  const filler = Array.from({length: 100}, (_, i) => ({name: `other ${i}`, status: 'completed'}));
+  responses[jobsOf(77)] = {total_count: 101, jobs: filler};
+  responses[jobsOf(77, 2)] = {total_count: 101, jobs: [{name: 'resume (aifs) / publisher', status: 'pending'}]};
+  const plan = await componentPlan({env: planEnv(['ecmwf', 'gfs', 'aifs']), token: 'fixture', fetcher: planFetcher(responses)});
+  assert.deepEqual(plan.models, ['ecmwf', 'gfs']);assert.match(plan.text, /aifs: stood aside\. Whole-bake run 77 job "resume \(aifs\) \/ publisher" is pending/);
+  // A job list that never ends is unreadable: fail open with every model.
+  for (let page = 1; page <= 6; page += 1) responses[jobsOf(77, page)] = {total_count: 10000, jobs: filler};
+  const open = await componentPlan({env: planEnv(['aifs']), token: 'fixture', fetcher: planFetcher(responses)});
+  assert.deepEqual(open.models, ['aifs']);assert.match(open.text, /could not be listed/);
 });
 
 test('the component plan never touches staging targets and fails open when the Actions API is unreadable', async () => {
   const calls = [];
   assert.deepEqual(await componentPlan({env: {CATALOG_TARGET: 'staging', REQUESTED_MODELS: '["hrrr"]'}, token: 'fixture', fetcher: planFetcher(planResponses(), calls)}),
-    {models: ['hrrr'], text: ''});
+    {models: ['hrrr'], aside: [], text: ''});
   assert.deepEqual(calls, []);
   for (const [token, responses] of [['fixture', {}], ['', planResponses()]]) {
-    const plan = await componentPlan({env: {CATALOG_TARGET: 'production', REQUESTED_MODELS: '["ecmwf","gfs","aifs"]'}, token, fetcher: planFetcher(responses)});
+    const plan = await componentPlan({env: planEnv(['ecmwf', 'gfs', 'aifs']), token, fetcher: planFetcher(responses)});
     assert.deepEqual(plan.models, ['ecmwf', 'gfs', 'aifs']);assert.match(plan.text, /could not be listed/);
   }
   for (const bad of ['', 'not json', '[]', '["hrrr","x"]']) assert.equal((await componentPlan({env: {CATALOG_TARGET: 'production', REQUESTED_MODELS: bad}, token: 'fixture', fetcher: planFetcher(planResponses())})).models, null);
   const dir = mkdtempSync(join(tmpdir(), 'component-plan-'));
   const output = join(dir, 'out'), summary = join(dir, 'summary');
   const code = await main(['component-plan'], {CATALOG_TARGET: 'production', REQUESTED_MODELS: '["hrrr"]', GH_TOKEN: 'fixture', GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary}, NOW, planFetcher(planResponses()));
-  assert.equal(code, 0);assert.equal(readFileSync(output, 'utf8'), 'models=[]\n');assert.match(readFileSync(summary, 'utf8'), /hrrr: stood aside/);
+  assert.equal(code, 0);
+  assert.equal(readFileSync(output, 'utf8'), 'models=[]\nstood_aside=[{"model":"hrrr","runId":37679425040,"job":"publish-hrrr / publisher"}]\n');
+  assert.match(readFileSync(summary, 'utf8'), /hrrr: stood aside/);
   const {text} = componentMarkdown({jobs: [{name: 'model', conclusion: 'skipped'}, {name: 'summary'}], target: 'production', event: 'workflow_dispatch', holders: [], now: NOW});
   assert.match(text, /\| \(none\) \| skipped \| no model job ran; see this run's plan job/);
+});
+
+test('the component summary lists each model the plan dropped', async () => {
+  const stoodAside = [{model: 'gfs', runId: 37679425040, job: 'publish-gfs / publisher'}];
+  const {text} = componentMarkdown({jobs: [{name: 'model (ecmwf)', conclusion: 'success', completed_at: at(1)}, {name: 'model (aifs)', conclusion: 'success', completed_at: at(2)}],
+    target: 'production', event: 'workflow_dispatch', holders: [], now: NOW, stoodAside});
+  assert.match(text, /\| gfs \| stood aside \| not queued: whole-bake run 37679425040 job "publish-gfs \/ publisher" would have been cancelled; previous component kept \|/);
+  assert.match(text, /\| ecmwf \| refreshed \|/);
+  const all = componentMarkdown({jobs: [{name: 'model', conclusion: 'skipped'}], target: 'production', event: 'workflow_dispatch', holders: [], now: NOW, stoodAside}).text;
+  assert.match(all, /\| gfs \| stood aside \|/);assert.doesNotMatch(all, /\(none\)/);
+  const responses = {'/actions/runs/9/attempts/1/jobs?per_page=100': {jobs: [{name: 'plan', conclusion: 'success'}, {name: 'model', conclusion: 'skipped'}, {name: 'summary'}]}};
+  const dir = mkdtempSync(join(tmpdir(), 'component-summary-'));
+  const code = await main(['component'], {CATALOG_TARGET: 'staging', GITHUB_RUN_ID: '9', GITHUB_RUN_ATTEMPT: '1', GH_TOKEN: 'fixture', SUMMARY_JOB_NAME: 'summary',
+    GITHUB_EVENT_NAME: 'workflow_dispatch', STOOD_ASIDE: JSON.stringify(stoodAside), GITHUB_STEP_SUMMARY: join(dir, 's')}, NOW, planFetcher(responses));
+  assert.equal(code, 0);assert.match(readFileSync(join(dir, 's'), 'utf8'), /\| gfs \| stood aside \|/);
 });
 
 test('the component bake plans before it queues, keeps the shared model locks, and falls back to the full matrix', () => {
@@ -340,6 +401,6 @@ test('the component bake plans before it queues, keeps the shared model locks, a
   for (const name of ['bake.yml', 'catalog-bake.yml', 'publish-current-model-production.yml', 'collect-core-model.yml', 'collect-regional-model.yml']) {
     const text = read(name);
     assert.doesNotMatch(text, /sudo apt-get (update|install)/, `${name}: unbounded apt`);
-    assert.match(text, /sudo timeout -k 10 180 apt-get update && sudo timeout -k 10 300 apt-get install -y libeccodes-dev && break\n\s+test "\$attempt" -lt 3/, name);
+    assert.match(text, /sudo timeout -k 10 180 apt-get update && sudo timeout -k 10 300 apt-get install -y libeccodes-dev && break\n\s+test "\$attempt" -lt 3\n(\s+#.*\n)?\s+sudo timeout -k 10 120 dpkg --configure -a \|\| true\n\s+sleep 15\n/, name);
   }
 });

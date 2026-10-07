@@ -61,6 +61,8 @@ jobs:
           for attempt in 1 2 3; do
             sudo timeout -k 10 180 apt-get update && sudo timeout -k 10 300 apt-get install -y libeccodes-dev && break
             test "$attempt" -lt 3
+            # A dpkg killed mid-install leaves its database locked/half-configured; repair it first.
+            sudo timeout -k 10 120 dpkg --configure -a || true
             sleep 15
           done
       - name: venv + python deps

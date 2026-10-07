@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `f8754e221631802783f708faae2c4f8e4701ddee2c189f7f2bb002228ce8f5ec`.
+Source digest (registry and workflow bytes): `a3baabe2cf792271ad12dfbe22177b02eb35f639983a8a802d8593eddc26c73b`.
 
 64 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -113,8 +113,8 @@ Workflow permissions: <code>{"contents":"read","actions":"read"}</code>. Workflo
 | [publish-nam-ak](../.github/workflows/bake.yml#L225) ← <code>regional-nam-ak</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 | [component-publish-status](../.github/workflows/bake.yml#L236) ← <code>["publish-ecmwf","publish-gfs","publish-hrrr","publish-aifs","publish-icon","publish-hrdps","publish-arome-antilles","publish-hrrr-ak","publish-nam","publish-nam-hi","publish-nam-ak"]</code> | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 | [bake](../.github/workflows/bake.yml#L265) ← <code>["core-ecmwf","core-gfs","core-hrrr","core-aifs","regional-icon","regional-hrdps","regional-arome-antilles","regional-hrrr-ak","regional-nam","regional-nam-hi","regional-nam-ak"]</code> | <code>ubuntu-latest</code> | <code>production</code> | <code>300</code> | <code>{"group":"weatherx-data-maintenance","cancel-in-progress":false}</code> | not declared | inherits workflow/default policy |
-| [model-status](../.github/workflows/bake.yml#L574) ← <code>["core-ecmwf","core-gfs","core-hrrr","core-aifs","regional-icon","regional-hrdps","regional-arome-antilles","regional-hrrr-ak","regional-nam","regional-nam-hi","regional-nam-ak","bake"]</code> | <code>ubuntu-latest</code> | not declared | <code>8</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
-| [run-summary](../.github/workflows/bake.yml#L601) ← <code>["core-ecmwf","staging-wind100","production-wind100","core-gfs","core-hrrr","core-aifs","regional-icon","regional-hrdps","regional-arome-antilles","regional-hrrr-ak","regional-nam","regional-nam-hi","regional-nam-ak","publish-ecmwf","publish-gfs","publish-hrrr","publish-aifs","publish-icon","publish-hrdps","publish-arome-antilles","publish-hrrr-ak","publish-nam","publish-nam-hi","publish-nam-ak","bake"]</code> | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
+| [model-status](../.github/workflows/bake.yml#L576) ← <code>["core-ecmwf","core-gfs","core-hrrr","core-aifs","regional-icon","regional-hrdps","regional-arome-antilles","regional-hrrr-ak","regional-nam","regional-nam-hi","regional-nam-ak","bake"]</code> | <code>ubuntu-latest</code> | not declared | <code>8</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
+| [run-summary](../.github/workflows/bake.yml#L603) ← <code>["core-ecmwf","staging-wind100","production-wind100","core-gfs","core-hrrr","core-aifs","regional-icon","regional-hrdps","regional-arome-antilles","regional-hrrr-ak","regional-nam","regional-nam-hi","regional-nam-ak","publish-ecmwf","publish-gfs","publish-hrrr","publish-aifs","publish-icon","publish-hrdps","publish-arome-antilles","publish-hrrr-ak","publish-nam","publish-nam-hi","publish-nam-ak","bake"]</code> | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
 
 Declared job conditions (additional step/helper checks may apply):
 
@@ -144,8 +144,8 @@ Declared job conditions (additional step/helper checks may apply):
 - [publish-nam-ak](../.github/workflows/bake.yml#L226): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.regional-nam-ak.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
 - [component-publish-status](../.github/workflows/bake.yml#L237): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (always()) }}</code>
 - [bake](../.github/workflows/bake.yml#L276): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (always() &amp;&amp; !cancelled() &amp;&amp; needs.core-ecmwf.result == 'success' &amp;&amp; needs.core-gfs.result == 'success' &amp;&amp; needs.core-hrrr.result == 'success' &amp;&amp; needs.core-aifs.result == 'success' &amp;&amp; (inputs.recovery_run_id == '' &#124;&#124; (needs.regional-icon.result == 'success' &amp;&amp; needs.regional-hrdps.result == 'success' &amp;&amp; needs.regional-arome-antilles.result == 'success' &amp;&amp; needs.regional-hrrr-ak.result == 'success' &amp;&amp; needs.regional-nam.result == 'success' &amp;&amp; needs.regional-nam-hi.result == 'success' &amp;&amp; needs.regional-nam-ak.result == 'success'))) }}</code>
-- [model-status](../.github/workflows/bake.yml#L575): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (always()) }}</code>
-- [run-summary](../.github/workflows/bake.yml#L603): <code>${{ always() }}</code>
+- [model-status](../.github/workflows/bake.yml#L577): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (always()) }}</code>
+- [run-summary](../.github/workflows/bake.yml#L605): <code>${{ always() }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
@@ -153,11 +153,11 @@ Checkout declarations (not a claim of approval or checkout success):
 | --- | --- | --- |
 | [bake / checkout exact public bake diagnostic controller](../.github/workflows/bake.yml#L278) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
 | [bake / checkout atmos (private, read-only deploy key)](../.github/workflows/bake.yml#L292) | <code>weatherx-hq/atmos</code> | <code>e5fd5758aab079c32c6b077857e641ba40970d04</code> |
-| [bake / checkout this reviewed recovery transfer checker](../.github/workflows/bake.yml#L388) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
-| [model-status / step 1](../.github/workflows/bake.yml#L582) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [run-summary / step 1](../.github/workflows/bake.yml#L610) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [bake / checkout this reviewed recovery transfer checker](../.github/workflows/bake.yml#L390) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
+| [model-status / step 1](../.github/workflows/bake.yml#L584) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [run-summary / step 1](../.github/workflows/bake.yml#L612) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
-Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/bake.yml#L116), [PRODUCTION_WIND100_CALL_ENABLED](../.github/workflows/bake.yml#L49), [R2_FALLBACK_MIRROR_ENABLED](../.github/workflows/bake.yml#L531).
+Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/bake.yml#L116), [PRODUCTION_WIND100_CALL_ENABLED](../.github/workflows/bake.yml#L49), [R2_FALLBACK_MIRROR_ENABLED](../.github/workflows/bake.yml#L533).
 
 
 ## catalog-bake
@@ -170,25 +170,25 @@ Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: no
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [plan](../.github/workflows/catalog-bake.yml#L38) ← no needs | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
-| [model](../.github/workflows/catalog-bake.yml#L62) ← <code>plan</code> | <code>ubuntu-latest</code> | <code>production</code> | <code>210</code> | <code>{"group":"weatherx-component-${{ github.event_name == 'workflow_dispatch' &amp;&amp; inputs.target &#124;&#124; vars.CATALOG_DEFAULT_TARGET &#124;&#124; 'staging' }}-${{ matrix.model }}","cancel-in-progress":false}</code> | <code>{"fail-fast":false,"max-parallel":4,"matrix":{"model":"${{ fromJSON(needs.plan.outputs.models &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model == 'slow' &amp;&amp; '[\"ecmwf\",\"gfs\",\"aifs\"]' &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model != 'all' &amp;&amp; format('[\"{0}\"]', inputs.model) &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; '[\"ecmwf\",\"gfs\",\"hrrr\",\"aifs\"]' &#124;&#124; github.event.schedule == '8-59/10 * * * *' &amp;&amp; '[\"hrrr\"]' &#124;&#124; '[\"ecmwf\",\"gfs\",\"aifs\"]') }}"}}</code> | inherits workflow/default policy |
-| [summary](../.github/workflows/catalog-bake.yml#L260) ← <code>model</code> | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
+| [plan](../.github/workflows/catalog-bake.yml#L42) ← no needs | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
+| [model](../.github/workflows/catalog-bake.yml#L67) ← <code>plan</code> | <code>ubuntu-latest</code> | <code>production</code> | <code>210</code> | <code>{"group":"weatherx-component-${{ github.event_name == 'workflow_dispatch' &amp;&amp; inputs.target &#124;&#124; vars.CATALOG_DEFAULT_TARGET &#124;&#124; 'staging' }}-${{ matrix.model }}","cancel-in-progress":false}</code> | <code>{"fail-fast":false,"max-parallel":4,"matrix":{"model":"${{ fromJSON(needs.plan.outputs.models &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model == 'slow' &amp;&amp; '[\"ecmwf\",\"gfs\",\"aifs\"]' &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model != 'all' &amp;&amp; format('[\"{0}\"]', inputs.model) &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; '[\"ecmwf\",\"gfs\",\"hrrr\",\"aifs\"]' &#124;&#124; github.event.schedule == '8-59/10 * * * *' &amp;&amp; '[\"hrrr\"]' &#124;&#124; '[\"ecmwf\",\"gfs\",\"aifs\"]') }}"}}</code> | inherits workflow/default policy |
+| [summary](../.github/workflows/catalog-bake.yml#L267) ← <code>["plan","model"]</code> | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [plan](../.github/workflows/catalog-bake.yml#L38): <code>${{ github.event_name == 'workflow_dispatch' &#124;&#124; vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true' }}</code>
-- [model](../.github/workflows/catalog-bake.yml#L66): <code>${{ !cancelled() &amp;&amp; (github.event_name == 'workflow_dispatch' &#124;&#124; vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true') &amp;&amp; needs.plan.outputs.models != '[]' }}</code>
-- [summary](../.github/workflows/catalog-bake.yml#L261): <code>${{ always() &amp;&amp; (github.event_name == 'workflow_dispatch' &#124;&#124; vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true') }}</code>
+- [plan](../.github/workflows/catalog-bake.yml#L42): <code>${{ github.event_name == 'workflow_dispatch' &#124;&#124; vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true' }}</code>
+- [model](../.github/workflows/catalog-bake.yml#L71): <code>${{ !cancelled() &amp;&amp; (github.event_name == 'workflow_dispatch' &#124;&#124; vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true') &amp;&amp; needs.plan.outputs.models != '[]' }}</code>
+- [summary](../.github/workflows/catalog-bake.yml#L268): <code>${{ always() &amp;&amp; (github.event_name == 'workflow_dispatch' &#124;&#124; vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true') }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [plan / step 1](../.github/workflows/catalog-bake.yml#L47) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [model / Checkout WeatherX](../.github/workflows/catalog-bake.yml#L102) | <code>weatherx-hq/atmos</code> | <code>18faa9b33084623ef2486a57134de2e8c8974b0c</code> |
-| [summary / step 1](../.github/workflows/catalog-bake.yml#L268) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [plan / step 1](../.github/workflows/catalog-bake.yml#L52) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [model / Checkout WeatherX](../.github/workflows/catalog-bake.yml#L107) | <code>weatherx-hq/atmos</code> | <code>18faa9b33084623ef2486a57134de2e8c8974b0c</code> |
+| [summary / step 1](../.github/workflows/catalog-bake.yml#L275) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
-Variable references (declared names only; values and activation unknown): [CATALOG_DEFAULT_TARGET](../.github/workflows/catalog-bake.yml#L58), [CATALOG_GITHUB_FALLBACK_DISABLED](../.github/workflows/catalog-bake.yml#L38), [CURRENT_RUN_CATALOG_BAKE_ATMOS_SHA](../.github/workflows/catalog-bake.yml#L85), [CURRENT_RUN_POINT_REUSE_MODEL](../.github/workflows/catalog-bake.yml#L86).
+Variable references (declared names only; values and activation unknown): [CATALOG_DEFAULT_TARGET](../.github/workflows/catalog-bake.yml#L63), [CATALOG_GITHUB_FALLBACK_DISABLED](../.github/workflows/catalog-bake.yml#L42), [CURRENT_RUN_CATALOG_BAKE_ATMOS_SHA](../.github/workflows/catalog-bake.yml#L90), [CURRENT_RUN_POINT_REUSE_MODEL](../.github/workflows/catalog-bake.yml#L91).
 
 
 ## catalog-bootstrap
