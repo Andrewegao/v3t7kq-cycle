@@ -31,9 +31,27 @@ test('manual single-model requests collect only that model; schedules still coll
     assert.deepEqual(actual,selection===''||selection==='all'?all:all.includes(selection)?[selection]:[]);
   }
   assert.match(bake,/cron: '30 2,8,14,20 \* \* \*'/);
-  // Whole maintenance still requires all FOUR successful core collectors.
-  const maintenance=bake.split('\n  bake:')[1];
-  for(const model of coreModels)assert.match(maintenance,new RegExp(`needs.core-${model}.result == 'success'`));
+  // Whole maintenance requires every core collector FINISHED and ECMWF+GFS successful;
+  // a failed HRRR/AIFS abstains (atmos decisions 2026-10-07). Cancelled or skipped never bakes.
+  const maintenance=bake.split('\n  bake:')[1].split(/\n  [a-z]/)[0];
+  const gate=maintenance.match(/\n    if: \$\{\{ (.+) \}\}/)[1];
+  const canBake=(core,recovery='',regional='success')=>Function('inputs','needs','always','cancelled',`return ${gate.replace(/needs\.([a-z0-9-]+)\.result/g,"needs['$1'].result")}`)(
+    {staging_wind100_only:false,recovery_run_id:recovery},
+    Object.fromEntries([...coreModels.map(m=>[`core-${m}`,{result:core[m]??'success'}]),...regionalModels.map(m=>[`regional-${m}`,{result:regional}])]),
+    ()=>true,()=>false);
+  assert.equal(canBake({}),true);
+  for(const result of ['failure','cancelled','skipped']){
+    for(const model of coreModels){
+      assert.equal(canBake({[model]:result}),result==='failure'&&['hrrr','aifs'].includes(model),`${model} ${result}`);
+    }
+  }
+  assert.equal(canBake({hrrr:'failure',aifs:'failure'}),true);
+  assert.equal(canBake({gfs:'failure',aifs:'failure'}),false);
+  assert.equal(canBake({},'',  'failure'),true);
+  assert.equal(canBake({aifs:'failure'},'33925520386'),false,'a refused core recovery is not an abstention');
+  assert.equal(canBake({},'33925520386','failure'),false);
+  const publish=maintenance.split('      - name: bake → gate → publish immutable data release')[1].split('      - name:')[0];
+  assert.match(publish,/CORE_COLLECTOR_RESULTS: ecmwf=\$\{\{ needs\.core-ecmwf\.result \}\} gfs=\$\{\{ needs\.core-gfs\.result \}\} hrrr=\$\{\{ needs\.core-hrrr\.result \}\} aifs=\$\{\{ needs\.core-aifs\.result \}\}/);
 });
 
 test('eleven reusable collectors each unlock only their matching publisher',()=>{

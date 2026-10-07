@@ -10,6 +10,7 @@ const REPO = 'Andrewegao/v3t7kq-cycle';
 const API = `https://api.github.com/repos/${REPO}`;
 export const MODELS = Object.freeze(['ecmwf', 'gfs', 'hrrr', 'aifs', 'icon', 'hrdps', 'arome-antilles', 'hrrr-ak', 'nam', 'nam-hi', 'nam-ak']);
 const CORE = MODELS.slice(0, 4);
+const OPTIONAL_CORE = Object.freeze(['hrrr', 'aifs']);
 const RESULT = /^(?:success|failure|cancelled|skipped)$/;
 const result = value => RESULT.test(value ?? '') ? value : 'unknown';
 // An environment gate with no reviewer and no wait timer should clear in seconds. A job left in
@@ -49,9 +50,12 @@ export function bakeRows(needs, jobs, now) {
   const rows = [];
   const time = prefix => ago(minutesSince(finished(jobs, prefix), now));
   const maintenance = result(needs.bake?.result);
+  // bake.yml lets a failed HRRR/AIFS collector abstain from the whole release (atmos 2026-10-07).
+  const abstained = maintenance === 'success' ? OPTIONAL_CORE.filter(model => result(needs[`core-${model}`]?.result) === 'failure') : [];
   rows.push({part: 'Whole-data maintenance (immutable whole release; legacy observation fallback)',
     outcome: maintenance === 'success' ? 'refreshed' : maintenance === 'skipped' ? 'SKIPPED' : maintenance === 'unknown' ? 'unknown' : maintenance.toUpperCase(),
-    detail: maintenance === 'success' ? `finished ${time('bake')}` : 'previous whole release kept; this run did not refresh it'});
+    detail: maintenance === 'success' ? `finished ${time('bake')}${abstained.length ? `; abstained core: ${abstained.join(', ')}` : ''}`
+      : 'previous whole release kept; this run did not refresh it'});
   for (const model of MODELS) {
     const collectorKey = `${CORE.includes(model) ? 'core' : 'regional'}-${model}`;
     const collector = result(needs[collectorKey]?.result);
@@ -60,7 +64,8 @@ export function bakeRows(needs, jobs, now) {
     const publishResult = result(publisher?.result);
     let outcome, detail;
     if (collector === 'skipped') { outcome = 'skipped'; detail = 'not requested by this run'; }
-    else if (collector !== 'success') { outcome = collector === 'unknown' ? 'unknown' : `COLLECTION ${collector.toUpperCase()}`; detail = 'previous component kept'; }
+    else if (collector !== 'success') { outcome = collector === 'unknown' ? 'unknown' : `COLLECTION ${collector.toUpperCase()}`;
+      detail = abstained.includes(model) ? 'abstained from the whole release; its last published run (at most 24 h old) is still served' : 'previous component kept'; }
     else if (publishResult === 'skipped') { outcome = 'collected, publication skipped'; detail = 'per-model publication disabled or not requested; previous component kept'; }
     else if (published === 'published') { outcome = 'refreshed'; detail = `published ${time(`publish-${model}`)}`; }
     else if (published === 'unchanged') { outcome = 'unchanged'; detail = 'collected run already published'; }

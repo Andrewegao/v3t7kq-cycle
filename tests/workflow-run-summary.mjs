@@ -32,6 +32,19 @@ test('a staging-Wind100-only run says whole-data maintenance was SKIPPED, not re
   assert.doesNotMatch(text, /whole-data maintenance refreshed/);
 });
 
+test('an abstained HRRR or AIFS core is named on the refreshed whole release', () => {
+  const rows = bakeRows(needs({bake: {result: 'success'}, 'core-ecmwf': {result: 'success'}, 'core-gfs': {result: 'success'},
+    'core-hrrr': {result: 'success'}, 'core-aifs': {result: 'failure'}}), [{name: 'bake', completed_at: at(2)}], NOW);
+  const row = part => rows.find(r => r.part.startsWith(part));
+  assert.deepEqual([row('Whole-data').outcome, row('Whole-data').detail], ['refreshed', 'finished 2 min ago; abstained core: aifs']);
+  assert.deepEqual([row('aifs').outcome, row('aifs').detail],
+    ['COLLECTION FAILURE', 'abstained from the whole release; its last published run (at most 24 h old) is still served']);
+  // A skipped whole release names no abstention: nothing was served from this run.
+  const skipped = bakeRows(needs({bake: {result: 'skipped'}, 'core-hrrr': {result: 'failure'}}), [], NOW);
+  assert.equal(skipped[0].detail, 'previous whole release kept; this run did not refresh it');
+  assert.equal(skipped.find(r => r.part.startsWith('hrrr (')).detail, 'previous component kept');
+});
+
 test('a full run separates refreshed, unchanged, withheld, failed and skipped parts with ages', () => {
   const rows = bakeRows(needs({bake: {result: 'success'}, 'core-ecmwf': {result: 'success'}, 'publish-ecmwf': {result: 'success', outputs: {status: 'published'}},
     'core-gfs': {result: 'failure'}, 'core-hrrr': {result: 'success'}, 'publish-hrrr': {result: 'cancelled', outputs: {}},
