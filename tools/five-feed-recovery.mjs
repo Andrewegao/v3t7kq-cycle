@@ -12,10 +12,19 @@ const WORKFLOW_PREFIX = 'Andrewegao/v3t7kq-cycle/.github/workflows/';
 // recovery: manual, literal confirmation, all five families or nothing (original contract).
 // scheduled: unattended; each admitted family publishes on its own and a refused family keeps
 // its served component. Every mode keeps the same CAS, staging, lock and readback guarantees.
+// A workflow_dispatch needs the literal confirmation, except the component-bake chain caller,
+// which only scheduled mode accepts (its run id is verified by the lane's plan job).
+export const CONFIRMATION = 'RECOVER FIVE OBSERVATION FEEDS';
+export const CHAIN_CALLER = 'component-bake-chain';
 export const MODES = Object.freeze({
-  recovery: Object.freeze({events: ['workflow_dispatch'], workflowRef: `${WORKFLOW_PREFIX}five-feed-recovery.yml@refs/heads/main`, allFive: true}),
-  scheduled: Object.freeze({events: ['schedule', 'workflow_dispatch'], workflowRef: `${WORKFLOW_PREFIX}observation-refresh.yml@refs/heads/main`, allFive: false}),
+  recovery: Object.freeze({events: ['workflow_dispatch'], workflowRef: `${WORKFLOW_PREFIX}five-feed-recovery.yml@refs/heads/main`, allFive: true, chain: false}),
+  scheduled: Object.freeze({events: ['schedule', 'workflow_dispatch'], workflowRef: `${WORKFLOW_PREFIX}observation-refresh.yml@refs/heads/main`, allFive: false, chain: true}),
 });
+export function dispatchAdmitted(mode, inputs) {
+  if (!object(inputs)) return false;
+  if (inputs.caller === CHAIN_CALLER) return MODES[mode]?.chain === true && /^[1-9][0-9]{0,19}$/.test(inputs.chain_run_id ?? '');
+  return inputs.confirmation === CONFIRMATION;
+}
 export const FEEDS = Object.freeze({metar:'data-atmos/stations/',synop:'data-atmos/synop/',
   buoys:'data-atmos/buoys/',openaq:'data-atmos/openaq/',fires:'data-atmos/fires/'});
 const DATA = 'weatherx:weatherx-data-production';
@@ -280,6 +289,10 @@ export async function main(argv) {
     MODES[mode].events.includes(process.env.GITHUB_EVENT_NAME) && process.env.APPROVED_SHA===SOURCE &&
     process.env.GITHUB_WORKFLOW_REF===MODES[mode].workflowRef &&
     /^[1-9][0-9]*$/.test(process.env.GITHUB_RUN_ID??'') && /^[1-9][0-9]*$/.test(process.env.GITHUB_RUN_ATTEMPT??''),'manual-approved-source');
+  if (process.env.GITHUB_EVENT_NAME==='workflow_dispatch') {
+    let inputs=null;try {inputs=JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH??'','utf8')).inputs;} catch {inputs=null;}
+    fail(dispatchAdmitted(mode,inputs),'manual-approved-source');
+  }
   fail(process.env.CATALOG_ENDPOINT===ENDPOINT,'production-catalog-endpoint');
   pristine(atmos);
   if (operation==='snapshot') {fail(!existsSync(work),'fresh-state-directory');mkdirSync(work);save(join(work,'baseline.json'),snapshot());return;}

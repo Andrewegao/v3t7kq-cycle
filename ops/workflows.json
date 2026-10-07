@@ -560,6 +560,15 @@
       "runbook": "docs/five-feed-recovery-20261006.md"
     },
     {
+      "id": "observation-chain",
+      "path": ".github/workflows/observation-chain.yml",
+      "family": "maintenance",
+      "purpose": "On each component bake run, dispatch the observation lane in scheduled mode when it is enabled, idle and last started over 25 minutes ago.",
+      "subsystem": "Observation component refresh",
+      "lifecycle": "recurring",
+      "runbook": "docs/observation-refresh.md"
+    },
+    {
       "id": "observation-refresh",
       "path": ".github/workflows/observation-refresh.yml",
       "family": "maintenance",
