@@ -271,8 +271,8 @@ jobs:
     # Join bounded collectors before assembling one release. Missing regional inputs abstain
     # in the roster. Every core collector must have finished (success or failure/timeout, never
     # cancelled or skipped) and ECMWF+GFS must succeed: a failed HRRR or AIFS abstains in
-    # data/core-model-roster.json and its last published run (24 h cap) is served
-    # (atmos decisions 2026-10-07). Only this job can publish.
+    # data/core-model-roster.json as carried and its last published run stays served (HRRR at
+    # most 12 h old at the release gate, AIFS 24 h; atmos decisions 2026-10-07). Only this job can publish.
     needs: [core-ecmwf, core-gfs, core-hrrr, core-aifs, regional-icon, regional-hrdps, regional-arome-antilles, regional-hrrr-ak, regional-nam, regional-nam-hi, regional-nam-ak]
     # Recovery provenance failures are not optional provider abstentions. A refused
     # core or regional recovery must withhold the entire candidate, never publish a subset.

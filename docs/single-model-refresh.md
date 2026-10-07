@@ -2,8 +2,10 @@
 
 Manual `bake.yml` now accepts `model` (default `all`). A selected model runs only
 its existing collector and paired publisher. The other ten collectors are
-skipped; no duplicate weather collection occurs. Whole maintenance still requires
-all four core collectors to succeed, so it does not run for a single-model request.
+skipped; no duplicate weather collection occurs. Whole maintenance requires every
+core collector to finish (success or failure, never skipped or cancelled) with ECMWF and
+GFS succeeding; a failed HRRR or AIFS is carried from the last release. Skipped
+collectors mean it does not run for a single-model request.
 
 Scheduled runs have no manual input and continue to collect all eleven on the
 unchanged four-times-daily schedule. Ordinary manual `model=all` also preserves

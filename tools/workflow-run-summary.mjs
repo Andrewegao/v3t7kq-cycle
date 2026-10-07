@@ -11,6 +11,8 @@ const API = `https://api.github.com/repos/${REPO}`;
 export const MODELS = Object.freeze(['ecmwf', 'gfs', 'hrrr', 'aifs', 'icon', 'hrdps', 'arome-antilles', 'hrrr-ak', 'nam', 'nam-hi', 'nam-ak']);
 const CORE = MODELS.slice(0, 4);
 const OPTIONAL_CORE = Object.freeze(['hrrr', 'aifs']);
+// atmos 2026-10-07: HRRR at most 12 h old at the release freshness gate; AIFS at most 24 h at install.
+const CARRY_LIMIT = Object.freeze({hrrr: '12 h old at the release gate', aifs: '24 h old'});
 const RESULT = /^(?:success|failure|cancelled|skipped)$/;
 const result = value => RESULT.test(value ?? '') ? value : 'unknown';
 // An environment gate with no reviewer and no wait timer should clear in seconds. A job left in
@@ -65,7 +67,7 @@ export function bakeRows(needs, jobs, now) {
     let outcome, detail;
     if (collector === 'skipped') { outcome = 'skipped'; detail = 'not requested by this run'; }
     else if (collector !== 'success') { outcome = collector === 'unknown' ? 'unknown' : `COLLECTION ${collector.toUpperCase()}`;
-      detail = abstained.includes(model) ? 'abstained from the whole release; its last published run (at most 24 h old) is still served' : 'previous component kept'; }
+      detail = abstained.includes(model) ? `abstained from the whole release; its last published run (at most ${CARRY_LIMIT[model]}) is still served` : 'previous component kept'; }
     else if (publishResult === 'skipped') { outcome = 'collected, publication skipped'; detail = 'per-model publication disabled or not requested; previous component kept'; }
     else if (published === 'published') { outcome = 'refreshed'; detail = `published ${time(`publish-${model}`)}`; }
     else if (published === 'unchanged') { outcome = 'unchanged'; detail = 'collected run already published'; }

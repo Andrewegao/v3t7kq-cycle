@@ -35,21 +35,29 @@ test('manual single-model requests collect only that model; schedules still coll
   // a failed HRRR/AIFS abstains (atmos decisions 2026-10-07). Cancelled or skipped never bakes.
   const maintenance=bake.split('\n  bake:')[1].split(/\n  [a-z]/)[0];
   const gate=maintenance.match(/\n    if: \$\{\{ (.+) \}\}/)[1];
-  const canBake=(core,recovery='',regional='success')=>Function('inputs','needs','always','cancelled',`return ${gate.replace(/needs\.([a-z0-9-]+)\.result/g,"needs['$1'].result")}`)(
-    {staging_wind100_only:false,recovery_run_id:recovery},
-    Object.fromEntries([...coreModels.map(m=>[`core-${m}`,{result:core[m]??'success'}]),...regionalModels.map(m=>[`regional-${m}`,{result:regional}])]),
-    ()=>true,()=>false);
-  assert.equal(canBake({}),true);
-  for(const result of ['failure','cancelled','skipped']){
-    for(const model of coreModels){
-      assert.equal(canBake({[model]:result}),result==='failure'&&['hrrr','aifs'].includes(model),`${model} ${result}`);
+  const evaluate=(core,recovery,regional,{wind100=false,runCancelled=false}={})=>Function('inputs','needs','always','cancelled',
+    `return ${gate.replace(/needs\.([a-z0-9-]+)\.result/g,"needs['$1'].result")}`)(
+    {staging_wind100_only:wind100,recovery_run_id:recovery},
+    Object.fromEntries([...coreModels.map((m,i)=>[`core-${m}`,{result:core[i]}]),...regionalModels.map((m,i)=>[`regional-${m}`,{result:regional[i]}])]),
+    ()=>true,()=>runCancelled);
+  // Exhaustive: 4^4 core results x recovery off/on x 9 regional shapes (all ok, all failed, each one failed).
+  const results=['success','failure','cancelled','skipped'];
+  const regionalShapes=[regionalModels.map(()=>'success'),regionalModels.map(()=>'failure'),
+    ...regionalModels.map((_,j)=>regionalModels.map((__,i)=>i===j?'failure':'success'))];
+  let cases=0;
+  for(const ecmwf of results)for(const gfs of results)for(const hrrr of results)for(const aifs of results){
+    const core=[ecmwf,gfs,hrrr,aifs];
+    for(const recovery of ['','33925520386'])for(const regional of regionalShapes){
+      const finished=r=>r==='success'||r==='failure';
+      const expected=ecmwf==='success'&&gfs==='success'&&finished(hrrr)&&finished(aifs)&&
+        (recovery===''||(core.every(r=>r==='success')&&regional.every(r=>r==='success')));
+      assert.equal(evaluate(core,recovery,regional),expected,`${core} recovery=${recovery} regional=${regional}`);
+      assert.equal(evaluate(core,recovery,regional,{runCancelled:true}),false);
+      assert.equal(evaluate(core,recovery,regional,{wind100:true}),false);
+      cases++;
     }
   }
-  assert.equal(canBake({hrrr:'failure',aifs:'failure'}),true);
-  assert.equal(canBake({gfs:'failure',aifs:'failure'}),false);
-  assert.equal(canBake({},'',  'failure'),true);
-  assert.equal(canBake({aifs:'failure'},'33925520386'),false,'a refused core recovery is not an abstention');
-  assert.equal(canBake({},'33925520386','failure'),false);
+  assert.equal(cases,4**4*2*9);
   const publish=maintenance.split('      - name: bake → gate → publish immutable data release')[1].split('      - name:')[0];
   assert.match(publish,/CORE_COLLECTOR_RESULTS: ecmwf=\$\{\{ needs\.core-ecmwf\.result \}\} gfs=\$\{\{ needs\.core-gfs\.result \}\} hrrr=\$\{\{ needs\.core-hrrr\.result \}\} aifs=\$\{\{ needs\.core-aifs\.result \}\}/);
 });

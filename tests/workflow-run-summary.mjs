@@ -39,6 +39,8 @@ test('an abstained HRRR or AIFS core is named on the refreshed whole release', (
   assert.deepEqual([row('Whole-data').outcome, row('Whole-data').detail], ['refreshed', 'finished 2 min ago; abstained core: aifs']);
   assert.deepEqual([row('aifs').outcome, row('aifs').detail],
     ['COLLECTION FAILURE', 'abstained from the whole release; its last published run (at most 24 h old) is still served']);
+  const hrrr = bakeRows(needs({bake: {result: 'success'}, 'core-hrrr': {result: 'failure'}}), [], NOW).find(r => r.part.startsWith('hrrr ('));
+  assert.equal(hrrr.detail, 'abstained from the whole release; its last published run (at most 12 h old at the release gate) is still served');
   // A skipped whole release names no abstention: nothing was served from this run.
   const skipped = bakeRows(needs({bake: {result: 'skipped'}, 'core-hrrr': {result: 'failure'}}), [], NOW);
   assert.equal(skipped[0].detail, 'previous whole release kept; this run did not refresh it');
