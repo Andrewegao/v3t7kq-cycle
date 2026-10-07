@@ -36,13 +36,13 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: weatherx-hq/atmos
-          ref: 18fb5074d7472ffc5549704c0874f6e35516cef5
+          ref: 51f01dd303abeeb6246aeec7169543152e651e1f
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 32
           persist-credentials: false
       - name: Verify approved immutable regional collector before running source
         run: |
-          test "$(git rev-parse HEAD)" = "18fb5074d7472ffc5549704c0874f6e35516cef5"
+          test "$(git rev-parse HEAD)" = "51f01dd303abeeb6246aeec7169543152e651e1f"
           git diff --exit-code HEAD
       - name: checkout this reviewed recovery controller
         if: ${{ inputs.recovery_run_id != '' }}

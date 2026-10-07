@@ -1,7 +1,7 @@
 {
   "schemaVersion": 3,
   "sourceSha": "9174329db6ca8527569e67f14ef70406dedefb69",
-  "coreSourceSha": "18fb5074d7472ffc5549704c0874f6e35516cef5",
+  "coreSourceSha": "51f01dd303abeeb6246aeec7169543152e651e1f",
   "recurringPublicationMode": "point-only-recurring-v1",
   "recurringStorage": {
     "componentObjectPrefix": "components/point-ecmwf/stage-wind100-recurring-point-ecmwf-",
