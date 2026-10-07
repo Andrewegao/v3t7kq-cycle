@@ -1,0 +1,161 @@
+# Manual recovery of all five observation and fire components (all five or nothing). Its recover
+# job is the observation lane's refresh job with FIVE_FEED_MODE recovery; tests/five-feed-recovery.mjs
+# keeps the two byte-identical apart from that mode and the schedule gate.
+name: Recover five observation and fire components
+run-name: 'observations: manual five-family recovery (all five or nothing)'
+permissions:
+  contents: read
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Enter RECOVER FIVE OBSERVATION FEEDS after reviewing the exact source and operation
+        type: string
+        required: true
+jobs:
+  recover:
+    environment: production
+    # Every obs-* component writer (this lane and five-feed-recovery.yml) shares this lock.
+    # It is deliberately not weatherx-data-maintenance: GitHub keeps one pending job per group,
+    # so a 30-minute schedule there would cancel the whole bake's queued maintenance job.
+    # Whole maintenance never promotes obs-* components; the controller's exact five-target
+    # CAS and release-pointer checks refuse any concurrent change instead of overwriting it.
+    concurrency:
+      group: weatherx-observation-components-production
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      ATMOS_SHA: 18fb5074d7472ffc5549704c0874f6e35516cef5
+      APPROVED_SHA: ${{ vars.CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA }}
+      CATALOG_ENDPOINT: https://weatherx.org/api/platform/internal/catalog
+      FIVE_FEED_MODE: recovery
+    steps:
+      - name: Require main, an admitted caller and the approved production source before credentials
+        id: source
+        env:
+          ENABLED: ${{ vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED }}
+        run: |
+          test "$GITHUB_REPOSITORY" = Andrewegao/v3t7kq-cycle
+          test "$GITHUB_REF" = refs/heads/main
+          # Every manual dispatch re-reads its literal confirmation from the event before any credential.
+          CONFIRMATION="$(jq -r '.inputs.confirmation // ""' "$GITHUB_EVENT_PATH")"
+          case "$FIVE_FEED_MODE:$GITHUB_EVENT_NAME:$GITHUB_WORKFLOW_REF" in
+            "recovery:workflow_dispatch:Andrewegao/v3t7kq-cycle/.github/workflows/five-feed-recovery.yml@refs/heads/main")
+              test "$CONFIRMATION" = 'RECOVER FIVE OBSERVATION FEEDS' ;;
+            "scheduled:schedule:Andrewegao/v3t7kq-cycle/.github/workflows/observation-refresh.yml@refs/heads/main") ;;
+            "scheduled:workflow_dispatch:Andrewegao/v3t7kq-cycle/.github/workflows/observation-refresh.yml@refs/heads/main")
+              test "$CONFIRMATION" = 'RECOVER FIVE OBSERVATION FEEDS' ;;
+            *) echo "refusing an unadmitted observation caller" >&2; exit 2 ;;
+          esac
+          test "$ENABLED" = true
+          test "$APPROVED_SHA" = "$ATMOS_SHA"
+      - name: Checkout exact recovery controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Andrewegao/v3t7kq-cycle
+          ref: ${{ github.sha }}
+          path: cycle
+          persist-credentials: false
+      - name: Checkout unchanged qualified five-feed producers
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: weatherx-hq/atmos
+          ref: 18fb5074d7472ffc5549704c0874f6e35516cef5
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: atmos
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with: {python-version: '3.12'}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: {node-version: '22'}
+      - name: Provision only locked data runtime and hash-locked existing R2 transport
+        timeout-minutes: 10
+        run: |
+          test "$(git -C cycle rev-parse HEAD)" = "$GITHUB_SHA"
+          git -C cycle diff --quiet HEAD
+          test "$(git -C atmos rev-parse HEAD)" = "$ATMOS_SHA"
+          git -C atmos diff --quiet HEAD
+          node cycle/tools/atmos-source-pin.mjs --check
+          python -m venv atmos/data/.venv
+          atmos/data/.venv/bin/pip install --require-hashes --only-binary=:all: -r atmos/data/requirements.lock
+          archive="$RUNNER_TEMP/rclone-v1.75.0-linux-amd64.zip"
+          curl --fail --silent --show-error --location --max-time 120 \
+            https://github.com/rclone/rclone/releases/download/v1.75.0/rclone-v1.75.0-linux-amd64.zip --output "$archive"
+          printf '%s  %s\n' aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa "$archive" | sha256sum --check --status
+          unzip -q "$archive" -d "$RUNNER_TEMP"
+          sudo install -m 0755 "$RUNNER_TEMP/rclone-v1.75.0-linux-amd64/rclone" /usr/local/bin/rclone
+          rclone version | head -1 | grep -Fx 'rclone v1.75.0'
+      - name: Authenticate predecessor catalog release and complete mount inventories
+        id: snapshot
+        timeout-minutes: 8
+        env:
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+        run: node cycle/tools/five-feed-recovery.mjs snapshot "$GITHUB_WORKSPACE/atmos" "$RUNNER_TEMP/five-feed-state"
+      - name: Collect all five independent families with three workers and fixed provider deadlines
+        id: collect
+        timeout-minutes: 23
+        env:
+          OPENAQ_API_KEY: ${{ secrets.OPENAQ_API_KEY }}
+        run: |
+          atmos/data/.venv/bin/python -I cycle/tools/five-feed-collect.py collect \
+            "$GITHUB_WORKSPACE/atmos" "$RUNNER_TEMP/five-feed-stage" --mode "$FIVE_FEED_MODE"
+      - name: Stage verify atomic CAS of admitted components and verify genuine public aliases
+        id: publish
+        timeout-minutes: 18
+        env:
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+          CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+        run: |
+          export FIVE_FEED_PUBLICATION_DEADLINE_MS="$(( $(date +%s) * 1000 + 18 * 60 * 1000 ))"
+          node cycle/tools/five-feed-recovery.mjs stage "$GITHUB_WORKSPACE/atmos" "$RUNNER_TEMP/five-feed-state" "$RUNNER_TEMP/five-feed-stage"
+          node cycle/tools/five-feed-recovery.mjs promote "$GITHUB_WORKSPACE/atmos" "$RUNNER_TEMP/five-feed-state" "$RUNNER_TEMP/five-feed-stage"
+          node cycle/tools/five-feed-recovery.mjs readback "$GITHUB_WORKSPACE/atmos" "$RUNNER_TEMP/five-feed-state" "$RUNNER_TEMP/five-feed-stage"
+      - name: Report each family's outcome and age; fail unless all five refreshed
+        if: ${{ always() && steps.source.outcome == 'success' }}
+        env:
+          STEP_SOURCE: ${{ steps.source.outcome }}
+          STEP_SNAPSHOT: ${{ steps.snapshot.outcome }}
+          STEP_COLLECT: ${{ steps.collect.outcome }}
+          STEP_PUBLISH: ${{ steps.publish.outcome }}
+        run: node cycle/tools/observation-summary.mjs "$RUNNER_TEMP/five-feed-state" "$RUNNER_TEMP/five-feed-stage"
+      - name: Render the shared Atmos refresh table when the pinned source provides it
+        # ops/report-refresh.py arrives with the Atmos observation-receipt change; until the pin
+        # includes it the controller verdict above is the only report. Malformed input exits 2.
+        if: ${{ always() && steps.source.outcome == 'success' }}
+        run: |
+          receipt="$RUNNER_TEMP/five-feed-state/observation-refresh-v1.json"
+          if [ ! -f atmos/ops/report-refresh.py ]; then
+            echo "pinned Atmos source has no ops/report-refresh.py; the five-feed verdict is authoritative"
+          elif [ ! -f "$receipt" ]; then
+            echo "no observation receipt was produced"; exit 1
+          else
+            python3 -I atmos/ops/report-refresh.py --observations "$receipt" \
+              --expect obs-metar --expect obs-synop --expect obs-buoys --expect obs-openaq --expect obs-fires \
+              --json-out "$RUNNER_TEMP/five-feed-state/refresh-report.json" --strict
+          fi
+      - name: Retain only aggregate public acceptance and family outcomes
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: five-feed-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/five-feed-state/acceptance.json
+            ${{ runner.temp }}/five-feed-state/observation-receipt.json
+            ${{ runner.temp }}/five-feed-state/observation-refresh-v1.json
+            ${{ runner.temp }}/five-feed-state/refresh-report.json
+            ${{ runner.temp }}/five-feed-state/public-promotion-intent.json
+            ${{ runner.temp }}/five-feed-state/public-promotion-result.json
+            ${{ runner.temp }}/five-feed-stage/collection-outcomes.json
+          if-no-files-found: ignore
+          retention-days: 7

@@ -37,7 +37,12 @@ artifact. It requires:
   path, and the exact attempt-specific successful model job. Publisher retries
   may use the newest untouched successful collector from an earlier attempt of
   that same run and controller/source. The lookup stops at a newer failed,
-  skipped, incomplete or malformed collector and is bounded to ten attempts;
+  skipped, incomplete or malformed collector and is bounded to ten attempts.
+  The aggregate run status may be any of GitHub's documented run statuses
+  (`requested`, `queued`, `waiting`, `pending`, `in_progress`, `completed`) and
+  its conclusion is not read: a sibling job held at an environment gate leaves
+  the whole run `waiting` after this collector finished. Any other status
+  string, or a missing one, is fatal `collector-run-provenance`;
 - successful source-verification, collection, and artifact-upload steps in order;
 - exactly one artifact created during the original collector's upload step, with GitHub's
   immutable ID, SHA-256 digest, bounded size, repository provenance, and a live

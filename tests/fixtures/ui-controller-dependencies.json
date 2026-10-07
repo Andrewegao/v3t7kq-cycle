@@ -91,11 +91,12 @@
       ]
     },
     {
-      "pin": "248abd180ff95b4ada641c3eee7bf155f766091d",
+      "pin": "b3f63183dbcde01e388fda7720726cc53f28134b",
       "files": [
         "app/e2e/layer-switch-surface.mjs",
         "app/e2e/layer-switch-tint.mjs",
         "app/e2e/public-release-journeys.mjs",
+        "app/e2e/staging-account-qualification.mjs",
         "app/e2e/weather-lab-only-runtime.mjs",
         "app/package-lock.json",
         "app/package.json",
@@ -121,14 +122,14 @@
         "pngjs"
       ],
       "releaseLayerFiles": {
-        "app/e2e/layer-switch-tint.mjs": "d686f763ce892d2b6288c8caafa0924bf0bef6328847ad3806bd0f395b8e632b",
-        "app/e2e/layer-switch-surface.mjs": "3e6244dc1df4529174cf8e5a65668706f542931d685169d54b88c71c34f8fbe4"
+        "app/e2e/layer-switch-tint.mjs": "df65cf5409c67f0001a6cbf5edf7847c0d1798a2bf437714b9035b06d8d2c67a",
+        "app/e2e/layer-switch-surface.mjs": "441de2a52996646a8540a6df2f7f346c143f6efcd41daf3d9ab4c6ddf4ca9809"
       }
     }
   ],
   "stagingBuild": {
     "profile": "production-account-ru-kk-wind100-onboarding-v2",
-    "pin": "248abd180ff95b4ada641c3eee7bf155f766091d",
+    "pin": "b3f63183dbcde01e388fda7720726cc53f28134b",
     "paths": [
       ".gitignore",
       "platform/edge/package.json",
@@ -136,6 +137,6 @@
       "ops/release/build-release-receipt.mjs"
     ],
     "coneMode": false,
-    "provenance": "Merged Atmos PR #481 source 248abd180ff95b4ada641c3eee7bf155f766091d, tree 8db0d2fc570ff21232bb6038b6607a11dbda864e, matches qualified head 05fb9164852a497edc3eeda450ca3398a493e481. Actual Git blob comparison confirms all 43 reviewed account/onboarding source hashes and the four-path sparse build closure are unchanged versus prior UI pin 0b270cb7c8855170783a6f885aedbc33cf321016. The 21-file qualification inventory paths are unchanged: 20 file blobs are identical, while app/e2e/layer-switch-tint.mjs changes only the stronger natural bare-map precondition for observing cloud Deck fade. Platform/edge bytes are unchanged versus 0b270cb7c8855170783a6f885aedbc33cf321016; the inherited PR #480 five-path delta versus accepted Search source remains governed by its separate Worker receipt. Original staging run 37394570824 attempt 1 remains failed at the Weather Lab gate before any UI artifact/deployment, despite successful application tests; those receipts retain their source identities. A fresh exact-source hosted staging candidate, pipeline digest, layer-menu/Search acceptance and same-release native100m Wind/CF acceptance remain required. No deployment or performance/memory completion is established by these local closure checks. See docs/ui-public-combined.md."
+    "provenance": "Merged Atmos PR #486 source b3f63183dbcde01e388fda7720726cc53f28134b, tree 5b21adbc7904655c98f400129bce3c238ed8bf3c, merged at 2026-10-06T06:30:14Z; tree equals independently reviewed final head f3620f20309a6bd122497bfb300f1d235d2c2666 and required hosted-CI merge tree. Relative to historical 547a8e1 source, only the two active Wind capture harnesses, their existing regression fixture and the task record change. All 43 account/onboarding digests, the other 20 of 22 qualification inputs, four sparse build paths, frontend/Functions/Worker/config/lockfile/release-builder closures are unchanged. This fixes demonstrated scheduled-versus-painted and renderer-owner capture races while retaining strict opacity, source bytes, pixels, roundtrip, deadlines and isolation. Original failed run 37413651923 remains failed; its discarded child throw is unknown. Real canonical-backend read-only replay and local profile-specific evidence passed but do not constitute deployed acceptance. Historical diagnosis bindings remain fixed. Existing Worker requires no deployment for this input delta. Fresh controller CI, current-base/source admission, recovery checks and one new exact-source guarded staging run remain required; no generated-byte equality, production deployment or data publication is asserted."
   }
 }

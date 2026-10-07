@@ -549,6 +549,24 @@
       "subsystem": "Train 3 baseline preparation",
       "lifecycle": "diagnostic",
       "runbook": "docs/train3-baseline-preparation.md"
+    },
+    {
+      "id": "five-feed-recovery",
+      "path": ".github/workflows/five-feed-recovery.yml",
+      "family": "maintenance",
+      "purpose": "Manually refresh all five observation/fire components or none, through the shared observation lane with a literal confirmation.",
+      "subsystem": "Observation component recovery",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/five-feed-recovery-20261006.md"
+    },
+    {
+      "id": "observation-refresh",
+      "path": ".github/workflows/observation-refresh.yml",
+      "family": "maintenance",
+      "purpose": "Refresh METAR, SYNOP, buoys, OpenAQ and fire components every 30 minutes, independent of every model collector.",
+      "subsystem": "Observation component refresh",
+      "lifecycle": "recurring",
+      "runbook": "docs/observation-refresh.md"
     }
   ]
 }

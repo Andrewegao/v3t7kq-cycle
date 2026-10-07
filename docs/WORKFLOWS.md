@@ -6,9 +6,9 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `12459827cee6e6374fdcb73d587c8aa07ae5dffbab1a241c9ffec0b6470c2df1`.
+Source digest (registry and workflow bytes): `87d85ef3981d9de7fcdb32fdba100a719c662ba187c33e0b45082fe550f6afe1`.
 
-61 workflows. Ordering and output are deterministic; no API request or clock is used.
+63 workflows. Ordering and output are deterministic; no API request or clock is used.
 
 | Workflow | Family / subsystem | Lifecycle | Purpose | Runbook |
 | --- | --- | --- | --- | --- |
@@ -25,6 +25,7 @@ Source digest (registry and workflow bytes): `12459827cee6e6374fdcb73d587c8aa07a
 | [consumer-refresh](#consumer-refresh) | releases / Production consumers | manual-supported | Refresh production consumers with guarded verification and rollback. | [guide](../CONSUMER_REFRESH.md) |
 | [data-edge-deploy](#data-edge-deploy) | releases / Production data edge | manual-supported | Deploy the selected production data-edge phase under its explicit guards. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [data-reader-refresh](#data-reader-refresh) | releases / Production data reader | manual-supported | Refresh the production data reader with compatible fallback recovery. | [guide](../docs/data-reader-refresh.md) |
+| [five-feed-recovery](#five-feed-recovery) | maintenance / Observation component recovery | manual-supported | Manually refresh all five observation/fire components or none, through the shared observation lane with a literal confirmation. | [guide](../docs/five-feed-recovery-20261006.md) |
 | [fusion-evaluate](#fusion-evaluate) | maintenance / Fusion evaluation | manual-supported | Evaluate retained fusion inputs through the existing guarded evaluation path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [fusion-infra](#fusion-infra) | control-plane / Fusion infrastructure | manual-supported | Deploy the exact isolated Fusion archive or complete infrastructure pair through explicit scope guards. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [fusion-issue](#fusion-issue) | maintenance / Fusion issuance | recurring | Record source-bound Fusion forecasts with canary/full completeness, exact archive readback, and a complete-network archive manifest. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
@@ -34,6 +35,7 @@ Source digest (registry and workflow bytes): `12459827cee6e6374fdcb73d587c8aa07a
 | [hydrology](#hydrology) | archives / Hydrology | manual-supported | Prepare hydrology artifacts through the explicit staging path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [model-inputs](#model-inputs) | staging / Experimental models | manual-supported | Collect isolated experimental model inputs with bounded provider concurrency. | [guide](../docs/MODEL_CLOUD_INPUTS.md) |
 | [nam-hi-diagnostic](#nam-hi-diagnostic) | staging / Experimental models | diagnostic | Diagnose a bounded NAM-HI acquisition without broadening publication authority. | [guide](../docs/nam-hi-cloud-diagnostic.md) |
+| [observation-refresh](#observation-refresh) | maintenance / Observation component refresh | recurring | Refresh METAR, SYNOP, buoys, OpenAQ and fire components every 30 minutes, independent of every model collector. | [guide](../docs/observation-refresh.md) |
 | [platform-production-feed-routes](#platform-production-feed-routes) | releases / Production platform | manual-supported | Attach and verify only the missing production USGS and composed-hazard Worker routes. | [guide](../docs/platform-production-feed-routes.md) |
 | [platform-staging-transaction](#platform-staging-transaction) | releases / Platform staging | manual-supported | Execute one authorized Atmos backend rehearsal stage against frozen staging identities. | [guide](../docs/platform-staging-transaction.md) |
 | [platform-wind100-worker-release](#platform-wind100-worker-release) | releases / Production platform | manual-supported | Release the exact reviewed production platform Worker for the qualified Wind100 selector. | [guide](../docs/platform-wind100-worker-release.md) |
@@ -78,105 +80,111 @@ Source digest (registry and workflow bytes): `12459827cee6e6374fdcb73d587c8aa07a
 
 [.github/workflows/bake.yml](../.github/workflows/bake.yml#L1) · <code>bake</code>
 
-Declared triggers: [schedule](../.github/workflows/bake.yml#L10) <code>["30 2,8,14,20 * * *"]</code>; [workflow_dispatch](../.github/workflows/bake.yml#L12); input names <code>["model","recovery_run_id","staging_wind100_only"]</code>.
+Declared triggers: [schedule](../.github/workflows/bake.yml#L12) <code>["30 2,8,14,20 * * *"]</code>; [workflow_dispatch](../.github/workflows/bake.yml#L14); input names <code>["model","recovery_run_id","staging_wind100_only"]</code>.
 
 Workflow permissions: <code>{"contents":"read","actions":"read"}</code>. Workflow concurrency: not declared.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [core-ecmwf](../.github/workflows/bake.yml#L31) ← no needs | <code>./.github/workflows/collect-core-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [staging-wind100](../.github/workflows/bake.yml#L37) ← <code>core-ecmwf</code> | <code>./.github/workflows/staging-wind100-recurring.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [production-wind100](../.github/workflows/bake.yml#L45) ← <code>core-ecmwf</code> | <code>./.github/workflows/production-wind100-recurring.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [core-gfs](../.github/workflows/bake.yml#L53) ← no needs | <code>./.github/workflows/collect-core-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [core-hrrr](../.github/workflows/bake.yml#L59) ← no needs | <code>./.github/workflows/collect-core-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [core-aifs](../.github/workflows/bake.yml#L65) ← no needs | <code>./.github/workflows/collect-core-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [regional-icon](../.github/workflows/bake.yml#L71) ← no needs | <code>./.github/workflows/collect-regional-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [regional-hrdps](../.github/workflows/bake.yml#L77) ← no needs | <code>./.github/workflows/collect-regional-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [regional-arome-antilles](../.github/workflows/bake.yml#L83) ← no needs | <code>./.github/workflows/collect-regional-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [regional-hrrr-ak](../.github/workflows/bake.yml#L89) ← no needs | <code>./.github/workflows/collect-regional-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [regional-nam](../.github/workflows/bake.yml#L95) ← no needs | <code>./.github/workflows/collect-regional-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [regional-nam-hi](../.github/workflows/bake.yml#L101) ← no needs | <code>./.github/workflows/collect-regional-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [regional-nam-ak](../.github/workflows/bake.yml#L107) ← no needs | <code>./.github/workflows/collect-regional-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [publish-ecmwf](../.github/workflows/bake.yml#L113) ← <code>core-ecmwf</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [publish-gfs](../.github/workflows/bake.yml#L124) ← <code>core-gfs</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [publish-hrrr](../.github/workflows/bake.yml#L135) ← <code>core-hrrr</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [publish-aifs](../.github/workflows/bake.yml#L146) ← <code>core-aifs</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [publish-icon](../.github/workflows/bake.yml#L157) ← <code>regional-icon</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [publish-hrdps](../.github/workflows/bake.yml#L168) ← <code>regional-hrdps</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [publish-arome-antilles](../.github/workflows/bake.yml#L179) ← <code>regional-arome-antilles</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [publish-hrrr-ak](../.github/workflows/bake.yml#L190) ← <code>regional-hrrr-ak</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [publish-nam](../.github/workflows/bake.yml#L201) ← <code>regional-nam</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [publish-nam-hi](../.github/workflows/bake.yml#L212) ← <code>regional-nam-hi</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [publish-nam-ak](../.github/workflows/bake.yml#L223) ← <code>regional-nam-ak</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [component-publish-status](../.github/workflows/bake.yml#L234) ← <code>["publish-ecmwf","publish-gfs","publish-hrrr","publish-aifs","publish-icon","publish-hrdps","publish-arome-antilles","publish-hrrr-ak","publish-nam","publish-nam-hi","publish-nam-ak"]</code> | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [bake](../.github/workflows/bake.yml#L263) ← <code>["core-ecmwf","core-gfs","core-hrrr","core-aifs","regional-icon","regional-hrdps","regional-arome-antilles","regional-hrrr-ak","regional-nam","regional-nam-hi","regional-nam-ak"]</code> | <code>ubuntu-latest</code> | <code>production</code> | <code>300</code> | <code>{"group":"weatherx-data-maintenance","cancel-in-progress":false}</code> | not declared | inherits workflow/default policy |
-| [model-status](../.github/workflows/bake.yml#L554) ← <code>["core-ecmwf","core-gfs","core-hrrr","core-aifs","regional-icon","regional-hrdps","regional-arome-antilles","regional-hrrr-ak","regional-nam","regional-nam-hi","regional-nam-ak","bake"]</code> | <code>ubuntu-latest</code> | not declared | <code>8</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
+| [core-ecmwf](../.github/workflows/bake.yml#L33) ← no needs | <code>./.github/workflows/collect-core-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [staging-wind100](../.github/workflows/bake.yml#L39) ← <code>core-ecmwf</code> | <code>./.github/workflows/staging-wind100-recurring.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [production-wind100](../.github/workflows/bake.yml#L47) ← <code>core-ecmwf</code> | <code>./.github/workflows/production-wind100-recurring.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [core-gfs](../.github/workflows/bake.yml#L55) ← no needs | <code>./.github/workflows/collect-core-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [core-hrrr](../.github/workflows/bake.yml#L61) ← no needs | <code>./.github/workflows/collect-core-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [core-aifs](../.github/workflows/bake.yml#L67) ← no needs | <code>./.github/workflows/collect-core-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [regional-icon](../.github/workflows/bake.yml#L73) ← no needs | <code>./.github/workflows/collect-regional-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [regional-hrdps](../.github/workflows/bake.yml#L79) ← no needs | <code>./.github/workflows/collect-regional-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [regional-arome-antilles](../.github/workflows/bake.yml#L85) ← no needs | <code>./.github/workflows/collect-regional-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [regional-hrrr-ak](../.github/workflows/bake.yml#L91) ← no needs | <code>./.github/workflows/collect-regional-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [regional-nam](../.github/workflows/bake.yml#L97) ← no needs | <code>./.github/workflows/collect-regional-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [regional-nam-hi](../.github/workflows/bake.yml#L103) ← no needs | <code>./.github/workflows/collect-regional-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [regional-nam-ak](../.github/workflows/bake.yml#L109) ← no needs | <code>./.github/workflows/collect-regional-model.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [publish-ecmwf](../.github/workflows/bake.yml#L115) ← <code>core-ecmwf</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [publish-gfs](../.github/workflows/bake.yml#L126) ← <code>core-gfs</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [publish-hrrr](../.github/workflows/bake.yml#L137) ← <code>core-hrrr</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [publish-aifs](../.github/workflows/bake.yml#L148) ← <code>core-aifs</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [publish-icon](../.github/workflows/bake.yml#L159) ← <code>regional-icon</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [publish-hrdps](../.github/workflows/bake.yml#L170) ← <code>regional-hrdps</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [publish-arome-antilles](../.github/workflows/bake.yml#L181) ← <code>regional-arome-antilles</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [publish-hrrr-ak](../.github/workflows/bake.yml#L192) ← <code>regional-hrrr-ak</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [publish-nam](../.github/workflows/bake.yml#L203) ← <code>regional-nam</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [publish-nam-hi](../.github/workflows/bake.yml#L214) ← <code>regional-nam-hi</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [publish-nam-ak](../.github/workflows/bake.yml#L225) ← <code>regional-nam-ak</code> | <code>./.github/workflows/publish-current-model-production.yml</code> | not declared | not declared | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [component-publish-status](../.github/workflows/bake.yml#L236) ← <code>["publish-ecmwf","publish-gfs","publish-hrrr","publish-aifs","publish-icon","publish-hrdps","publish-arome-antilles","publish-hrrr-ak","publish-nam","publish-nam-hi","publish-nam-ak"]</code> | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [bake](../.github/workflows/bake.yml#L265) ← <code>["core-ecmwf","core-gfs","core-hrrr","core-aifs","regional-icon","regional-hrdps","regional-arome-antilles","regional-hrrr-ak","regional-nam","regional-nam-hi","regional-nam-ak"]</code> | <code>ubuntu-latest</code> | <code>production</code> | <code>300</code> | <code>{"group":"weatherx-data-maintenance","cancel-in-progress":false}</code> | not declared | inherits workflow/default policy |
+| [model-status](../.github/workflows/bake.yml#L569) ← <code>["core-ecmwf","core-gfs","core-hrrr","core-aifs","regional-icon","regional-hrdps","regional-arome-antilles","regional-hrrr-ak","regional-nam","regional-nam-hi","regional-nam-ak","bake"]</code> | <code>ubuntu-latest</code> | not declared | <code>8</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
+| [run-summary](../.github/workflows/bake.yml#L596) ← <code>["core-ecmwf","staging-wind100","production-wind100","core-gfs","core-hrrr","core-aifs","regional-icon","regional-hrdps","regional-arome-antilles","regional-hrrr-ak","regional-nam","regional-nam-hi","regional-nam-ak","publish-ecmwf","publish-gfs","publish-hrrr","publish-aifs","publish-icon","publish-hrdps","publish-arome-antilles","publish-hrrr-ak","publish-nam","publish-nam-hi","publish-nam-ak","bake"]</code> | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [core-ecmwf](../.github/workflows/bake.yml#L33): <code>${{ (inputs.staging_wind100_only == true &amp;&amp; github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model == 'ecmwf' &amp;&amp; inputs.recovery_run_id == '') &#124;&#124; (inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'ecmwf')) }}</code>
-- [staging-wind100](../.github/workflows/bake.yml#L39): <code>${{ needs.core-ecmwf.result == 'success' &amp;&amp; (inputs.staging_wind100_only != true &#124;&#124; (github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model == 'ecmwf' &amp;&amp; inputs.recovery_run_id == '')) }}</code>
-- [production-wind100](../.github/workflows/bake.yml#L47): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (vars.PRODUCTION_WIND100_CALL_ENABLED == 'true' &amp;&amp; needs.core-ecmwf.result == 'success' &amp;&amp; inputs.recovery_run_id == '') }}</code>
-- [core-gfs](../.github/workflows/bake.yml#L55): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'gfs') }}</code>
-- [core-hrrr](../.github/workflows/bake.yml#L61): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'hrrr') }}</code>
-- [core-aifs](../.github/workflows/bake.yml#L67): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'aifs') }}</code>
-- [regional-icon](../.github/workflows/bake.yml#L73): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'icon') }}</code>
-- [regional-hrdps](../.github/workflows/bake.yml#L79): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'hrdps') }}</code>
-- [regional-arome-antilles](../.github/workflows/bake.yml#L85): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'arome-antilles') }}</code>
-- [regional-hrrr-ak](../.github/workflows/bake.yml#L91): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'hrrr-ak') }}</code>
-- [regional-nam](../.github/workflows/bake.yml#L97): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'nam') }}</code>
-- [regional-nam-hi](../.github/workflows/bake.yml#L103): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'nam-hi') }}</code>
-- [regional-nam-ak](../.github/workflows/bake.yml#L109): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'nam-ak') }}</code>
-- [publish-ecmwf](../.github/workflows/bake.yml#L114): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.core-ecmwf.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
-- [publish-gfs](../.github/workflows/bake.yml#L125): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.core-gfs.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
-- [publish-hrrr](../.github/workflows/bake.yml#L136): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.core-hrrr.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
-- [publish-aifs](../.github/workflows/bake.yml#L147): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.core-aifs.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
-- [publish-icon](../.github/workflows/bake.yml#L158): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.regional-icon.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
-- [publish-hrdps](../.github/workflows/bake.yml#L169): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.regional-hrdps.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
-- [publish-arome-antilles](../.github/workflows/bake.yml#L180): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.regional-arome-antilles.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
-- [publish-hrrr-ak](../.github/workflows/bake.yml#L191): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.regional-hrrr-ak.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
-- [publish-nam](../.github/workflows/bake.yml#L202): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.regional-nam.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
-- [publish-nam-hi](../.github/workflows/bake.yml#L213): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.regional-nam-hi.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
-- [publish-nam-ak](../.github/workflows/bake.yml#L224): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.regional-nam-ak.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
-- [component-publish-status](../.github/workflows/bake.yml#L235): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (always()) }}</code>
-- [bake](../.github/workflows/bake.yml#L274): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (always() &amp;&amp; !cancelled() &amp;&amp; needs.core-ecmwf.result == 'success' &amp;&amp; needs.core-gfs.result == 'success' &amp;&amp; needs.core-hrrr.result == 'success' &amp;&amp; needs.core-aifs.result == 'success' &amp;&amp; (inputs.recovery_run_id == '' &#124;&#124; (needs.regional-icon.result == 'success' &amp;&amp; needs.regional-hrdps.result == 'success' &amp;&amp; needs.regional-arome-antilles.result == 'success' &amp;&amp; needs.regional-hrrr-ak.result == 'success' &amp;&amp; needs.regional-nam.result == 'success' &amp;&amp; needs.regional-nam-hi.result == 'success' &amp;&amp; needs.regional-nam-ak.result == 'success'))) }}</code>
-- [model-status](../.github/workflows/bake.yml#L555): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (always()) }}</code>
+- [core-ecmwf](../.github/workflows/bake.yml#L35): <code>${{ (inputs.staging_wind100_only == true &amp;&amp; github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model == 'ecmwf' &amp;&amp; inputs.recovery_run_id == '') &#124;&#124; (inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'ecmwf')) }}</code>
+- [staging-wind100](../.github/workflows/bake.yml#L41): <code>${{ needs.core-ecmwf.result == 'success' &amp;&amp; (inputs.staging_wind100_only != true &#124;&#124; (github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model == 'ecmwf' &amp;&amp; inputs.recovery_run_id == '')) }}</code>
+- [production-wind100](../.github/workflows/bake.yml#L49): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (vars.PRODUCTION_WIND100_CALL_ENABLED == 'true' &amp;&amp; needs.core-ecmwf.result == 'success' &amp;&amp; inputs.recovery_run_id == '') }}</code>
+- [core-gfs](../.github/workflows/bake.yml#L57): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'gfs') }}</code>
+- [core-hrrr](../.github/workflows/bake.yml#L63): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'hrrr') }}</code>
+- [core-aifs](../.github/workflows/bake.yml#L69): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'aifs') }}</code>
+- [regional-icon](../.github/workflows/bake.yml#L75): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'icon') }}</code>
+- [regional-hrdps](../.github/workflows/bake.yml#L81): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'hrdps') }}</code>
+- [regional-arome-antilles](../.github/workflows/bake.yml#L87): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'arome-antilles') }}</code>
+- [regional-hrrr-ak](../.github/workflows/bake.yml#L93): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'hrrr-ak') }}</code>
+- [regional-nam](../.github/workflows/bake.yml#L99): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'nam') }}</code>
+- [regional-nam-hi](../.github/workflows/bake.yml#L105): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'nam-hi') }}</code>
+- [regional-nam-ak](../.github/workflows/bake.yml#L111): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (inputs.model == '' &#124;&#124; inputs.model == 'all' &#124;&#124; inputs.model == 'nam-ak') }}</code>
+- [publish-ecmwf](../.github/workflows/bake.yml#L116): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.core-ecmwf.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
+- [publish-gfs](../.github/workflows/bake.yml#L127): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.core-gfs.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
+- [publish-hrrr](../.github/workflows/bake.yml#L138): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.core-hrrr.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
+- [publish-aifs](../.github/workflows/bake.yml#L149): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.core-aifs.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
+- [publish-icon](../.github/workflows/bake.yml#L160): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.regional-icon.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
+- [publish-hrdps](../.github/workflows/bake.yml#L171): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.regional-hrdps.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
+- [publish-arome-antilles](../.github/workflows/bake.yml#L182): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.regional-arome-antilles.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
+- [publish-hrrr-ak](../.github/workflows/bake.yml#L193): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.regional-hrrr-ak.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
+- [publish-nam](../.github/workflows/bake.yml#L204): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.regional-nam.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
+- [publish-nam-hi](../.github/workflows/bake.yml#L215): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.regional-nam-hi.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
+- [publish-nam-ak](../.github/workflows/bake.yml#L226): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (needs.regional-nam-ak.result == 'success' &amp;&amp; vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}</code>
+- [component-publish-status](../.github/workflows/bake.yml#L237): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (always()) }}</code>
+- [bake](../.github/workflows/bake.yml#L276): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (always() &amp;&amp; !cancelled() &amp;&amp; needs.core-ecmwf.result == 'success' &amp;&amp; needs.core-gfs.result == 'success' &amp;&amp; needs.core-hrrr.result == 'success' &amp;&amp; needs.core-aifs.result == 'success' &amp;&amp; (inputs.recovery_run_id == '' &#124;&#124; (needs.regional-icon.result == 'success' &amp;&amp; needs.regional-hrdps.result == 'success' &amp;&amp; needs.regional-arome-antilles.result == 'success' &amp;&amp; needs.regional-hrrr-ak.result == 'success' &amp;&amp; needs.regional-nam.result == 'success' &amp;&amp; needs.regional-nam-hi.result == 'success' &amp;&amp; needs.regional-nam-ak.result == 'success'))) }}</code>
+- [model-status](../.github/workflows/bake.yml#L570): <code>${{ inputs.staging_wind100_only != true &amp;&amp; (always()) }}</code>
+- [run-summary](../.github/workflows/bake.yml#L598): <code>${{ always() }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [bake / checkout exact public bake diagnostic controller](../.github/workflows/bake.yml#L276) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
-| [bake / checkout atmos (private, read-only deploy key)](../.github/workflows/bake.yml#L290) | <code>weatherx-hq/atmos</code> | <code>7a50f19714f22e04dc610a5aa33d311b7d1dc673</code> |
-| [bake / checkout this reviewed recovery transfer checker](../.github/workflows/bake.yml#L381) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
-| [model-status / step 1](../.github/workflows/bake.yml#L562) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [bake / checkout exact public bake diagnostic controller](../.github/workflows/bake.yml#L278) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
+| [bake / checkout atmos (private, read-only deploy key)](../.github/workflows/bake.yml#L292) | <code>weatherx-hq/atmos</code> | <code>18fb5074d7472ffc5549704c0874f6e35516cef5</code> |
+| [bake / checkout this reviewed recovery transfer checker](../.github/workflows/bake.yml#L383) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
+| [model-status / step 1](../.github/workflows/bake.yml#L577) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [run-summary / step 1](../.github/workflows/bake.yml#L605) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
-Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/bake.yml#L114), [PRODUCTION_WIND100_CALL_ENABLED](../.github/workflows/bake.yml#L47), [R2_FALLBACK_MIRROR_ENABLED](../.github/workflows/bake.yml#L511).
+Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/bake.yml#L116), [PRODUCTION_WIND100_CALL_ENABLED](../.github/workflows/bake.yml#L49), [R2_FALLBACK_MIRROR_ENABLED](../.github/workflows/bake.yml#L526).
 
 
 ## catalog-bake
 
 [.github/workflows/catalog-bake.yml](../.github/workflows/catalog-bake.yml#L1) · <code>WeatherX component bake</code>
 
-Declared triggers: [workflow_dispatch](../.github/workflows/catalog-bake.yml#L6); input names <code>["model","target","bootstrap_missing"]</code>; [schedule](../.github/workflows/catalog-bake.yml#L27) <code>["8-59/10 * * * *","7 * * * *"]</code>.
+Declared triggers: [workflow_dispatch](../.github/workflows/catalog-bake.yml#L7); input names <code>["model","target","bootstrap_missing"]</code>; [schedule](../.github/workflows/catalog-bake.yml#L28) <code>["8-59/10 * * * *","7 * * * *"]</code>.
 
 Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: not declared.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [model](../.github/workflows/catalog-bake.yml#L31) ← no needs | <code>ubuntu-latest</code> | <code>production</code> | <code>210</code> | <code>{"group":"weatherx-component-${{ github.event_name == 'workflow_dispatch' &amp;&amp; inputs.target &#124;&#124; vars.CATALOG_DEFAULT_TARGET &#124;&#124; 'staging' }}-${{ matrix.model }}","cancel-in-progress":false}</code> | <code>{"fail-fast":false,"max-parallel":4,"matrix":{"model":"${{ fromJSON(github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model == 'slow' &amp;&amp; '[\"ecmwf\",\"gfs\",\"aifs\"]' &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model != 'all' &amp;&amp; format('[\"{0}\"]', inputs.model) &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; '[\"ecmwf\",\"gfs\",\"hrrr\",\"aifs\"]' &#124;&#124; github.event.schedule == '8-59/10 * * * *' &amp;&amp; '[\"hrrr\"]' &#124;&#124; '[\"ecmwf\",\"gfs\",\"aifs\"]') }}"}}</code> | inherits workflow/default policy |
+| [model](../.github/workflows/catalog-bake.yml#L32) ← no needs | <code>ubuntu-latest</code> | <code>production</code> | <code>210</code> | <code>{"group":"weatherx-component-${{ github.event_name == 'workflow_dispatch' &amp;&amp; inputs.target &#124;&#124; vars.CATALOG_DEFAULT_TARGET &#124;&#124; 'staging' }}-${{ matrix.model }}","cancel-in-progress":false}</code> | <code>{"fail-fast":false,"max-parallel":4,"matrix":{"model":"${{ fromJSON(github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model == 'slow' &amp;&amp; '[\"ecmwf\",\"gfs\",\"aifs\"]' &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model != 'all' &amp;&amp; format('[\"{0}\"]', inputs.model) &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; '[\"ecmwf\",\"gfs\",\"hrrr\",\"aifs\"]' &#124;&#124; github.event.schedule == '8-59/10 * * * *' &amp;&amp; '[\"hrrr\"]' &#124;&#124; '[\"ecmwf\",\"gfs\",\"aifs\"]') }}"}}</code> | inherits workflow/default policy |
+| [summary](../.github/workflows/catalog-bake.yml#L224) ← <code>model</code> | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [model](../.github/workflows/catalog-bake.yml#L34): <code>${{ github.event_name == 'workflow_dispatch' &#124;&#124; vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true' }}</code>
+- [model](../.github/workflows/catalog-bake.yml#L35): <code>${{ github.event_name == 'workflow_dispatch' &#124;&#124; vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true' }}</code>
+- [summary](../.github/workflows/catalog-bake.yml#L225): <code>${{ always() &amp;&amp; (github.event_name == 'workflow_dispatch' &#124;&#124; vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true') }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [model / Checkout WeatherX](../.github/workflows/catalog-bake.yml#L70) | <code>weatherx-hq/atmos</code> | <code>18faa9b33084623ef2486a57134de2e8c8974b0c</code> |
+| [model / Checkout WeatherX](../.github/workflows/catalog-bake.yml#L71) | <code>weatherx-hq/atmos</code> | <code>18faa9b33084623ef2486a57134de2e8c8974b0c</code> |
+| [summary / step 1](../.github/workflows/catalog-bake.yml#L232) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
-Variable references (declared names only; values and activation unknown): [CATALOG_DEFAULT_TARGET](../.github/workflows/catalog-bake.yml#L36), [CATALOG_GITHUB_FALLBACK_DISABLED](../.github/workflows/catalog-bake.yml#L34), [CURRENT_RUN_CATALOG_BAKE_ATMOS_SHA](../.github/workflows/catalog-bake.yml#L53), [CURRENT_RUN_POINT_REUSE_MODEL](../.github/workflows/catalog-bake.yml#L54).
+Variable references (declared names only; values and activation unknown): [CATALOG_DEFAULT_TARGET](../.github/workflows/catalog-bake.yml#L37), [CATALOG_GITHUB_FALLBACK_DISABLED](../.github/workflows/catalog-bake.yml#L35), [CURRENT_RUN_CATALOG_BAKE_ATMOS_SHA](../.github/workflows/catalog-bake.yml#L54), [CURRENT_RUN_POINT_REUSE_MODEL](../.github/workflows/catalog-bake.yml#L55).
 
 
 ## catalog-bootstrap
@@ -322,7 +330,7 @@ Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [collector / checkout atmos core collector (same approved commit, read-only deploy key)](../.github/workflows/collect-core-model.yml#L35) | <code>weatherx-hq/atmos</code> | <code>7a50f19714f22e04dc610a5aa33d311b7d1dc673</code> |
+| [collector / checkout atmos core collector (same approved commit, read-only deploy key)](../.github/workflows/collect-core-model.yml#L35) | <code>weatherx-hq/atmos</code> | <code>18fb5074d7472ffc5549704c0874f6e35516cef5</code> |
 | [collector / checkout this reviewed recovery controller](../.github/workflows/collect-core-model.yml#L47) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
@@ -344,7 +352,7 @@ Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [collector / checkout atmos regional collector (same approved commit, read-only deploy key)](../.github/workflows/collect-regional-model.yml#L35) | <code>weatherx-hq/atmos</code> | <code>7a50f19714f22e04dc610a5aa33d311b7d1dc673</code> |
+| [collector / checkout atmos regional collector (same approved commit, read-only deploy key)](../.github/workflows/collect-regional-model.yml#L35) | <code>weatherx-hq/atmos</code> | <code>18fb5074d7472ffc5549704c0874f6e35516cef5</code> |
 | [collector / checkout this reviewed recovery controller](../.github/workflows/collect-regional-model.yml#L47) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
@@ -421,6 +429,28 @@ Checkout declarations (not a claim of approval or checkout success):
 | [data-reader-refresh / Checkout exact reviewed source](../.github/workflows/data-reader-refresh.yml#L54) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmosphere_sha }}</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
+
+
+## five-feed-recovery
+
+[.github/workflows/five-feed-recovery.yml](../.github/workflows/five-feed-recovery.yml#L1) · <code>Recover five observation and fire components</code>
+
+Declared triggers: [workflow_dispatch](../.github/workflows/five-feed-recovery.yml#L10); input names <code>["confirmation"]</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: not declared.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [recover](../.github/workflows/five-feed-recovery.yml#L17) ← no needs | <code>ubuntu-24.04</code> | <code>production</code> | <code>60</code> | <code>{"group":"weatherx-observation-components-production","cancel-in-progress":false}</code> | not declared | inherits workflow/default policy |
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [recover / Checkout exact recovery controller](../.github/workflows/five-feed-recovery.yml#L53) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
+| [recover / Checkout unchanged qualified five-feed producers](../.github/workflows/five-feed-recovery.yml#L60) | <code>weatherx-hq/atmos</code> | <code>18fb5074d7472ffc5549704c0874f6e35516cef5</code> |
+
+Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/five-feed-recovery.yml#L30), [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/five-feed-recovery.yml#L37).
 
 
 ## fusion-evaluate
@@ -648,6 +678,34 @@ Checkout declarations (not a claim of approval or checkout success):
 Variable references (declared names only; values and activation unknown): none detected.
 
 
+## observation-refresh
+
+[.github/workflows/observation-refresh.yml](../.github/workflows/observation-refresh.yml#L1) · <code>Refresh observation and fire components</code>
+
+Declared triggers: [schedule](../.github/workflows/observation-refresh.yml#L15) <code>["14,44 * * * *"]</code>; [workflow_dispatch](../.github/workflows/observation-refresh.yml#L17); input names <code>["confirmation"]</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: not declared.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [plan](../.github/workflows/observation-refresh.yml#L27) ← no needs | <code>ubuntu-24.04</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
+| [refresh](../.github/workflows/observation-refresh.yml#L49) ← <code>plan</code> | <code>ubuntu-24.04</code> | <code>production</code> | <code>60</code> | <code>{"group":"weatherx-observation-components-production","cancel-in-progress":false}</code> | not declared | inherits workflow/default policy |
+
+Declared job conditions (additional step/helper checks may apply):
+
+- [refresh](../.github/workflows/observation-refresh.yml#L50): <code>${{ needs.plan.outputs.run == 'true' }}</code>
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [plan / step 1](../.github/workflows/observation-refresh.yml#L35) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [refresh / Checkout exact recovery controller](../.github/workflows/observation-refresh.yml#L87) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
+| [refresh / Checkout unchanged qualified five-feed producers](../.github/workflows/observation-refresh.yml#L94) | <code>weatherx-hq/atmos</code> | <code>18fb5074d7472ffc5549704c0874f6e35516cef5</code> |
+
+Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/observation-refresh.yml#L64), [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/observation-refresh.yml#L71), [OBSERVATION_REFRESH_ENABLED](../.github/workflows/observation-refresh.yml#L45).
+
+
 ## platform-production-feed-routes
 
 [.github/workflows/platform-production-feed-routes.yml](../.github/workflows/platform-production-feed-routes.yml#L1) · <code>WeatherX production feed route repair</code>
@@ -821,7 +879,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
 | [wind100 / step 3](../.github/workflows/production-wind100-recurring.yml#L69) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [wind100 / Checkout the exact ordinary core producer](../.github/workflows/production-wind100-recurring.yml#L75) | <code>weatherx-hq/atmos</code> | <code>7a50f19714f22e04dc610a5aa33d311b7d1dc673</code> |
+| [wind100 / Checkout the exact ordinary core producer](../.github/workflows/production-wind100-recurring.yml#L75) | <code>weatherx-hq/atmos</code> | <code>18fb5074d7472ffc5549704c0874f6e35516cef5</code> |
 | [wind100 / Checkout the exact reviewed point-only augmenter and publisher](../.github/workflows/production-wind100-recurring.yml#L84) | <code>weatherx-hq/atmos</code> | <code>9174329db6ca8527569e67f14ef70406dedefb69</code> |
 
 Variable references (declared names only; values and activation unknown): [PRODUCTION_WIND100_APPROVED_SOURCE_SHA](../.github/workflows/production-wind100-recurring.yml#L41), [PRODUCTION_WIND100_CONTROLLER_SHA256](../.github/workflows/production-wind100-recurring.yml#L43), [PRODUCTION_WIND100_ENABLED](../.github/workflows/production-wind100-recurring.yml#L42), [PRODUCTION_WIND100_GC_READY_SHA256](../.github/workflows/production-wind100-recurring.yml#L44), [PRODUCTION_WIND100_R2_ACCOUNT_ID](../.github/workflows/production-wind100-recurring.yml#L45).
@@ -895,7 +953,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
 | [publisher / checkout authenticated current-run controller](../.github/workflows/publish-current-model-production.yml#L82) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
-| [publisher / checkout exact qualified Atmos component publisher](../.github/workflows/publish-current-model-production.yml#L89) | <code>weatherx-hq/atmos</code> | <code>7a50f19714f22e04dc610a5aa33d311b7d1dc673</code> |
+| [publisher / checkout exact qualified Atmos component publisher](../.github/workflows/publish-current-model-production.yml#L89) | <code>weatherx-hq/atmos</code> | <code>18fb5074d7472ffc5549704c0874f6e35516cef5</code> |
 
 Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/publish-current-model-production.yml#L53), [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/publish-current-model-production.yml#L52), [CURRENT_RUN_POINT_REUSE_MODEL](../.github/workflows/publish-current-model-production.yml#L73).
 
@@ -986,19 +1044,19 @@ Variable references (declared names only; values and activation unknown): [R2_CO
 
 [.github/workflows/scheduler-ci.yml](../.github/workflows/scheduler-ci.yml#L1) · <code>WeatherX scheduler CI</code>
 
-Declared triggers: [pull_request](../.github/workflows/scheduler-ci.yml#L4); [push](../.github/workflows/scheduler-ci.yml#L6) <code>{"branches":["main"],"paths":[".github/workflows/**","ops/workflows.json","ops/train3-validation-contract.json","docs/WORKFLOWS.md","docs/WORKFLOW_OPERATIONS.md","README.md",".github/workflows/bake.yml",".github/workflows/collect-core-model.yml",".github/workflows/collect-regional-model.yml",".github/workflows/publish-current-model-production.yml",".github/workflows/resume-model-publication.yml",".github/workflows/catalog-bake.yml",".github/workflows/scheduler-ci.yml",".github/workflows/source-checkout-probe.yml",".github/workflows/scheduler-deploy.yml",".github/workflows/satellite-archive.yml",".github/workflows/ui-release.yml",".github/workflows/ui-staging.yml",".github/workflows/ui-staging-tc.yml",".github/workflows/staging-follow-master.yml",".github/workflows/staging-data.yml",".github/workflows/staging-current-selection.yml",".github/workflows/model-inputs.yml",".github/workflows/nam-hi-diagnostic.yml",".github/workflows/staging-model-components.yml",".github/workflows/staging-model-selection.yml",".github/workflows/staging-consumer-refresh.yml",".github/workflows/staging-search.yml",".github/workflows/staging-tc-guidance.yml",".github/workflows/staging-place-renewal.yml",".github/workflows/staging-wind100.yml",".github/workflows/staging-wind100-recurring.yml",".github/workflows/production-wind100-recurring.yml",".github/workflows/production-wind100-retention.yml",".github/workflows/staging-wind100-preflight.yml",".github/workflows/staging-search-reader.yml",".github/workflows/staging-data-activate.yml",".github/workflows/verify-backfill.yml",".github/workflows/consumer-refresh.yml",".github/workflows/data-reader-refresh.yml",".github/workflows/gdacs-feed-release.yml",".github/workflows/fusion-*.yml","scheduler/**","tests/**","tools/**","staging-controller/**"]}</code>.
+Declared triggers: [pull_request](../.github/workflows/scheduler-ci.yml#L4); [push](../.github/workflows/scheduler-ci.yml#L6) <code>{"branches":["main"],"paths":[".github/workflows/**","ops/workflows.json","ops/atmos-production-source.json","ops/train3-validation-contract.json","docs/WORKFLOWS.md","docs/WORKFLOW_OPERATIONS.md","README.md",".github/workflows/bake.yml",".github/workflows/collect-core-model.yml",".github/workflows/collect-regional-model.yml",".github/workflows/publish-current-model-production.yml",".github/workflows/resume-model-publication.yml",".github/workflows/catalog-bake.yml",".github/workflows/scheduler-ci.yml",".github/workflows/source-checkout-probe.yml",".github/workflows/scheduler-deploy.yml",".github/workflows/satellite-archive.yml",".github/workflows/ui-release.yml",".github/workflows/ui-staging.yml",".github/workflows/ui-staging-tc.yml",".github/workflows/staging-follow-master.yml",".github/workflows/staging-data.yml",".github/workflows/staging-current-selection.yml",".github/workflows/model-inputs.yml",".github/workflows/nam-hi-diagnostic.yml",".github/workflows/staging-model-components.yml",".github/workflows/staging-model-selection.yml",".github/workflows/staging-consumer-refresh.yml",".github/workflows/staging-search.yml",".github/workflows/staging-tc-guidance.yml",".github/workflows/staging-place-renewal.yml",".github/workflows/staging-wind100.yml",".github/workflows/staging-wind100-recurring.yml",".github/workflows/production-wind100-recurring.yml",".github/workflows/production-wind100-retention.yml",".github/workflows/staging-wind100-preflight.yml",".github/workflows/staging-search-reader.yml",".github/workflows/staging-data-activate.yml",".github/workflows/verify-backfill.yml",".github/workflows/consumer-refresh.yml",".github/workflows/data-reader-refresh.yml",".github/workflows/gdacs-feed-release.yml",".github/workflows/fusion-*.yml","scheduler/**","tests/**","tools/**","staging-controller/**"]}</code>.
 
 Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: not declared.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [scheduler](../.github/workflows/scheduler-ci.yml#L60) ← no needs | <code>ubuntu-latest</code> | not declared | <code>10</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [scheduler](../.github/workflows/scheduler-ci.yml#L61) ← no needs | <code>ubuntu-latest</code> | not declared | <code>10</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [scheduler / step 1](../.github/workflows/scheduler-ci.yml#L63) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [scheduler / step 1](../.github/workflows/scheduler-ci.yml#L64) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
 Variable references (declared names only; values and activation unknown): none detected.
 
@@ -1423,7 +1481,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
 | [wind100 / step 3](../.github/workflows/staging-wind100-recurring.yml#L67) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [wind100 / Checkout the exact ordinary core producer](../.github/workflows/staging-wind100-recurring.yml#L73) | <code>weatherx-hq/atmos</code> | <code>7a50f19714f22e04dc610a5aa33d311b7d1dc673</code> |
+| [wind100 / Checkout the exact ordinary core producer](../.github/workflows/staging-wind100-recurring.yml#L73) | <code>weatherx-hq/atmos</code> | <code>18fb5074d7472ffc5549704c0874f6e35516cef5</code> |
 | [wind100 / Checkout the exact reviewed point-only augmenter and publisher](../.github/workflows/staging-wind100-recurring.yml#L82) | <code>weatherx-hq/atmos</code> | <code>9174329db6ca8527569e67f14ef70406dedefb69</code> |
 
 Variable references (declared names only; values and activation unknown): [STAGING_DATA_ISOLATION_APPROVED](../.github/workflows/staging-wind100-recurring.yml#L40), [STAGING_R2_ACCOUNT_ID](../.github/workflows/staging-wind100-recurring.yml#L43), [STAGING_WIND100_CONTROLLER_SHA256](../.github/workflows/staging-wind100-recurring.yml#L42), [STAGING_WIND100_ENABLED](../.github/workflows/staging-wind100-recurring.yml#L41).
@@ -1498,7 +1556,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
 | [diagnose / step 1](../.github/workflows/ui-layer-diagnostics.yml#L34) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [diagnose / Checkout exact reviewed diagnostic controller](../.github/workflows/ui-layer-diagnostics.yml#L38) | <code>weatherx-hq/atmos</code> | <code>5b622f594b107e105dae9ee6b494c20ff8d0699a</code> |
+| [diagnose / Checkout exact reviewed diagnostic controller](../.github/workflows/ui-layer-diagnostics.yml#L38) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.target == 'recovery-preview' &amp;&amp; '547a8e1e54a7e46b211ea0770d895b6cc46c8afd' &#124;&#124; '5b622f594b107e105dae9ee6b494c20ff8d0699a' }}</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
 
@@ -1527,7 +1585,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | --- | --- | --- |
 | [resolve / step 1](../.github/workflows/ui-release.yml#L62) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 | [promote / step 1](../.github/workflows/ui-release.yml#L100) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [promote / checkout reviewed release controller (not candidate source)](../.github/workflows/ui-release.yml#L102) | <code>weatherx-hq/atmos</code> | <code>${{ env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-wind100-onboarding-v2' &amp;&amp; '248abd180ff95b4ada641c3eee7bf155f766091d' &#124;&#124; env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-beta-v1' &amp;&amp; 'b9db38dd22eed1da56c6c4dd4140480da7e89153' &#124;&#124; env.MODEL_SELECTION_SHA256 == 'production-account-billing-v1' &amp;&amp; '6fcec22638f6696be71daa2f2e974ebc4b24318e' &#124;&#124; '25c402db5149daa018e349a34a4beeba1f2dca45' }}</code> |
+| [promote / checkout reviewed release controller (not candidate source)](../.github/workflows/ui-release.yml#L102) | <code>weatherx-hq/atmos</code> | <code>${{ env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-wind100-onboarding-v2' &amp;&amp; 'b3f63183dbcde01e388fda7720726cc53f28134b' &#124;&#124; env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-beta-v1' &amp;&amp; 'b9db38dd22eed1da56c6c4dd4140480da7e89153' &#124;&#124; env.MODEL_SELECTION_SHA256 == 'production-account-billing-v1' &amp;&amp; '6fcec22638f6696be71daa2f2e974ebc4b24318e' &#124;&#124; '25c402db5149daa018e349a34a4beeba1f2dca45' }}</code> |
 
 Variable references (declared names only; values and activation unknown): [UI_AUTO_PROMOTE_ENABLED](../.github/workflows/ui-release.yml#L9), [UI_AUTO_PROMOTE_PROFILE](../.github/workflows/ui-release.yml#L9), [UI_DEPLOYMENT_HOLD_UNTIL](../.github/workflows/ui-release.yml#L91), [UI_ISOLATION_APPROVED](../.github/workflows/ui-release.yml#L90), [UI_PAGES_CONFIG_SHA256](../.github/workflows/ui-release.yml#L148), [UI_RELEASES_ENABLED](../.github/workflows/ui-release.yml#L89).
 
@@ -1588,12 +1646,12 @@ Checkout declarations (not a claim of approval or checkout success):
 | [profile / step 1](../.github/workflows/ui-staging.yml#L41) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 | [atmos-evidence / step 1](../.github/workflows/ui-staging.yml#L105) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 | [build / step 2](../.github/workflows/ui-staging.yml#L152) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [build / checkout reviewed release controller](../.github/workflows/ui-staging.yml#L154) | <code>weatherx-hq/atmos</code> | <code>${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2' &amp;&amp; '248abd180ff95b4ada641c3eee7bf155f766091d' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' &amp;&amp; 'b9db38dd22eed1da56c6c4dd4140480da7e89153' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'production-account-billing-v1' &amp;&amp; '6fcec22638f6696be71daa2f2e974ebc4b24318e' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'none' &amp;&amp; '25c402db5149daa018e349a34a4beeba1f2dca45' &#124;&#124; '4dafd26387d5917604deb7379a8d45a994fc5b67' }}</code> |
+| [build / checkout reviewed release controller](../.github/workflows/ui-staging.yml#L154) | <code>weatherx-hq/atmos</code> | <code>${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2' &amp;&amp; 'b3f63183dbcde01e388fda7720726cc53f28134b' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' &amp;&amp; 'b9db38dd22eed1da56c6c4dd4140480da7e89153' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'production-account-billing-v1' &amp;&amp; '6fcec22638f6696be71daa2f2e974ebc4b24318e' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'none' &amp;&amp; '25c402db5149daa018e349a34a4beeba1f2dca45' &#124;&#124; '4dafd26387d5917604deb7379a8d45a994fc5b67' }}</code> |
 | [build / checkout exact candidate Atmos source](../.github/workflows/ui-staging.yml#L185) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmos_sha }}</code> |
 | [app-tests / step 2](../.github/workflows/ui-staging.yml#L286) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 | [app-tests / checkout exact app test source](../.github/workflows/ui-staging.yml#L288) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmos_sha }}</code> |
 | [qualify / step 1](../.github/workflows/ui-staging.yml#L380) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [qualify / checkout pinned controller, NOT candidate source](../.github/workflows/ui-staging.yml#L382) | <code>weatherx-hq/atmos</code> | <code>${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2' &amp;&amp; '248abd180ff95b4ada641c3eee7bf155f766091d' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' &amp;&amp; 'b9db38dd22eed1da56c6c4dd4140480da7e89153' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'production-account-billing-v1' &amp;&amp; '6fcec22638f6696be71daa2f2e974ebc4b24318e' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'none' &amp;&amp; '25c402db5149daa018e349a34a4beeba1f2dca45' &#124;&#124; '4dafd26387d5917604deb7379a8d45a994fc5b67' }}</code> |
+| [qualify / checkout pinned controller, NOT candidate source](../.github/workflows/ui-staging.yml#L382) | <code>weatherx-hq/atmos</code> | <code>${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2' &amp;&amp; 'b3f63183dbcde01e388fda7720726cc53f28134b' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' &amp;&amp; 'b9db38dd22eed1da56c6c4dd4140480da7e89153' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'production-account-billing-v1' &amp;&amp; '6fcec22638f6696be71daa2f2e974ebc4b24318e' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'none' &amp;&amp; '25c402db5149daa018e349a34a4beeba1f2dca45' &#124;&#124; '4dafd26387d5917604deb7379a8d45a994fc5b67' }}</code> |
 
 Variable references (declared names only; values and activation unknown): [FUSION_CALIBRATION_RUNTIME_ENABLED](../.github/workflows/ui-staging.yml#L134), [STAGING_WIND100_UI_CATALOG_ID](../.github/workflows/ui-staging.yml#L59), [STAGING_WIND100_UI_DYNAMIC](../.github/workflows/ui-staging.yml#L62), [STAGING_WIND100_UI_ENABLED](../.github/workflows/ui-staging.yml#L58), [STAGING_WIND100_UI_RUN_ID](../.github/workflows/ui-staging.yml#L60), [STAGING_WIND100_UI_SELECTION_SHA256](../.github/workflows/ui-staging.yml#L61), [UI_AUTO_PROMOTE_ENABLED](../.github/workflows/ui-staging.yml#L49), [UI_AUTO_PROMOTE_PROFILE](../.github/workflows/ui-staging.yml#L50), [UI_BUILDS_ENABLED](../.github/workflows/ui-staging.yml#L125), [UI_BUILD_PUBLIC_KEY](../.github/workflows/ui-staging.yml#L126), [UI_DEPLOYMENT_HOLD_UNTIL](../.github/workflows/ui-staging.yml#L364), [UI_ISOLATION_APPROVED](../.github/workflows/ui-staging.yml#L363), [UI_PAGES_CONFIG_SHA256](../.github/workflows/ui-staging.yml#L416), [UI_PRODUCTION_ACCOUNT_PROFILE_APPROVED](../.github/workflows/ui-staging.yml#L55), [UI_PUBLIC_COMBINED_PROFILE_APPROVED](../.github/workflows/ui-staging.yml#L57), [UI_PUBLIC_LOCALE_BETA_PROFILE_APPROVED](../.github/workflows/ui-staging.yml#L56), [UI_RELEASES_ENABLED](../.github/workflows/ui-staging.yml#L362), [UI_STAGING_ACCOUNT_ID](../.github/workflows/ui-staging.yml#L415), [UI_STAGING_ACCOUNT_PROFILE_APPROVED](../.github/workflows/ui-staging.yml#L54), [UI_STAGING_CORE_PROFILE_APPROVED](../.github/workflows/ui-staging.yml#L52), [UI_STAGING_MODEL_SELECTION_APPROVED_SHA256](../.github/workflows/ui-staging.yml#L51), [UI_STAGING_STATIC_COMPRESSION_APPROVED](../.github/workflows/ui-staging.yml#L53).
 

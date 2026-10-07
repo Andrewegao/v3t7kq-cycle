@@ -1,0 +1,244 @@
+from datetime import datetime, timedelta, timezone
+import importlib.util
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+import sys
+
+sys.dont_write_bytecode=True
+spec=importlib.util.spec_from_file_location('five_feed',Path(__file__).parents[1]/'tools/five-feed-collect.py')
+r=importlib.util.module_from_spec(spec);spec.loader.exec_module(r)
+NOW=datetime(2026,10,6,16,tzinfo=timezone.utc);START=NOW-timedelta(minutes=20)
+def iso(time):return time.isoformat().replace('+00:00','Z')
+def write(path,value):path.parent.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(value))
+def station(age=10):return dict(id='real-id',icao='REAL',lat=0,lon=0,src='ndbc',obs_time=iso(NOW-timedelta(minutes=age)))
+def pack(family,root):
+    row=station();doc=dict(baked_at=iso(NOW-timedelta(minutes=10)),source='genuine source',stations=[row])
+    if family=='openaq':
+        row.update(lic='Commercial license',v={'pm25':[12,10]});doc.update(freshness={'max_age_min':180},license={'allowed':['Commercial license']})
+    write(root/r.FAMILIES[family][1],doc);return doc
+def fires(root):
+    row=dict(lat=0,lon=0,frp=2,sat='NOAA-20',acq=iso(NOW-timedelta(hours=1)))
+    envelope=dict(baked_at=iso(NOW-timedelta(minutes=10)),source='NOAA-20',missing_feeds=['Suomi NPP'])
+    write(root/'fires.json',{**envelope,'fires':[row]})
+    write(root/'overview.json',{**envelope,'fires':[{**row,'count':1}]})
+    write(root/'tiles/18_9.json',{'baked_at':envelope['baked_at'],'fires':[row]})
+    write(root/'index.json',{**envelope,'schemaVersion':1,'cell_deg':10,'overview':'overview.json','tiles':'tiles/',
+          'total':1,'detected_total':1,'overview_rows':1,'cells':{'18_9':1}})
+
+# Two exact decoded rows/native bins from the retained official Suomi NPP CSV.
+# CSV SHA25656c9603e65f4ed42d9832235baaf5439aca9d4170b6c42026adfa6584452d122;
+# sampled2026-10-06T16:24:16.518582Z. Offline fixture, not live bake/coverage proof.
+AUTHENTIC_NOW=datetime(2026,10,6,16,24,16,518582,tzinfo=timezone.utc)
+AUTHENTIC_FIRES=[dict(lon=16.479,lat=-16.505,frp=0.84,acq='2026-10-05T01:17:00Z',sat='N'),
+    dict(lon=145.602,lat=-32.297,frp=0.78,acq='2026-10-05T16:35:00Z',sat='N')]
+def authentic_fires(root):
+    envelope=dict(baked_at=iso(AUTHENTIC_NOW-timedelta(minutes=1)),source='NASA FIRMS · VIIRS (Suomi NPP) 24h 活跃火点',
+                  attribution='Active fires: NASA FIRMS · VIIRS (Suomi NPP), public domain',missing_feeds=['NOAA-20','NOAA-21'])
+    rows=[dict(row) for row in AUTHENTIC_FIRES]
+    write(root/'fires.json',{**envelope,'fires':rows})
+    write(root/'overview.json',{**envelope,'fires':[{**row,'count':1} for row in rows]})
+    # Exact native build_progressive bins; independent of controller implementation.
+    for key,row in zip(['19_7','32_5'],rows):write(root/('tiles/'+key+'.json'),{'baked_at':envelope['baked_at'],'fires':[row]})
+    write(root/'index.json',{**envelope,'schemaVersion':1,'cell_deg':10,'overview':'overview.json','tiles':'tiles/',
+          'total':2,'detected_total':2,'overview_rows':2,'cells':{'19_7':1,'32_5':1}})
+
+class AdmissionTests(unittest.TestCase):
+    def test_each_family_needs_new_nonempty_real_current_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            for family in ['metar','synop','buoys','openaq']:
+                p=root/family;doc=pack(family,p)
+                self.assertEqual(r.validate_family(family,p,START,NOW)['currentRecords'],1)
+                doc['baked_at']=iso(START-timedelta(seconds=1));write(p/r.FAMILIES[family][1],doc)
+                with self.assertRaisesRegex(ValueError,'old-or-future'):r.validate_family(family,p,START,NOW)
+                doc=pack(family,p);doc['stations']=[];write(p/r.FAMILIES[family][1],doc)
+                with self.assertRaisesRegex(ValueError,'nonempty'):r.validate_family(family,p,START,NOW)
+                doc=pack(family,p);doc['stations'][0]['obs_time']=iso(NOW-timedelta(days=1));write(p/r.FAMILIES[family][1],doc)
+                with self.assertRaisesRegex(ValueError,'no-current'):r.validate_family(family,p,START,NOW)
+    def test_honest_stale_tail_is_retained_but_not_counted_as_current(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp);doc=pack('metar',p);doc['stations'].append(station(age=240));write(p/'metar.json',doc)
+            actual=r.validate_family('metar',p,START,NOW);self.assertEqual(actual['rows'],2);self.assertEqual(actual['currentRecords'],1)
+            p=Path(tmp)/'buoys';doc=pack('buoys',p);doc['stations'].append(station(age=95));write(p/'stations.json',doc)
+            self.assertEqual(r.validate_family('buoys',p,START,NOW)['currentRecords'],1)
+    def test_openaq_encoded_reading_age_adds_elapsed_time_and_license_is_required(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp);doc=pack('openaq',p);doc['stations'][0]['v']['pm25']=[12,175];write(p/'stations.json',doc)
+            with self.assertRaisesRegex(ValueError,'no-current'):r.validate_family('openaq',p,START,NOW)
+            doc['stations'][0]['v']['pm10']=[15,10];write(p/'stations.json',doc)
+            self.assertEqual(r.validate_family('openaq',p,START,NOW)['currentReadings'],1)
+            doc['license']['allowed']=[];write(p/'stations.json',doc)
+            with self.assertRaisesRegex(ValueError,'license'):r.validate_family('openaq',p,START,NOW)
+    def test_buoy_reader_cap_is_four_mib_and_unexpected_files_cannot_be_mounted(self):
+        self.assertEqual(r.FAMILIES['buoys'][2],4*1024**2)
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp);pack('buoys',p);(p/'unrelated.json').write_text('{}')
+            with self.assertRaisesRegex(ValueError,'unexpected'):r.validate_family('buoys',p,START,NOW)
+            (p/'unrelated.json').unlink();(p/'stations.json').write_bytes(b' '*(4*1024**2+1))
+            with self.assertRaisesRegex(ValueError,'byte-bound'):r.validate_family('buoys',p,START,NOW)
+    def test_fire_inventory_counts_cell_geometry_and_age_are_bound(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp);fires(p);actual=r.validate_family('fires',p,START,NOW)
+            self.assertEqual(len(actual['files']),4);self.assertEqual(actual['missingFeeds'],['Suomi NPP'])
+            tile=json.loads((p/'tiles/18_9.json').read_text());tile['fires'][0]['acq']=iso(NOW-timedelta(hours=25))
+            tile['fires'].append(dict(tile['fires'][0],acq=iso(NOW-timedelta(hours=1))))
+            write(p/'tiles/18_9.json',tile)
+            legacy=json.loads((p/'fires.json').read_text());legacy['fires']=tile['fires'];write(p/'fires.json',legacy)
+            index=json.loads((p/'index.json').read_text());index.update(total=2,detected_total=2,cells={'18_9':2});write(p/'index.json',index)
+            overview=json.loads((p/'overview.json').read_text());overview['fires'][0]['count']=2;write(p/'overview.json',overview)
+            r.validate_family('fires',p,START,NOW) # old tail within36h and one genuine current detection
+            for change in ['missing','extra','count','geometry','age']:
+                fires(p)
+                if change=='missing':(p/'tiles/18_9.json').unlink()
+                elif change=='extra':write(p/'tiles/17_9.json',tile)
+                else:
+                    t=json.loads((p/'tiles/18_9.json').read_text())
+                    if change=='count':t['fires']=[]
+                    elif change=='geometry':t['fires'][0]['lon']=-11
+                    else:t['fires'][0]['acq']=iso(NOW-timedelta(hours=37))
+                    write(p/'tiles/18_9.json',t)
+                with self.subTest(change=change),self.assertRaises((ValueError,FileNotFoundError)):r.validate_family('fires',p,START,NOW)
+                if (p/'tiles/17_9.json').exists():(p/'tiles/17_9.json').unlink()
+    def test_authentic_older_tail_is_preserved_and_never_counted_as_current(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp);authentic_fires(p);before={f.relative_to(p):f.read_bytes() for f in p.rglob('*.json')}
+            actual=r.validate_family('fires',p,AUTHENTIC_NOW-timedelta(minutes=2),AUTHENTIC_NOW)
+            self.assertEqual(actual['rows'],2);self.assertEqual(actual['currentRecords'],1)
+            self.assertEqual(actual['fireRecords'],{kind:{'retained':2,'current24h':1} for kind in ['legacy','detail','overview']})
+            self.assertEqual(before,{f.relative_to(p):f.read_bytes() for f in p.rglob('*.json')})
+            # The same real timestamps age past24h naturally; a fresh baked_at is insufficient.
+            with self.assertRaisesRegex(ValueError,'no-current-real-record'):
+                r.validate_family('fires',p,AUTHENTIC_NOW-timedelta(minutes=2),AUTHENTIC_NOW+timedelta(minutes=11))
+
+    def test_retained_fire_tail_does_not_hide_future_or_invalid_source_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp)
+            for change,code in [('future-tile','fire-tile-future'),('future-overview','fire-overview-future'),
+                                ('cell','fire-tile-cell'),('satellite','fire-tile-satellite'),('timestamp','')]:
+                authentic_fires(p)
+                path=p/('overview.json' if change=='future-overview' else 'tiles/19_7.json')
+                doc=json.loads(path.read_text())
+                if change.startswith('future'):doc['fires'][0]['acq']=iso(AUTHENTIC_NOW+timedelta(minutes=16))
+                elif change=='cell':doc['fires'][0]['lon']=26.479
+                elif change=='satellite':doc['fires'][0]['sat']=20
+                else:doc['fires'][0]['acq']='not-a-time'
+                write(path,doc)
+                with self.subTest(change=change),self.assertRaisesRegex(ValueError,code):
+                    r.validate_family('fires',p,AUTHENTIC_NOW-timedelta(minutes=2),AUTHENTIC_NOW)
+
+    def test_each_fire_view_requires_current_records_and_refuses_future_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp)
+            for view,filename,stale_code,future_code in [('legacy','fires.json','no-current-real-record','future-record'),
+                    ('detail','tiles/32_5.json','no-current-fire-detail','fire-tile-future'),
+                    ('overview','overview.json','no-current-fire-overview','fire-overview-future')]:
+                for scenario,code in [('all-stale',stale_code),('future',future_code)]:
+                    authentic_fires(p);path=p/filename;doc=json.loads(path.read_text())
+                    if scenario=='all-stale':
+                        for row in doc['fires']:row['acq']=AUTHENTIC_FIRES[0]['acq']
+                    else:doc['fires'][0]['acq']=iso(AUTHENTIC_NOW+timedelta(minutes=16))
+                    write(path,doc)
+                    with self.subTest(view=view,scenario=scenario),self.assertRaisesRegex(ValueError,code):
+                        r.validate_family('fires',p,AUTHENTIC_NOW-timedelta(minutes=2),AUTHENTIC_NOW)
+
+    def test_fire_thinning_preserves_detected_counts_and_fixed_rule(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp)
+            def valid():
+                fires(p);receipt=dict(detected=2,kept=1,rule=r.THIN_RULE)
+                legacy=json.loads((p/'fires.json').read_text());legacy['thinned']=receipt;write(p/'fires.json',legacy)
+                tile=json.loads((p/'tiles/18_9.json').read_text());tile['thinned']=receipt;write(p/'tiles/18_9.json',tile)
+                index=json.loads((p/'index.json').read_text());index.update(detected_total=2,thinned={'rule':r.THIN_RULE,'cells':{'18_9':receipt}});write(p/'index.json',index)
+                overview=json.loads((p/'overview.json').read_text());overview['fires'][0]['count']=2;write(p/'overview.json',overview)
+            valid();self.assertEqual(r.validate_family('fires',p,START,NOW)['rows'],1)
+            for change in ['kept','detected','rule','overview-count','extra-receipt']:
+                valid()
+                if change=='overview-count':
+                    d=json.loads((p/'overview.json').read_text());d['fires'][0]['count']=3;write(p/'overview.json',d)
+                else:
+                    d=json.loads((p/'index.json').read_text())
+                    if change=='extra-receipt':d['thinned']['cells']['17_9']=d['thinned']['cells']['18_9']
+                    elif change=='rule':d['thinned']['rule']='invented thinning'
+                    else:d['thinned']['cells']['18_9'][change]=3
+                    write(p/'index.json',d)
+                with self.subTest(change=change),self.assertRaises(ValueError):r.validate_family('fires',p,START,NOW)
+
+    def test_all_five_guard_refuses_one_of_four_success_and_byte_tampering(self):
+        receipt=dict(schemaVersion=1,sourceSha=r.SOURCE,startedAt=iso(START),families={'metar':{}})
+        with self.assertRaisesRegex(ValueError,'all-five'):r.validate_all(Path('/none'),Path('/none'),receipt,NOW)
+        with tempfile.TemporaryDirectory() as tmp:
+            stage=Path(tmp);rows={}
+            for family in r.FAMILIES:
+                if family=='fires':fires(stage/family)
+                else:pack(family,stage/family)
+                rows[family]=r.validate_family(family,stage/family,START,NOW)
+            receipt['families']=rows
+            with patch.object(r,'native_validate') as native:
+                current=r.validate_all(Path('/none'),stage,receipt,NOW);self.assertEqual(native.call_count,5)
+                self.assertEqual(current['fires']['fireRecords'],{view:{'retained':1,'current24h':1} for view in ['legacy','detail','overview']})
+                doc=json.loads((stage/'metar/metar.json').read_text());doc['source']='changed';write(stage/'metar/metar.json',doc)
+                with self.assertRaisesRegex(ValueError,'bytes-changed'):r.validate_all(Path('/none'),stage,receipt,NOW)
+    def test_scheduled_mode_admits_a_nonempty_subset_and_recovery_still_needs_all_five(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stage=Path(tmp);rows={}
+            for family in ['metar','synop']:
+                pack(family,stage/family);rows[family]=r.validate_family(family,stage/family,START,NOW)
+            receipt=dict(schemaVersion=1,sourceSha=r.SOURCE,mode='scheduled',startedAt=iso(START),families=rows)
+            with patch.object(r,'native_validate'):
+                current=r.validate_all(Path('/none'),stage,receipt,NOW,mode='scheduled')
+                self.assertEqual(sorted(current),['metar','synop'])
+                self.assertEqual(current['metar']['newestRecordTime'],iso(NOW-timedelta(minutes=10)))
+                self.assertEqual(current['metar']['generationTime'],rows['metar']['generationTime'])
+                for mode,bad in [('recovery',receipt),('scheduled',dict(receipt,mode='recovery')),
+                                 ('scheduled',dict(receipt,families={})),('scheduled',dict(receipt,families=dict(rows,gfs={}))),
+                                 ('unknown',receipt)]:
+                    with self.subTest(mode=mode,families=sorted(bad['families'])),self.assertRaises(ValueError):
+                        r.validate_all(Path('/none'),stage,bad,NOW,mode=mode)
+
+    def test_newest_record_time_is_the_latest_genuine_observation_not_the_bake_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp);doc=pack('metar',p);doc['stations'].insert(0,station(age=240));doc['stations'].append(station(age=3));write(p/'metar.json',doc)
+            self.assertEqual(r.validate_family('metar',p,START,NOW)['newestRecordTime'],iso(NOW-timedelta(minutes=3)))
+            p=Path(tmp)/'fires';fires(p)
+            self.assertEqual(r.validate_family('fires',p,START,NOW)['newestRecordTime'],iso(NOW-timedelta(hours=1)))
+
+    def test_scheduled_collection_keeps_admitted_families_when_fires_fail_and_recovery_refuses(self):
+        def fake_bake(atmos):
+            def run(args,**kwargs):
+                if args[0]=='git':return r.subprocess.CompletedProcess(args,0)
+                family=Path(args[1]).name[len('fetch_'):-len('.py')]
+                if family=='fires':raise r.subprocess.CalledProcessError(1,args)
+                now=datetime.now(timezone.utc);root=atmos/'app/public/data-atmos'/r.FAMILIES[family][0]
+                row=dict(id='real-id',icao='REAL',lat=0,lon=0,src='ndbc',obs_time=iso(now-timedelta(minutes=5)))
+                doc=dict(baked_at=iso(now),source='genuine source',stations=[row])
+                if family=='openaq':
+                    row.update(lic='Commercial license',v={'pm25':[12,10]});doc.update(freshness={'max_age_min':180},license={'allowed':['Commercial license']})
+                write(root/r.FAMILIES[family][1],doc);return r.subprocess.CompletedProcess(args,0)
+            return run
+        for mode in ['scheduled','recovery']:
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                atmos=Path(tmp)/'atmos';stage=Path(tmp)/'stage';(atmos/'data').mkdir(parents=True)
+                with patch.dict(r.os.environ,{'OPENAQ_API_KEY':'fixture-not-a-key'}),\
+                        patch.object(r.subprocess,'check_output',return_value=r.SOURCE+'\n'),\
+                        patch.object(r.subprocess,'run',side_effect=fake_bake(atmos)),patch.object(r,'native_validate'):
+                    if mode=='recovery':
+                        with self.assertRaisesRegex(ValueError,'family-refused:fires'):r.collect(atmos,stage,mode)
+                        self.assertFalse((stage/'receipt.json').exists())
+                    else:
+                        self.assertEqual(r.collect(atmos,stage,mode),['fires'])
+                        receipt=json.loads((stage/'receipt.json').read_text())
+                        self.assertEqual(receipt['mode'],'scheduled');self.assertEqual(sorted(receipt['families']),['buoys','metar','openaq','synop'])
+                outcomes=json.loads((stage/'collection-outcomes.json').read_text())
+                self.assertEqual(outcomes['fires'],{'status':'refused','stage':'collect','code':'native-process-failed'})
+                self.assertTrue(all(outcomes[f]['status']=='passed' for f in ['metar','synop','buoys','openaq']))
+
+    def test_collector_subprocess_environment_excludes_writer_keys(self):
+        with patch.dict(r.os.environ,{'OPENAQ_API_KEY':'private','CATALOG_PROMOTION_KEY':'private','GH_TOKEN':'private',
+                                    'RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY':'private'}):
+            env=r.safe_env();self.assertNotIn('OPENAQ_API_KEY',env);self.assertNotIn('GH_TOKEN',env)
+            self.assertNotIn('CATALOG_PROMOTION_KEY',env);self.assertNotIn('RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY',env)
+
+if __name__=='__main__':unittest.main()

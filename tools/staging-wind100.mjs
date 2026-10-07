@@ -325,7 +325,8 @@ export function readPolicy(path = policyPath()) {
   assert.equal(policy.schemaVersion, 3);
   assert.match(policy.sourceSha ?? '', COMMIT);
   assert.equal(policy.sourceSha, SOURCE_SHA);
-  assert.equal(policy.coreSourceSha, '7a50f19714f22e04dc610a5aa33d311b7d1dc673');
+  // The ordinary core input source is declared once for every production producer.
+  assert.equal(policy.coreSourceSha, JSON.parse(readFileSync(resolve(ROOT, 'ops/atmos-production-source.json'), 'utf8')).atmosSha);
   assert.equal(policy.recurringPublicationMode, RECURRING_PUBLICATION_MODE);
   assert.deepEqual(policy.recurringStorage, {
     componentObjectPrefix: RECURRING_COMPONENT_PREFIX,
