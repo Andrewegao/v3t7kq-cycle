@@ -224,7 +224,7 @@ test('isolated publisher binds protected input profile to the exact same-attempt
 });
 test('manual staging defaults to protected approval and only explicit none selects baseline',()=>{
   const root=new URL('../',import.meta.url),staging=readFileSync(new URL('.github/workflows/ui-staging.yml',root),'utf8'),production=readFileSync(new URL('.github/workflows/ui-release.yml',root),'utf8');
-  assert.match(staging,/model_selection_sha256:[\s\S]*?default: approved/);
+  assert.match(staging,/model_selection_sha256:[\s\S]*?default: default\n/); // unarmed default resolves to approved
   assert.match(staging,/\n  profile:\n[\s\S]*?environment:\s*\n\s*name: ui-staging[\s\S]*?APPROVED_SELECTION: \$\{\{ vars\.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256 \}\}/);
   assert.match(staging,/APPROVED_CORE_PROFILE: \$\{\{ vars\.UI_STAGING_CORE_PROFILE_APPROVED \}\}/);
   // The selected profile reaches build, app-tests and qualify unchanged. Controller

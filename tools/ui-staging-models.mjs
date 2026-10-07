@@ -92,6 +92,21 @@ export function resolveWind100BuildPin(profile,env={}){
   assert.ok(dynamic===''||dynamic==='true','protected staging Wind100 dynamic presentation approval must be exactly true or empty');
   return dynamic==='true'?Object.freeze({...pin,dynamic:true}):pin;
 }
+// The four exact profiles a production promotion may name (ui-release.yml choices).
+export const RELEASE_PROFILES=Object.freeze(['none','production-account-billing-v1',
+  'production-account-ru-kk-beta-v1','production-account-ru-kk-wind100-onboarding-v2']);
+export const DEFAULT_SELECTION_REQUEST='default';
+// A dispatch that omits model_selection_sha256 sends the sentinel `default`: it qualifies the
+// armed auto-promotion profile while armed, otherwise the protected `approved` selection. An
+// armed but unrecognised profile fails closed instead of silently qualifying `approved`.
+// Explicit values pass through unchanged; resolveSelectionRequest still enforces approvals.
+export function resolveDispatchSelection(requested,autoPromoteEnabled,autoPromoteProfile){
+  if(requested!==DEFAULT_SELECTION_REQUEST)return requested;
+  if(autoPromoteEnabled!=='true')return 'approved';
+  assert.ok(RELEASE_PROFILES.includes(autoPromoteProfile),
+    `UI_AUTO_PROMOTE_ENABLED is true but UI_AUTO_PROMOTE_PROFILE (${JSON.stringify(String(autoPromoteProfile??'')).slice(0,80)}) is not one of ${RELEASE_PROFILES.join(', ')}; refusing to fall back to approved`);
+  return autoPromoteProfile;
+}
 export function resolveSelectionRequest(requested='approved',approved,approvedCore,approvedStaticCompression,approvedAccount,approvedTc,approvedProductionAccount,options={}){
   assert.ok(requested==='approved'||requested==='none'||requested===CORE_RELEASE_REQUEST||requested===STATIC_COMPRESSION_REQUEST||requested===ACCOUNT_CORE_REQUEST||requested===TC_RELEASE_REQUEST||requested===PRODUCTION_ACCOUNT_REQUEST||requested===PUBLIC_LOCALE_BETA_REQUEST||requested===PUBLIC_COMBINED_REQUEST||HASH.test(requested??''),'invalid staging selection request');
   if(requested==='none')return 'none';

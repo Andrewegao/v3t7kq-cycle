@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
 
 const read=path=>readFileSync(new URL('../'+path,import.meta.url),'utf8');
@@ -64,7 +64,7 @@ test('locked dependency setup, exact artifact promotion and guarded probes remai
   for(const line of ['npm ci --prefix control/platform/edge','npm ci --prefix control/app',
     'cd control/app && npx playwright install --with-deps chromium','node cycle/tools/ui-release.mjs download',
     'node cycle/tools/ui-release.mjs deploy production']) assert.ok(workflow.includes(line),line);
-  assert.doesNotMatch(workflow,/actions\/cache|--omit=dev|npm run build|ui-release.mjs build/);
+  assert.doesNotMatch(workflow,/actions\/cache|cache: npm|cache-dependency-path|--omit=dev|npm run build|ui-release.mjs build/);
   const release=read('tools/ui-release.mjs');
   assert.match(release,/RELEASE_GUARD_VERIFY_REQUIRED_SUCCESSES:'3'/);
   assert.match(release,/if \(stage === 'production'\) \{ await auditRun\(c\); await exactStaging\(c\); \}/);
@@ -146,5 +146,23 @@ test('qualify, candidate and Cycle checkouts and the actual controller guard rem
     'npm ci --prefix control/app','npx playwright install --with-deps chromium',
     'node cycle/tools/ui-release.mjs deploy staging','bash ops/weather-lab-ready.sh'])
     assert.ok(staging.includes(command),command);
-  assert.doesNotMatch(staging,/actions\/cache|--omit=dev/);
+  assert.doesNotMatch(staging,/--omit=dev/);
+  // Caches live only in the candidate-domain jobs; the publisher never restores one.
+  assert.doesNotMatch(qualify,/actions\/cache|cache: npm|cache-dependency-path/);
+  const profileJob=staging.split('\n  profile:\n')[1].split('\n  build:\n')[0];
+  assert.doesNotMatch(profileJob,/actions\/cache|cache: npm/);
+  // No browser cache anywhere: a planted browser would otherwise outlive its candidate.
+  assert.doesNotMatch(staging,/ms-playwright|actions\/cache\/(?:restore|save)|cache: npm|cache-dependency-path/);
+  for(const job of ['build','app-tests']){
+    const block=staging.split(`\n  ${job}:\n`)[1].split('\n  '+(job==='build'?'app-tests':'qualify')+':\n')[0];
+    const uses=[...block.matchAll(/uses: (actions\/cache[^@]*)@([a-f0-9]{40}) # v4\n\s+with:\n\s+path: ([^\n]+)\n\s+key: ([^\n]+)\n\s+restore-keys: ([^\n]+)\n/g)];
+    assert.deepEqual(uses.map(m=>[m[1],m[2],m[3],m[4],m[5]]),[['actions/cache','0057852bfaa89a56745cba8c7296529d2fc39830','~/.npm/_cacache',
+      "ui-candidate-npm-${{ runner.os }}-${{ hashFiles('atmos/app/package-lock.json', 'control/platform/edge/package-lock.json') }}",
+      'ui-candidate-npm-${{ runner.os }}-']],job);
+    assert.equal((block.match(/actions\/cache/g)||[]).length,1,job);
+    assert.ok(block.indexOf('actions/cache@')<block.indexOf('npm ci --prefix atmos/app'),job);
+  }
+  // The candidate npm key prefix is unique to the two candidate jobs across every workflow.
+  for(const name of readdirSync(new URL('../.github/workflows/',import.meta.url)))
+    if(name!=='ui-staging.yml')assert.doesNotMatch(read('.github/workflows/'+name),/ui-candidate-npm/,name);
 });

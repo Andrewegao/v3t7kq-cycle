@@ -9,9 +9,9 @@ on:
         required: true
         type: string
       model_selection_sha256:
-        description: approved/hash uses a pinned selection; production-account-billing-v1 selects the reviewed production account UI; production-account-ru-kk-beta-v1 adds the exact RU/KK public locale beta; production-account-ru-kk-wind100-onboarding-v2 adds native production Wind100 and onboarding with billing UI off; release-roster-core-v1 enables reviewed core expansion plus release roster; release-roster-core-br11-v1 adds separately approved staging-only static compression; release-roster-core-account-v1 preserves separately approved staging accounts with standard compression; none selects baseline
+        description: default (omitted) qualifies the armed UI_AUTO_PROMOTE_PROFILE while UI_AUTO_PROMOTE_ENABLED is true, otherwise approved; approved/hash uses a pinned selection; production-account-billing-v1 selects the reviewed production account UI; production-account-ru-kk-beta-v1 adds the exact RU/KK public locale beta; production-account-ru-kk-wind100-onboarding-v2 adds native production Wind100 and onboarding with billing UI off; release-roster-core-v1 enables reviewed core expansion plus release roster; release-roster-core-br11-v1 adds separately approved staging-only static compression; release-roster-core-account-v1 preserves separately approved staging accounts with standard compression; none selects baseline
         required: false
-        default: approved
+        default: default
         type: string
 permissions:
   contents: read
@@ -46,6 +46,8 @@ jobs:
         id: selection
         env:
           REQUESTED_SELECTION: ${{ inputs.model_selection_sha256 }}
+          UI_AUTO_PROMOTE_ENABLED: ${{ vars.UI_AUTO_PROMOTE_ENABLED }}
+          UI_AUTO_PROMOTE_PROFILE: ${{ vars.UI_AUTO_PROMOTE_PROFILE }}
           APPROVED_SELECTION: ${{ vars.UI_STAGING_MODEL_SELECTION_APPROVED_SHA256 }}
           APPROVED_CORE_PROFILE: ${{ vars.UI_STAGING_CORE_PROFILE_APPROVED }}
           APPROVED_STATIC_COMPRESSION: ${{ vars.UI_STAGING_STATIC_COMPRESSION_APPROVED }}
@@ -61,8 +63,10 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import { appendFileSync } from 'node:fs';
-          import { profileFor, resolveSelectionRequest, resolveWind100BuildPin } from './cycle/tools/ui-staging-models.mjs';
-          const selection = resolveSelectionRequest(process.env.REQUESTED_SELECTION,process.env.APPROVED_SELECTION,process.env.APPROVED_CORE_PROFILE,process.env.APPROVED_STATIC_COMPRESSION,process.env.APPROVED_ACCOUNT_PROFILE,undefined,process.env.APPROVED_PRODUCTION_ACCOUNT_PROFILE,{approvedPublicLocaleBeta:process.env.APPROVED_PUBLIC_LOCALE_BETA,approvedPublicCombined:process.env.APPROVED_PUBLIC_COMBINED});
+          import { profileFor, resolveDispatchSelection, resolveSelectionRequest, resolveWind100BuildPin } from './cycle/tools/ui-staging-models.mjs';
+          const requested = resolveDispatchSelection(process.env.REQUESTED_SELECTION,process.env.UI_AUTO_PROMOTE_ENABLED,process.env.UI_AUTO_PROMOTE_PROFILE);
+          console.log(`Staging selection request: ${process.env.REQUESTED_SELECTION} -> ${requested}`);
+          const selection = resolveSelectionRequest(requested,process.env.APPROVED_SELECTION,process.env.APPROVED_CORE_PROFILE,process.env.APPROVED_STATIC_COMPRESSION,process.env.APPROVED_ACCOUNT_PROFILE,undefined,process.env.APPROVED_PRODUCTION_ACCOUNT_PROFILE,{approvedPublicLocaleBeta:process.env.APPROVED_PUBLIC_LOCALE_BETA,approvedPublicCombined:process.env.APPROVED_PUBLIC_COMBINED});
           // Wind100 approval belongs only to the staging account profile. Protected
           // environment variables may remain enabled while a production-account
           // candidate is built, so remove them before resolving that distinct profile.
@@ -80,6 +84,33 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT,
             `model_selection_sha256=${selection}\nwind100_enabled=${pin ? 'true' : ''}\nwind100_catalog_id=${pin?.catalogId ?? ''}\nwind100_run_id=${pin?.runId ?? ''}\nwind100_selection_sha256=${pin?.selectionSha256 ?? ''}\nwind100_dynamic=${pin?.dynamic === true ? 'true' : ''}\n`);
           NODE
+  atmos-evidence:
+    # Decision B evidence check. No candidate checkout and no candidate code ever runs here; this
+    # is the only job that references the Atmos CI read token, so candidate jobs cannot reach it.
+    needs: profile
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    environment:
+      name: atmos-ci-evidence
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      path: ${{ steps.atmos_ci.outputs.path }}
+      atmos_run_id: ${{ steps.atmos_ci.outputs.atmos_run_id }}
+      atmos_run_attempt: ${{ steps.atmos_ci.outputs.atmos_run_attempt }}
+    env:
+      ATMOS_SHA: ${{ inputs.atmos_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: verify Atmos CI evidence for the exact source
+        id: atmos_ci
+        env:
+          ATMOS_CI_READ_TOKEN: ${{ secrets.ATMOS_CI_READ_TOKEN }}
+        run: node cycle/tools/ui-app-test-receipt.mjs evidence
   build:
     # Source-read key only. No publisher token, decryption or promotion-signing key.
     needs: profile
@@ -173,6 +204,15 @@ jobs:
       - name: verify combined-profile layer harness source before dependency install
         if: ${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2' }}
         run: node cycle/tools/ui-release-layer-guard.mjs source "${{ github.workspace }}/atmos" "$ATMOS_SHA"
+      # Candidate-domain npm tarball cache under its own key prefix: only build/app-tests ever
+      # restore it (never setup-node's generic key shared with publisher workflows). Only the
+      # integrity-checked _cacache store; npm ci verifies every tarball against the lockfile.
+      - name: restore candidate-only npm download cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.npm/_cacache
+          key: ui-candidate-npm-${{ runner.os }}-${{ hashFiles('atmos/app/package-lock.json', 'control/platform/edge/package-lock.json') }}
+          restore-keys: ui-candidate-npm-${{ runner.os }}-
       - name: install locked dependencies and browsers
         run: |
           python3.11 -m pip install pillow
@@ -202,8 +242,9 @@ jobs:
           retention-days: 1
           compression-level: 0
   app-tests:
-    # Complete app tests overlap the browser/build lane; no publisher credentials or cache.
-    needs: profile
+    # Exact-source app test evidence overlaps the browser/build lane; no publisher credentials.
+    # Only the candidate-domain npm download cache; never a publisher or browser cache.
+    needs: [profile, atmos-evidence]
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
     environment:
       name: atmos-source-read-ui
@@ -267,18 +308,45 @@ jobs:
           else
             test "$ATMOS_SHA" = "$(git rev-parse origin/master)"
           fi
+      # Candidate-domain npm tarball cache under its own key prefix: only build/app-tests ever
+      # restore it (never setup-node's generic key shared with publisher workflows). Only the
+      # integrity-checked _cacache store; npm ci verifies every tarball against the lockfile.
+      - name: restore candidate-only npm download cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.npm/_cacache
+          key: ui-candidate-npm-${{ runner.os }}-${{ hashFiles('atmos/app/package-lock.json', 'control/platform/edge/package-lock.json') }}
+          restore-keys: ui-candidate-npm-${{ runner.os }}-
       - name: install locked app test dependencies and browsers
         run: |
           python3.11 -m pip install pillow
           npm ci --prefix atmos/app
           cd atmos/app && npx playwright install --with-deps chromium
+      # atmos-ci path: Atmos already ran the complete suite for this exact SHA in its own CI
+      # environment; keep a shorter gate that still executes the candidate in this trust domain.
+      # Static gates follow the selection exactly like the full-local suite (job-level
+      # WX_CI_PROFILE: public-beta for RU/KK, full otherwise), so the token never changes which
+      # i18n gate runs. RU/KK first proves Atmos still tracks the manifest that justifies it.
+      - name: local certification and visual gate
+        if: ${{ needs.atmos-evidence.outputs.path == 'atmos-ci' }}
+        run: |
+          if [ -n "$WX_CI_PROFILE" ]; then git -C atmos ls-files --error-unmatch ops/release/public-beta-ci-manifest.json; fi
+          npm run gates --prefix atmos/app
+          npm run test:certify --prefix atmos/app
+          cd atmos/app && npx playwright test
+      # full-local path: unchanged complete suite (token absent or evidence not proven).
       - name: full application test gate
+        if: ${{ needs.atmos-evidence.outputs.path == 'full-local' }}
         run: npm test --prefix atmos/app
-      - name: bind successful complete tests to this source and attempt
+      - name: bind successful app test evidence to this source and attempt
         id: evidence
+        env:
+          UI_APP_TEST_EVIDENCE_PATH: ${{ needs.atmos-evidence.outputs.path }}
+          UI_APP_TEST_ATMOS_RUN_ID: ${{ needs.atmos-evidence.outputs.atmos_run_id }}
+          UI_APP_TEST_ATMOS_RUN_ATTEMPT: ${{ needs.atmos-evidence.outputs.atmos_run_attempt }}
         run: node cycle/tools/ui-app-test-receipt.mjs emit
   qualify:
-    needs: [profile, build, app-tests]
+    needs: [profile, build, atmos-evidence, app-tests]
     # A fresh runner executes pinned controller code only, never candidate source.
     environment:
       name: ui-staging
@@ -287,6 +355,10 @@ jobs:
     timeout-minutes: 45
     env:
       UI_APP_TEST_RECEIPT: ${{ needs.app-tests.outputs.receipt }}
+      # Straight from the evidence job, which never ran candidate code.
+      UI_APP_TEST_EVIDENCE_PATH: ${{ needs.atmos-evidence.outputs.path }}
+      UI_APP_TEST_ATMOS_RUN_ID: ${{ needs.atmos-evidence.outputs.atmos_run_id }}
+      UI_APP_TEST_ATMOS_RUN_ATTEMPT: ${{ needs.atmos-evidence.outputs.atmos_run_attempt }}
       UI_RELEASES_ENABLED: ${{ vars.UI_RELEASES_ENABLED }}
       UI_ISOLATION_APPROVED: ${{ vars.UI_ISOLATION_APPROVED }}
       UI_DEPLOYMENT_HOLD_UNTIL: ${{ vars.UI_DEPLOYMENT_HOLD_UNTIL }}
@@ -321,11 +393,16 @@ jobs:
         with: { python-version: '3.12' }
       - name: enforce manual activation and freeze
         run: node cycle/tools/ui-release.mjs gate
+      # No cache crosses into this publisher runner. The two locked installs are independent,
+      # so the Functions toolchain installs concurrently with the app/browser install.
       - name: install pinned controller and verification tools (no candidate scripts)
         run: |
-          npm ci --prefix control/platform/edge
+          npm ci --prefix control/platform/edge >"$RUNNER_TEMP/npm-ci-edge.log" 2>&1 &
+          edge=$!
           npm ci --prefix control/app
-          cd control/app && npx playwright install --with-deps chromium
+          (cd control/app && npx playwright install --with-deps chromium)
+          if ! wait "$edge"; then cat "$RUNNER_TEMP/npm-ci-edge.log"; exit 1; fi
+          cat "$RUNNER_TEMP/npm-ci-edge.log"
       - name: authenticate successful same-attempt build and restore opaque bytes
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -350,6 +427,15 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           compression-level: 0
+      # Public routing hint for automatic promotion: the same summary.json (source, run,
+      # attempt, digest, release profile name). Promotion re-audits it against the sealed candidate.
+      - name: retain public promotion routing summary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ui-candidate-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ui-sealed/summary.json
+          if-no-files-found: error
+          retention-days: 90
       - name: retain automatic rollback evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

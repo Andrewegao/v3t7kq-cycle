@@ -12,9 +12,9 @@ const read=p=>readFileSync(new URL(p,root),'utf8');
 const staging=read('.github/workflows/ui-staging.yml'), prod=read('.github/workflows/ui-release.yml'), source=read('tools/ui-release.mjs'), candidate=read('tools/ui-candidate.mjs');
 test('compressed profile is an explicit staging request using the unchanged input and default',()=>{
   assert.match(staging,/model_selection_sha256:\n\s+description:.*release-roster-core-br11-v1/);
-  assert.match(staging,/model_selection_sha256:[\s\S]*?default: approved/);
+  assert.match(staging,/model_selection_sha256:[\s\S]*?default: default\n/);
   assert.match(staging,/APPROVED_STATIC_COMPRESSION: \$\{\{ vars\.UI_STAGING_STATIC_COMPRESSION_APPROVED \}\}/);
-  assert.match(staging,/resolveSelectionRequest\(process\.env\.REQUESTED_SELECTION,process\.env\.APPROVED_SELECTION,process\.env\.APPROVED_CORE_PROFILE,process\.env\.APPROVED_STATIC_COMPRESSION,process\.env\.APPROVED_ACCOUNT_PROFILE,undefined,process\.env\.APPROVED_PRODUCTION_ACCOUNT_PROFILE,\{approvedPublicLocaleBeta:process\.env\.APPROVED_PUBLIC_LOCALE_BETA,approvedPublicCombined:process\.env\.APPROVED_PUBLIC_COMBINED\}\)/);
+  assert.match(staging,/resolveSelectionRequest\(requested,process\.env\.APPROVED_SELECTION,process\.env\.APPROVED_CORE_PROFILE,process\.env\.APPROVED_STATIC_COMPRESSION,process\.env\.APPROVED_ACCOUNT_PROFILE,undefined,process\.env\.APPROVED_PRODUCTION_ACCOUNT_PROFILE,\{approvedPublicLocaleBeta:process\.env\.APPROVED_PUBLIC_LOCALE_BETA,approvedPublicCombined:process\.env\.APPROVED_PUBLIC_COMBINED\}\)/);
   assert.doesNotMatch(prod,/UI_STAGING_STATIC_COMPRESSION_APPROVED|release-roster-core-br11-v1|static-br11-v1/);
 });
 test('staging private checkouts use the current Atmos repository owner',()=>{
@@ -28,7 +28,7 @@ test('staging rejects stale public point data before expensive build work while 
   assert.ok(staging.indexOf(preflight)<staging.indexOf('checkout exact candidate Atmos source'));
   assert.ok(staging.indexOf(preflight)<staging.indexOf('install locked dependencies and browsers'));
   assert.doesNotMatch(prod,/ui-staging-preflight|UI_STAGING_MODEL_SELECTION_APPROVED_SHA256/);
-  assert.match(prod,/MODEL_SELECTION_SHA256: \$\{\{ inputs\.release_profile \}\}/);
+  assert.match(prod,/MODEL_SELECTION_SHA256: \$\{\{ github\.event_name == 'workflow_run' && needs\.resolve\.outputs\.release_profile \|\| inputs\.release_profile \}\}/);
 });
 test('staging workflow leaves release-mode activation to the exact-profile controller',()=>{
   const build=staging.slice(staging.indexOf('\n  build:\n'),staging.indexOf('\n  app-tests:\n'));
@@ -44,7 +44,8 @@ test('staging workflow leaves release-mode activation to the exact-profile contr
   assert.equal((staging.match(/ref: \$\{\{ needs\.profile\.outputs\.model_selection_sha256/g)||[]).length,2);
   assert.match(candidate,/export const CONTROL_SHA = '25c402db5149daa018e349a34a4beeba1f2dca45'/);
   assert.equal(STAGING_CONTROL_SHA,'4dafd26387d5917604deb7379a8d45a994fc5b67');
-  assert.ok(prod.includes("production-account-ru-kk-wind100-onboarding-v2' && '" + COMBINED_ATMOS_SHA + "' || inputs.release_profile == 'production-account-ru-kk-beta-v1' && '" + BETA_ATMOS_SHA + "' || inputs.release_profile == 'production-account-billing-v1'"));
+  assert.ok(prod.includes("ref: ${{ env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-wind100-onboarding-v2' && '" + COMBINED_ATMOS_SHA + "' || env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-beta-v1' && '" + BETA_ATMOS_SHA + "' || env.MODEL_SELECTION_SHA256 == 'production-account-billing-v1'"));
+  assert.doesNotMatch(prod,/ref: \$\{\{ inputs\./);
   assert.match(prod,/repository: weatherx-hq\/atmos/);
   assert.doesNotMatch(prod,/ref: a58eff158b56ef2ba25189d2b859315b00893a14/);
   assert.doesNotMatch(prod,/STAGING_CONTROL_SHA|stagingOnly/);

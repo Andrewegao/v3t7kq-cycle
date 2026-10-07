@@ -2,9 +2,10 @@ import {runReleaseLayerGuard} from './ui-release-layer-guard.mjs';
 // Guarded orchestration only. This program never writes Workers, DNS, bindings, data or settings.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { constants, closeSync, fstatSync, openSync, readFileSync, readSync, writeFileSync, mkdirSync, readdirSync, statSync, lstatSync, chmodSync, existsSync, unlinkSync } from 'node:fs';
+import { appendFileSync, constants, closeSync, fstatSync, openSync, readFileSync, readSync, writeFileSync, mkdirSync, readdirSync, statSync, lstatSync, chmodSync, existsSync, unlinkSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import {installCompressionOverlay,selectCompressionAssets,validateCompressionFiles} from './ui-static-compression.mjs';
 import {verifyStaticCompression} from './ui-static-compression-wire.mjs';
 import {staticCompressionProfile} from './ui-staging-models.mjs';
@@ -16,8 +17,8 @@ import {PUBLIC_JOURNEY_PROOF_MAX_BYTES,runPublicReleaseJourneys,readPublicJourne
 import { controlShaFor, TC_CONTROL_SHA, REPOSITORY, MAX_BYTES, gate, hash, createCandidate, validateCandidate,
   readTree, validateFiles, seal, unseal, restore, eligibleRun } from './ui-candidate.mjs';
 import { packBuild, unpackBuild, eligibleBuild } from './ui-build-transfer.mjs';
-import { verifyAppTestReceipt } from './ui-app-test-receipt.mjs';
-import {profileFor,validateProfile,selectionProfile,coreReleaseProfile,publicLocaleBetaProfile,publicCombinedProfile,accountServingProductionProfile,tcGuidanceProfile,canonical as profileCanonical,readSelection,readTcSelection,requireUiProductionProfile,requireStagingApproval,resolveWind100BuildPin,SELECTION_ASSET,TC_SELECTION_ASSET,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt} from './ui-staging-models.mjs';
+import { verifyAppTestReceipt, appTestEvidenceFromEnvironment, ciProfileFor } from './ui-app-test-receipt.mjs';
+import {profileFor,validateProfile,selectionProfile,coreReleaseProfile,publicLocaleBetaProfile,publicCombinedProfile,accountServingProductionProfile,tcGuidanceProfile,canonical as profileCanonical,readSelection,readTcSelection,requireUiProductionProfile,requireStagingApproval,resolveWind100BuildPin,SELECTION_ASSET,TC_SELECTION_ASSET,browserEnvironment,validateBrowserReceipt,validateCoreBrowserReceipt,RELEASE_PROFILES} from './ui-staging-models.mjs';
 import {LANE_B_CONTRACT,PRODUCTION_ACCOUNT_APPROVAL,validateProductionPagesConfiguration} from './production-account-contract.mjs';
 import {assertPublicLocaleBetaReady} from './ui-public-locale-beta.mjs';
 import {assertPublicCombinedReady,PUBLIC_COMBINED_WIND100_RECEIPT} from './ui-public-combined.mjs';
@@ -143,6 +144,75 @@ export function requireReleaseProfileBinding(candidateProfile,selection=process.
   assert.deepEqual(validateProfile(candidateProfile),requestedProfile,
     'production candidate profile differs from requested release profile');
   return candidateProfile;
+}
+export { RELEASE_PROFILES };
+export const releaseProfileName = profile => RELEASE_PROFILES.find(name => isDeepStrictEqual(profileFor(name), profile)) ?? null;
+const RUN_NUMBER = /^[1-9][0-9]{0,19}$/;
+// Manual dispatch keeps the unchanged manual gate. The only other admitted event is the owner-armed
+// automatic promotion (decision C): exact armed profile, exact routed staging attempt, promote job.
+export function releaseGate(env, now = Date.now()) {
+  if (env.GITHUB_EVENT_NAME !== 'workflow_run') return gate(env, now);
+  assert.equal(env.GITHUB_JOB, 'promote', 'an automatic run may only promote');
+  assert.equal(env.UI_AUTO_PROMOTE_ENABLED, 'true', 'automatic promotion is not armed');
+  assert.ok(RELEASE_PROFILES.includes(env.UI_AUTO_PROMOTE_PROFILE), 'automatic promotion profile is not armed');
+  assert.equal(env.MODEL_SELECTION_SHA256, env.UI_AUTO_PROMOTE_PROFILE, 'routed profile differs from the armed profile');
+  assert.match(env.STAGING_RUN_ID ?? '', RUN_NUMBER); assert.match(env.STAGING_RUN_ATTEMPT ?? '', RUN_NUMBER);
+  // Every activation, isolation, hold, freeze, repository and protected-ref check is the manual gate's own.
+  return gate({ ...env, GITHUB_EVENT_NAME: 'workflow_dispatch' }, now);
+}
+// Routing only (no authority): the automatic run must name the attempt that just succeeded.
+export function autoRouteRun(env, run, artifacts) {
+  assert.equal(env.GITHUB_EVENT_NAME, 'workflow_run'); assert.equal(env.GITHUB_JOB, 'resolve');
+  assert.equal(env.GITHUB_REPOSITORY, REPOSITORY); assert.equal(env.GITHUB_REF, 'refs/heads/main');
+  assert.equal(env.UI_AUTO_PROMOTE_ENABLED, 'true', 'automatic promotion is not armed');
+  assert.ok(RELEASE_PROFILES.includes(env.UI_AUTO_PROMOTE_PROFILE), 'automatic promotion profile is not armed');
+  const id = env.STAGING_RUN_ID, attempt = env.STAGING_RUN_ATTEMPT;
+  assert.match(id ?? '', RUN_NUMBER); assert.match(attempt ?? '', RUN_NUMBER);
+  assert.equal(String(run.id), id); assert.equal(run.repository?.full_name, REPOSITORY);
+  assert.equal(run.path, '.github/workflows/ui-staging.yml'); assert.equal(run.event, 'workflow_dispatch');
+  assert.equal(run.head_branch, 'main');
+  // Before status: a re-run already in progress is a superseded route to skip, not a failure.
+  if (String(run.run_attempt) !== attempt) return { promote: false, reason: `staging run ${id} has a newer attempt ${run.run_attempt}` };
+  assert.equal(run.status, 'completed'); assert.equal(run.conclusion, 'success');
+  const source = /^Staging ([a-f0-9]{40})$/.exec(run.display_title ?? '');
+  assert.ok(source, 'unattributed staging run');
+  assert.ok(Array.isArray(artifacts) && artifacts.length <= 100);
+  const one = name => { const m = artifacts.filter(a => a.name === name); assert.equal(m.length, 1, `one ${name} required`);
+    assert.equal(m[0].expired, false); return m[0]; };
+  one(`ui-candidate-${id}-${attempt}`);
+  const summary = one(`ui-candidate-summary-${id}-${attempt}`);
+  assert.ok(summary.size_in_bytes > 0 && summary.size_in_bytes <= 64 * 1024, 'routing summary size');
+  return { promote: true, id, attempt, sourceSha: source[1], summaryArtifact: summary.name };
+}
+export function autoRouteSummary(route, bytes, armedProfile) {
+  assert.ok(Buffer.isBuffer(bytes) && bytes.length > 0 && bytes.length <= 4096, 'routing summary size');
+  const summary = JSON.parse(bytes);
+  assert.equal(summary.sourceSha, route.sourceSha); assert.equal(summary.stagingRunId, route.id);
+  assert.equal(summary.attempt, route.attempt); assert.match(summary.artifactDigest ?? '', /^[a-f0-9]{64}$/);
+  assert.ok(summary.releaseProfile === null || RELEASE_PROFILES.includes(summary.releaseProfile), 'unknown routed profile');
+  if (summary.releaseProfile !== armedProfile)
+    return { promote: false, reason: `staging qualified ${summary.releaseProfile ?? 'a staging-only profile'}; armed profile is ${armedProfile}` };
+  // Unauthenticated routing hints: promote re-derives and re-audits all of them from the sealed candidate.
+  return { promote: true, staging_run_id: route.id, staging_run_attempt: route.attempt, atmos_sha: route.sourceSha,
+    candidate_digest: summary.artifactDigest, release_profile: summary.releaseProfile };
+}
+async function resolveAuto() {
+  const output = values => appendFileSync(process.env.GITHUB_OUTPUT, Object.entries(values).map(([k, v]) => `${k}=${v}\n`).join(''));
+  assert.ok(process.env.GITHUB_OUTPUT, 'job output path is required');
+  const r = await gh(`actions/runs/${process.env.STAGING_RUN_ID}`), a = await gh(`actions/runs/${process.env.STAGING_RUN_ID}/artifacts?per_page=100`);
+  assert.ok(a.total_count <= 100, 'too many artifacts');
+  let result = autoRouteRun(process.env, r, a.artifacts);
+  if (result.promote) {
+    const out = resolve(process.env.RUNNER_TEMP, 'ui-route'); mkdirSync(out, { mode: 0o700 });
+    run('gh', ['run', 'download', result.id, '--repo', REPOSITORY, '--name', result.summaryArtifact, '--dir', out], { env: { ...process.env, GH_TOKEN: process.env.GITHUB_TOKEN } });
+    assert.deepEqual(readdirSync(out), ['summary.json']);
+    const path = resolve(out, 'summary.json'), stat = lstatSync(path);
+    assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 4096, 'routing summary is invalid');
+    result = autoRouteSummary(result, readFileSync(path), process.env.UI_AUTO_PROMOTE_PROFILE);
+  }
+  if (!result.promote) { console.log(`Automatic promotion skipped: ${result.reason}`); output({ promote: 'false' }); return; }
+  console.log(`Automatic promotion routed: staging run ${result.staging_run_id} attempt ${result.staging_run_attempt}, source ${result.atmos_sha}, profile ${result.release_profile}`);
+  output(result);
 }
 async function get(url, token, limit = 2 * 1024 * 1024, {fetcher=fetch,timeoutMs=20000} = {}) {
   const response = await fetcher(url, { redirect: 'error', signal: AbortSignal.timeout(timeoutMs),
@@ -438,7 +508,7 @@ async function preflight(stage) {
   const c=candidate();
   if(stage==='production') { requireUiProductionProfile(c.profile); verifyProductionGround(c.files); }
   else requireStagingApproval(c,process.env);
-  gate(process.env); controller();
+  releaseGate(process.env); controller();
   await projectSnapshot(stage); await publicModes(ORIGINS[stage],c.profile,'preflight');
   if (standaloneWeatherFeedVerificationRequired(stage, 'preflight')) verifyWeatherFeeds(stage,c.profile);
 }
@@ -642,7 +712,8 @@ async function receiveBuild() {
   const jobs=await gh(`actions/runs/${id}/attempts/${attempt}/jobs?per_page=100`);
   assert.ok(a.total_count<=100 && jobs.total_count<=100);
   verifyAppTestReceipt(process.env.UI_APP_TEST_RECEIPT,jobs.jobs,{runId:id,attempt,
-    sourceSha:process.env.ATMOS_SHA,workflowSha:process.env.GITHUB_SHA,selection:process.env.MODEL_SELECTION_SHA256});
+    sourceSha:process.env.ATMOS_SHA,workflowSha:process.env.GITHUB_SHA,selection:process.env.MODEL_SELECTION_SHA256,
+    evidence:appTestEvidenceFromEnvironment(process.env)});
   const name=`ui-build-${id}-${attempt}`, matches=a.artifacts.filter(x=>x.name===name);
   assert.equal(matches.length,1);assert.equal(matches[0].expired,false);
   assert.ok(matches[0].size_in_bytes<MAX_BYTES*2+1024);
@@ -735,8 +806,11 @@ async function deploy(stage) {
     const selection=requireStagingApproval(c,process.env),modelProof=c.profile.stagingOnly?readFileSync(resolve(process.env.RUNNER_TEMP,'ui-model-browser.json')):null;
     if(modelProof&&selectionProfile(c.profile))validateBrowserReceipt(modelProof,selection,{sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId,selectionSha256:c.profile.modelSelectionSha256});
     if(modelProof&&coreReleaseProfile(c.profile))validateCoreBrowserReceipt(modelProof,{sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId});
+    // fullTests is true only when the complete suite ran here; atmos-ci evidence is recorded exactly.
+    const appTestEvidence=appTestEvidenceFromEnvironment(process.env,ciProfileFor(c.profile));
     c.qualification = {origin:ORIGINS.staging, deploymentId,
-      artifactDigest:c.artifactDigest,qualifiedAt:new Date().toISOString(),fullTests:true,weatherLab:true,builtRuntime:true,probes:3};
+      artifactDigest:c.artifactDigest,qualifiedAt:new Date().toISOString(),fullTests:appTestEvidence.path==='full-local',
+      weatherLab:true,builtRuntime:true,probes:3,appTestEvidence};
     if(wind100)Object.assign(c.qualification,{wind100});
     if(modelProof&&selectionProfile(c.profile))Object.assign(c.qualification,{modelSelectionSha256:c.profile.modelSelectionSha256,modelBrowserReceiptSha256:hash(modelProof),modelBrowserModels:selection.entries.length});
     if(modelProof&&coreReleaseProfile(c.profile))Object.assign(c.qualification,{coreProfile:c.profile.releaseRosterCore,coreBrowserReceiptSha256:hash(modelProof),coreBrowserModels:2});
@@ -834,7 +908,7 @@ async function retain() {
   if(accountProof)writeFileSync(resolve(out,'account-qualification.json'),accountProof.bytes,{flag:'wx',mode:0o600});
   if(publicProof)writeFileSync(resolve(out,'public-release-journeys.json'),publicProof.bytes,{flag:'wx',mode:0o600});
   const summary={sourceSha:c.sourceSha,stagingRunId:c.runId,attempt:c.attempt,artifactDigest:c.artifactDigest,
-    deploymentId:c.qualification.deploymentId,qualifiedAt:c.qualification.qualifiedAt};
+    deploymentId:c.qualification.deploymentId,qualifiedAt:c.qualification.qualifiedAt,releaseProfile:releaseProfileName(c.profile)};
   save(resolve(out,'summary.json'),summary);
   if(process.env.GITHUB_STEP_SUMMARY) writeFileSync(process.env.GITHUB_STEP_SUMMARY,
     `### Qualified UI candidate\n\nSource: \`${c.sourceSha}\`\n\nStaging run: \`${c.runId}\`\n\nArtifact digest: \`${c.artifactDigest}\`\n\nProduction remains unchanged.\n`,{flag:'a'});
@@ -843,6 +917,8 @@ async function runRecords() {
   const id = process.env.STAGING_RUN_ID;
   assert.match(id ?? '', /^[1-9][0-9]{0,19}$/);
   const r=await gh(`actions/runs/${id}`), a=await gh(`actions/runs/${id}/artifacts?per_page=100`);
+  // The automatic path names the attempt that just succeeded; a later re-run is never substituted.
+  if(process.env.STAGING_RUN_ATTEMPT) assert.equal(String(r.run_attempt),process.env.STAGING_RUN_ATTEMPT,'staging run has a different attempt than the routed one');
   assert.ok(a.total_count<=100,'too many artifacts'); return {r,artifacts:a.artifacts};
 }
 async function auditRun(c) {
@@ -853,7 +929,7 @@ async function auditRun(c) {
   git(['merge-base','--is-ancestor',r.head_sha,'origin/main']);
 }
 async function download() {
-  gate(process.env); controller();
+  releaseGate(process.env); controller();
   const {r,artifacts}=await runRecords();
   assert.equal(r.repository?.full_name,REPOSITORY); assert.equal(r.path,'.github/workflows/ui-staging.yml');
   assert.equal(r.event,'workflow_dispatch'); assert.equal(r.head_branch,'main'); assert.equal(r.conclusion,'success');
@@ -898,7 +974,7 @@ async function download() {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const [command,stage]=process.argv.slice(2);
   try {
-    if(command==='gate') { gate(process.env); controller(); assert.equal(git(['rev-parse','HEAD']),process.env.GITHUB_SHA); }
+    if(command==='gate') { releaseGate(process.env); controller(); assert.equal(git(['rev-parse','HEAD']),process.env.GITHUB_SHA); }
     else if(command==='build-gate') { buildGate(); controller(); }
     else if(command==='pack-build') pack();
     else if(command==='receive-build') await receiveBuild();
@@ -908,6 +984,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     else if(command==='verify') await verify(stage);
     else if(command==='retain') await retain();
     else if(command==='download') await download();
+    else if(command==='resolve-auto') await resolveAuto();
     else throw Error('unknown UI release command');
   } catch(error) { console.error(`UI release refused: ${error.message}`); process.exitCode=1; }
 }
