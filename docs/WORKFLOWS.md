@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `e7afaab1383f486a1e3822ee94119832ef9f736ce4226c8a0bb46492742efabd`.
+Source digest (registry and workflow bytes): `9b4dd4aecc839368d4df5cc2dc8a34af047aff97027a8174a0cec2975fc61b04`.
 
 63 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -151,7 +151,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
 | [bake / checkout exact public bake diagnostic controller](../.github/workflows/bake.yml#L278) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
-| [bake / checkout atmos (private, read-only deploy key)](../.github/workflows/bake.yml#L292) | <code>weatherx-hq/atmos</code> | <code>7b084d7f862208eb9c9da0c796e870d54678a08d</code> |
+| [bake / checkout atmos (private, read-only deploy key)](../.github/workflows/bake.yml#L292) | <code>weatherx-hq/atmos</code> | <code>8a1eef9cfded33df44738c4e45f16b1f597008af</code> |
 | [bake / checkout this reviewed recovery transfer checker](../.github/workflows/bake.yml#L383) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
 | [model-status / step 1](../.github/workflows/bake.yml#L577) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 | [run-summary / step 1](../.github/workflows/bake.yml#L605) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
@@ -330,7 +330,7 @@ Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [collector / checkout atmos core collector (same approved commit, read-only deploy key)](../.github/workflows/collect-core-model.yml#L35) | <code>weatherx-hq/atmos</code> | <code>7b084d7f862208eb9c9da0c796e870d54678a08d</code> |
+| [collector / checkout atmos core collector (same approved commit, read-only deploy key)](../.github/workflows/collect-core-model.yml#L35) | <code>weatherx-hq/atmos</code> | <code>8a1eef9cfded33df44738c4e45f16b1f597008af</code> |
 | [collector / checkout this reviewed recovery controller](../.github/workflows/collect-core-model.yml#L47) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
@@ -352,7 +352,7 @@ Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [collector / checkout atmos regional collector (same approved commit, read-only deploy key)](../.github/workflows/collect-regional-model.yml#L35) | <code>weatherx-hq/atmos</code> | <code>7b084d7f862208eb9c9da0c796e870d54678a08d</code> |
+| [collector / checkout atmos regional collector (same approved commit, read-only deploy key)](../.github/workflows/collect-regional-model.yml#L35) | <code>weatherx-hq/atmos</code> | <code>8a1eef9cfded33df44738c4e45f16b1f597008af</code> |
 | [collector / checkout this reviewed recovery controller](../.github/workflows/collect-regional-model.yml#L47) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
@@ -448,7 +448,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
 | [recover / Checkout exact recovery controller](../.github/workflows/five-feed-recovery.yml#L53) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
-| [recover / Checkout unchanged qualified five-feed producers](../.github/workflows/five-feed-recovery.yml#L60) | <code>weatherx-hq/atmos</code> | <code>7b084d7f862208eb9c9da0c796e870d54678a08d</code> |
+| [recover / Checkout unchanged qualified five-feed producers](../.github/workflows/five-feed-recovery.yml#L60) | <code>weatherx-hq/atmos</code> | <code>8a1eef9cfded33df44738c4e45f16b1f597008af</code> |
 
 Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/five-feed-recovery.yml#L30), [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/five-feed-recovery.yml#L37).
 
@@ -701,7 +701,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | --- | --- | --- |
 | [plan / step 1](../.github/workflows/observation-refresh.yml#L35) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 | [refresh / Checkout exact recovery controller](../.github/workflows/observation-refresh.yml#L87) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
-| [refresh / Checkout unchanged qualified five-feed producers](../.github/workflows/observation-refresh.yml#L94) | <code>weatherx-hq/atmos</code> | <code>7b084d7f862208eb9c9da0c796e870d54678a08d</code> |
+| [refresh / Checkout unchanged qualified five-feed producers](../.github/workflows/observation-refresh.yml#L94) | <code>weatherx-hq/atmos</code> | <code>8a1eef9cfded33df44738c4e45f16b1f597008af</code> |
 
 Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/observation-refresh.yml#L64), [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/observation-refresh.yml#L71), [OBSERVATION_REFRESH_ENABLED](../.github/workflows/observation-refresh.yml#L45).
 
@@ -879,7 +879,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
 | [wind100 / step 3](../.github/workflows/production-wind100-recurring.yml#L69) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [wind100 / Checkout the exact ordinary core producer](../.github/workflows/production-wind100-recurring.yml#L75) | <code>weatherx-hq/atmos</code> | <code>7b084d7f862208eb9c9da0c796e870d54678a08d</code> |
+| [wind100 / Checkout the exact ordinary core producer](../.github/workflows/production-wind100-recurring.yml#L75) | <code>weatherx-hq/atmos</code> | <code>8a1eef9cfded33df44738c4e45f16b1f597008af</code> |
 | [wind100 / Checkout the exact reviewed point-only augmenter and publisher](../.github/workflows/production-wind100-recurring.yml#L84) | <code>weatherx-hq/atmos</code> | <code>9174329db6ca8527569e67f14ef70406dedefb69</code> |
 
 Variable references (declared names only; values and activation unknown): [PRODUCTION_WIND100_APPROVED_SOURCE_SHA](../.github/workflows/production-wind100-recurring.yml#L41), [PRODUCTION_WIND100_CONTROLLER_SHA256](../.github/workflows/production-wind100-recurring.yml#L43), [PRODUCTION_WIND100_ENABLED](../.github/workflows/production-wind100-recurring.yml#L42), [PRODUCTION_WIND100_GC_READY_SHA256](../.github/workflows/production-wind100-recurring.yml#L44), [PRODUCTION_WIND100_R2_ACCOUNT_ID](../.github/workflows/production-wind100-recurring.yml#L45).
@@ -953,7 +953,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
 | [publisher / checkout authenticated current-run controller](../.github/workflows/publish-current-model-production.yml#L82) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
-| [publisher / checkout exact qualified Atmos component publisher](../.github/workflows/publish-current-model-production.yml#L89) | <code>weatherx-hq/atmos</code> | <code>7b084d7f862208eb9c9da0c796e870d54678a08d</code> |
+| [publisher / checkout exact qualified Atmos component publisher](../.github/workflows/publish-current-model-production.yml#L89) | <code>weatherx-hq/atmos</code> | <code>8a1eef9cfded33df44738c4e45f16b1f597008af</code> |
 
 Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/publish-current-model-production.yml#L53), [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/publish-current-model-production.yml#L52), [CURRENT_RUN_POINT_REUSE_MODEL](../.github/workflows/publish-current-model-production.yml#L73).
 
@@ -1481,7 +1481,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
 | [wind100 / step 3](../.github/workflows/staging-wind100-recurring.yml#L67) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [wind100 / Checkout the exact ordinary core producer](../.github/workflows/staging-wind100-recurring.yml#L73) | <code>weatherx-hq/atmos</code> | <code>7b084d7f862208eb9c9da0c796e870d54678a08d</code> |
+| [wind100 / Checkout the exact ordinary core producer](../.github/workflows/staging-wind100-recurring.yml#L73) | <code>weatherx-hq/atmos</code> | <code>8a1eef9cfded33df44738c4e45f16b1f597008af</code> |
 | [wind100 / Checkout the exact reviewed point-only augmenter and publisher](../.github/workflows/staging-wind100-recurring.yml#L82) | <code>weatherx-hq/atmos</code> | <code>9174329db6ca8527569e67f14ef70406dedefb69</code> |
 
 Variable references (declared names only; values and activation unknown): [STAGING_DATA_ISOLATION_APPROVED](../.github/workflows/staging-wind100-recurring.yml#L40), [STAGING_R2_ACCOUNT_ID](../.github/workflows/staging-wind100-recurring.yml#L43), [STAGING_WIND100_CONTROLLER_SHA256](../.github/workflows/staging-wind100-recurring.yml#L42), [STAGING_WIND100_ENABLED](../.github/workflows/staging-wind100-recurring.yml#L41).
