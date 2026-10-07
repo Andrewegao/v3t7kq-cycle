@@ -40,12 +40,19 @@ jobs:
           test "$GITHUB_REF" = refs/heads/main
           # Every manual dispatch re-reads its literal confirmation from the event before any credential.
           CONFIRMATION="$(jq -r '.inputs.confirmation // ""' "$GITHUB_EVENT_PATH")"
+          CALLER="$(jq -r '.inputs.caller // ""' "$GITHUB_EVENT_PATH")"
+          CHAIN_RUN_ID="$(jq -r '.inputs.chain_run_id // ""' "$GITHUB_EVENT_PATH")"
           case "$FIVE_FEED_MODE:$GITHUB_EVENT_NAME:$GITHUB_WORKFLOW_REF" in
             "recovery:workflow_dispatch:Andrewegao/v3t7kq-cycle/.github/workflows/five-feed-recovery.yml@refs/heads/main")
               test "$CONFIRMATION" = 'RECOVER FIVE OBSERVATION FEEDS' ;;
             "scheduled:schedule:Andrewegao/v3t7kq-cycle/.github/workflows/observation-refresh.yml@refs/heads/main") ;;
             "scheduled:workflow_dispatch:Andrewegao/v3t7kq-cycle/.github/workflows/observation-refresh.yml@refs/heads/main")
-              test "$CONFIRMATION" = 'RECOVER FIVE OBSERVATION FEEDS' ;;
+              # The chain caller's run id was verified against the Actions API by the plan job.
+              if [ "$CALLER" = component-bake-chain ]; then
+                printf '%s\n' "$CHAIN_RUN_ID" | grep -Eqx '[1-9][0-9]{0,19}'
+              else
+                test "$CONFIRMATION" = 'RECOVER FIVE OBSERVATION FEEDS'
+              fi ;;
             *) echo "refusing an unadmitted observation caller" >&2; exit 2 ;;
           esac
           test "$ENABLED" = true

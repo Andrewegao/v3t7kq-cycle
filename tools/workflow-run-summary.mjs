@@ -164,12 +164,30 @@ export async function lockHolders({runId, token, fetcher = fetch, now, only = nu
 }
 
 const CONFIRMATION = 'RECOVER FIVE OBSERVATION FEEDS';
+// observation-chain.yml dispatches the lane with this caller and its own run id. The id is checked
+// against the Actions API, so typing the caller by hand is not a way around the literal.
+export const CHAIN_CALLER = 'component-bake-chain';
+export const CHAIN_WORKFLOW = '.github/workflows/observation-chain.yml';
+export const CHAIN_MAX_AGE_MINUTES = 15;
+export async function chainCallerVerified({runId, token, fetcher, now}) {
+  if (!/^[1-9]\d{0,19}$/.test(runId ?? '') || !token) return false;
+  try {
+    const run = await github(`/actions/runs/${runId}`, token, fetcher);
+    const minutes = minutesSince(run.created_at, now);
+    return run.path === CHAIN_WORKFLOW && run.event === 'workflow_run' && run.head_branch === 'main'
+      && minutes !== null && minutes <= CHAIN_MAX_AGE_MINUTES;
+  } catch { return false; }
+}
 // The observation lane's secret-free plan: refuse an unconfirmed manual dispatch, name a stuck
 // observation lock (red), and stand aside while a manual recovery is queued or running so the
-// schedule never cancels it (GitHub keeps one pending job per concurrency group).
+// schedule never cancels it (GitHub keeps one pending job per concurrency group). A verified
+// component-bake chain dispatch is planned exactly like the schedule.
 export async function observationPlan({env, event, token, fetcher = fetch, now}) {
   const lines = [];
-  if (env.GITHUB_EVENT_NAME === 'workflow_dispatch' && event?.inputs?.confirmation !== CONFIRMATION)
+  if (env.GITHUB_EVENT_NAME === 'workflow_dispatch' && event?.inputs?.caller === CHAIN_CALLER) {
+    if (!await chainCallerVerified({runId: event?.inputs?.chain_run_id, token, fetcher, now}))
+      return {run: false, code: 1, text: `## Observation refresh: REFUSED\n\nThe \`${CHAIN_CALLER}\` caller must name an observation-chain.yml run on main from the last ${CHAIN_MAX_AGE_MINUTES} minutes. Nothing was refreshed.\n`};
+  } else if (env.GITHUB_EVENT_NAME === 'workflow_dispatch' && event?.inputs?.confirmation !== CONFIRMATION)
     return {run: false, code: 1, text: `## Observation refresh: REFUSED\n\nA manual dispatch must enter \`${CONFIRMATION}\`. Nothing was refreshed.\n`};
   const holders = await lockHolders({runId: env.GITHUB_RUN_ID, token, fetcher, now, only: ['observations']});
   const stuck = (holders ?? []).filter(holder => holder.stuck);

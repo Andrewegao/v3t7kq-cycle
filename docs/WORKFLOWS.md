@@ -6,9 +6,9 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `9b4dd4aecc839368d4df5cc2dc8a34af047aff97027a8174a0cec2975fc61b04`.
+Source digest (registry and workflow bytes): `1cca56ad1d1bd02650b592a5ee2ef5e5e4c1a8701559f5a31bf533b6f1663ca9`.
 
-63 workflows. Ordering and output are deterministic; no API request or clock is used.
+64 workflows. Ordering and output are deterministic; no API request or clock is used.
 
 | Workflow | Family / subsystem | Lifecycle | Purpose | Runbook |
 | --- | --- | --- | --- | --- |
@@ -35,6 +35,7 @@ Source digest (registry and workflow bytes): `9b4dd4aecc839368d4df5cc2dc8a34af04
 | [hydrology](#hydrology) | archives / Hydrology | manual-supported | Prepare hydrology artifacts through the explicit staging path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [model-inputs](#model-inputs) | staging / Experimental models | manual-supported | Collect isolated experimental model inputs with bounded provider concurrency. | [guide](../docs/MODEL_CLOUD_INPUTS.md) |
 | [nam-hi-diagnostic](#nam-hi-diagnostic) | staging / Experimental models | diagnostic | Diagnose a bounded NAM-HI acquisition without broadening publication authority. | [guide](../docs/nam-hi-cloud-diagnostic.md) |
+| [observation-chain](#observation-chain) | maintenance / Observation component refresh | recurring | On each component bake run, dispatch the observation lane in scheduled mode when it is enabled, idle and last started over 25 minutes ago. | [guide](../docs/observation-refresh.md) |
 | [observation-refresh](#observation-refresh) | maintenance / Observation component refresh | recurring | Refresh METAR, SYNOP, buoys, OpenAQ and fire components every 30 minutes, independent of every model collector. | [guide](../docs/observation-refresh.md) |
 | [platform-production-feed-routes](#platform-production-feed-routes) | releases / Production platform | manual-supported | Attach and verify only the missing production USGS and composed-hazard Worker routes. | [guide](../docs/platform-production-feed-routes.md) |
 | [platform-staging-transaction](#platform-staging-transaction) | releases / Platform staging | manual-supported | Execute one authorized Atmos backend rehearsal stage against frozen staging identities. | [guide](../docs/platform-staging-transaction.md) |
@@ -447,8 +448,8 @@ Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [recover / Checkout exact recovery controller](../.github/workflows/five-feed-recovery.yml#L53) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
-| [recover / Checkout unchanged qualified five-feed producers](../.github/workflows/five-feed-recovery.yml#L60) | <code>weatherx-hq/atmos</code> | <code>8a1eef9cfded33df44738c4e45f16b1f597008af</code> |
+| [recover / Checkout exact recovery controller](../.github/workflows/five-feed-recovery.yml#L60) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
+| [recover / Checkout unchanged qualified five-feed producers](../.github/workflows/five-feed-recovery.yml#L67) | <code>weatherx-hq/atmos</code> | <code>8a1eef9cfded33df44738c4e45f16b1f597008af</code> |
 
 Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/five-feed-recovery.yml#L30), [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/five-feed-recovery.yml#L37).
 
@@ -678,32 +679,57 @@ Checkout declarations (not a claim of approval or checkout success):
 Variable references (declared names only; values and activation unknown): none detected.
 
 
-## observation-refresh
+## observation-chain
 
-[.github/workflows/observation-refresh.yml](../.github/workflows/observation-refresh.yml#L1) · <code>Refresh observation and fire components</code>
+[.github/workflows/observation-chain.yml](../.github/workflows/observation-chain.yml#L1) · <code>Chain observation refresh to the component bake</code>
 
-Declared triggers: [schedule](../.github/workflows/observation-refresh.yml#L15) <code>["14,44 * * * *"]</code>; [workflow_dispatch](../.github/workflows/observation-refresh.yml#L17); input names <code>["confirmation"]</code>.
+Declared triggers: [workflow_run](../.github/workflows/observation-chain.yml#L14) <code>{"workflows":["WeatherX component bake"],"types":["requested"]}</code>.
 
 Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: not declared.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [plan](../.github/workflows/observation-refresh.yml#L27) ← no needs | <code>ubuntu-24.04</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
-| [refresh](../.github/workflows/observation-refresh.yml#L49) ← <code>plan</code> | <code>ubuntu-24.04</code> | <code>production</code> | <code>60</code> | <code>{"group":"weatherx-observation-components-production","cancel-in-progress":false}</code> | not declared | inherits workflow/default policy |
+| [dispatch](../.github/workflows/observation-chain.yml#L18) ← no needs | <code>ubuntu-24.04</code> | not declared | <code>3</code> | <code>{"group":"weatherx-observation-chain","cancel-in-progress":false}</code> | not declared | <code>{"contents":"read","actions":"write"}</code> |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [refresh](../.github/workflows/observation-refresh.yml#L50): <code>${{ needs.plan.outputs.run == 'true' }}</code>
+- [dispatch](../.github/workflows/observation-chain.yml#L18): <code>${{ vars.OBSERVATION_REFRESH_ENABLED == 'true' }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [plan / step 1](../.github/workflows/observation-refresh.yml#L35) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [refresh / Checkout exact recovery controller](../.github/workflows/observation-refresh.yml#L87) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
-| [refresh / Checkout unchanged qualified five-feed producers](../.github/workflows/observation-refresh.yml#L94) | <code>weatherx-hq/atmos</code> | <code>8a1eef9cfded33df44738c4e45f16b1f597008af</code> |
+| [dispatch / step 1](../.github/workflows/observation-chain.yml#L29) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
-Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/observation-refresh.yml#L64), [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/observation-refresh.yml#L71), [OBSERVATION_REFRESH_ENABLED](../.github/workflows/observation-refresh.yml#L45).
+Variable references (declared names only; values and activation unknown): [OBSERVATION_REFRESH_ENABLED](../.github/workflows/observation-chain.yml#L18).
+
+
+## observation-refresh
+
+[.github/workflows/observation-refresh.yml](../.github/workflows/observation-refresh.yml#L1) · <code>Refresh observation and fire components</code>
+
+Declared triggers: [schedule](../.github/workflows/observation-refresh.yml#L17) <code>["14,44 * * * *"]</code>; [workflow_dispatch](../.github/workflows/observation-refresh.yml#L19); input names <code>["confirmation","caller","chain_run_id"]</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: not declared.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [plan](../.github/workflows/observation-refresh.yml#L40) ← no needs | <code>ubuntu-24.04</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
+| [refresh](../.github/workflows/observation-refresh.yml#L62) ← <code>plan</code> | <code>ubuntu-24.04</code> | <code>production</code> | <code>60</code> | <code>{"group":"weatherx-observation-components-production","cancel-in-progress":false}</code> | not declared | inherits workflow/default policy |
+
+Declared job conditions (additional step/helper checks may apply):
+
+- [refresh](../.github/workflows/observation-refresh.yml#L63): <code>${{ needs.plan.outputs.run == 'true' }}</code>
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [plan / step 1](../.github/workflows/observation-refresh.yml#L48) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [refresh / Checkout exact recovery controller](../.github/workflows/observation-refresh.yml#L107) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
+| [refresh / Checkout unchanged qualified five-feed producers](../.github/workflows/observation-refresh.yml#L114) | <code>weatherx-hq/atmos</code> | <code>8a1eef9cfded33df44738c4e45f16b1f597008af</code> |
+
+Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/observation-refresh.yml#L77), [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/observation-refresh.yml#L84), [OBSERVATION_REFRESH_ENABLED](../.github/workflows/observation-refresh.yml#L58).
 
 
 ## platform-production-feed-routes

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {bakeMarkdown, bakeRows, bakeMode, componentMarkdown, lockHolders, holderJobName, main, MODELS, observationPlan, OBSERVATION_LOCK} from '../tools/workflow-run-summary.mjs';
+import {bakeMarkdown, bakeRows, bakeMode, componentMarkdown, lockHolders, holderJobName, main, MODELS, observationPlan, OBSERVATION_LOCK, CHAIN_CALLER} from '../tools/workflow-run-summary.mjs';
 
 const NOW = Date.parse('2026-10-06T18:00:00Z');
 const at = minutes => new Date(NOW - minutes * 60000).toISOString();
@@ -201,4 +201,46 @@ test('a holder whose deployment is older than the newest 100 is still stuck, and
   responses['/actions/runs/60/jobs?per_page=100'] = {jobs: [{id: 600, name: 'recover', status: 'waiting', started_at: at(10)}]};
   const aside = await observationPlan({env: {GITHUB_RUN_ID: '1', GITHUB_EVENT_NAME: 'schedule', ENABLED: 'true'}, event: {}, token: 'fixture', fetcher, now: NOW});
   assert.equal(aside.code, 0);assert.match(aside.text, /Manual recovery run 60 is waiting/);
+});
+
+test('a verified component-bake chain dispatch plans like the schedule; an unverified one is REFUSED', async () => {
+  const chainRun = {id: 37600000001, path: '.github/workflows/observation-chain.yml', event: 'workflow_run', head_branch: 'main', created_at: at(1)};
+  const responses = {'/actions/runs?status=waiting&per_page=50': {workflow_runs: []}, '/actions/runs?status=in_progress&per_page=50': {workflow_runs: []},
+    '/actions/runs/37600000001': chainRun};
+  const requested = [];
+  const fetcher = async url => { const path = url.replace('https://api.github.com/repos/Andrewegao/v3t7kq-cycle', '');requested.push(path);
+    return responses[path] ? new Response(JSON.stringify(responses[path])) : new Response(JSON.stringify(path.includes('/statuses') ? [] : {workflow_runs: []})); };
+  const chained = (inputs = {}, ENABLED = 'true') => observationPlan({env: {GITHUB_RUN_ID: '1', GITHUB_EVENT_NAME: 'workflow_dispatch', ENABLED},
+    event: {inputs: {caller: CHAIN_CALLER, chain_run_id: '37600000001', ...inputs}}, token: 'fixture', fetcher, now: NOW});
+  assert.equal(CHAIN_CALLER, 'component-bake-chain');
+  // Chain caller -> the scheduled plan (subset admission happens in the refresh job's scheduled mode).
+  assert.deepEqual(await chained(), {run: true, code: 0, text: ''});
+  assert.ok(requested.includes('/actions/runs/37600000001'), 'the chain run id is checked against the Actions API');
+  const disabled = await chained({}, 'false');
+  assert.equal(disabled.run, false);assert.equal(disabled.code, 0);assert.match(disabled.text, /SKIPPED/);
+  // Chain caller while a recovery is queued -> SKIPPED (stand aside, green).
+  responses['/actions/workflows/five-feed-recovery.yml/runs?status=queued&per_page=10'] = {workflow_runs: [{id: 43}]};
+  const aside = await chained();
+  assert.equal(aside.run, false);assert.equal(aside.code, 0);assert.match(aside.text, /SKIPPED[\s\S]*Manual recovery run 43 is queued/);
+  delete responses['/actions/workflows/five-feed-recovery.yml/runs?status=queued&per_page=10'];
+  // Chain caller with a stuck observation lock holder -> BLOCKED (red).
+  responses['/actions/runs?status=waiting&per_page=50'] = {workflow_runs: [{id: 51, path: '.github/workflows/observation-refresh.yml', head_sha: 'f'.repeat(40)}]};
+  responses['/actions/runs/51/jobs?per_page=100'] = {jobs: [{id: 510, name: 'refresh', status: 'waiting', started_at: at(90)}]};
+  const blocked = await chained();
+  assert.equal(blocked.run, false);assert.equal(blocked.code, 1);assert.match(blocked.text, /BLOCKED[\s\S]*run 51 \(observation-refresh\.yml\) job "refresh"/);
+  responses['/actions/runs?status=waiting&per_page=50'] = {workflow_runs: []};
+  // A hand-typed chain caller is refused unless it names a recent observation-chain.yml run on main.
+  for (const [inputs, run] of [[{chain_run_id: ''}, null], [{chain_run_id: '12x'}, null], [{chain_run_id: '99'}, null],
+    [{}, {...chainRun, path: '.github/workflows/catalog-bake.yml'}], [{}, {...chainRun, event: 'workflow_dispatch'}],
+    [{}, {...chainRun, head_branch: 'feature'}], [{}, {...chainRun, created_at: at(16)}],
+    [{confirmation: 'RECOVER FIVE OBSERVATION FEEDS'}, {...chainRun, created_at: at(60)}]]) {
+    responses['/actions/runs/37600000001'] = run ?? chainRun;
+    const refused = await chained(inputs);
+    assert.equal(refused.run, false, JSON.stringify(inputs));assert.equal(refused.code, 1);assert.match(refused.text, /REFUSED/);
+  }
+  // A manual dispatch without the literal is still REFUSED, with or without a caller value.
+  for (const inputs of [{}, {confirmation: 'yes'}, {caller: 'operator'}, {caller: '', confirmation: ''}]) {
+    const refused = await observationPlan({env: {GITHUB_RUN_ID: '1', GITHUB_EVENT_NAME: 'workflow_dispatch', ENABLED: 'true'}, event: {inputs}, token: 'fixture', fetcher, now: NOW});
+    assert.equal(refused.run, false);assert.equal(refused.code, 1);assert.match(refused.text, /must enter `RECOVER FIVE OBSERVATION FEEDS`/);
+  }
 });

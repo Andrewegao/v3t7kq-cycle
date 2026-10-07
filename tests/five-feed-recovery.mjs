@@ -2,7 +2,9 @@ import test from 'node:test';
 import * as controller from '../tools/five-feed-recovery.mjs';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {readFileSync} from 'node:fs';
+import {readFileSync,writeFileSync,mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {authenticateCatalog,authenticateRelease,mountPreflight,verifySuccessor,candidatesFor,inventoryDigest,validateStagedManifest,refreshBaseline,readPublicAliases,FEEDS,SOURCE}
   from '../tools/five-feed-recovery.mjs';
 
@@ -90,7 +92,7 @@ test('observation lane owns its own lock, fixed source, scoped key, and stage th
   assert.doesNotMatch(plan,/environment:|concurrency:|secrets\.|: write/);
   assert.match(plan,/OBSERVATION_REFRESH_ENABLED/);assert.match(plan,/actions: read/);
   assert.match(plan,/run: node tools\/workflow-run-summary\.mjs observation-plan/);
-  assert.match(workflow,/workflow_dispatch:\n    inputs:\n      confirmation:\n[\s\S]*?required: true/);
+  assert.match(workflow,/workflow_dispatch:\n    inputs:\n      confirmation:\n[\s\S]*?required: false/);
   const refresh=workflow.split('\n  refresh:\n')[1];
   assert.match(refresh,/environment: production/);
   assert.match(refresh,/group: weatherx-observation-components-production\n\s+cancel-in-progress: false/);
@@ -104,8 +106,11 @@ test('observation lane owns its own lock, fixed source, scoped key, and stage th
     '"scheduled:workflow_dispatch:Andrewegao/v3t7kq-cycle/.github/workflows/observation-refresh.yml@refs/heads/main"'])
     assert.ok(refresh.includes(caller),caller);
   assert.match(refresh,/test "\$CONFIRMATION" = 'RECOVER FIVE OBSERVATION FEEDS'/);
-  assert.match(refresh,/"scheduled:workflow_dispatch:[^"]+"\)\n\s+test "\$CONFIRMATION" = 'RECOVER FIVE OBSERVATION FEEDS' ;;/,
-    'a manual dispatch of the scheduled lane needs the literal confirmation; the schedule does not');
+  assert.match(refresh,/"scheduled:workflow_dispatch:[^"]+"\)\n(?:\s+#.*\n)?\s+if \[ "\$CALLER" = component-bake-chain \]; then\n\s+printf '%s\\n' "\$CHAIN_RUN_ID" \| grep -Eqx '\[1-9\]\[0-9\]\{0,19\}'\n\s+else\n\s+test "\$CONFIRMATION" = 'RECOVER FIVE OBSERVATION FEEDS'\n\s+fi ;;/,
+    'a manual dispatch of the scheduled lane needs the literal confirmation unless it is the chain caller; the schedule needs neither');
+  assert.match(refresh,/"recovery:workflow_dispatch:[^"]+"\)\n\s+test "\$CONFIRMATION" = 'RECOVER FIVE OBSERVATION FEEDS' ;;/,
+    'recovery always needs the literal; the chain caller never reaches it');
+  assert.match(workflow,/caller:\n\s+description: Leave empty[^\n]*\n\s+type: string\n\s+required: false/);
   assert.match(refresh,/"scheduled:schedule:[^"]+"\) ;;/);
   const collect=refresh.split('      - name: Collect all five')[1].split('      - name:')[0];
   assert.match(collect,/OPENAQ_API_KEY/);assert.match(collect,/--mode "\$FIVE_FEED_MODE"/);
@@ -128,9 +133,12 @@ test('each mode is bound to exactly one caller workflow and event set before any
     GITHUB_RUN_ID:'1',GITHUB_RUN_ATTEMPT:'1',CATALOG_ENDPOINT:'https://wrong.invalid'};
   const recovery='Andrewegao/v3t7kq-cycle/.github/workflows/five-feed-recovery.yml@refs/heads/main';
   const scheduled='Andrewegao/v3t7kq-cycle/.github/workflows/observation-refresh.yml@refs/heads/main';
-  const attempt=async env=>{
+  const events=mkdtempSync(join(tmpdir(),'five-feed-event-'));let n=0;
+  const literal={confirmation:'RECOVER FIVE OBSERVATION FEEDS'},chain={caller:'component-bake-chain',chain_run_id:'37600000000'};
+  const attempt=async (env,inputs=literal)=>{
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
-    Object.assign(process.env,base,env);
+    const GITHUB_EVENT_PATH=join(events,`event-${n++}.json`);writeFileSync(GITHUB_EVENT_PATH,JSON.stringify({inputs}));
+    Object.assign(process.env,base,{GITHUB_EVENT_PATH},env);
     try {await controller.main(['snapshot','/nonexistent-atmos','/nonexistent-state']);return 'passed';}
     catch(error) {return error.message;}
   };
@@ -146,6 +154,18 @@ test('each mode is bound to exactly one caller workflow and event set before any
       {FIVE_FEED_MODE:'',GITHUB_EVENT_NAME:'workflow_dispatch',GITHUB_WORKFLOW_REF:recovery},
       {FIVE_FEED_MODE:'scheduled',GITHUB_EVENT_NAME:'schedule',GITHUB_WORKFLOW_REF:scheduled,APPROVED_SHA:'0'.repeat(40)}])
       assert.equal(await attempt(env),'manual-approved-source',JSON.stringify(env));
+    // The chain caller is admitted only in scheduled mode; a dispatch otherwise needs the literal.
+    const dispatched={GITHUB_EVENT_NAME:'workflow_dispatch'};
+    assert.equal(await attempt({...dispatched,FIVE_FEED_MODE:'scheduled',GITHUB_WORKFLOW_REF:scheduled},chain),'production-catalog-endpoint');
+    for (const [env,inputs] of [[{FIVE_FEED_MODE:'recovery',GITHUB_WORKFLOW_REF:recovery},chain],
+      [{FIVE_FEED_MODE:'recovery',GITHUB_WORKFLOW_REF:recovery},{...chain,...literal}],
+      [{FIVE_FEED_MODE:'recovery',GITHUB_WORKFLOW_REF:recovery},{confirmation:'yes'}],
+      [{FIVE_FEED_MODE:'scheduled',GITHUB_WORKFLOW_REF:scheduled},{}],
+      [{FIVE_FEED_MODE:'scheduled',GITHUB_WORKFLOW_REF:scheduled},{caller:'component-bake-chain',chain_run_id:''}],
+      [{FIVE_FEED_MODE:'scheduled',GITHUB_WORKFLOW_REF:scheduled},{caller:'someone',confirmation:'yes'}]])
+      assert.equal(await attempt({...dispatched,...env},inputs),'manual-approved-source',JSON.stringify([env,inputs]));
+    assert.equal(await attempt({...dispatched,FIVE_FEED_MODE:'scheduled',GITHUB_WORKFLOW_REF:scheduled,GITHUB_EVENT_PATH:'/nonexistent'}),'manual-approved-source');
+    assert.equal(controller.MODES.recovery.chain,false);assert.equal(controller.MODES.scheduled.chain,true);
   } finally {
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
     Object.assign(process.env,saved);

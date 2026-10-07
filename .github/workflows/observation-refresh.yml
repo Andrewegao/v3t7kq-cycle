@@ -5,25 +5,38 @@
 # any family is refused. five-feed-recovery.yml runs this same refresh job (kept byte-identical
 # apart from its mode, checked by tests/five-feed-recovery.mjs) with the all-five contract.
 name: Refresh observation and fire components
-run-name: "${{ github.event_name == 'schedule' && 'observations: scheduled refresh of METAR, SYNOP, buoys, OpenAQ and fires' || 'observations: manually started refresh of METAR, SYNOP, buoys, OpenAQ and fires' }}"
+run-name: "${{ github.event_name == 'schedule' && 'observations: scheduled refresh of METAR, SYNOP, buoys, OpenAQ and fires' || inputs.caller == 'component-bake-chain' && 'observations: chained refresh of METAR, SYNOP, buoys, OpenAQ and fires' || 'observations: manually started refresh of METAR, SYNOP, buoys, OpenAQ and fires' }}"
 permissions:
   contents: read
 on:
   schedule:
-    # Every 30 minutes, offset from the component bake (8-59/10 and :07), the archive (:23),
-    # the external Wind100 dispatch (:35) and the whole bake (:30 at 02, 08, 14 and 20 UTC).
+    # Fallback only: observation-chain.yml dispatches this lane from the component-bake chain,
+    # because GitHub schedule events for this repository starved on 2026-10-07. Every 30 minutes,
+    # offset from the component bake (8-59/10 and :07), the archive (:23), the external Wind100
+    # dispatch (:35) and the whole bake (:30 at 02, 08, 14 and 20 UTC).
     - cron: '14,44 * * * *'
   workflow_dispatch:
     inputs:
       confirmation:
         description: Enter RECOVER FIVE OBSERVATION FEEDS to publish every admitted family now (refused families keep served data)
         type: string
-        required: true
+        # Not required by GitHub so the chain can dispatch without it; plan and source refuse a
+        # manual dispatch without the literal.
+        required: false
+      caller:
+        description: Leave empty. Set only by observation-chain.yml (component-bake-chain)
+        type: string
+        required: false
+      chain_run_id:
+        description: Leave empty. The observation-chain.yml run that dispatched this run
+        type: string
+        required: false
 jobs:
   plan:
-    # No environment, no lock, no secret. Refuses an unconfirmed manual dispatch, turns red when a
-    # job holding the observation lock is stuck at the production gate, stands aside while a manual
-    # recovery is queued or running, and reports a disabled schedule as SKIPPED.
+    # No environment, no lock, no secret. Refuses an unconfirmed manual dispatch or an unverified
+    # chain caller, turns red when a job holding the observation lock is stuck at the production
+    # gate, stands aside while a manual recovery is queued or running, and reports a disabled
+    # schedule as SKIPPED. A verified chain dispatch is planned exactly like the schedule.
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     permissions:
@@ -74,12 +87,19 @@ jobs:
           test "$GITHUB_REF" = refs/heads/main
           # Every manual dispatch re-reads its literal confirmation from the event before any credential.
           CONFIRMATION="$(jq -r '.inputs.confirmation // ""' "$GITHUB_EVENT_PATH")"
+          CALLER="$(jq -r '.inputs.caller // ""' "$GITHUB_EVENT_PATH")"
+          CHAIN_RUN_ID="$(jq -r '.inputs.chain_run_id // ""' "$GITHUB_EVENT_PATH")"
           case "$FIVE_FEED_MODE:$GITHUB_EVENT_NAME:$GITHUB_WORKFLOW_REF" in
             "recovery:workflow_dispatch:Andrewegao/v3t7kq-cycle/.github/workflows/five-feed-recovery.yml@refs/heads/main")
               test "$CONFIRMATION" = 'RECOVER FIVE OBSERVATION FEEDS' ;;
             "scheduled:schedule:Andrewegao/v3t7kq-cycle/.github/workflows/observation-refresh.yml@refs/heads/main") ;;
             "scheduled:workflow_dispatch:Andrewegao/v3t7kq-cycle/.github/workflows/observation-refresh.yml@refs/heads/main")
-              test "$CONFIRMATION" = 'RECOVER FIVE OBSERVATION FEEDS' ;;
+              # The chain caller's run id was verified against the Actions API by the plan job.
+              if [ "$CALLER" = component-bake-chain ]; then
+                printf '%s\n' "$CHAIN_RUN_ID" | grep -Eqx '[1-9][0-9]{0,19}'
+              else
+                test "$CONFIRMATION" = 'RECOVER FIVE OBSERVATION FEEDS'
+              fi ;;
             *) echo "refusing an unadmitted observation caller" >&2; exit 2 ;;
           esac
           test "$ENABLED" = true

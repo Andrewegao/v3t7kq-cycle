@@ -1,0 +1,42 @@
+# Starts the observation lane from the component-bake chain. GitHub stopped delivering this
+# repository's schedule events on 2026-10-07 (docs/observation-refresh.md), while the component
+# bake kept running because the Cloudflare scheduler Worker dispatches it every ten minutes. Each
+# component bake run requests this run, which dispatches observation-refresh.yml in its scheduled
+# mode only when OBSERVATION_REFRESH_ENABLED is true, the lane's newest run started more than 25
+# minutes ago and no lane or recovery run is queued, pending, waiting or in progress. The lane's
+# own cron stays as the fallback. No environment and no secret: this run can only dispatch.
+name: Chain observation refresh to the component bake
+run-name: "observations: chain check after component bake run ${{ github.event.workflow_run.id }}"
+permissions:
+  contents: read
+on:
+  workflow_run:
+    workflows: [WeatherX component bake]
+    types: [requested]
+jobs:
+  dispatch:
+    if: ${{ vars.OBSERVATION_REFRESH_ENABLED == 'true' }}
+    # Serializes the :07 slow and :08 HRRR dispatches so the second sees the first's lane run.
+    concurrency:
+      group: weatherx-observation-chain
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            tools/observation-chain.mjs
+            tools/workflow-run-summary.mjs
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: {node-version: '22'}
+      - name: Dispatch the observation lane when it is due and nothing is queued or running
+        env:
+          ENABLED: ${{ vars.OBSERVATION_REFRESH_ENABLED }}
+          GH_TOKEN: ${{ github.token }}
+        run: node tools/observation-chain.mjs
