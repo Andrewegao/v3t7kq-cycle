@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `1cca56ad1d1bd02650b592a5ee2ef5e5e4c1a8701559f5a31bf533b6f1663ca9`.
+Source digest (registry and workflow bytes): `5011cf6cd4b6e3ce3fd54f7668a83f95828cba526f1ef6a56232082445a2d584`.
 
 64 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -683,25 +683,25 @@ Variable references (declared names only; values and activation unknown): none d
 
 [.github/workflows/observation-chain.yml](../.github/workflows/observation-chain.yml#L1) · <code>Chain observation refresh to the component bake</code>
 
-Declared triggers: [workflow_run](../.github/workflows/observation-chain.yml#L14) <code>{"workflows":["WeatherX component bake"],"types":["requested"]}</code>.
+Declared triggers: [workflow_run](../.github/workflows/observation-chain.yml#L15) <code>{"workflows":["WeatherX component bake"],"types":["requested"],"branches":["main"]}</code>.
 
 Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: not declared.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [dispatch](../.github/workflows/observation-chain.yml#L18) ← no needs | <code>ubuntu-24.04</code> | not declared | <code>3</code> | <code>{"group":"weatherx-observation-chain","cancel-in-progress":false}</code> | not declared | <code>{"contents":"read","actions":"write"}</code> |
+| [dispatch](../.github/workflows/observation-chain.yml#L23) ← no needs | <code>ubuntu-24.04</code> | not declared | <code>4</code> | <code>{"group":"weatherx-observation-chain","cancel-in-progress":false}</code> | not declared | <code>{"contents":"read","actions":"write"}</code> |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [dispatch](../.github/workflows/observation-chain.yml#L18): <code>${{ vars.OBSERVATION_REFRESH_ENABLED == 'true' }}</code>
+- [dispatch](../.github/workflows/observation-chain.yml#L23): <code>${{ vars.OBSERVATION_REFRESH_ENABLED == 'true' &amp;&amp; (github.event.workflow_run.event == 'workflow_dispatch' &#124;&#124; github.event.workflow_run.event == 'schedule') &amp;&amp; github.event.workflow_run.head_repository.full_name == github.repository &amp;&amp; github.event.workflow_run.head_branch == 'main' }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [dispatch / step 1](../.github/workflows/observation-chain.yml#L29) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [dispatch / step 1](../.github/workflows/observation-chain.yml#L38) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
-Variable references (declared names only; values and activation unknown): [OBSERVATION_REFRESH_ENABLED](../.github/workflows/observation-chain.yml#L18).
+Variable references (declared names only; values and activation unknown): [OBSERVATION_REFRESH_ENABLED](../.github/workflows/observation-chain.yml#L24).
 
 
 ## observation-refresh

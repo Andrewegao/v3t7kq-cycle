@@ -5,7 +5,7 @@
 # any family is refused. five-feed-recovery.yml runs this same refresh job (kept byte-identical
 # apart from its mode, checked by tests/five-feed-recovery.mjs) with the all-five contract.
 name: Refresh observation and fire components
-run-name: "${{ github.event_name == 'schedule' && 'observations: scheduled refresh of METAR, SYNOP, buoys, OpenAQ and fires' || inputs.caller == 'component-bake-chain' && 'observations: chained refresh of METAR, SYNOP, buoys, OpenAQ and fires' || 'observations: manually started refresh of METAR, SYNOP, buoys, OpenAQ and fires' }}"
+run-name: "${{ github.event_name == 'schedule' && 'observations: scheduled refresh of METAR, SYNOP, buoys, OpenAQ and fires' || inputs.caller == 'component-bake-chain' && format('observations: refresh dispatched as component-bake chain run {0} (caller checked by plan)', inputs.chain_run_id) || 'observations: manually started refresh of METAR, SYNOP, buoys, OpenAQ and fires' }}"
 permissions:
   contents: read
 on:

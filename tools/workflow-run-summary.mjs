@@ -178,6 +178,20 @@ export async function chainCallerVerified({runId, token, fetcher, now}) {
       && minutes !== null && minutes <= CHAIN_MAX_AGE_MINUTES;
   } catch { return false; }
 }
+export const LANE_GAP_MINUTES = 25;
+const ACTIVE_STATUSES = ['queued', 'pending', 'waiting', 'requested', 'in_progress'];
+async function otherLaneRun({runId, token, fetcher, now}) {
+  const other = run => String(run.id) !== String(runId);
+  for (const status of ACTIVE_STATUSES) {
+    const run = ((await github(`/actions/workflows/observation-refresh.yml/runs?status=${status}&per_page=10`, token, fetcher)).workflow_runs ?? []).find(other);
+    if (run) return {id: run.id, why: `is ${status}`};
+  }
+  for (const run of ((await github('/actions/workflows/observation-refresh.yml/runs?per_page=10', token, fetcher)).workflow_runs ?? []).filter(other)) {
+    const minutes = minutesSince(run.run_started_at ?? run.created_at, now);
+    if (minutes !== null && minutes <= LANE_GAP_MINUTES) return {id: run.id, why: `started ${minutes} min ago (${String(run.event ?? '').replace(/[^a-z_]/g, '')})`};
+  }
+  return null;
+}
 // The observation lane's secret-free plan: refuse an unconfirmed manual dispatch, name a stuck
 // observation lock (red), and stand aside while a manual recovery is queued or running so the
 // schedule never cancels it (GitHub keeps one pending job per concurrency group). A verified
@@ -195,7 +209,7 @@ export async function observationPlan({env, event, token, fetcher = fetch, now})
   if (stuck.length) return {run: false, code: 1, text: ['## Observation refresh: BLOCKED (stuck writer lock)', '', ...lines, ''].join('\n')};
   let recovery = null;
   try {
-    for (const status of ['queued', 'pending', 'waiting', 'requested', 'in_progress']) {
+    for (const status of ACTIVE_STATUSES) {
       const runs = (await github(`/actions/workflows/five-feed-recovery.yml/runs?status=${status}&per_page=10`, token, fetcher)).workflow_runs ?? [];
       if (runs.length) { recovery = {id: runs[0].id, status}; break; }
     }
@@ -203,7 +217,14 @@ export async function observationPlan({env, event, token, fetcher = fetch, now})
   if (env.ENABLED !== 'true')
     return {run: false, code: 0, text: '## Observation refresh: SKIPPED\n\nNothing was refreshed. The repository variable OBSERVATION_REFRESH_ENABLED is not `true`; METAR, SYNOP, buoys, OpenAQ and fires keep their previously published data.\n'};
   if (recovery) return {run: false, code: 0, text: `## Observation refresh: SKIPPED\n\nManual recovery run ${recovery.id} is ${recovery.status}; this run stands aside so it cannot cancel that recovery. Nothing was refreshed by this run.\n`};
-  const notes = [holders === null || recovery === undefined ? 'Lock and recovery checks were unavailable (Actions API); refreshing anyway.' : null].filter(Boolean);
+  // The cron is the fallback behind the component-bake chain: it stands aside for any other lane run
+  // that is still active or started within the chain's 25-minute gap.
+  let overlap = null;
+  if (env.GITHUB_EVENT_NAME === 'schedule') {
+    try { overlap = await otherLaneRun({runId: env.GITHUB_RUN_ID, token, fetcher, now}); } catch { overlap = undefined; }
+    if (overlap) return {run: false, code: 0, text: `## Observation refresh: SKIPPED\n\nLane run ${overlap.id} ${overlap.why}; this scheduled run stands aside. Nothing was refreshed by this run.\n`};
+  }
+  const notes = [holders === null || recovery === undefined || overlap === undefined ? 'Lock, recovery or overlap checks were unavailable (Actions API); refreshing anyway.' : null].filter(Boolean);
   return {run: true, code: 0, text: notes.length ? `## Observation refresh plan\n\n${notes.join('\n')}\n` : ''};
 }
 

@@ -244,3 +244,30 @@ test('a verified component-bake chain dispatch plans like the schedule; an unver
     assert.equal(refused.run, false);assert.equal(refused.code, 1);assert.match(refused.text, /must enter `RECOVER FIVE OBSERVATION FEEDS`/);
   }
 });
+
+test('a scheduled run stands aside (green SKIPPED) for another lane run that is active or started in the last 25 minutes', async () => {
+  // Live shape: schedule run 37578857914 started 05:56:47Z, the :44 slot 12 minutes late.
+  const now = Date.parse('2026-10-07T05:56:50Z');
+  const self = {id: 37578857914, event: 'schedule', status: 'in_progress', run_started_at: '2026-10-07T05:56:47Z'};
+  const responses = {'/actions/runs?status=waiting&per_page=50': {workflow_runs: []}, '/actions/runs?status=in_progress&per_page=50': {workflow_runs: []},
+    '/actions/workflows/observation-refresh.yml/runs?status=in_progress&per_page=10': {workflow_runs: [self]},
+    '/actions/workflows/observation-refresh.yml/runs?per_page=10': {workflow_runs: [self, {id: 37578000001, event: 'workflow_dispatch', status: 'completed', run_started_at: '2026-10-07T05:44:30Z'}]}};
+  const fetcher = async url => { const path = url.replace('https://api.github.com/repos/Andrewegao/v3t7kq-cycle', '');
+    return responses[path] ? new Response(JSON.stringify(responses[path])) : new Response(JSON.stringify(path.includes('/statuses') ? [] : {workflow_runs: []})); };
+  const plan = (GITHUB_EVENT_NAME = 'schedule', event = {}) => observationPlan({env: {GITHUB_RUN_ID: String(self.id), GITHUB_EVENT_NAME, ENABLED: 'true'}, event, token: 'fixture', fetcher, now});
+  const recent = await plan();
+  assert.equal(recent.run, false);assert.equal(recent.code, 0);
+  assert.match(recent.text, /SKIPPED[\s\S]*Lane run 37578000001 started 12 min ago \(workflow_dispatch\); this scheduled run stands aside/);
+  // Older than 25 minutes, and only itself active: the scheduled run refreshes.
+  responses['/actions/workflows/observation-refresh.yml/runs?per_page=10'].workflow_runs[1].run_started_at = '2026-10-07T05:30:00Z';
+  assert.deepEqual(await plan(), {run: true, code: 0, text: ''});
+  // Another lane run still queued: stand aside.
+  responses['/actions/workflows/observation-refresh.yml/runs?status=queued&per_page=10'] = {workflow_runs: [{id: 37578000002}]};
+  assert.match((await plan()).text, /Lane run 37578000002 is queued/);
+  // Only the schedule stands aside; a manual dispatch with the literal is not affected.
+  assert.equal((await plan('workflow_dispatch', {inputs: {confirmation: 'RECOVER FIVE OBSERVATION FEEDS'}})).run, true);
+  // Unavailable overlap check: noted, refresh anyway (same as the lock and recovery checks).
+  const down = async url => url.includes('/workflows/observation-refresh.yml/') ? new Response('', {status: 503}) : fetcher(url);
+  const open = await observationPlan({env: {GITHUB_RUN_ID: '1', GITHUB_EVENT_NAME: 'schedule', ENABLED: 'true'}, event: {}, token: 'fixture', fetcher: down, now});
+  assert.equal(open.run, true);assert.match(open.text, /overlap checks were unavailable/);
+});

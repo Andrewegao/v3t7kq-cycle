@@ -2,9 +2,10 @@
 # repository's schedule events on 2026-10-07 (docs/observation-refresh.md), while the component
 # bake kept running because the Cloudflare scheduler Worker dispatches it every ten minutes. Each
 # component bake run requests this run, which dispatches observation-refresh.yml in its scheduled
-# mode only when OBSERVATION_REFRESH_ENABLED is true, the lane's newest run started more than 25
-# minutes ago and no lane or recovery run is queued, pending, waiting or in progress. The lane's
-# own cron stays as the fallback. No environment and no secret: this run can only dispatch.
+# mode only when OBSERVATION_REFRESH_ENABLED is true, the lane's newest non-schedule run started
+# more than 25 minutes ago and no lane or recovery run is queued, pending, waiting or in progress
+# (red when one has been for over 60 minutes). The lane's own cron stays as the fallback and stands
+# aside for the chain. No environment and no secret: this run can only dispatch.
 name: Chain observation refresh to the component bake
 run-name: "observations: chain check after component bake run ${{ github.event.workflow_run.id }}"
 permissions:
@@ -13,15 +14,23 @@ on:
   workflow_run:
     workflows: [WeatherX component bake]
     types: [requested]
+    branches: [main]
 jobs:
   dispatch:
-    if: ${{ vars.OBSERVATION_REFRESH_ENABLED == 'true' }}
+    # workflow_run matches by workflow name only, so a fork pull request carrying a workflow with
+    # the same name would also fire this. Accept only this repository's dispatched or scheduled
+    # runs on main; tools/observation-chain.mjs re-verifies the run through the API.
+    if: >-
+      ${{ vars.OBSERVATION_REFRESH_ENABLED == 'true'
+      && (github.event.workflow_run.event == 'workflow_dispatch' || github.event.workflow_run.event == 'schedule')
+      && github.event.workflow_run.head_repository.full_name == github.repository
+      && github.event.workflow_run.head_branch == 'main' }}
     # Serializes the :07 slow and :08 HRRR dispatches so the second sees the first's lane run.
     concurrency:
       group: weatherx-observation-chain
       cancel-in-progress: false
     runs-on: ubuntu-24.04
-    timeout-minutes: 3
+    timeout-minutes: 4
     permissions:
       contents: read
       actions: write
@@ -39,4 +48,5 @@ jobs:
         env:
           ENABLED: ${{ vars.OBSERVATION_REFRESH_ENABLED }}
           GH_TOKEN: ${{ github.token }}
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
         run: node tools/observation-chain.mjs
