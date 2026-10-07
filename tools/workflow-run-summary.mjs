@@ -228,7 +228,74 @@ export async function observationPlan({env, event, token, fetcher = fetch, now})
   return {run: true, code: 0, text: notes.length ? `## Observation refresh plan\n\n${notes.join('\n')}\n` : ''};
 }
 
-export function componentMarkdown({jobs, target, event, holders, now}) {
+// GitHub keeps one pending job per concurrency group, and a newer pending job cancels the older one
+// even with cancel-in-progress false. A whole-bake publisher (bake.yml `publish-<model> / publisher`,
+// or resume-model-publication.yml `resume (<model>) / publisher`) queued behind a running component job
+// shares weatherx-component-production-<model>, so a routine component dispatch for that model would
+// cancel it (bake run 37679425040 lost hrrr, ecmwf and gfs this way on 2026-10-07). The plan drops a
+// model from this component run while its publisher is queued, and also while the whole bake's collector
+// for it is still running (or has finished and its publisher is not listed yet): the publisher follows the
+// collector within seconds, and a component job that joined the group in that gap would replace it.
+// Component publishes for that model therefore pause during the whole bake's collector. It never drops a
+// model for any other reason, never touches staging targets, and keeps every model when the API is unreadable.
+export const WHOLE_BAKE_WORKFLOWS = Object.freeze(['.github/workflows/bake.yml', '.github/workflows/resume-model-publication.yml']);
+const QUEUED_JOB = ['queued', 'pending', 'waiting', 'requested'];
+const JOB_PAGES = 5;
+async function allJobs(runId, token, fetcher) {
+  const jobs = [];
+  for (let page = 1; page <= JOB_PAGES; page += 1) {
+    const body = await github(`/actions/runs/${runId}/jobs?per_page=100&page=${page}`, token, fetcher);
+    jobs.push(...(body.jobs ?? []));
+    if (!(body.total_count > jobs.length) || !(body.jobs ?? []).length) return jobs;
+  }
+  throw new Error('job list too long');
+}
+export function wholeBakeReasons(jobs) {
+  const reasons = new Map();
+  const add = (model, job, why) => { if (MODELS.includes(model) && !reasons.has(model)) reasons.set(model, {job: job.name, status: job.status, why}); };
+  for (const job of jobs) {
+    const publisher = /^(?:publish-([a-z-]+)|resume \(([a-z-]+)\)) \/ publisher$/.exec(job.name ?? '');
+    if (publisher && QUEUED_JOB.includes(job.status)) add(publisher[1] ?? publisher[2], job, 'its publisher is waiting for');
+  }
+  for (const job of jobs) {
+    const collector = /^(?:core|regional) \(([a-z-]+)\) \/ collector$/.exec(job.name ?? '');
+    if (!collector) continue;
+    const model = collector[1];
+    const publisherListed = jobs.some(other => other.name === `publish-${model} / publisher` || other.name === `publish-${model}`);
+    if (job.status !== 'completed') add(model, job, 'its collector runs first and its publisher then waits for');
+    else if (job.conclusion === 'success' && !publisherListed) add(model, job, 'its collector just finished and its publisher is about to wait for');
+  }
+  return reasons;
+}
+export async function componentPlan({env, token, fetcher = fetch}) {
+  let requested = null;
+  try { requested = JSON.parse(env.REQUESTED_MODELS ?? ''); } catch { requested = null; }
+  if (!Array.isArray(requested) || !requested.length || !requested.every(model => MODELS.includes(model)))
+    return {models: null, aside: [], text: '## Component bake plan\n\nRequested model list unreadable; the model job falls back to its own matrix.\n'};
+  if (env.CATALOG_TARGET !== 'production') return {models: requested, aside: [], text: ''};
+  const aside = [];
+  try {
+    if (!token) throw new Error('no token');
+    for (const path of WHOLE_BAKE_WORKFLOWS) {
+      // No server-side status filter: a run whose only live job is waiting on a lock may be listed as
+      // queued, pending or waiting rather than in_progress. Completed runs are skipped here instead.
+      const runs = (await github(`/actions/workflows/${path.split('/').pop()}/runs?per_page=10`, token, fetcher)).workflow_runs ?? [];
+      for (const run of runs.filter(run => run.path === path && run.head_branch === 'main' && run.status !== 'completed')) {
+        for (const [model, reason] of wholeBakeReasons(await allJobs(run.id, token, fetcher)))
+          if (requested.includes(model) && !aside.some(row => row.model === model)) aside.push({model, runId: run.id, ...reason});
+      }
+    }
+  } catch {
+    return {models: requested, aside: [], text: '## Component bake plan\n\nWhole-bake publishers could not be listed (Actions API); publishing every requested model.\n'};
+  }
+  const models = requested.filter(model => !aside.some(row => row.model === model));
+  if (!aside.length) return {models, aside, text: ''};
+  return {models, aside, text: ['## Component bake plan', '',
+    ...aside.map(row => `- ${row.model}: stood aside. Whole-bake run ${row.runId} job "${row.job}" is ${row.status}; ${row.why} ${lockName(row.model)}, and queuing here would cancel it. Component publishes for ${row.model} pause until that publisher has the lock; the previous component stays served.`),
+    models.length ? `\nPublishing: ${models.join(', ')}.` : '\nNo model is published by this run.', ''].join('\n')};
+}
+
+export function componentMarkdown({jobs, target, event, holders, now, stoodAside = []}) {
   const lines = [`## component bake summary (target: ${target.replace(/[^a-z]/g, '')})`, '',
     `Trigger: ${event.replace(/[^a-z_]/g, '')}. Ages are measured when this summary ran (${new Date(now).toISOString()}).`, '',
     '| Model | Outcome | Detail |', '| --- | --- | --- |'];
@@ -242,7 +309,12 @@ export function componentMarkdown({jobs, target, event, holders, now}) {
         : 'previous component kept';
     lines.push(`| ${model} | ${outcome} | ${detail} |`);
   }
-  if (!ours.length) lines.push('| (none) | unknown | job list unavailable |');
+  for (const row of stoodAside) if (MODELS.includes(row?.model))
+    lines.push(`| ${row.model} | stood aside | not queued: whole-bake run ${String(row.runId).replace(/[^0-9]/g, '')} job "${String(row.job).replace(/[^a-z0-9 ()/-]/g, '')}" would have been cancelled; previous component kept |`);
+  if (!ours.length && stoodAside.length) { /* every requested model is listed above */ }
+  else if (!ours.length && (jobs ?? []).some(job => job.name === 'model' && job.conclusion === 'skipped'))
+    lines.push('| (none) | skipped | no model job ran; see this run\'s plan job (stood aside for a queued whole-bake publisher) |');
+  else if (!ours.length) lines.push('| (none) | unknown | job list unavailable |');
   const stuck = (holders ?? []).filter(holder => holder.stuck);
   lines.push('', '### Writer locks');
   if (holders === null) lines.push('Lock holders could not be listed (Actions API unavailable).');
@@ -267,8 +339,10 @@ export async function main(argv, env = process.env, now = Date.now(), fetcher = 
     // Staging-target bakes hold staging locks; production lock reporting does not apply to them.
     const holders = env.CATALOG_TARGET === 'production'
       ? await lockHolders({runId: env.GITHUB_RUN_ID, token: env.GH_TOKEN, fetcher, now}) : [];
-    const {text, stuck} = componentMarkdown({jobs: jobs?.filter(job => job.name !== env.SUMMARY_JOB_NAME),
-      target: env.CATALOG_TARGET ?? '', event: env.GITHUB_EVENT_NAME ?? '', holders, now});
+    let stoodAside = [];
+    try { stoodAside = JSON.parse(env.STOOD_ASIDE || '[]'); } catch { stoodAside = []; }
+    const {text, stuck} = componentMarkdown({jobs: jobs?.filter(job => job.name !== env.SUMMARY_JOB_NAME && job.name !== 'plan'),
+      target: env.CATALOG_TARGET ?? '', event: env.GITHUB_EVENT_NAME ?? '', holders, now, stoodAside: Array.isArray(stoodAside) ? stoodAside : []});
     if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, text);
     console.log(text);
     return stuck.length ? 1 : 0;
@@ -282,7 +356,15 @@ export async function main(argv, env = process.env, now = Date.now(), fetcher = 
     console.log(plan.text || 'observation refresh planned');
     return plan.code;
   }
-  throw new Error('usage: workflow-run-summary.mjs bake|component|observation-plan');
+  if (kind === 'component-plan') {
+    const plan = await componentPlan({env, token: env.GH_TOKEN, fetcher});
+    if (env.GITHUB_OUTPUT && plan.models) appendFileSync(env.GITHUB_OUTPUT, `models=${JSON.stringify(plan.models)}\n`);
+    if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `stood_aside=${JSON.stringify(plan.aside.map(({model, runId, job}) => ({model, runId, job})))}\n`);
+    if (env.GITHUB_STEP_SUMMARY && plan.text) appendFileSync(env.GITHUB_STEP_SUMMARY, plan.text);
+    console.log(plan.text || `component bake planned: ${JSON.stringify(plan.models)}`);
+    return 0;
+  }
+  throw new Error('usage: workflow-run-summary.mjs bake|component|observation-plan|component-plan');
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

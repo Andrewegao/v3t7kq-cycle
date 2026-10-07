@@ -56,8 +56,15 @@ jobs:
         with: { python-version: '3.12' }
       - name: system eccodes
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libeccodes-dev
+          # apt-get update stalled on a mirror for 69 and 89 min on 2026-10-07 (normally 15-27 s for
+          # both commands); bound each attempt so a stall retries instead of eating the job timeout.
+          for attempt in 1 2 3; do
+            sudo timeout -k 10 180 apt-get update && sudo timeout -k 10 300 apt-get install -y libeccodes-dev && break
+            test "$attempt" -lt 3
+            # A dpkg killed mid-install leaves its database locked/half-configured; repair it first.
+            sudo timeout -k 10 120 dpkg --configure -a || true
+            sleep 15
+          done
       - name: venv + python deps
         run: |
           python -m venv data/.venv
