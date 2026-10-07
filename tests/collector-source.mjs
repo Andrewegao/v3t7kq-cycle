@@ -99,7 +99,8 @@ const closure = {
   productionPolicy: JSON.parse(readFileSync(new URL('../tools/production-wind100-policy.json', import.meta.url), 'utf8')),
 };
 test('reviewed maintenance, sealed collectors, publisher and diagnostic share the exact recovery source', () => {
-  assert.equal(validateMaintenanceSourceClosure(closure), '5e68af94c24517eaaaf6a9d25aec0cadc3d9b135');
+  assert.equal(validateMaintenanceSourceClosure(closure),
+    JSON.parse(readFileSync(new URL('../ops/atmos-production-source.json', import.meta.url), 'utf8')).atmosSha);
 });
 test('a whole-bake-only repin cannot silently relabel sealed collector inputs', () => {
   const original = validateMaintenanceSourceClosure(closure);

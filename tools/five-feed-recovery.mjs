@@ -6,7 +6,16 @@ import {resolve, join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 
-export const SOURCE = '5e68af94c24517eaaaf6a9d25aec0cadc3d9b135';
+// The single production producer declaration shared with every ordinary data workflow.
+export const SOURCE = JSON.parse(readFileSync(new URL('../ops/atmos-production-source.json', import.meta.url), 'utf8')).atmosSha;
+const WORKFLOW_PREFIX = 'Andrewegao/v3t7kq-cycle/.github/workflows/';
+// recovery: manual, literal confirmation, all five families or nothing (original contract).
+// scheduled: unattended; each admitted family publishes on its own and a refused family keeps
+// its served component. Every mode keeps the same CAS, staging, lock and readback guarantees.
+export const MODES = Object.freeze({
+  recovery: Object.freeze({events: ['workflow_dispatch'], workflowRef: `${WORKFLOW_PREFIX}five-feed-recovery.yml@refs/heads/main`, allFive: true}),
+  scheduled: Object.freeze({events: ['schedule', 'workflow_dispatch'], workflowRef: `${WORKFLOW_PREFIX}observation-refresh.yml@refs/heads/main`, allFive: false}),
+});
 export const FEEDS = Object.freeze({metar:'data-atmos/stations/',synop:'data-atmos/synop/',
   buoys:'data-atmos/buoys/',openaq:'data-atmos/openaq/',fires:'data-atmos/fires/'});
 const DATA = 'weatherx:weatherx-data-production';
@@ -28,6 +37,13 @@ const json = bytes => JSON.parse(bytes.toString('utf8'));
 // Match the unchanged publisher's directory traversal and JSON property order.
 export const inventoryDigest = files => sha(encoded(files.map(({path,size,sha256})=>({path,size,sha256}))
   .sort((a,b)=>a.path.localeCompare(b.path))));
+export function admittedFamilies(receipt, mode = 'recovery') {
+  const families=Object.keys(receipt?.families??{});
+  fail(Object.hasOwn(MODES,mode) && (receipt?.mode??'recovery')===mode && families.length>0 &&
+    families.every(family=>Object.hasOwn(FEEDS,family)) &&
+    (!MODES[mode].allFive || families.length===Object.keys(FEEDS).length),'all-five-collection-required');
+  return Object.keys(FEEDS).filter(family=>families.includes(family));
+}
 export function validateStagedManifest(family, candidate, bytes, receipt, artifactId) {
   const manifest=json(bytes),mount=FEEDS[family];
   fail(mount && ID.test(artifactId??'') && candidate.manifestKey===`components/obs-${family}/${artifactId}/component.json` &&
@@ -96,19 +112,48 @@ export function refreshBaseline(original, current, staged = null) {
   return current;
 }
 
-export function verifySuccessor(before, after, candidates) {
+export function verifySuccessor(before, after, candidates, families = Object.keys(FEEDS)) {
   fail(after.sequence===before.sequence+1 && after.parentCatalogId===before.catalogId &&
     (after.rollbackEpoch??0)===(before.rollbackEpoch??0), 'atomic-five-catalog-envelope');
-  const ids=Object.keys(FEEDS).map(f=>`obs-${f}`);
+  fail(families.length>0 && families.every(family=>Object.hasOwn(FEEDS,family)),'admitted-family-set');
+  // Only admitted targets may change; a refused family's served component is unrelated here.
+  const ids=families.map(f=>`obs-${f}`);
   assert.deepEqual(Object.keys(after.components).filter(id=>!ids.includes(id)).sort(),
     Object.keys(before.components).filter(id=>!ids.includes(id)).sort(), 'unrelated-component-set-changed');
   for (const [id,c] of Object.entries(before.components)) if (!ids.includes(id)) assert.deepEqual(after.components[id],c);
-  fail(candidates.length===5 && new Set(candidates.map(c=>c.manifestKey)).size===5,'exact-five-candidates');
+  fail(candidates.length===ids.length && new Set(candidates.map(c=>c.manifestKey)).size===ids.length,'exact-five-candidates');
   for (const candidate of candidates) {
     const id=candidate.manifestKey.split('/')[1];
     fail(ids.includes(id) && after.components[id]?.manifestKey===candidate.manifestKey &&
       after.components[id]?.manifestSha256===candidate.manifestSha256,'five-component-readback');
   }
+}
+
+// Scheduled readback runs while the hourly component bake and the whole bake keep promoting
+// unrelated models and releases. It accepts those advances and proves only what this lane owns:
+// every admitted obs-* entry is exactly this run's candidate, every refused family's entry is the
+// predecessor it left, and the rollback epoch is unchanged. snapshot() re-runs the whole-release
+// mount-shadow preflight, so an advanced release still cannot place files under an obs mount.
+// Manual recovery keeps the strict single-successor, unchanged-release rule.
+export function verifyScheduledReadback(before, after, candidates, families) {
+  fail(Number.isSafeInteger(after.sequence) && after.sequence>=before.sequence+1 &&
+    (after.rollbackEpoch??0)===(before.rollbackEpoch??0),'scheduled-successor-envelope');
+  fail(families.length>0 && families.every(family=>Object.hasOwn(FEEDS,family)) &&
+    candidates.length===families.length && new Set(candidates.map(c=>c.manifestKey)).size===families.length,'exact-five-candidates');
+  for (const family of Object.keys(FEEDS)) {
+    const id=`obs-${family}`;
+    if (families.includes(family)) {
+      const candidate=candidates.find(row=>row.manifestKey?.split('/')[1]===id);
+      fail(candidate && after.components[id]?.manifestKey===candidate.manifestKey &&
+        after.components[id]?.manifestSha256===candidate.manifestSha256,'five-component-readback');
+    } else assert.deepEqual(after.components[id]??null,before.components[id]??null,'retained-target-changed');
+  }
+}
+export function verifyStableTargets(mode, after, final) {
+  if (mode!=='scheduled') {assert.deepEqual(final,after,'catalog-changed-during-readback');return;}
+  fail((final.catalog.rollbackEpoch??0)===(after.catalog.rollbackEpoch??0),'catalog-changed-during-readback');
+  for (const family of Object.keys(FEEDS)) assert.deepEqual(final.catalog.components[`obs-${family}`]??null,
+    after.catalog.components[`obs-${family}`]??null,'catalog-changed-during-readback');
 }
 
 function run(command,args,env=process.env,timeout=60000,maxBuffer=1024**2) {
@@ -126,6 +171,7 @@ const save = (path,value) => {const fd=openSync(path,'wx');try{writeFileSync(fd,
 const load = path => json(readFileSync(path));
 
 function snapshot(fullInventory=true) {
+  const targets={};
   const pointer=json(r2('catalogs/current.json',DATA,1024**2));
   const catalog=authenticateCatalog(pointer,r2(`catalogs/snapshots/${pointer.catalogId}.json`,DATA,4*1024**2));
   const releasePointer=json(r2('releases/current.json',DATA,1024**2));
@@ -140,6 +186,8 @@ function snapshot(fullInventory=true) {
       ID.test(component.artifactId??'') && component.mounts?.length===1 && component.mounts[0]===mount &&
       component.quality?.status==='passed' && Number.isSafeInteger(component.objectCount) &&
       component.objectCount>0 && component.objectCount<=651 && HASH.test(component.inventorySha256??''),'predecessor-component-auth');
+    // Served bake time of the authenticated predecessor; reported when a family is refused.
+    targets[family]={generationTime:typeof component.generationTime==='string'?component.generationTime:null};
     // The authenticated schema-1 manifest commits the previous immutable bytes. Mount-shadow
     // admission needs the full remote path inventory, not repeated downloads of old payloads.
     if (fullInventory) {
@@ -150,7 +198,7 @@ function snapshot(fullInventory=true) {
         'predecessor-mount-inventory');
     }
   }
-  return {schemaVersion:1,pointer,catalog,releasePointer,releaseManifestSha256:releasePointer.manifestSha256};
+  return {schemaVersion:1,pointer,catalog,releasePointer,releaseManifestSha256:releasePointer.manifestSha256,targets};
 }
 
 function pristine(atmos) {
@@ -161,10 +209,10 @@ function pristine(atmos) {
   run('git',['-C',atmos,'diff','--exit-code','HEAD','--',...paths]);
 }
 
-export function candidatesFor(baseline, receipt, sourceReceipts) {
-  fail(Object.keys(receipt.families??{}).sort().join()===Object.keys(FEEDS).sort().join(),'all-five-collection-required');
-  fail(Object.keys(sourceReceipts).sort().join()===Object.keys(FEEDS).sort().join(),'exact-five-candidate-families');
-  return Object.keys(FEEDS).map(family=>{
+export function candidatesFor(baseline, receipt, sourceReceipts, mode = 'recovery') {
+  const families=admittedFamilies(receipt,mode);
+  fail(Object.keys(sourceReceipts).sort().join()===[...families].sort().join(),'exact-five-candidate-families');
+  return families.map(family=>{
     const candidate=sourceReceipts[family];const previous=baseline.catalog.components[`obs-${family}`];
     fail(candidate && safePath(candidate.manifestKey) && new RegExp(`^components/obs-${family}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}/component\\.json$`).test(candidate.manifestKey) &&
       HASH.test(candidate.manifestSha256??'') && candidate.expectedPreviousManifestSha256===(previous?.manifestSha256??null) &&
@@ -173,10 +221,10 @@ export function candidatesFor(baseline, receipt, sourceReceipts) {
   });
 }
 
-function verifyCollected(atmos,stage) {
+function verifyCollected(atmos,stage,mode) {
   pristine(atmos);
   return json(run(join(atmos,'data/.venv/bin/python'),[fileURLToPath(new URL('./five-feed-collect.py',import.meta.url)),
-    'verify',atmos,stage],baseEnv(),180000));
+    'verify',atmos,stage,'--mode',mode],baseEnv(),180000));
 }
 function baseEnv() {
   return Object.fromEntries(Object.entries(process.env).filter(([k])=>['PATH','HOME','TMPDIR'].includes(k)));
@@ -196,8 +244,9 @@ export async function settleCatalogCache(publicationDeadline) {
 export async function readPublicAliases(receipt,publicationDeadline) {
   const publicObjects=[];
   const jobs=[];
-  for (const [family,mount] of Object.entries(FEEDS)) for (const row of receipt.families[family].files)
+  for (const [family,mount] of Object.entries(FEEDS)) for (const row of receipt.families[family]?.files??[])
     for (const origin of ['https://weatherx.org','https://staging.weatherx.org']) jobs.push({family,mount,row,origin});
+  fail(jobs.length>0,'public-alias-set');
   const deadline=Math.min(Date.now()+8*60*1000,publicationDeadline-60000);
   fail(Number.isSafeInteger(deadline) && deadline>Date.now(),'public-readback-budget');
   const cancellation=new AbortController();
@@ -226,18 +275,19 @@ export async function readPublicAliases(receipt,publicationDeadline) {
 export async function main(argv) {
   const [operation,atmosArg,workArg,stageArg]=argv;const atmos=resolve(atmosArg??'');const work=resolve(workArg??'');
   fail(['snapshot','stage','promote','readback'].includes(operation) && atmosArg && workArg,'controller-arguments');
-  fail(process.env.GITHUB_REPOSITORY==='Andrewegao/v3t7kq-cycle' && process.env.GITHUB_REF==='refs/heads/main' &&
-    process.env.GITHUB_EVENT_NAME==='workflow_dispatch' && process.env.APPROVED_SHA===SOURCE &&
-    process.env.GITHUB_WORKFLOW_REF==='Andrewegao/v3t7kq-cycle/.github/workflows/five-feed-recovery.yml@refs/heads/main' &&
+  const mode=process.env.FIVE_FEED_MODE??'';
+  fail(Object.hasOwn(MODES,mode) && process.env.GITHUB_REPOSITORY==='Andrewegao/v3t7kq-cycle' && process.env.GITHUB_REF==='refs/heads/main' &&
+    MODES[mode].events.includes(process.env.GITHUB_EVENT_NAME) && process.env.APPROVED_SHA===SOURCE &&
+    process.env.GITHUB_WORKFLOW_REF===MODES[mode].workflowRef &&
     /^[1-9][0-9]*$/.test(process.env.GITHUB_RUN_ID??'') && /^[1-9][0-9]*$/.test(process.env.GITHUB_RUN_ATTEMPT??''),'manual-approved-source');
   fail(process.env.CATALOG_ENDPOINT===ENDPOINT,'production-catalog-endpoint');
   pristine(atmos);
   if (operation==='snapshot') {fail(!existsSync(work),'fresh-state-directory');mkdirSync(work);save(join(work,'baseline.json'),snapshot());return;}
   const baseline=load(join(work,'baseline.json'));const stage=resolve(stageArg??'');fail(stageArg,'collection-stage-required');
-  verifyCollected(atmos,stage);const receipt=load(join(stage,'receipt.json'));
+  verifyCollected(atmos,stage,mode);const receipt=load(join(stage,'receipt.json'));const families=admittedFamilies(receipt,mode);
   if (operation==='stage') {
     const staged=refreshBaseline(baseline,snapshot());save(join(work,'stage-baseline.json'),staged);const sourceReceipts={};
-    for (const [family,mount] of Object.entries(FEEDS)) {
+    for (const family of families) {const mount=FEEDS[family];
       const path=join(work,`${family}-candidate.json`);const previous=baseline.catalog.components[`obs-${family}`];
       run('bash',[join(atmos,'ops/platform/publish-r2-component.sh')],{...process.env,SOURCE_DIR:join(stage,family),
         COMPONENT_ID:`obs-${family}`,MOUNT:mount,GENERATION_TIME:receipt.families[family].generationTime,
@@ -252,29 +302,30 @@ export async function main(argv) {
         `obs-${family}-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`);
       sourceReceipts[family]=candidate;
     }
-    save(join(work,'candidates.json'),candidatesFor(baseline,receipt,sourceReceipts));return;
+    save(join(work,'candidates.json'),candidatesFor(baseline,receipt,sourceReceipts,mode));return;
   }
   const candidates=load(join(work,'candidates.json'));
-  fail(Array.isArray(candidates) && candidates.length===5,'five-candidates-required');
+  fail(Array.isArray(candidates) && candidates.length===families.length,'five-candidates-required');
   const candidateMap=Object.fromEntries(candidates.map(candidate=>[candidate.manifestKey?.split('/')[1]?.replace(/^obs-/,''),candidate]));
-  assert.deepEqual(candidatesFor(baseline,receipt,candidateMap),candidates,'five-candidate-binding');
-  for (const family of Object.keys(FEEDS)) validateStagedManifest(family,candidateMap[family],
+  assert.deepEqual(candidatesFor(baseline,receipt,candidateMap,mode),candidates,'five-candidate-binding');
+  const retained=Object.keys(FEEDS).filter(family=>!families.includes(family));
+  for (const family of families) validateStagedManifest(family,candidateMap[family],
     r2(candidateMap[family].manifestKey,COMPONENTS,1024**2),receipt.families[family],
     `obs-${family}-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`);
   if (operation==='promote') {
     const promotionBaseline=refreshBaseline(baseline,snapshot(),load(join(work,'stage-baseline.json')));
-    verifyCollected(atmos,stage);
+    verifyCollected(atmos,stage,mode);
     const publicationDeadline=Number(process.env.FIVE_FEED_PUBLICATION_DEADLINE_MS);
     fail(Number.isSafeInteger(publicationDeadline) && publicationDeadline>Date.now()+11*60*1000+CATALOG_CACHE_SETTLE_MS &&
       publicationDeadline<=Date.now()+18*60*1000,'readback-budget-required-before-promotion');
     save(join(work,'promotion-baseline.json'),promotionBaseline);
     save(join(work,'promotion-intent.json'),{operation:'promote-set',candidates,sourceSha:SOURCE,
       previousCatalogId:promotionBaseline.pointer.catalogId,previousRelease:promotionBaseline.releasePointer});
-    save(join(work,'public-promotion-intent.json'),{schemaVersion:1,status:'requested',sourceSha:SOURCE,
+    save(join(work,'public-promotion-intent.json'),{schemaVersion:1,status:'requested',sourceSha:SOURCE,mode,retained,
       runId:process.env.GITHUB_RUN_ID,runAttempt:Number(process.env.GITHUB_RUN_ATTEMPT),
       previousCatalogId:promotionBaseline.pointer.catalogId,previousReleaseId:promotionBaseline.releasePointer.releaseId,
       rollbackEpoch:promotionBaseline.catalog.rollbackEpoch??0,
-      components:Object.fromEntries(Object.keys(FEEDS).map(family=>[`obs-${family}`,{
+      components:Object.fromEntries(families.map(family=>[`obs-${family}`,{
         previousManifestSha256:baseline.catalog.components[`obs-${family}`]?.manifestSha256??null,
         candidateManifestSha256:candidateMap[family].manifestSha256}]))});
     const result=run('node',[join(atmos,'ops/platform/submit-catalog-mutation.mjs'),'promote-set',ENDPOINT,join(work,'candidates.json')],
@@ -284,12 +335,19 @@ export async function main(argv) {
   }
   fail(existsSync(join(work,'promotion-intent.json')) && existsSync(join(work,'promotion-result.json')),'acknowledged-promotion-required');
   const promotionBaseline=load(join(work,'promotion-baseline.json'));
-  const after=snapshot();assert.deepEqual(after.releasePointer,promotionBaseline.releasePointer,'whole-release-pointer-changed');
-  verifySuccessor({...promotionBaseline.catalog,catalogId:promotionBaseline.pointer.catalogId},after.catalog,candidates);
+  const after=snapshot();
+  if (mode==='scheduled') verifyScheduledReadback(promotionBaseline.catalog,after.catalog,candidates,families);
+  else {
+    assert.deepEqual(after.releasePointer,promotionBaseline.releasePointer,'whole-release-pointer-changed');
+    verifySuccessor({...promotionBaseline.catalog,catalogId:promotionBaseline.pointer.catalogId},after.catalog,candidates,families);
+  }
   await settleCatalogCache(Number(process.env.FIVE_FEED_PUBLICATION_DEADLINE_MS));
   const publicObjects=await readPublicAliases(receipt,Number(process.env.FIVE_FEED_PUBLICATION_DEADLINE_MS));
-  const qualified=verifyCollected(atmos,stage);const final=snapshot(false);assert.deepEqual(final,after,'catalog-changed-during-readback');
-  save(join(work,'acceptance.json'),{schemaVersion:1,status:'passed',sourceSha:SOURCE,runId:process.env.GITHUB_RUN_ID,
+  const qualified=verifyCollected(atmos,stage,mode);const final=snapshot(false);verifyStableTargets(mode,after,final);
+  // A retained family still serves its authenticated predecessor; report that bake time, never relabel it.
+  const retainedServed=Object.fromEntries(retained.map(family=>[family,{status:'retained',
+    servedGenerationTime:after.targets?.[family]?.generationTime??null}]));
+  save(join(work,'acceptance.json'),{schemaVersion:1,status:'passed',sourceSha:SOURCE,mode,retained:retainedServed,runId:process.env.GITHUB_RUN_ID,
     runAttempt:Number(process.env.GITHUB_RUN_ATTEMPT),catalogId:after.pointer.catalogId,previousCatalogId:promotionBaseline.pointer.catalogId,
     previousReleaseId:promotionBaseline.releasePointer.releaseId,families:qualified,publicObjects});
 }

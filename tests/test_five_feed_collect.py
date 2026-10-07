@@ -181,6 +181,60 @@ class AdmissionTests(unittest.TestCase):
                 self.assertEqual(current['fires']['fireRecords'],{view:{'retained':1,'current24h':1} for view in ['legacy','detail','overview']})
                 doc=json.loads((stage/'metar/metar.json').read_text());doc['source']='changed';write(stage/'metar/metar.json',doc)
                 with self.assertRaisesRegex(ValueError,'bytes-changed'):r.validate_all(Path('/none'),stage,receipt,NOW)
+    def test_scheduled_mode_admits_a_nonempty_subset_and_recovery_still_needs_all_five(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stage=Path(tmp);rows={}
+            for family in ['metar','synop']:
+                pack(family,stage/family);rows[family]=r.validate_family(family,stage/family,START,NOW)
+            receipt=dict(schemaVersion=1,sourceSha=r.SOURCE,mode='scheduled',startedAt=iso(START),families=rows)
+            with patch.object(r,'native_validate'):
+                current=r.validate_all(Path('/none'),stage,receipt,NOW,mode='scheduled')
+                self.assertEqual(sorted(current),['metar','synop'])
+                self.assertEqual(current['metar']['newestRecordTime'],iso(NOW-timedelta(minutes=10)))
+                self.assertEqual(current['metar']['generationTime'],rows['metar']['generationTime'])
+                for mode,bad in [('recovery',receipt),('scheduled',dict(receipt,mode='recovery')),
+                                 ('scheduled',dict(receipt,families={})),('scheduled',dict(receipt,families=dict(rows,gfs={}))),
+                                 ('unknown',receipt)]:
+                    with self.subTest(mode=mode,families=sorted(bad['families'])),self.assertRaises(ValueError):
+                        r.validate_all(Path('/none'),stage,bad,NOW,mode=mode)
+
+    def test_newest_record_time_is_the_latest_genuine_observation_not_the_bake_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp);doc=pack('metar',p);doc['stations'].insert(0,station(age=240));doc['stations'].append(station(age=3));write(p/'metar.json',doc)
+            self.assertEqual(r.validate_family('metar',p,START,NOW)['newestRecordTime'],iso(NOW-timedelta(minutes=3)))
+            p=Path(tmp)/'fires';fires(p)
+            self.assertEqual(r.validate_family('fires',p,START,NOW)['newestRecordTime'],iso(NOW-timedelta(hours=1)))
+
+    def test_scheduled_collection_keeps_admitted_families_when_fires_fail_and_recovery_refuses(self):
+        def fake_bake(atmos):
+            def run(args,**kwargs):
+                if args[0]=='git':return r.subprocess.CompletedProcess(args,0)
+                family=Path(args[1]).name[len('fetch_'):-len('.py')]
+                if family=='fires':raise r.subprocess.CalledProcessError(1,args)
+                now=datetime.now(timezone.utc);root=atmos/'app/public/data-atmos'/r.FAMILIES[family][0]
+                row=dict(id='real-id',icao='REAL',lat=0,lon=0,src='ndbc',obs_time=iso(now-timedelta(minutes=5)))
+                doc=dict(baked_at=iso(now),source='genuine source',stations=[row])
+                if family=='openaq':
+                    row.update(lic='Commercial license',v={'pm25':[12,10]});doc.update(freshness={'max_age_min':180},license={'allowed':['Commercial license']})
+                write(root/r.FAMILIES[family][1],doc);return r.subprocess.CompletedProcess(args,0)
+            return run
+        for mode in ['scheduled','recovery']:
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                atmos=Path(tmp)/'atmos';stage=Path(tmp)/'stage';(atmos/'data').mkdir(parents=True)
+                with patch.dict(r.os.environ,{'OPENAQ_API_KEY':'fixture-not-a-key'}),\
+                        patch.object(r.subprocess,'check_output',return_value=r.SOURCE+'\n'),\
+                        patch.object(r.subprocess,'run',side_effect=fake_bake(atmos)),patch.object(r,'native_validate'):
+                    if mode=='recovery':
+                        with self.assertRaisesRegex(ValueError,'family-refused:fires'):r.collect(atmos,stage,mode)
+                        self.assertFalse((stage/'receipt.json').exists())
+                    else:
+                        self.assertEqual(r.collect(atmos,stage,mode),['fires'])
+                        receipt=json.loads((stage/'receipt.json').read_text())
+                        self.assertEqual(receipt['mode'],'scheduled');self.assertEqual(sorted(receipt['families']),['buoys','metar','openaq','synop'])
+                outcomes=json.loads((stage/'collection-outcomes.json').read_text())
+                self.assertEqual(outcomes['fires'],{'status':'refused','stage':'collect','code':'native-process-failed'})
+                self.assertTrue(all(outcomes[f]['status']=='passed' for f in ['metar','synop','buoys','openaq']))
+
     def test_collector_subprocess_environment_excludes_writer_keys(self):
         with patch.dict(r.os.environ,{'OPENAQ_API_KEY':'private','CATALOG_PROMOTION_KEY':'private','GH_TOKEN':'private',
                                     'RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY':'private'}):

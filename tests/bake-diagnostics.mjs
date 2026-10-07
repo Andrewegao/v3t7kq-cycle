@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const workflow = await readFile(new URL('../.github/workflows/bake.yml', import.meta.url), 'utf8');
+const declaredSource = JSON.parse(await readFile(new URL('../ops/atmos-production-source.json', import.meta.url), 'utf8')).atmosSha;
 const joinedBake = workflow.split('      - name: bake → gate → publish immutable data release\n')[1]?.split('      - name:')[0];
 assert.ok(joinedBake, 'joined publisher step remains present');
 assert.match(joinedBake, /^          WEATHERX_BAKE_LIVE_PROGRESS: '1'$/m);
@@ -34,7 +35,7 @@ assert.doesNotMatch(diagnosticBlock, /\bawk\b|\btail\b|\bcat\b|substr\(/,
   'the final public diagnostic is projected by the schema validator only');
 assert.match(workflow, /path: \$\{\{ runner\.temp \}\}\/weatherx-bake-diagnostic\/receipt\.json/);
 assert.match(workflow, /bake-public-diagnostic\.mjs" retain/);
-assert.match(workflow, /continue-on-error: true[\s\S]*?ATMOS_SHA: 5e68af94c24517eaaaf6a9d25aec0cadc3d9b135/);
+assert.match(workflow, new RegExp(`continue-on-error: true[\\s\\S]*?ATMOS_SHA: ${declaredSource}`));
 const uploadBlock=workflow.split('      - name: upload encrypted bake diagnostic receipt\n')[1]?.split('\n  # Reporting')[0];
 assert.match(uploadBlock,/continue-on-error: true/,'diagnostic artifact outages never change the bake result');
 

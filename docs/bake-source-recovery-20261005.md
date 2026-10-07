@@ -1,5 +1,7 @@
 # Whole-data source recovery proposal · 2026-10-05
 
+> Superseded pin: on 2026-10-06 the same closure moved to `18fb5074d7472ffc5549704c0874f6e35516cef5`, now declared once in `ops/atmos-production-source.json` (see [observation refresh](observation-refresh.md#source-pin)). The text below records the 2026-10-05 proposal.
+
 This local source proposal moves ordinary model collectors and their consumers from Atmos
 `7a50f19714f22e04dc610a5aa33d311b7d1dc673` to the qualified merged master
 `5e68af94c24517eaaaf6a9d25aec0cadc3d9b135`. It is not an operational approval.

@@ -13,7 +13,12 @@ import subprocess
 import sys
 import time
 
-SOURCE = "5e68af94c24517eaaaf6a9d25aec0cadc3d9b135"
+# The single production producer declaration shared with every ordinary data workflow.
+SOURCE = json.loads((Path(__file__).resolve().parents[1] / "ops/atmos-production-source.json").read_text())["atmosSha"]
+# recovery: the manual lane publishes only when all five families pass (original contract).
+# scheduled: each admitted family publishes on its own; any refused family keeps its served
+# component, is reported with its age, and turns the run red after publication.
+MODES = ("recovery", "scheduled")
 FAMILIES = {
     "metar": ("stations/", "metar.json", 6 * 1024**2, 25000, 180),
     "synop": ("synop/", "stations.json", 6 * 1024**2, 30000, 420),
@@ -89,12 +94,15 @@ def validate_family(family, root, started, now):
     require(isinstance(rows, list) and 0 < len(rows) <= row_cap, "nonempty-row-bound")
     fresh = 0
     fresh_readings = 0
+    newest = None
     for row in rows:
         require(isinstance(row, dict), "record-schema")
         require(all(isinstance(row.get(k), (int, float)) and not isinstance(row[k], bool)
                     and math.isfinite(row[k]) for k in ("lat", "lon")), "record-coordinate")
         require(-90 <= row["lat"] <= 90 and -180 <= row["lon"] <= 180, "record-coordinate")
-        age = age_minutes(row.get("acq" if family == "fires" else "obs_time"), now)
+        record_time = stamp(row.get("acq" if family == "fires" else "obs_time"))
+        newest = record_time if newest is None or record_time > newest else newest
+        age = (now - record_time).total_seconds() / 60
         maximum = {"metar": 90, "synop": 360, "openaq": 180, "fires": 1440}.get(family)
         if family == "buoys":
             require(row.get("src") in ("ndbc", "dwd"), "buoy-source")
@@ -191,6 +199,7 @@ def validate_family(family, root, started, now):
     require({r["path"] for r in files} == expected, "unexpected-or-missing-mount-file")
     result = dict(family=family, componentId="obs-" + family, mount="data-atmos/" + FAMILIES[family][0],
                 generationTime=doc["baked_at"], rows=len(rows), currentRecords=fresh,
+                newestRecordTime=newest.isoformat().replace("+00:00", "Z"),
                 currentReadings=fresh_readings if family == "openaq" else None, missingFeeds=missing, files=files)
     if family == "fires":
         result["fireRecords"] = {"legacy": dict(retained=len(rows), current24h=fresh),
@@ -204,18 +213,28 @@ def native_validate(atmos, family, path, env):
                     "--validate", str(path)], env=env, timeout=30, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def validate_all(atmos, stage, receipt, now=None):
+def admitted(receipt, mode):
+    require(mode in MODES and receipt.get("mode", "recovery") == mode, "collection-mode-mismatch")
+    families = set(receipt.get("families", {}))
+    if mode == "recovery":
+        require(families == set(FAMILIES), "all-five-source-receipt-required")
+    require(families and families <= set(FAMILIES), "admitted-family-receipt-required")
+    return [family for family in FAMILIES if family in families]
+
+
+def validate_all(atmos, stage, receipt, now=None, mode="recovery"):
     now = now or datetime.now(timezone.utc)
-    require(receipt.get("schemaVersion") == 1 and receipt.get("sourceSha") == SOURCE and
-            set(receipt.get("families", {})) == set(FAMILIES), "all-five-source-receipt-required")
+    require(receipt.get("schemaVersion") == 1 and receipt.get("sourceSha") == SOURCE, "all-five-source-receipt-required")
     current = {}
-    for family in FAMILIES:
+    for family in admitted(receipt, mode):
         expected = receipt["families"][family]
         root = stage / family
         native_validate(atmos, family, root / FAMILIES[family][1], safe_env())
         actual = validate_family(family, root, stamp(receipt["startedAt"]), now)
         require(actual["files"] == expected["files"] and actual["generationTime"] == expected["generationTime"], "collected-bytes-changed")
-        current[family] = dict(rows=actual["rows"], currentRecords=actual["currentRecords"], currentReadings=actual["currentReadings"], missingFeeds=actual["missingFeeds"])
+        current[family] = dict(rows=actual["rows"], currentRecords=actual["currentRecords"], currentReadings=actual["currentReadings"],
+                               missingFeeds=actual["missingFeeds"], generationTime=actual["generationTime"],
+                               newestRecordTime=actual["newestRecordTime"])
         if family == "fires":
             current[family]["fireRecords"] = actual["fireRecords"]
     return current
@@ -225,13 +244,14 @@ def safe_env():
     return {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "TMPDIR", "SYSTEMROOT")}
 
 
-def collect(atmos, stage):
+def collect(atmos, stage, mode="recovery"):
+    require(mode in MODES, "collection-mode-mismatch")
     require(not stage.exists(), "fresh-external-stage-required")
     require(not stage.resolve().is_relative_to(atmos.resolve()), "stage-outside-source-required")
     require(subprocess.check_output(["git", "-C", str(atmos), "rev-parse", "HEAD"], text=True).strip() == SOURCE, "exact-atmos-source")
     require(subprocess.run(["git", "-C", str(atmos), "diff", "--quiet", "HEAD"]).returncode == 0, "pristine-producer-source")
     started = datetime.now(timezone.utc)
-    receipt = dict(schemaVersion=1, sourceSha=SOURCE, startedAt=started.isoformat(), families={})
+    receipt = dict(schemaVersion=1, sourceSha=SOURCE, mode=mode, startedAt=started.isoformat(), families={})
     stage.mkdir()
     deadline = time.monotonic() + 22 * 60
     def one(family):
@@ -267,20 +287,31 @@ def collect(atmos, stage):
                     "native-process-failed" if isinstance(error, subprocess.CalledProcessError) else "invalid-or-unavailable-output")
                 outcomes[family] = dict(status="refused", stage=phases[family], code=code)
     (stage / "collection-outcomes.json").write_text(json.dumps(outcomes, sort_keys=True) + "\n")
-    require(all(outcomes.get(family, {}).get("status") == "passed" for family in FAMILIES),
-            "family-refused:" + ",".join(family for family in FAMILIES if outcomes.get(family, {}).get("status") != "passed"))
-    validate_all(atmos, stage, receipt)
+    refused = [family for family in FAMILIES if outcomes.get(family, {}).get("status") != "passed"]
+    if mode == "recovery":
+        require(not refused, "family-refused:" + ",".join(refused))
+    else:
+        require(len(refused) < len(FAMILIES), "family-refused:" + ",".join(refused))
+    validate_all(atmos, stage, receipt, mode=mode)
     (stage / "receipt.json").write_text(json.dumps(receipt, sort_keys=True) + "\n")
+    return refused
 
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("operation", choices=("collect", "verify"));p.add_argument("atmos");p.add_argument("stage")
+    p.add_argument("--mode", choices=MODES, default="recovery")
     args = p.parse_args();atmos=Path(args.atmos).resolve();stage=Path(args.stage).resolve()
     try:
-        if args.operation == "collect": collect(atmos, stage)
+        if args.operation == "collect":
+            refused = collect(atmos, stage, args.mode)
+            if refused:
+                # Admitted families still publish; the run's final verdict step turns red.
+                print(json.dumps(json_file(stage / "collection-outcomes.json", 4096), sort_keys=True))
+                print("five-feed admission partial; refused: " + ",".join(refused))
+                return 0
         else:
-            print(json.dumps(validate_all(atmos, stage, json_file(stage / "receipt.json", 1024**2)), sort_keys=True))
+            print(json.dumps(validate_all(atmos, stage, json_file(stage / "receipt.json", 1024**2), mode=args.mode), sort_keys=True))
             return 0
         print("five-feed admission passed")
     except Exception:
