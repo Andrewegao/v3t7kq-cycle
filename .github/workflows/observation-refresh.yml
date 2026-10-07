@@ -73,7 +73,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      ATMOS_SHA: 8a1eef9cfded33df44738c4e45f16b1f597008af
+      ATMOS_SHA: e5fd5758aab079c32c6b077857e641ba40970d04
       APPROVED_SHA: ${{ vars.CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA }}
       CATALOG_ENDPOINT: https://weatherx.org/api/platform/internal/catalog
       FIVE_FEED_MODE: scheduled
@@ -115,7 +115,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: weatherx-hq/atmos
-          ref: 8a1eef9cfded33df44738c4e45f16b1f597008af
+          ref: e5fd5758aab079c32c6b077857e641ba40970d04
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: atmos
           persist-credentials: false
