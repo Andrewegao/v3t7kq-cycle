@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
-import {bakeMarkdown, bakeRows, bakeMode, componentMarkdown, lockHolders, holderJobName, main, MODELS, observationPlan, OBSERVATION_LOCK, CHAIN_CALLER} from '../tools/workflow-run-summary.mjs';
+import {mkdtempSync, readFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {bakeMarkdown, bakeRows, bakeMode, componentMarkdown, componentPlan, lockHolders, holderJobName, main, MODELS, observationPlan, OBSERVATION_LOCK, CHAIN_CALLER} from '../tools/workflow-run-summary.mjs';
 
 const NOW = Date.parse('2026-10-06T18:00:00Z');
 const at = minutes => new Date(NOW - minutes * 60000).toISOString();
@@ -270,4 +272,74 @@ test('a scheduled run stands aside (green SKIPPED) for another lane run that is 
   const down = async url => url.includes('/workflows/observation-refresh.yml/') ? new Response('', {status: 503}) : fetcher(url);
   const open = await observationPlan({env: {GITHUB_RUN_ID: '1', GITHUB_EVENT_NAME: 'schedule', ENABLED: 'true'}, event: {}, token: 'fixture', fetcher: down, now});
   assert.equal(open.run, true);assert.match(open.text, /overlap checks were unavailable/);
+});
+
+// Live shape of bake run 37679425040 (2026-10-07): publish-hrrr, publish-ecmwf and publish-gfs were queued
+// behind component jobs on weatherx-component-production-<model> and each was cancelled ("Canceling since a
+// higher priority waiting request ... exists") when the next routine component dispatch queued that model.
+const planResponses = () => ({
+  '/actions/workflows/bake.yml/runs?status=in_progress&per_page=10': {workflow_runs: [
+    {id: 37679425040, path: '.github/workflows/bake.yml', head_branch: 'main'},
+    {id: 5, path: '.github/workflows/bake.yml', head_branch: 'feature'}]},
+  '/actions/runs/37679425040/jobs?per_page=100': {jobs: [
+    {name: 'publish-hrrr / publisher', status: 'pending'}, {name: 'publish-gfs / publisher', status: 'queued'},
+    {name: 'publish-ecmwf / publisher', status: 'in_progress'}, {name: 'publish-nam / publisher', status: 'pending'},
+    {name: 'core (aifs) / collector', status: 'in_progress'}]},
+  '/actions/runs/5/jobs?per_page=100': {jobs: [{name: 'publish-ecmwf / publisher', status: 'pending'}]},
+});
+const planFetcher = (responses, requested = []) => async url => {
+  const path = url.replace('https://api.github.com/repos/Andrewegao/v3t7kq-cycle', '');requested.push(path);
+  return responses[path] ? new Response(JSON.stringify(responses[path])) : new Response('{}', {status: 500});
+};
+
+test('the component plan stands aside only for a model whose whole-bake publisher is queued on the same lock', async () => {
+  const env = models => ({CATALOG_TARGET: 'production', REQUESTED_MODELS: JSON.stringify(models)});
+  const hrrr = await componentPlan({env: env(['hrrr']), token: 'fixture', fetcher: planFetcher(planResponses())});
+  assert.deepEqual(hrrr.models, []);
+  assert.match(hrrr.text, /hrrr: stood aside\. Whole-bake run 37679425040 job "publish-hrrr \/ publisher" is pending for weatherx-component-production-hrrr/);
+  assert.match(hrrr.text, /No model is published by this run/);
+  // A running publisher already holds the lock (the component job just waits behind it), so ecmwf runs;
+  // a publisher on a non-main bake run and non-requested models (nam) are ignored.
+  const slow = await componentPlan({env: env(['ecmwf', 'gfs', 'aifs']), token: 'fixture', fetcher: planFetcher(planResponses())});
+  assert.deepEqual(slow.models, ['ecmwf', 'aifs']);assert.match(slow.text, /gfs: stood aside/);assert.doesNotMatch(slow.text, /nam|ecmwf: stood/);
+  const idle = planResponses();idle['/actions/runs/37679425040/jobs?per_page=100'] = {jobs: [{name: 'publish-hrrr / publisher', status: 'completed'}]};
+  assert.deepEqual(await componentPlan({env: env(['hrrr']), token: 'fixture', fetcher: planFetcher(idle)}), {models: ['hrrr'], text: ''});
+});
+
+test('the component plan never touches staging targets and fails open when the Actions API is unreadable', async () => {
+  const calls = [];
+  assert.deepEqual(await componentPlan({env: {CATALOG_TARGET: 'staging', REQUESTED_MODELS: '["hrrr"]'}, token: 'fixture', fetcher: planFetcher(planResponses(), calls)}),
+    {models: ['hrrr'], text: ''});
+  assert.deepEqual(calls, []);
+  for (const [token, responses] of [['fixture', {}], ['', planResponses()]]) {
+    const plan = await componentPlan({env: {CATALOG_TARGET: 'production', REQUESTED_MODELS: '["ecmwf","gfs","aifs"]'}, token, fetcher: planFetcher(responses)});
+    assert.deepEqual(plan.models, ['ecmwf', 'gfs', 'aifs']);assert.match(plan.text, /could not be listed/);
+  }
+  for (const bad of ['', 'not json', '[]', '["hrrr","x"]']) assert.equal((await componentPlan({env: {CATALOG_TARGET: 'production', REQUESTED_MODELS: bad}, token: 'fixture', fetcher: planFetcher(planResponses())})).models, null);
+  const dir = mkdtempSync(join(tmpdir(), 'component-plan-'));
+  const output = join(dir, 'out'), summary = join(dir, 'summary');
+  const code = await main(['component-plan'], {CATALOG_TARGET: 'production', REQUESTED_MODELS: '["hrrr"]', GH_TOKEN: 'fixture', GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary}, NOW, planFetcher(planResponses()));
+  assert.equal(code, 0);assert.equal(readFileSync(output, 'utf8'), 'models=[]\n');assert.match(readFileSync(summary, 'utf8'), /hrrr: stood aside/);
+  const {text} = componentMarkdown({jobs: [{name: 'model', conclusion: 'skipped'}, {name: 'summary'}], target: 'production', event: 'workflow_dispatch', holders: [], now: NOW});
+  assert.match(text, /\| \(none\) \| skipped \| no model job ran; see this run's plan job/);
+});
+
+test('the component bake plans before it queues, keeps the shared model locks, and falls back to the full matrix', () => {
+  const read = name => readFileSync(new URL(`../.github/workflows/${name}`, import.meta.url), 'utf8');
+  const catalog = read('catalog-bake.yml'), publisher = read('publish-current-model-production.yml');
+  const plan = catalog.split('\n  plan:\n')[1].split('\n  model:\n')[0];
+  const model = catalog.split('\n  model:\n')[1].split('\n  summary:\n')[0];
+  assert.doesNotMatch(plan, /secrets\.|environment:|concurrency:|: write/);
+  assert.match(plan, /actions: read/);assert.match(plan, /run: node tools\/workflow-run-summary\.mjs component-plan/);
+  assert.match(model, /^    needs: plan$/m);
+  assert.match(model, /if: \$\{\{ !cancelled\(\) && \(github\.event_name == 'workflow_dispatch' \|\| vars\.CATALOG_GITHUB_FALLBACK_DISABLED != 'true'\) && needs\.plan\.outputs\.models != '\[\]' \}\}/);
+  const requested = plan.match(/REQUESTED_MODELS: \$\{\{ (.+) \}\}$/m)[1];
+  assert.equal(model.match(/model: \$\{\{ fromJSON\(needs\.plan\.outputs\.models \|\| (.+)\) \}\}$/m)[1], requested, 'plan and fallback matrix must request the same models');
+  assert.match(model, /group: weatherx-component-\$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.target \|\| vars\.CATALOG_DEFAULT_TARGET \|\| 'staging' \}\}-\$\{\{ matrix\.model \}\}\n      cancel-in-progress: false/);
+  assert.match(publisher, /group: weatherx-component-production-\$\{\{ inputs\.model \}\}\n      cancel-in-progress: false/);
+  for (const name of ['bake.yml', 'catalog-bake.yml', 'publish-current-model-production.yml', 'collect-core-model.yml', 'collect-regional-model.yml']) {
+    const text = read(name);
+    assert.doesNotMatch(text, /sudo apt-get (update|install)/, `${name}: unbounded apt`);
+    assert.match(text, /sudo timeout -k 10 180 apt-get update && sudo timeout -k 10 300 apt-get install -y libeccodes-dev && break\n\s+test "\$attempt" -lt 3/, name);
+  }
 });

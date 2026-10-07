@@ -228,6 +228,44 @@ export async function observationPlan({env, event, token, fetcher = fetch, now})
   return {run: true, code: 0, text: notes.length ? `## Observation refresh plan\n\n${notes.join('\n')}\n` : ''};
 }
 
+// GitHub keeps one pending job per concurrency group, and a newer pending job cancels the older one
+// even with cancel-in-progress false. A whole-bake publisher (bake.yml `publish-<model> / publisher`)
+// that is queued behind a running component job shares weatherx-component-production-<model>, so a
+// routine component dispatch for that model would cancel it (bake run 37679425040 lost hrrr, ecmwf
+// and gfs this way on 2026-10-07). The plan drops only those models from this component run; the
+// publisher keeps its place and later dispatches publish the model as before. It never drops a model
+// for any other reason, never touches staging targets, and keeps every requested model when the
+// Actions API cannot be read.
+export const WHOLE_BAKE_WORKFLOW = '.github/workflows/bake.yml';
+const QUEUED_JOB = ['queued', 'pending', 'waiting', 'requested'];
+export async function componentPlan({env, token, fetcher = fetch}) {
+  let requested = null;
+  try { requested = JSON.parse(env.REQUESTED_MODELS ?? ''); } catch { requested = null; }
+  if (!Array.isArray(requested) || !requested.length || !requested.every(model => MODELS.includes(model)))
+    return {models: null, text: '## Component bake plan\n\nRequested model list unreadable; the model job falls back to its own matrix.\n'};
+  if (env.CATALOG_TARGET !== 'production') return {models: requested, text: ''};
+  const aside = [];
+  try {
+    if (!token) throw new Error('no token');
+    const runs = (await github(`/actions/workflows/bake.yml/runs?status=in_progress&per_page=10`, token, fetcher)).workflow_runs ?? [];
+    for (const run of runs.filter(run => run.path === WHOLE_BAKE_WORKFLOW && run.head_branch === 'main').slice(0, 5)) {
+      const jobs = (await github(`/actions/runs/${run.id}/jobs?per_page=100`, token, fetcher)).jobs ?? [];
+      for (const job of jobs) {
+        const model = /^publish-([a-z-]+) \/ publisher$/.exec(job.name ?? '')?.[1];
+        if (requested.includes(model) && QUEUED_JOB.includes(job.status) && !aside.some(row => row.model === model))
+          aside.push({model, runId: run.id, job: job.name, status: job.status});
+      }
+    }
+  } catch {
+    return {models: requested, text: '## Component bake plan\n\nWhole-bake publishers could not be listed (Actions API); publishing every requested model.\n'};
+  }
+  const models = requested.filter(model => !aside.some(row => row.model === model));
+  if (!aside.length) return {models, text: ''};
+  return {models, text: ['## Component bake plan', '',
+    ...aside.map(row => `- ${row.model}: stood aside. Whole-bake run ${row.runId} job "${row.job}" is ${row.status} for ${lockName(row.model)}; queuing here would cancel it. The previous component stays served until that publisher or a later dispatch publishes.`),
+    models.length ? `\nPublishing: ${models.join(', ')}.` : '\nNo model is published by this run.', ''].join('\n')};
+}
+
 export function componentMarkdown({jobs, target, event, holders, now}) {
   const lines = [`## component bake summary (target: ${target.replace(/[^a-z]/g, '')})`, '',
     `Trigger: ${event.replace(/[^a-z_]/g, '')}. Ages are measured when this summary ran (${new Date(now).toISOString()}).`, '',
@@ -242,7 +280,9 @@ export function componentMarkdown({jobs, target, event, holders, now}) {
         : 'previous component kept';
     lines.push(`| ${model} | ${outcome} | ${detail} |`);
   }
-  if (!ours.length) lines.push('| (none) | unknown | job list unavailable |');
+  if (!ours.length && (jobs ?? []).some(job => job.name === 'model' && job.conclusion === 'skipped'))
+    lines.push('| (none) | skipped | no model job ran; see this run\'s plan job (stood aside for a queued whole-bake publisher) |');
+  else if (!ours.length) lines.push('| (none) | unknown | job list unavailable |');
   const stuck = (holders ?? []).filter(holder => holder.stuck);
   lines.push('', '### Writer locks');
   if (holders === null) lines.push('Lock holders could not be listed (Actions API unavailable).');
@@ -282,7 +322,14 @@ export async function main(argv, env = process.env, now = Date.now(), fetcher = 
     console.log(plan.text || 'observation refresh planned');
     return plan.code;
   }
-  throw new Error('usage: workflow-run-summary.mjs bake|component|observation-plan');
+  if (kind === 'component-plan') {
+    const plan = await componentPlan({env, token: env.GH_TOKEN, fetcher});
+    if (env.GITHUB_OUTPUT && plan.models) appendFileSync(env.GITHUB_OUTPUT, `models=${JSON.stringify(plan.models)}\n`);
+    if (env.GITHUB_STEP_SUMMARY && plan.text) appendFileSync(env.GITHUB_STEP_SUMMARY, plan.text);
+    console.log(plan.text || `component bake planned: ${JSON.stringify(plan.models)}`);
+    return 0;
+  }
+  throw new Error('usage: workflow-run-summary.mjs bake|component|observation-plan|component-plan');
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

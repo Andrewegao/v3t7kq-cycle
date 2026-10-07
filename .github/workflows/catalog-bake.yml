@@ -28,11 +28,42 @@ on:
     - cron: '8-59/10 * * * *'
     - cron: '7 * * * *'
 jobs:
-  model:
-    environment: production
+  plan:
+    # No environment, lock or secret. GitHub keeps one pending job per concurrency group and the
+    # newer pending job cancels the older one, so queuing a model whose whole-bake publisher
+    # (bake.yml publish-<model>) is still waiting for the same lock would cancel that publisher.
+    # This job drops only those models from this run; it keeps every model if the API is unreadable.
     # Fail open: native schedules remain a publisher unless an operator explicitly
     # disables the fallback after the Cloudflare trigger set is verified live.
     if: ${{ github.event_name == 'workflow_dispatch' || vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      models: ${{ steps.plan.outputs.models }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: tools/workflow-run-summary.mjs
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Stand aside for a whole-bake publisher queued on the same model lock
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CATALOG_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || vars.CATALOG_DEFAULT_TARGET || 'staging' }}
+          REQUESTED_MODELS: ${{ github.event_name == 'workflow_dispatch' && inputs.model == 'slow' && '["ecmwf","gfs","aifs"]' || github.event_name == 'workflow_dispatch' && inputs.model != 'all' && format('["{0}"]', inputs.model) || github.event_name == 'workflow_dispatch' && '["ecmwf","gfs","hrrr","aifs"]' || github.event.schedule == '8-59/10 * * * *' && '["hrrr"]' || '["ecmwf","gfs","aifs"]' }}
+        run: node tools/workflow-run-summary.mjs component-plan
+  model:
+    needs: plan
+    environment: production
+    # Runs even if the plan job itself failed (then with the full matrix below), never when the
+    # plan stood aside for every requested model.
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true') && needs.plan.outputs.models != '[]' }}
     concurrency:
       group: weatherx-component-${{ github.event_name == 'workflow_dispatch' && inputs.target || vars.CATALOG_DEFAULT_TARGET || 'staging' }}-${{ matrix.model }}
       cancel-in-progress: false
@@ -40,7 +71,7 @@ jobs:
       fail-fast: false
       max-parallel: 4
       matrix:
-        model: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.model == 'slow' && '["ecmwf","gfs","aifs"]' || github.event_name == 'workflow_dispatch' && inputs.model != 'all' && format('["{0}"]', inputs.model) || github.event_name == 'workflow_dispatch' && '["ecmwf","gfs","hrrr","aifs"]' || github.event.schedule == '8-59/10 * * * *' && '["hrrr"]' || '["ecmwf","gfs","aifs"]') }}
+        model: ${{ fromJSON(needs.plan.outputs.models || github.event_name == 'workflow_dispatch' && inputs.model == 'slow' && '["ecmwf","gfs","aifs"]' || github.event_name == 'workflow_dispatch' && inputs.model != 'all' && format('["{0}"]', inputs.model) || github.event_name == 'workflow_dispatch' && '["ecmwf","gfs","hrrr","aifs"]' || github.event.schedule == '8-59/10 * * * *' && '["hrrr"]' || '["ecmwf","gfs","aifs"]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 210
     env:
@@ -89,8 +120,13 @@ jobs:
       - name: Install decode dependencies
         working-directory: atmos
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libeccodes-dev
+          # apt-get update stalled on a mirror for 69 and 89 min on 2026-10-07 (normally 15-27 s for
+          # both commands); bound each attempt so a stall retries instead of eating the job timeout.
+          for attempt in 1 2 3; do
+            sudo timeout -k 10 180 apt-get update && sudo timeout -k 10 300 apt-get install -y libeccodes-dev && break
+            test "$attempt" -lt 3
+            sleep 15
+          done
           archive="$RUNNER_TEMP/rclone-v1.75.0-linux-amd64.zip"
           curl --fail --silent --show-error --location \
             https://github.com/rclone/rclone/releases/download/v1.75.0/rclone-v1.75.0-linux-amd64.zip \
