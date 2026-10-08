@@ -6,13 +6,14 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `cd4950b47c80175b924d7fc160772bc1f7660f2be08377f8f79ff3d189a9fa1a`.
+Source digest (registry and workflow bytes): `186fcd0eef2bf751dac7352d9b9aacbbb72685c461edb3b34c9a4dc6795bc988`.
 
-64 workflows. Ordering and output are deterministic; no API request or clock is used.
+66 workflows. Ordering and output are deterministic; no API request or clock is used.
 
 | Workflow | Family / subsystem | Lifecycle | Purpose | Runbook |
 | --- | --- | --- | --- | --- |
 | [bake](#bake) | models / Model collection | recurring | Collect independent model inputs and assemble the whole-maintenance fallback. | [guide](../docs/single-model-refresh.md) |
+| [cams-ingest](#cams-ingest) | maintenance / Energy own ingest | recurring | Ingest CAMS dust and total aerosol optical depth for the Energy Desk solar clusters from the Copernicus ADS twice daily and publish the energy-cams component. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [catalog-bake](#catalog-bake) | models / Component freshness | recurring | Refresh individual core model components from provider schedules or a manual request. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [catalog-bootstrap](#catalog-bootstrap) | models / Catalog bootstrap | manual-supported | Initialize the staging catalog through its guarded bootstrap path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [catalog-production-bootstrap](#catalog-production-bootstrap) | models / Catalog bootstrap | manual-supported | Initialize the production catalog through its guarded bootstrap path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
@@ -32,6 +33,7 @@ Source digest (registry and workflow bytes): `cd4950b47c80175b924d7fc160772bc1f7
 | [fusion-promote](#fusion-promote) | maintenance / Fusion promotion | manual-supported | Promote a qualified fusion candidate through the guarded controller. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [fusion-staging-evidence](#fusion-staging-evidence) | staging / Fusion evidence | manual-supported | Manually diagnose isolated staging forecast evidence without relying on an aging fixed catalog. | [guide](../docs/FUSION_STAGING_EVIDENCE.md) |
 | [gdacs-feed-release](#gdacs-feed-release) | releases / Hazard feed | manual-supported | Release the isolated GDACS route through guarded verification and recovery. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
+| [glofas-ingest](#glofas-ingest) | maintenance / Energy own ingest | recurring | Ingest the GloFAS v4 ensemble for the five Energy Desk dams from the Copernicus EWDS daily and publish the energy-glofas component. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [hydrology](#hydrology) | archives / Hydrology | manual-supported | Prepare hydrology artifacts through the explicit staging path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [model-inputs](#model-inputs) | staging / Experimental models | manual-supported | Collect isolated experimental model inputs with bounded provider concurrency. | [guide](../docs/MODEL_CLOUD_INPUTS.md) |
 | [nam-hi-diagnostic](#nam-hi-diagnostic) | staging / Experimental models | diagnostic | Diagnose a bounded NAM-HI acquisition without broadening publication authority. | [guide](../docs/nam-hi-cloud-diagnostic.md) |
@@ -158,6 +160,28 @@ Checkout declarations (not a claim of approval or checkout success):
 | [run-summary / step 1](../.github/workflows/bake.yml#L617) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
 Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/bake.yml#L116), [PRODUCTION_WIND100_CALL_ENABLED](../.github/workflows/bake.yml#L49), [R2_FALLBACK_MIRROR_ENABLED](../.github/workflows/bake.yml#L538).
+
+
+## cams-ingest
+
+[.github/workflows/cams-ingest.yml](../.github/workflows/cams-ingest.yml#L1) · <code>Energy CAMS dust ingest</code>
+
+Declared triggers: [schedule](../.github/workflows/cams-ingest.yml#L21) <code>["40 0,10,12,22 * * *"]</code>; [workflow_dispatch](../.github/workflows/cams-ingest.yml#L23); input names <code>["run","dry_run","caller"]</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-energy-cams-production","cancel-in-progress":false}</code>.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [ingest](../.github/workflows/cams-ingest.yml#L42) ← no needs | <code>ubuntu-24.04</code> | <code>production</code> | <code>90</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [ingest / Checkout exact controller](../.github/workflows/cams-ingest.yml#L65) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [ingest / Checkout pinned Atmos producers](../.github/workflows/cams-ingest.yml#L74) | <code>weatherx-hq/atmos</code> | <code>4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88</code> |
+
+Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/cams-ingest.yml#L47).
 
 
 ## catalog-bake
@@ -608,6 +632,28 @@ Checkout declarations (not a claim of approval or checkout success):
 | [repair / Checkout exact reviewed Atmos source](../.github/workflows/gdacs-feed-release.yml#L53) | <code>Andrewegao/atmos</code> | <code>${{ inputs.atmos_sha }}</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
+
+
+## glofas-ingest
+
+[.github/workflows/glofas-ingest.yml](../.github/workflows/glofas-ingest.yml#L1) · <code>Energy GloFAS dams ingest</code>
+
+Declared triggers: [schedule](../.github/workflows/glofas-ingest.yml#L19) <code>["15 11,13 * * *"]</code>; [workflow_dispatch](../.github/workflows/glofas-ingest.yml#L21); input names <code>["date","dry_run","caller"]</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-energy-glofas-production","cancel-in-progress":false}</code>.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [ingest](../.github/workflows/glofas-ingest.yml#L40) ← no needs | <code>ubuntu-24.04</code> | <code>production</code> | <code>120</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [ingest / Checkout exact controller](../.github/workflows/glofas-ingest.yml#L58) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [ingest / Checkout pinned Atmos producers](../.github/workflows/glofas-ingest.yml#L67) | <code>weatherx-hq/atmos</code> | <code>4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88</code> |
+
+Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/glofas-ingest.yml#L45).
 
 
 ## hydrology
@@ -1073,19 +1119,19 @@ Variable references (declared names only; values and activation unknown): [R2_CO
 
 [.github/workflows/scheduler-ci.yml](../.github/workflows/scheduler-ci.yml#L1) · <code>WeatherX scheduler CI</code>
 
-Declared triggers: [pull_request](../.github/workflows/scheduler-ci.yml#L4); [push](../.github/workflows/scheduler-ci.yml#L6) <code>{"branches":["main"],"paths":[".github/workflows/**","ops/workflows.json","ops/atmos-production-source.json","ops/train3-validation-contract.json","docs/WORKFLOWS.md","docs/WORKFLOW_OPERATIONS.md","README.md",".github/workflows/bake.yml",".github/workflows/collect-core-model.yml",".github/workflows/collect-regional-model.yml",".github/workflows/publish-current-model-production.yml",".github/workflows/resume-model-publication.yml",".github/workflows/catalog-bake.yml",".github/workflows/scheduler-ci.yml",".github/workflows/source-checkout-probe.yml",".github/workflows/scheduler-deploy.yml",".github/workflows/satellite-archive.yml",".github/workflows/ui-release.yml",".github/workflows/ui-staging.yml",".github/workflows/ui-staging-tc.yml",".github/workflows/staging-follow-master.yml",".github/workflows/staging-data.yml",".github/workflows/staging-current-selection.yml",".github/workflows/model-inputs.yml",".github/workflows/nam-hi-diagnostic.yml",".github/workflows/staging-model-components.yml",".github/workflows/staging-model-selection.yml",".github/workflows/staging-consumer-refresh.yml",".github/workflows/staging-search.yml",".github/workflows/staging-tc-guidance.yml",".github/workflows/staging-place-renewal.yml",".github/workflows/staging-wind100.yml",".github/workflows/staging-wind100-recurring.yml",".github/workflows/production-wind100-recurring.yml",".github/workflows/production-wind100-retention.yml",".github/workflows/staging-wind100-preflight.yml",".github/workflows/staging-search-reader.yml",".github/workflows/staging-data-activate.yml",".github/workflows/verify-backfill.yml",".github/workflows/consumer-refresh.yml",".github/workflows/data-reader-refresh.yml",".github/workflows/gdacs-feed-release.yml",".github/workflows/fusion-*.yml","scheduler/**","tests/**","tools/**","staging-controller/**"]}</code>.
+Declared triggers: [pull_request](../.github/workflows/scheduler-ci.yml#L4); [push](../.github/workflows/scheduler-ci.yml#L6) <code>{"branches":["main"],"paths":[".github/workflows/**","ops/workflows.json","ops/atmos-production-source.json","ops/train3-validation-contract.json","docs/WORKFLOWS.md","docs/WORKFLOW_OPERATIONS.md","README.md",".github/workflows/bake.yml",".github/workflows/collect-core-model.yml",".github/workflows/collect-regional-model.yml",".github/workflows/publish-current-model-production.yml",".github/workflows/resume-model-publication.yml",".github/workflows/catalog-bake.yml",".github/workflows/scheduler-ci.yml",".github/workflows/source-checkout-probe.yml",".github/workflows/scheduler-deploy.yml",".github/workflows/satellite-archive.yml",".github/workflows/ui-release.yml",".github/workflows/ui-staging.yml",".github/workflows/ui-staging-tc.yml",".github/workflows/staging-follow-master.yml",".github/workflows/staging-data.yml",".github/workflows/staging-current-selection.yml",".github/workflows/model-inputs.yml",".github/workflows/nam-hi-diagnostic.yml",".github/workflows/staging-model-components.yml",".github/workflows/staging-model-selection.yml",".github/workflows/staging-consumer-refresh.yml",".github/workflows/staging-search.yml",".github/workflows/staging-tc-guidance.yml",".github/workflows/staging-place-renewal.yml",".github/workflows/staging-wind100.yml",".github/workflows/staging-wind100-recurring.yml",".github/workflows/production-wind100-recurring.yml",".github/workflows/production-wind100-retention.yml",".github/workflows/staging-wind100-preflight.yml",".github/workflows/staging-search-reader.yml",".github/workflows/staging-data-activate.yml",".github/workflows/verify-backfill.yml",".github/workflows/consumer-refresh.yml",".github/workflows/data-reader-refresh.yml",".github/workflows/gdacs-feed-release.yml",".github/workflows/glofas-ingest.yml",".github/workflows/cams-ingest.yml",".github/workflows/fusion-*.yml","scheduler/**","tests/**","tools/**","staging-controller/**"]}</code>.
 
 Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: not declared.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [scheduler](../.github/workflows/scheduler-ci.yml#L61) ← no needs | <code>ubuntu-latest</code> | not declared | <code>10</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [scheduler](../.github/workflows/scheduler-ci.yml#L63) ← no needs | <code>ubuntu-latest</code> | not declared | <code>10</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [scheduler / step 1](../.github/workflows/scheduler-ci.yml#L64) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [scheduler / step 1](../.github/workflows/scheduler-ci.yml#L66) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
 Variable references (declared names only; values and activation unknown): none detected.
 

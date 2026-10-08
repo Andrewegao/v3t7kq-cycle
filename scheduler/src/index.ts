@@ -1,4 +1,4 @@
-import { ARCHIVE_CRON, HRRR_CRON, SLOW_CRON, WIND100_CRON } from './schedules';
+import { ARCHIVE_CRON, CAMS_CRON, GLOFAS_CRON, HRRR_CRON, SLOW_CRON, WIND100_CRON } from './schedules';
 const MAX_ATTEMPTS = 4;
 const MAX_ERROR_BYTES = 4_096;
 
@@ -6,13 +6,16 @@ type ModelSelection = 'hrrr' | 'slow';
 type DispatchResult =
   | { kind: 'catalog'; model: ModelSelection; runId: number | null }
   | { kind: 'satellite-archive'; policy: 'hourly-tail-v1'; runId: number | null }
-  | { kind: 'staging-wind100'; model: 'ecmwf'; runId: number | null };
+  | { kind: 'staging-wind100'; model: 'ecmwf'; runId: number | null }
+  | { kind: 'energy-ingest'; family: EnergyFamily; runId: number | null };
+type EnergyFamily = 'glofas' | 'cams';
 type DispatchPlan =
   | { kind: 'catalog'; workflow: string; model: ModelSelection; inputs: { model: ModelSelection; target: 'staging' | 'production' } }
   | { kind: 'satellite-archive'; workflow: string; policy: 'hourly-tail-v1'; inputs: { policy: 'hourly-tail-v1' } }
   | { kind: 'staging-wind100'; workflow: 'bake.yml'; model: 'ecmwf'; inputs: {
     model: 'ecmwf'; recovery_run_id: ''; staging_wind100_only: true;
-  } };
+  } }
+  | { kind: 'energy-ingest'; workflow: 'glofas-ingest.yml' | 'cams-ingest.yml'; family: EnergyFamily; inputs: { caller: 'scheduler' } };
 type Fetcher = typeof fetch;
 type Sleeper = (delayMs: number) => Promise<void>;
 
@@ -38,6 +41,15 @@ function dispatchForSchedule(cron: string, env: CloudflareBindings): DispatchPla
     }
     return { kind: 'staging-wind100', workflow: env.WIND100_GITHUB_WORKFLOW, model: 'ecmwf',
       inputs: { model: 'ecmwf', recovery_run_id: '', staging_wind100_only: true } };
+  }
+  if (cron === GLOFAS_CRON || cron === CAMS_CRON) {
+    const family: EnergyFamily = cron === GLOFAS_CRON ? 'glofas' : 'cams';
+    const workflow = family === 'glofas' ? env.GLOFAS_GITHUB_WORKFLOW : env.CAMS_GITHUB_WORKFLOW;
+    if (workflow !== `${family}-ingest.yml` || env.GITHUB_REF !== 'main') {
+      throw new Error(`unsupported energy ${family} ingest workflow or ref`);
+    }
+    // The workflow takes its run (date / init) from the clock; the dispatch carries no data choice.
+    return { kind: 'energy-ingest', workflow, family, inputs: { caller: 'scheduler' } };
   }
   throw new Error(`unsupported scheduler cron: ${cron}`);
 }
@@ -107,6 +119,7 @@ export async function dispatchForCron(
       if (plan.kind === 'satellite-archive') {
         return { kind: 'satellite-archive', policy: plan.policy, runId };
       }
+      if (plan.kind === 'energy-ingest') return { kind: 'energy-ingest', family: plan.family, runId };
       return { kind: 'staging-wind100', model: plan.model, runId };
     }
 
