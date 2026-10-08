@@ -1,3 +1,4 @@
+import { controllerHasDataTruthGate, dataTruthInvocations, parseDataTruthWaiver, requireStagingServesCandidate } from './ui-data-truth.mjs';
 import {runReleaseLayerGuard} from './ui-release-layer-guard.mjs';
 // Guarded orchestration only. This program never writes Workers, DNS, bindings, data or settings.
 import assert from 'node:assert/strict';
@@ -39,7 +40,7 @@ const CORE_CATALOG_MODELS = ['ecmwf','gfs'];
 export const POLICY_FILES = ['.github/workflows/ui-staging.yml', '.github/workflows/ui-staging-tc.yml', '.github/workflows/ui-release.yml',
   'tools/ui-candidate.mjs', 'tools/ui-build-transfer.mjs', 'tools/ui-app-test-receipt.mjs', 'tools/ui-release.mjs', 'tools/ui-verify.sh', 'tools/ui-npx.sh',
   'tools/ui-release-profile-preflight.mjs','tools/ui-public-locale-beta.mjs','tools/ui-public-combined.mjs',
-  'tools/ui-combined-source-guard.mjs','tools/ui-weather-feed-baseline.mjs',
+  'tools/ui-combined-source-guard.mjs','tools/ui-weather-feed-baseline.mjs','tools/ui-data-truth.mjs',
   'tools/ui-release-layer-guard.mjs','tools/ui-layer-diagnostics.mjs','tools/ui-layer-diagnostics-browser.txt','tools/ui-layer-paint-proof.mjs',
   'tools/production-account-contract.mjs','tools/production-account-trust-policy.mjs','tools/production-account-release.mjs','tools/production-account-execution.mjs',
   'tools/ui-staging-models.mjs','tools/ui-staging-model-browser.mjs','tools/ui-staging-core-browser.mjs','tools/ui-staging-tc-proof.mjs','tools/ui-staging-preflight.mjs',
@@ -511,6 +512,21 @@ async function preflight(stage) {
   releaseGate(process.env); controller();
   await projectSnapshot(stage); await publicModes(ORIGINS[stage],c.profile,'preflight');
   if (standaloneWeatherFeedVerificationRequired(stage, 'preflight')) verifyWeatherFeeds(stage,c.profile);
+  if (stage === 'production') await verifyDataTruth(c);
+}
+/** Truth gates before any production write (tools/ui-data-truth.mjs). A failure stops the promotion
+    with the verifier's named reasons; UI_DATA_TRUTH_WAIVE is the owner's explicit, logged exception. */
+async function verifyDataTruth(c) {
+  if (!controllerHasDataTruthGate(CONTROL)) {
+    console.log('data-truth gate: the pinned controller predates ops/release/verify-weather-feeds.mjs --truth; not run');
+    return;
+  }
+  const waive = parseDataTruthWaiver(process.env.UI_DATA_TRUTH_WAIVE);
+  if (waive.length) console.log(`data-truth gate: owner waiver for this release: ${waive.join(', ')}`);
+  await requireStagingServesCandidate(ORIGINS.staging, validateCandidate(c).releaseId);
+  for (const { args } of dataTruthInvocations({ control: CONTROL, productionOrigin: ORIGINS.production, stagingOrigin: ORIGINS.staging, waive })) {
+    run('node', args);
+  }
 }
 export function requiredSourceGuard(profile) {
   validateProfile(profile);

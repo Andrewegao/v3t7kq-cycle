@@ -91,6 +91,7 @@ jobs:
       UI_DEPLOYMENT_HOLD_UNTIL: ${{ vars.UI_DEPLOYMENT_HOLD_UNTIL }}
       UI_AUTO_PROMOTE_ENABLED: ${{ vars.UI_AUTO_PROMOTE_ENABLED }}
       UI_AUTO_PROMOTE_PROFILE: ${{ vars.UI_AUTO_PROMOTE_PROFILE }}
+      UI_DATA_TRUTH_WAIVE: ${{ vars.UI_DATA_TRUTH_WAIVE }}
       ATMOS_SHA: ${{ github.event_name == 'workflow_run' && needs.resolve.outputs.atmos_sha || inputs.atmos_sha }}
       STAGING_RUN_ID: ${{ github.event_name == 'workflow_run' && needs.resolve.outputs.staging_run_id || inputs.staging_run_id }}
       STAGING_RUN_ATTEMPT: ${{ github.event_name == 'workflow_run' && needs.resolve.outputs.staging_run_attempt || '' }}
