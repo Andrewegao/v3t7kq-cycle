@@ -91,7 +91,7 @@
       ]
     },
     {
-      "pin": "2b9110841f2fcb84180b737100d8fb0cc9d10a88",
+      "pin": "4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88",
       "files": [
         "app/e2e/layer-switch-surface.mjs",
         "app/e2e/layer-switch-tint.mjs",
@@ -129,7 +129,7 @@
   ],
   "stagingBuild": {
     "profile": "production-account-ru-kk-wind100-onboarding-v2",
-    "pin": "2b9110841f2fcb84180b737100d8fb0cc9d10a88",
+    "pin": "4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88",
     "paths": [
       ".gitignore",
       "platform/edge/package.json",
@@ -137,6 +137,6 @@
       "ops/release/build-release-receipt.mjs"
     ],
     "coneMode": false,
-    "provenance": "Merged Atmos PR #504 source 2b9110841f2fcb84180b737100d8fb0cc9d10a88, tree 98162e8cd320515ff3622d85ad07faf7cb8df149, merged at 2026-10-08T00:03:56Z (atmos master head at pin time). Relative to the prior pin b3f63183dbcde01e388fda7720726cc53f28134b (PR #486), master advanced by 13 first-parent merges: #487 pipeline speed, #488, #490 observation pipeline, #491 found-by-tests fixes, #495, #496 i18n full-profile gate, #497, #498, #501 GFS point tail, #492 commercial API, #502, #499 pipeline finish, #504 GFS precipitation packing tolerance. Within the 22-file qualification inventory and the four sparse build paths, only .gitignore (one ignored log path), app/package.json and app/package-lock.json (testing-framework devDependencies plus zod), platform/edge/package.json and platform/edge/package-lock.json (check scripts reorganised; wrangler pinned 4.144.0, miniflare and vitest bumped) and ops/release/test-guard-pages-deploy.mjs (a failed receipt step can never withhold the release) changed. Both release layer harness hashes, all 43 account/onboarding source digests, ops/release/build-release-receipt.mjs, guard-pages-deploy.sh and the production verifiers are byte-identical to the prior pin. The production platform Worker is not part of this UI candidate and is not deployed by it. Fresh controller CI, current-master/clean-checkout admission and one new exact-source guarded staging run remain required; no deployment, performance or memory completion is asserted by these closure checks. See docs/ui-public-combined.md."
+    "provenance": "Merged Atmos PR #505 source 4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88, tree b0dc7fd368cb1ea751dedfe11de8b2c9825a92fe, merged at 2026-10-08T00:51:12Z (atmos master head at pin time). Supersedes the 2b9110841f2fcb84180b737100d8fb0cc9d10a88 (PR #504) pin of the same night, which was never qualified: its one staging run 37707277551 failed a wall-clock assertion (fuse under 1500 ms measured 1603 ms on a loaded runner; 30836 other tests passed) and master moved before a retry. Relative to 2b9110841f2fcb84180b737100d8fb0cc9d10a88 master advanced by #503 (journey runner fixes, ops/commercial) and #505 (a failed HRRR or AIFS collector may abstain from the whole release, data/); none of the 22 qualification inventory files, the four sparse build paths, the two release layer harnesses or the 43 account/onboarding sources changed. Relative to the last qualified pin b3f63183dbcde01e388fda7720726cc53f28134b (PR #486) the inventory delta is unchanged from the #504 admission: .gitignore, app/package.json and lockfile, platform/edge/package.json and lockfile (wrangler 4.144.0), ops/release/test-guard-pages-deploy.mjs. The production platform Worker is not part of this UI candidate and is not deployed by it. Fresh controller CI, current-master/clean-checkout admission and one new exact-source guarded staging run remain required; no deployment, performance or memory completion is asserted. See docs/ui-public-combined.md."
   }
 }

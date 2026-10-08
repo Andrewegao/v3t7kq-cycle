@@ -5,8 +5,8 @@ import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Reviewed merged master head (PR #504), first production-bound pin since the 2026-09-27 release; retain the exact-current-master and clean-checkout guard.
-export const UI_SOURCE = '2b9110841f2fcb84180b737100d8fb0cc9d10a88';
+// Reviewed merged master head (PR #505), first production-bound pin since the 2026-09-27 release; retain the exact-current-master and clean-checkout guard.
+export const UI_SOURCE = '4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88';
 export const REVIEWED_MASTER = UI_SOURCE;
 export const EDGE_ONLY_DIFF = Object.freeze([]);
 

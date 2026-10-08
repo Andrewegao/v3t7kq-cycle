@@ -135,7 +135,7 @@
         "tools/staging-live-proof.mjs",
         "tools/staging-model-components.mjs"
       ],
-      "2b9110841f2fcb84180b737100d8fb0cc9d10a88": [
+      "4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88": [
         ".github/workflows/ui-release.yml",
         ".github/workflows/ui-staging.yml",
         "tools/ui-combined-source-guard.mjs",
