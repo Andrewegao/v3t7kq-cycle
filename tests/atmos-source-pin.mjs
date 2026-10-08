@@ -16,7 +16,7 @@ function copy() {
 
 test('every ordinary production producer pin equals the one declared Atmos source', () => {
   assert.deepEqual(checkPins(), []);
-  assert.equal(declaration.atmosSha, 'e5fd5758aab079c32c6b077857e641ba40970d04', 'master merge of PR #501 (GFS point-tail banded read) is the declared producer source');
+  assert.equal(declaration.atmosSha, '4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88', 'master merge of PR #505 (core-collector abstention) is the declared producer source');
   const paths = declaration.pins.map(pin => pin.path);
   for (const path of ['.github/workflows/bake.yml', '.github/workflows/collect-core-model.yml', '.github/workflows/collect-regional-model.yml',
     '.github/workflows/publish-current-model-production.yml', '.github/workflows/observation-refresh.yml',
@@ -54,4 +54,14 @@ test('every 40-hex value in workflows and tools is classified, so a new or stray
   const root = copy();const file = join(root, '.github/workflows/hydrology.yml');
   writeFileSync(file, readFileSync(file, 'utf8') + `      - uses: actions/checkout@${'f'.repeat(40)} # v4\n`);
   assert.deepEqual(strayPins(root), [], 'action pins on uses: lines are not Atmos pins');
+  // A separately qualified pin that equals the producer source stays confined to its own listed files.
+  const shared = copy();const value = JSON.parse(readFileSync(join(shared, DECLARATION), 'utf8'));
+  value.otherAtmosCommits.commits[value.atmosSha] = ['tools/ui-public-combined.mjs'];
+  writeFileSync(join(shared, DECLARATION), JSON.stringify(value));
+  for (const [path, ok] of [['tools/ui-public-combined.mjs', true], ['.github/workflows/hydrology.yml', false]]) {
+    const file = join(shared, path);const before = readFileSync(file, 'utf8');
+    writeFileSync(file, before + `// ${value.atmosSha}\n`);
+    assert.equal(strayPins(shared).some(p => p.startsWith(`${path}:`) && /declared source in an unlisted pin site/.test(p)), !ok, path);
+    writeFileSync(file, before);
+  }
 });

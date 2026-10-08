@@ -269,11 +269,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     # Join bounded collectors before assembling one release. Missing regional inputs abstain
-    # in the roster; missing core inputs withhold this candidate. Only this job can publish.
+    # in the roster. Every core collector must have finished (success or failure/timeout, never
+    # cancelled or skipped) and ECMWF+GFS must succeed: a failed HRRR or AIFS abstains in
+    # data/core-model-roster.json as carried and its last published run stays served (HRRR at
+    # most 12 h old at the release gate, AIFS 24 h; atmos decisions 2026-10-07). Only this job can publish.
     needs: [core-ecmwf, core-gfs, core-hrrr, core-aifs, regional-icon, regional-hrdps, regional-arome-antilles, regional-hrrr-ak, regional-nam, regional-nam-hi, regional-nam-ak]
     # Recovery provenance failures are not optional provider abstentions. A refused
-    # regional recovery must withhold the entire candidate, never publish a subset.
-    if: ${{ inputs.staging_wind100_only != true && (always() && !cancelled() && needs.core-ecmwf.result == 'success' && needs.core-gfs.result == 'success' && needs.core-hrrr.result == 'success' && needs.core-aifs.result == 'success' && (inputs.recovery_run_id == '' || (needs.regional-icon.result == 'success' && needs.regional-hrdps.result == 'success' && needs.regional-arome-antilles.result == 'success' && needs.regional-hrrr-ak.result == 'success' && needs.regional-nam.result == 'success' && needs.regional-nam-hi.result == 'success' && needs.regional-nam-ak.result == 'success'))) }}
+    # core or regional recovery must withhold the entire candidate, never publish a subset.
+    if: ${{ inputs.staging_wind100_only != true && (always() && !cancelled() && needs.core-ecmwf.result == 'success' && needs.core-gfs.result == 'success' && (needs.core-hrrr.result == 'success' || needs.core-hrrr.result == 'failure') && (needs.core-aifs.result == 'success' || needs.core-aifs.result == 'failure') && (inputs.recovery_run_id == '' || (needs.core-hrrr.result == 'success' && needs.core-aifs.result == 'success' && needs.regional-icon.result == 'success' && needs.regional-hrdps.result == 'success' && needs.regional-arome-antilles.result == 'success' && needs.regional-hrrr-ak.result == 'success' && needs.regional-nam.result == 'success' && needs.regional-nam-hi.result == 'success' && needs.regional-nam-ak.result == 'success'))) }}
     steps:
       - name: checkout exact public bake diagnostic controller
         continue-on-error: true
@@ -295,13 +298,13 @@ jobs:
           repository: weatherx-hq/atmos
           # Approved by full Atmos CI. The whole release produced below must pass
           # its own gates before any staging or production consumer can select it.
-          ref: e5fd5758aab079c32c6b077857e641ba40970d04
+          ref: 4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           fetch-depth: 32 # bounded reviewed checkout history
           persist-credentials: false
       - name: Verify approved immutable collector before running source
         run: |
-          test "$(git rev-parse HEAD)" = "e5fd5758aab079c32c6b077857e641ba40970d04"
+          test "$(git rev-parse HEAD)" = "4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88"
           git diff --exit-code HEAD
       - name: plan conservative no-change fast path
         id: bake_plan
@@ -380,7 +383,7 @@ jobs:
           pattern: regional-packs-*
           path: ${{ runner.temp }}/regional-packs
           merge-multiple: true
-      - name: receive sealed core model inputs from all four collectors
+      - name: receive sealed core model inputs from the collectors that succeeded
         if: ${{ steps.bake_plan.outputs.skip != 'true' }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -475,6 +478,8 @@ jobs:
           WEATHERX_LIVE_ORIGIN: https://weatherx.org
           REGIONAL_PACKS_DIR: ${{ runner.temp }}/regional-packs
           CORE_MODEL_PACKS_DIR: ${{ runner.temp }}/core-model-packs
+          # The installer admits a missing HRRR/AIFS pack only when its collector result says failure.
+          CORE_COLLECTOR_RESULTS: ecmwf=${{ needs.core-ecmwf.result }} gfs=${{ needs.core-gfs.result }} hrrr=${{ needs.core-hrrr.result }} aifs=${{ needs.core-aifs.result }}
           WEATHERX_RECOVERY_RUN_ID: ${{ inputs.recovery_run_id || '' }}
           BAKE_PREFLIGHT_PLAN: ${{ runner.temp }}/weatherx-bake-plan.json
           DATA_PUBLISH_MODE: r2-release
@@ -560,7 +565,7 @@ jobs:
         if: ${{ always() }}
         continue-on-error: true
         env:
-          ATMOS_SHA: e5fd5758aab079c32c6b077857e641ba40970d04
+          ATMOS_SHA: 4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88
         run: node "$RUNNER_TEMP/public-diagnostic-controller/tools/bake-public-diagnostic.mjs" retain
       - name: upload encrypted bake diagnostic receipt
         if: ${{ always() }}

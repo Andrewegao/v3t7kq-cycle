@@ -31,9 +31,35 @@ test('manual single-model requests collect only that model; schedules still coll
     assert.deepEqual(actual,selection===''||selection==='all'?all:all.includes(selection)?[selection]:[]);
   }
   assert.match(bake,/cron: '30 2,8,14,20 \* \* \*'/);
-  // Whole maintenance still requires all FOUR successful core collectors.
-  const maintenance=bake.split('\n  bake:')[1];
-  for(const model of coreModels)assert.match(maintenance,new RegExp(`needs.core-${model}.result == 'success'`));
+  // Whole maintenance requires every core collector FINISHED and ECMWF+GFS successful;
+  // a failed HRRR/AIFS abstains (atmos decisions 2026-10-07). Cancelled or skipped never bakes.
+  const maintenance=bake.split('\n  bake:')[1].split(/\n  [a-z]/)[0];
+  const gate=maintenance.match(/\n    if: \$\{\{ (.+) \}\}/)[1];
+  const evaluate=(core,recovery,regional,{wind100=false,runCancelled=false}={})=>Function('inputs','needs','always','cancelled',
+    `return ${gate.replace(/needs\.([a-z0-9-]+)\.result/g,"needs['$1'].result")}`)(
+    {staging_wind100_only:wind100,recovery_run_id:recovery},
+    Object.fromEntries([...coreModels.map((m,i)=>[`core-${m}`,{result:core[i]}]),...regionalModels.map((m,i)=>[`regional-${m}`,{result:regional[i]}])]),
+    ()=>true,()=>runCancelled);
+  // Exhaustive: 4^4 core results x recovery off/on x 9 regional shapes (all ok, all failed, each one failed).
+  const results=['success','failure','cancelled','skipped'];
+  const regionalShapes=[regionalModels.map(()=>'success'),regionalModels.map(()=>'failure'),
+    ...regionalModels.map((_,j)=>regionalModels.map((__,i)=>i===j?'failure':'success'))];
+  let cases=0;
+  for(const ecmwf of results)for(const gfs of results)for(const hrrr of results)for(const aifs of results){
+    const core=[ecmwf,gfs,hrrr,aifs];
+    for(const recovery of ['','33925520386'])for(const regional of regionalShapes){
+      const finished=r=>r==='success'||r==='failure';
+      const expected=ecmwf==='success'&&gfs==='success'&&finished(hrrr)&&finished(aifs)&&
+        (recovery===''||(core.every(r=>r==='success')&&regional.every(r=>r==='success')));
+      assert.equal(evaluate(core,recovery,regional),expected,`${core} recovery=${recovery} regional=${regional}`);
+      assert.equal(evaluate(core,recovery,regional,{runCancelled:true}),false);
+      assert.equal(evaluate(core,recovery,regional,{wind100:true}),false);
+      cases++;
+    }
+  }
+  assert.equal(cases,4**4*2*9);
+  const publish=maintenance.split('      - name: bake → gate → publish immutable data release')[1].split('      - name:')[0];
+  assert.match(publish,/CORE_COLLECTOR_RESULTS: ecmwf=\$\{\{ needs\.core-ecmwf\.result \}\} gfs=\$\{\{ needs\.core-gfs\.result \}\} hrrr=\$\{\{ needs\.core-hrrr\.result \}\} aifs=\$\{\{ needs\.core-aifs\.result \}\}/);
 });
 
 test('eleven reusable collectors each unlock only their matching publisher',()=>{

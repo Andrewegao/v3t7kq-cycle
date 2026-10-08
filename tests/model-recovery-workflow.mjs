@@ -90,7 +90,8 @@ test('only an optional manual input enables recovery; one publisher and all gate
   for (const model of ['core-ecmwf','core-gfs','core-hrrr','core-aifs']) {
     assert.match(workflow, new RegExp(`needs\\.${model}\\.result == 'success'`));
   }
-  assert.match(workflow, /inputs\.recovery_run_id == '' \|\| \(needs\.regional-icon\.result == 'success'/);
+  // Recovery never turns a refused HRRR/AIFS transfer into a core abstention.
+  assert.match(workflow, /inputs\.recovery_run_id == '' \|\| \(needs\.core-hrrr\.result == 'success' && needs\.core-aifs\.result == 'success' && needs\.regional-icon\.result == 'success'/);
   const regionalDownload = step(workflow, 'receive regional display packs from the family jobs');
   assert.match(regionalDownload, /continue-on-error: \$\{\{ inputs\.recovery_run_id == '' \}\}/);
   const transfer = step(workflow, 'verify every recovery transfer before assembly');
