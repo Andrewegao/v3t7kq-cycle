@@ -149,14 +149,17 @@ test('only a staging candidate receives the bounded degraded-cache convergence w
   const base={RELEASE_GUARD_VERIFY_REQUIRED_SUCCESSES:'3',RELEASE_GUARD_VERIFY_SLEEP_SECONDS:'15'};
   const staging=platformVerificationEnvironment('staging','candidate',base);
   assert.notEqual(staging,base);
-  assert.deepEqual(staging,{...base,RELEASE_GUARD_VERIFY_ATTEMPTS:'50'});
+  assert.deepEqual(staging,{...base,RELEASE_GUARD_VERIFY_ATTEMPTS:'50',EDGE_DATA_PROBE_PATH:'/data-atmos/airports/airports.json'});
   // 600 s ordinary outer refresh + 60 s cache-only recovery + two more 15 s
   // observations for the required three consecutive successes fit before attempt 50.
   assert.ok((Number(staging.RELEASE_GUARD_VERIFY_ATTEMPTS)-1)*Number(staging.RELEASE_GUARD_VERIFY_SLEEP_SECONDS)>=690);
-  for(const [stage,phase] of [['production','candidate'],['production','rollback'],['staging','rollback']]){
+  // Exact staging rollback probes the same shared-read route without the widened attempt window.
+  assert.deepEqual(platformVerificationEnvironment('staging','rollback',base),{...base,EDGE_DATA_PROBE_PATH:'/data-atmos/airports/airports.json'});
+  for(const [stage,phase] of [['production','candidate'],['production','rollback']]){
     assert.equal(platformVerificationEnvironment(stage,phase,base),base);
     assert.equal(base.RELEASE_GUARD_VERIFY_ATTEMPTS,undefined);
   }
+  assert.equal(base.EDGE_DATA_PROBE_PATH,undefined);
   const verify=source.slice(source.indexOf('async function verify(stage)'),source.indexOf('function retain()'));
   assert.match(verify,/stage==='staging'&&phase==='candidate'[\s\S]*?run\('\/usr\/bin\/timeout',[\s\S]*?'--signal=KILL','15m','bash'[\s\S]*?platformVerificationEnvironment\(stage,phase\)[\s\S]*?else run\('bash'/);
   assert.ok(verify.indexOf('verify-platform-production.sh')<verify.indexOf("if (phase !== 'rollback')"));

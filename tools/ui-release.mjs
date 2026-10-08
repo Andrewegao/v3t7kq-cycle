@@ -22,7 +22,7 @@ import {profileFor,validateProfile,selectionProfile,coreReleaseProfile,publicLoc
 import {LANE_B_CONTRACT,PRODUCTION_ACCOUNT_APPROVAL,validateProductionPagesConfiguration} from './production-account-contract.mjs';
 import {assertPublicLocaleBetaReady} from './ui-public-locale-beta.mjs';
 import {assertPublicCombinedReady,PUBLIC_COMBINED_WIND100_RECEIPT} from './ui-public-combined.mjs';
-import {requireStagingTides} from './ui-required-data-preflight.mjs';
+import {REQUIRED_DATA_PATH,requireStagingData} from './ui-required-data-preflight.mjs';
 import {assertCombinedSource} from './ui-combined-source-guard.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -470,7 +470,7 @@ function verifyWeatherFeeds(stage, profile) {
 }
 export async function publicModes(origin,profile=profileFor(),phase='candidate') {
   assert.ok(Object.values(ORIGINS).includes(origin));
-  if(origin===ORIGINS.staging&&phase==='preflight')await requireStagingTides();
+  if(origin===ORIGINS.staging&&phase==='preflight')await requireStagingData();
   const health = await json(`${origin}/api/platform/health`);
   const data = await json(`${origin}/api/platform/data-health`);
   const catalogId = validatePublicModes(origin, health, data,profile,phase);
@@ -750,9 +750,12 @@ export function platformVerificationEnvironment(stage,phase,env=process.env) {
   // ordinary three-success/15-second soak intact, but give only this candidate transaction enough
   // bounded observations to see that convergence. Production and exact rollback retain the pinned
   // verifier's existing attempt policy byte-for-byte through the original environment object.
-  return stage==='staging'&&phase==='candidate'
-    ? {...env,RELEASE_GUARD_VERIFY_ATTEMPTS:'50'}
-    : env;
+  // Staging's whole-release data probe is the shared-read airports route (see
+  // ui-required-data-preflight.mjs); the pinned verifier's default tides route is a staging-only
+  // place family whose lease can lapse. Candidate and exact rollback on staging both probe it.
+  if(stage==='staging'&&phase==='candidate')return {...env,RELEASE_GUARD_VERIFY_ATTEMPTS:'50',EDGE_DATA_PROBE_PATH:REQUIRED_DATA_PATH};
+  if(stage==='staging')return {...env,EDGE_DATA_PROBE_PATH:REQUIRED_DATA_PATH};
+  return env;
 }
 async function exactStaging(c) {
   // Conservative: promotion refuses if staging has since changed; never promote an unreviewed
