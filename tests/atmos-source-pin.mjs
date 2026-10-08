@@ -54,4 +54,14 @@ test('every 40-hex value in workflows and tools is classified, so a new or stray
   const root = copy();const file = join(root, '.github/workflows/hydrology.yml');
   writeFileSync(file, readFileSync(file, 'utf8') + `      - uses: actions/checkout@${'f'.repeat(40)} # v4\n`);
   assert.deepEqual(strayPins(root), [], 'action pins on uses: lines are not Atmos pins');
+  // A separately qualified pin that equals the producer source stays confined to its own listed files.
+  const shared = copy();const value = JSON.parse(readFileSync(join(shared, DECLARATION), 'utf8'));
+  value.otherAtmosCommits.commits[value.atmosSha] = ['tools/ui-public-combined.mjs'];
+  writeFileSync(join(shared, DECLARATION), JSON.stringify(value));
+  for (const [path, ok] of [['tools/ui-public-combined.mjs', true], ['.github/workflows/hydrology.yml', false]]) {
+    const file = join(shared, path);const before = readFileSync(file, 'utf8');
+    writeFileSync(file, before + `// ${value.atmosSha}\n`);
+    assert.equal(strayPins(shared).some(p => p.startsWith(`${path}:`) && /declared source in an unlisted pin site/.test(p)), !ok, path);
+    writeFileSync(file, before);
+  }
 });

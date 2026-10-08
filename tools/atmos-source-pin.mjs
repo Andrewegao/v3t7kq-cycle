@@ -61,7 +61,9 @@ export function strayPins(root = ROOT, declaration = readDeclaration(root)) {
       if (/^\s*(?:-\s+)?uses:\s*\S+@[a-f0-9]{40}\b/.test(line)) return;
       for (const [sha] of line.matchAll(HEX)) {
         const at = `${path}:${index + 1}`;
-        if (sha === declaration.atmosSha) { if (!pinned.has(path)) problems.push(`${at}: declared source in an unlisted pin site`); }
+        // The same commit may also be an independently qualified pin (the UI profile re-pinned to the producer
+        // source); it is then allowed only in that pin's own listed files, and --set never moves those.
+        if (sha === declaration.atmosSha) { if (!pinned.has(path) && !other[sha]?.includes(path)) problems.push(`${at}: declared source in an unlisted pin site`); }
         else if (other[sha]) { if (!other[sha].includes(path)) problems.push(`${at}: Atmos commit ${sha} outside its listed files`); }
         else if (known[sha]) { if (!known[sha].includes(path)) problems.push(`${at}: hash ${sha} outside its listed files`); }
         else problems.push(`${at}: unclassified 40-hex value ${sha} (declare it as the producer source, another Atmos pin, or a non-Atmos hash)`);
