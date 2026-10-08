@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `cd4950b47c80175b924d7fc160772bc1f7660f2be08377f8f79ff3d189a9fa1a`.
+Source digest (registry and workflow bytes): `4a1faea56640ebbd67e3be0270e6a2267c3412e3e03a70dbf67a6dc13d14fe2a`.
 
 64 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -1613,10 +1613,10 @@ Checkout declarations (not a claim of approval or checkout success):
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
 | [resolve / step 1](../.github/workflows/ui-release.yml#L62) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [promote / step 1](../.github/workflows/ui-release.yml#L100) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [promote / checkout reviewed release controller (not candidate source)](../.github/workflows/ui-release.yml#L102) | <code>weatherx-hq/atmos</code> | <code>${{ env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-wind100-onboarding-v2' &amp;&amp; '4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88' &#124;&#124; env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-beta-v1' &amp;&amp; 'b9db38dd22eed1da56c6c4dd4140480da7e89153' &#124;&#124; env.MODEL_SELECTION_SHA256 == 'production-account-billing-v1' &amp;&amp; '6fcec22638f6696be71daa2f2e974ebc4b24318e' &#124;&#124; '25c402db5149daa018e349a34a4beeba1f2dca45' }}</code> |
+| [promote / step 1](../.github/workflows/ui-release.yml#L101) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [promote / checkout reviewed release controller (not candidate source)](../.github/workflows/ui-release.yml#L103) | <code>weatherx-hq/atmos</code> | <code>${{ env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-wind100-onboarding-v2' &amp;&amp; '4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88' &#124;&#124; env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-beta-v1' &amp;&amp; 'b9db38dd22eed1da56c6c4dd4140480da7e89153' &#124;&#124; env.MODEL_SELECTION_SHA256 == 'production-account-billing-v1' &amp;&amp; '6fcec22638f6696be71daa2f2e974ebc4b24318e' &#124;&#124; '25c402db5149daa018e349a34a4beeba1f2dca45' }}</code> |
 
-Variable references (declared names only; values and activation unknown): [UI_AUTO_PROMOTE_ENABLED](../.github/workflows/ui-release.yml#L9), [UI_AUTO_PROMOTE_PROFILE](../.github/workflows/ui-release.yml#L9), [UI_DEPLOYMENT_HOLD_UNTIL](../.github/workflows/ui-release.yml#L91), [UI_ISOLATION_APPROVED](../.github/workflows/ui-release.yml#L90), [UI_PAGES_CONFIG_SHA256](../.github/workflows/ui-release.yml#L148), [UI_RELEASES_ENABLED](../.github/workflows/ui-release.yml#L89).
+Variable references (declared names only; values and activation unknown): [UI_AUTO_PROMOTE_ENABLED](../.github/workflows/ui-release.yml#L9), [UI_AUTO_PROMOTE_PROFILE](../.github/workflows/ui-release.yml#L9), [UI_DATA_TRUTH_WAIVE](../.github/workflows/ui-release.yml#L94), [UI_DEPLOYMENT_HOLD_UNTIL](../.github/workflows/ui-release.yml#L91), [UI_ISOLATION_APPROVED](../.github/workflows/ui-release.yml#L90), [UI_PAGES_CONFIG_SHA256](../.github/workflows/ui-release.yml#L149), [UI_RELEASES_ENABLED](../.github/workflows/ui-release.yml#L89).
 
 
 ## ui-staging-tc
