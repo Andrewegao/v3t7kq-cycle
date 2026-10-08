@@ -576,6 +576,24 @@
       "subsystem": "Observation component refresh",
       "lifecycle": "recurring",
       "runbook": "docs/observation-refresh.md"
+    },
+    {
+      "id": "glofas-ingest",
+      "path": ".github/workflows/glofas-ingest.yml",
+      "family": "maintenance",
+      "purpose": "Ingest the GloFAS v4 ensemble for the five Energy Desk dams from the Copernicus EWDS daily and publish the energy-glofas component.",
+      "subsystem": "Energy own ingest",
+      "lifecycle": "recurring",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "cams-ingest",
+      "path": ".github/workflows/cams-ingest.yml",
+      "family": "maintenance",
+      "purpose": "Ingest CAMS dust and total aerosol optical depth for the Energy Desk solar clusters from the Copernicus ADS twice daily and publish the energy-cams component.",
+      "subsystem": "Energy own ingest",
+      "lifecycle": "recurring",
+      "runbook": "docs/WORKFLOW_OPERATIONS.md"
     }
   ]
 }

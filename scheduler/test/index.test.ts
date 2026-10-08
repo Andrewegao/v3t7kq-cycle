@@ -8,6 +8,8 @@ const env = {
   GITHUB_WORKFLOW: 'catalog-bake.yml',
   SATELLITE_GITHUB_WORKFLOW: 'satellite-archive.yml',
   WIND100_GITHUB_WORKFLOW: 'bake.yml',
+  GLOFAS_GITHUB_WORKFLOW: 'glofas-ingest.yml',
+  CAMS_GITHUB_WORKFLOW: 'cams-ingest.yml',
   GITHUB_REF: 'main',
   CATALOG_TARGET: 'staging',
 } as unknown as CloudflareBindings;
@@ -52,6 +54,30 @@ describe('Cloudflare scheduler dispatch bridge', () => {
     expect(JSON.parse(String(init?.body))).toEqual({
       ref: 'main', inputs: { model: 'ecmwf', recovery_run_id: '', staging_wind100_only: true },
     });
+  });
+
+  it.each([
+    ['15 11,13 * * *', 'glofas'],
+    ['40 0,10,12,22 * * *', 'cams'],
+  ])('dispatches only the energy %s ingest workflow, with no data choice in the inputs', async (cron, family) => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ workflow_run_id: 789 }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }));
+    await expect(dispatchForCron(cron, env, fetcher)).resolves.toEqual({ kind: 'energy-ingest', family, runId: 789 });
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(url).toBe(`https://api.github.com/repos/Andrewegao/v3t7kq-cycle/actions/workflows/${family}-ingest.yml/dispatches`);
+    expect(JSON.parse(String(init?.body))).toEqual({ ref: 'main', inputs: { caller: 'scheduler' } });
+  });
+
+  it.each([
+    ['15 11,13 * * *', { GLOFAS_GITHUB_WORKFLOW: 'bake.yml' }],
+    ['40 0,10,12,22 * * *', { CAMS_GITHUB_WORKFLOW: 'glofas-ingest.yml' }],
+    ['15 11,13 * * *', { GITHUB_REF: 'feature' }],
+  ])('fails closed when an energy ingest workflow or ref drifts: %s %o', async (cron, change) => {
+    const fetcher = vi.fn<typeof fetch>();
+    await expect(dispatchForCron(cron, { ...env, ...change } as never, fetcher)).rejects.toThrow(/unsupported energy (glofas|cams) ingest/);
+    expect(fetcher).not.toHaveBeenCalled();
   });
 
   it('retries transient GitHub failures with bounded backoff', async () => {

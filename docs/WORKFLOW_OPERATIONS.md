@@ -39,6 +39,21 @@ Repository configuration alone cannot establish which scheduler is deployed or w
 
 No queue setting changes are part of this inventory. Freshness work generally benefits from finishing the running transaction and coalescing replaceable pending requests. Historical batches and explicit recovery carry distinct identities and need their own reviewed retention policy. GitHub queue order is not scientific chronology; expanding a queue does not make an old forecast eligible. Keep archive catalog writers and history/ledger updates serialized under their existing controls.
 
+## Energy own ingest (GloFAS dams, CAMS dust)
+
+`glofas-ingest.yml` (11:15 and 13:15 UTC) and `cams-ingest.yml` (00:40, 10:40, 12:40, 22:40 UTC) are
+dispatched by the scheduler Worker with identical GitHub-native fallbacks. Each runs the pinned Atmos
+producer (`data/fetch_glofas.py --dams`, `data/fetch_cams.py`), checks the output tree
+(`tools/energy-ingest.mjs check-tree`), publishes one immutable component (`energy-glofas` at
+`data-atmos/energy/glofas/`, `energy-cams` at `data-atmos/energy/cams/`) through
+`ops/platform/publish-r2-component.sh` with compare-and-swap on the served manifest, and reads the public
+`current.json` back. Both stand aside green until the pinned Atmos carries the producers and the
+`EWDS_API_KEY` / `ADS_API_KEY` secrets (or `CDS_API_KEY`) exist, and both are no-ops when their run is
+already served. A failed run publishes nothing; the previous pointer keeps serving and the app labels it
+with its own init. Recovery is a manual dispatch (GloFAS `date`, CAMS `run`); `dry_run` exercises the
+producer on its synthetic fixture without any key. Owner steps: Atmos
+`docs/engineering/energy/own-ingest.md`.
+
 ## Choose recovery by the failed stage
 
 1. **The provider was late or collection abstained:** use the existing [single-model refresh](single-model-refresh.md) path, after checking current request and source guards. A successful one-model run does not certify all eleven models.

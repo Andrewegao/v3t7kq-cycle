@@ -8,7 +8,7 @@
   "workers_dev": false,
   "preview_urls": false,
   "triggers": {
-    "crons": ["8-59/10 * * * *", "7 * * * *", "23 * * * *", "35 2,8,14,20 * * *"]
+    "crons": ["8-59/10 * * * *", "7 * * * *", "23 * * * *", "35 2,8,14,20 * * *", "15 11,13 * * *", "40 0,10,12,22 * * *"]
   },
   "secrets": {
     "required": ["GITHUB_DISPATCH_TOKEN"]
@@ -19,6 +19,8 @@
     "GITHUB_WORKFLOW": "catalog-bake.yml",
     "SATELLITE_GITHUB_WORKFLOW": "satellite-archive.yml",
     "WIND100_GITHUB_WORKFLOW": "bake.yml",
+    "GLOFAS_GITHUB_WORKFLOW": "glofas-ingest.yml",
+    "CAMS_GITHUB_WORKFLOW": "cams-ingest.yml",
     "GITHUB_REF": "main",
     "CATALOG_TARGET": "production"
   },

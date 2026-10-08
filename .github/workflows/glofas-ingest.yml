@@ -1,0 +1,155 @@
+# Energy Desk own ingest, GloFAS dams (Kazakhstan energy edition, W5; owner ruling 2026-10-08: no
+# aggregator dependencies). Reads the CEMS GloFAS v4 ensemble forecast (control + 50 members, 30 days)
+# for the five dams from the Copernicus EWDS with the pinned Atmos producer (data/fetch_glofas.py --dams),
+# publishes it as the catalog component energy-glofas (mount data-atmos/energy/glofas/) through the
+# unchanged Atmos publisher, and reads /data-atmos/energy/glofas/current.json back.
+#
+# Stands aside (green, nothing published) until both owner actions exist: the EWDS key secret and an
+# Atmos pin that carries the producer. A failed run never touches the served component: the last
+# good pointer keeps serving and the app labels it with its own init (48 h limit, then «missing»).
+name: Energy GloFAS dams ingest
+run-name: "${{ github.event_name == 'schedule' && 'energy glofas: scheduled fallback' || inputs.dry_run && 'energy glofas: dry run on the synthetic fixture' || format('energy glofas: dispatched ({0})', inputs.date || 'today') }}"
+permissions:
+  contents: read
+on:
+  schedule:
+    # Fallback only: the Cloudflare scheduler Worker dispatches this at 11:15 and 13:15 UTC
+    # (GloFAS daily forecast available from about 10:45 UTC; the second slot is the retry).
+    # Duplicates are no-ops: a run whose init is already served stops before any credential.
+    - cron: '15 11,13 * * *'
+  workflow_dispatch:
+    inputs:
+      date:
+        description: Forecast date YYYY-MM-DD (blank = today UTC)
+        type: string
+        required: false
+      dry_run:
+        description: Run the producer on the synthetic fixture only; publishes nothing
+        type: boolean
+        required: false
+        default: false
+      caller:
+        description: Leave empty. Set only by the Cloudflare scheduler Worker
+        type: string
+        required: false
+concurrency:
+  group: weatherx-energy-glofas-production
+  cancel-in-progress: false
+jobs:
+  ingest:
+    runs-on: ubuntu-24.04
+    environment: production
+    timeout-minutes: 120
+    env:
+      ATMOS_SHA: 4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88
+      APPROVED_SHA: ${{ vars.CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
+      HAS_KEY: ${{ (secrets.EWDS_API_KEY != '' || secrets.CDS_API_KEY != '') && 'true' || 'false' }}
+    steps:
+      - name: Require main and the approved production source before credentials
+        run: |
+          test "$GITHUB_REPOSITORY" = Andrewegao/v3t7kq-cycle
+          test "$GITHUB_REF" = refs/heads/main
+          test "$APPROVED_SHA" = "$ATMOS_SHA"
+          DATE="$(jq -r '.inputs.date // ""' "$GITHUB_EVENT_PATH")"
+          [ -n "$DATE" ] || DATE="$(date -u +%F)"
+          printf '%s\n' "$DATE" | grep -Eqx '20[0-9]{2}-[01][0-9]-[0-3][0-9]'
+          echo "RUN_DATE=$DATE" >> "$GITHUB_ENV"
+      - name: Checkout exact controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: cycle
+          persist-credentials: false
+          sparse-checkout: |
+            tools/energy-ingest.mjs
+            tools/energy-ingest-requirements.txt
+          sparse-checkout-cone-mode: false
+      - name: Checkout pinned Atmos producers
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: weatherx-hq/atmos
+          ref: 4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: atmos
+          persist-credentials: false
+          sparse-checkout: |
+            data
+            ops/platform
+          sparse-checkout-cone-mode: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: {node-version: '22'}
+      - name: Stand aside until the owner actions exist
+        id: ready
+        run: |
+          test "$(git -C atmos rev-parse HEAD)" = "$ATMOS_SHA"
+          if [ ! -f atmos/data/glofas_dams.py ]; then
+            echo "::notice::The pinned Atmos source predates the own-ingest producer. Owner: merge the Atmos PR, then re-pin (node tools/atmos-source-pin.mjs --set <sha>). Nothing published."
+            echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$DRY_RUN" != true ] && [ "$HAS_KEY" != true ]; then
+            echo "::notice::No EWDS_API_KEY (or CDS_API_KEY) secret. Owner: create the EWDS account, accept the CEMS-FLOODS licence for cems-glofas-forecast, add the secret. Nothing published."
+            echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$DRY_RUN" != true ]; then
+            if node cycle/tools/energy-ingest.mjs served glofas "${RUN_DATE}T00:00:00Z" | grep -qx 'served=true'; then
+              echo "::notice::GloFAS ${RUN_DATE} 00Z is already served. Nothing to do."
+              echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+          fi
+          echo "go=true" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        if: ${{ steps.ready.outputs.go == 'true' }}
+        with: {python-version: '3.12'}
+      - name: Provision the locked data runtime, the pinned EWDS client and rclone
+        if: ${{ steps.ready.outputs.go == 'true' }}
+        timeout-minutes: 10
+        run: |
+          git -C atmos diff --quiet HEAD
+          python -m venv atmos/data/.venv
+          atmos/data/.venv/bin/pip install --require-hashes --only-binary=:all: -r atmos/data/requirements.lock
+          atmos/data/.venv/bin/pip install --require-hashes --only-binary=:all: --no-deps -r cycle/tools/energy-ingest-requirements.txt
+          archive="$RUNNER_TEMP/rclone-v1.75.0-linux-amd64.zip"
+          curl --fail --silent --show-error --location --max-time 120 \
+            https://github.com/rclone/rclone/releases/download/v1.75.0/rclone-v1.75.0-linux-amd64.zip --output "$archive"
+          printf '%s  %s\n' aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa "$archive" | sha256sum --check --status
+          unzip -q "$archive" -d "$RUNNER_TEMP"
+          sudo install -m 0755 "$RUNNER_TEMP/rclone-v1.75.0-linux-amd64/rclone" /usr/local/bin/rclone
+          rclone version | head -1 | grep -Fx 'rclone v1.75.0'
+      - name: Dry run on the synthetic fixture (no network, no key)
+        if: ${{ steps.ready.outputs.go == 'true' && env.DRY_RUN == 'true' }}
+        run: atmos/data/.venv/bin/python atmos/data/fetch_glofas.py --dry-run --date "$RUN_DATE" --out "$RUNNER_TEMP/energy-glofas"
+      - name: Ingest the GloFAS ensemble for the five dams from EWDS
+        if: ${{ steps.ready.outputs.go == 'true' && env.DRY_RUN != 'true' }}
+        # EWDS queues requests; five small area requests normally finish well inside this budget.
+        timeout-minutes: 90
+        env:
+          EWDS_API_KEY: ${{ secrets.EWDS_API_KEY }}
+          CDS_API_KEY: ${{ secrets.CDS_API_KEY }}
+        run: |
+          atmos/data/.venv/bin/python atmos/data/fetch_glofas.py --dams --date "$RUN_DATE" --out "$RUNNER_TEMP/energy-glofas"
+          test -f "$RUNNER_TEMP/energy-glofas/current.json"
+          node cycle/tools/energy-ingest.mjs check-tree glofas "$RUNNER_TEMP/energy-glofas"
+      - name: Publish one immutable component and promote it with compare-and-swap
+        if: ${{ steps.ready.outputs.go == 'true' && env.DRY_RUN != 'true' }}
+        timeout-minutes: 15
+        env:
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+          CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+        run: node cycle/tools/energy-ingest.mjs publish glofas "$RUNNER_TEMP/energy-glofas" "$GITHUB_WORKSPACE/atmos"
+      - name: Read the public pointer and dated file back
+        if: ${{ steps.ready.outputs.go == 'true' && env.DRY_RUN != 'true' }}
+        timeout-minutes: 5
+        run: node cycle/tools/energy-ingest.mjs readback glofas "$RUNNER_TEMP/energy-glofas"
+      - name: Keep the produced pointer and document
+        if: ${{ always() && steps.ready.outputs.go == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: energy-glofas-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/energy-glofas
+          if-no-files-found: ignore
+          retention-days: 7

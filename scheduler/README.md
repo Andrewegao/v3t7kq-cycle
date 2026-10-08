@@ -9,10 +9,14 @@ This scheduled-only Cloudflare Worker dispatches the existing GitHub Actions bak
 - `23 * * * *`: dispatch the idempotent satellite/radar hourly tail only
 - `35 2,8,14,20 * * *`: dispatch an isolated ECMWF collection plus staging-only
   100 m wind publication, five minutes after each native bake schedule
+- `15 11,13 * * *`: dispatch `glofas-ingest.yml` (Energy Desk GloFAS dams from the
+  Copernicus EWDS; daily forecast from about 10:45 UTC, 13:15 is the retry)
+- `40 0,10,12,22 * * *`: dispatch `cams-ingest.yml` (Energy Desk CAMS dust/AOD from the
+  Copernicus ADS; each 00/12 UTC run asked 10 h 40 min after init and again 2 h later)
 
 The GitHub-native schedules are a fail-open independent fallback. Existing workflow
 concurrency and immutable/no-change promotion behavior make duplicate dispatches
-safe. The archive dispatch is restricted to `hourly-tail-v1`; it cannot enter either
+safe. The two energy ingest dispatches carry only `caller: scheduler`; each workflow takes its run from the clock, stands aside until its Copernicus key secret exists, and is a no-op when its run is already served. The archive dispatch is restricted to `hourly-tail-v1`; it cannot enter either
 manual backfill path. The 100 m wind dispatch is restricted to `bake.yml` on `main`
 with `model=ecmwf`, an empty recovery run, and `staging_wind100_only=true`; every
 production publish and whole-maintenance job remains skipped. The reviewed Worker target is `production`; it may be deployed only after the

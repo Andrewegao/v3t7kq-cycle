@@ -45,6 +45,14 @@
     {
       "path": "tools/production-wind100-policy.json",
       "occurrences": 1
+    },
+    {
+      "path": ".github/workflows/glofas-ingest.yml",
+      "occurrences": 2
+    },
+    {
+      "path": ".github/workflows/cams-ingest.yml",
+      "occurrences": 2
     }
   ],
   "otherAtmosCommits": {
