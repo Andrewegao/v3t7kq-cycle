@@ -81,7 +81,7 @@ jobs:
     timeout-minutes: 210
     env:
       CATALOG_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || vars.CATALOG_DEFAULT_TARGET || 'staging' }}
-      ATMOS_SHA: 18faa9b33084623ef2486a57134de2e8c8974b0c
+      ATMOS_SHA: 332bd0d05ce3cfc1f085059cbc618c94b4121cb0
       MODEL: ${{ matrix.model }}
     steps:
       - name: qualify production source and select schema-1 point reuse before credentials
@@ -109,14 +109,14 @@ jobs:
         with:
           repository: weatherx-hq/atmos
           # Qualified fast-lane source, independent of experimental app master.
-          ref: 18faa9b33084623ef2486a57134de2e8c8974b0c
+          ref: 332bd0d05ce3cfc1f085059cbc618c94b4121cb0
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: atmos
           persist-credentials: false
       - name: Verify approved immutable component collector
         working-directory: atmos
         run: |
-          test "$(git rev-parse HEAD)" = "18faa9b33084623ef2486a57134de2e8c8974b0c"
+          test "$(git rev-parse HEAD)" = "332bd0d05ce3cfc1f085059cbc618c94b4121cb0"
           git diff --exit-code HEAD
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22 }
