@@ -41,7 +41,7 @@ jobs:
     outputs:
       status: ${{ steps.result.outputs.status }}
     env:
-      ATMOS_SHA: e5fd5758aab079c32c6b077857e641ba40970d04
+      ATMOS_SHA: 4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88
       UNQUALIFIED_PLACEHOLDER_SHA: 77487534a6ff0a17bf4e5d55f9ab5c06938138d4
       MODEL: ${{ inputs.model }}
       COMPONENT_KIND: ${{ inputs.kind }}
@@ -90,7 +90,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: weatherx-hq/atmos
-          ref: e5fd5758aab079c32c6b077857e641ba40970d04
+          ref: 4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: atmos
           fetch-depth: 32
