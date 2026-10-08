@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {normalizeLongitude,pointUrl,preflightLocations,requireSelectionMargin,runPreflight,validatePointPayload} from '../tools/ui-staging-preflight.mjs';
 
-const withTides=fetcher=>async(url,init)=>new URL(url).pathname==='/data-atmos/tides/tides.json'
+const withData=fetcher=>async(url,init)=>new URL(url).pathname==='/data-atmos/airports/airports.json'
   ? {url:String(url),status:200,headers:new Headers({'content-type':'application/json','x-weatherx-release':'staging-1'}),body:{cancel:async()=>{}}}
   : fetcher(url,init);
 
@@ -33,15 +33,15 @@ test('point payload requires a current non-stale run and finite core variables',
     assert.throws(()=>validatePointPayload(payload('ecmwf',change),'ecmwf',expected));
 });
 test('baseline preflight is credential-free, probes both models, and rejects redirects or missing release identity',async()=>{
-  const calls=[];const receipt=await runPreflight({selection:'none',root:'/unused',now:NOW,fetchImpl:withTides(async(url,init)=>{calls.push({url:String(url),init});return response(url,new URL(url).pathname.endsWith('/gfs')?'gfs':'ecmwf');})});
+  const calls=[];const receipt=await runPreflight({selection:'none',root:'/unused',now:NOW,fetchImpl:withData(async(url,init)=>{calls.push({url:String(url),init});return response(url,new URL(url).pathname.endsWith('/gfs')?'gfs':'ecmwf');})});
   assert.equal(receipt.origin,'https://staging.weatherx.org');assert.equal(receipt.locations,1);assert.equal(receipt.probes,2);assert.equal(calls.length,2);for(const call of calls){assert.equal(call.init.credentials,undefined);assert.doesNotMatch(JSON.stringify(call.init),/token|secret|production/i);}
-  await assert.rejects(runPreflight({selection:'none',root:'/unused',now:NOW,fetchImpl:withTides(async url=>({...response(url,'ecmwf'),url:'https://weatherx.org/api/v1/point-series/ecmwf'}))}));
-  await assert.rejects(runPreflight({selection:'none',root:'/unused',now:NOW,fetchImpl:withTides(async url=>({...response(url,new URL(url).pathname.endsWith('/gfs')?'gfs':'ecmwf'),headers:new Headers()}))}));
-  await assert.rejects(runPreflight({selection:'none',root:'/unused',now:NOW,fetchImpl:withTides(async url=>response(url,new URL(url).pathname.endsWith('/gfs')?'gfs':'ecmwf',{releaseId:'body-other'}))}));
-  await assert.rejects(runPreflight({selection:'none',root:'/unused',now:NOW,fetchImpl:withTides(async url=>{const model=new URL(url).pathname.endsWith('/gfs')?'gfs':'ecmwf',release=model==='gfs'?'release-gfs':'staging-1';return {...response(url,model,{releaseId:release}),headers:new Headers({'x-weatherx-release':release})};})}));
+  await assert.rejects(runPreflight({selection:'none',root:'/unused',now:NOW,fetchImpl:withData(async url=>({...response(url,'ecmwf'),url:'https://weatherx.org/api/v1/point-series/ecmwf'}))}));
+  await assert.rejects(runPreflight({selection:'none',root:'/unused',now:NOW,fetchImpl:withData(async url=>({...response(url,new URL(url).pathname.endsWith('/gfs')?'gfs':'ecmwf'),headers:new Headers()}))}));
+  await assert.rejects(runPreflight({selection:'none',root:'/unused',now:NOW,fetchImpl:withData(async url=>response(url,new URL(url).pathname.endsWith('/gfs')?'gfs':'ecmwf',{releaseId:'body-other'}))}));
+  await assert.rejects(runPreflight({selection:'none',root:'/unused',now:NOW,fetchImpl:withData(async url=>{const model=new URL(url).pathname.endsWith('/gfs')?'gfs':'ecmwf',release=model==='gfs'?'release-gfs':'staging-1';return {...response(url,model,{releaseId:release}),headers:new Headers({'x-weatherx-release':release})};})}));
 });
 test('release-roster core preflight reads no selection file and proves AIFS plus HRRR at its CONUS point',async()=>{
-  const calls=[];const receipt=await runPreflight({selection:'release-roster-core-v1',root:'/path/that/does/not/exist',now:NOW,fetchImpl:withTides(async(url,init)=>{
+  const calls=[];const receipt=await runPreflight({selection:'release-roster-core-v1',root:'/path/that/does/not/exist',now:NOW,fetchImpl:withData(async(url,init)=>{
     calls.push({url:new URL(url),init});const model=new URL(url).pathname.split('/').at(-1);return response(url,model);
   })});
   assert.equal(receipt.locations,2);assert.equal(receipt.probes,4);assert.deepEqual(receipt.results.map(row=>row.model),['ecmwf','gfs','aifs','hrrr']);
@@ -51,7 +51,7 @@ test('release-roster core preflight reads no selection file and proves AIFS plus
 });
 test('release-roster core preflight runs and reports every independent core probe when peers fail',async()=>{
   const calls=[];
-  await assert.rejects(runPreflight({selection:'release-roster-core-v1',root:'/unused',now:NOW,batchSize:4,fetchImpl:withTides(async url=>{
+  await assert.rejects(runPreflight({selection:'release-roster-core-v1',root:'/unused',now:NOW,batchSize:4,fetchImpl:withData(async url=>{
     const parsed=new URL(url),model=parsed.pathname.split('/').at(-1);calls.push(model);
     if(model==='ecmwf'||model==='hrrr')return {...response(url,model),status:503};
     return response(url,model);
@@ -66,12 +66,12 @@ test('release-roster core preflight runs and reports every independent core prob
   assert.deepEqual(calls,['ecmwf','gfs','aifs','hrrr'],'AIFS and HRRR must both run even when a peer fails');
 });
 
-test('unavailable required tides refuses the cheap preflight before point/build work',async()=>{
+test('unavailable required shared-read data refuses the cheap preflight before point/build work',async()=>{
   const paths=[];
   await assert.rejects(runPreflight({selection:'none',root:'/unused',now:NOW,fetchImpl:async url=>{
     const path=new URL(url).pathname;paths.push(path);
-    if(path==='/data-atmos/tides/tides.json')return {url:String(url),status:503,headers:new Headers({'content-type':'application/json'}),body:{cancel:async()=>{}}};
+    if(path==='/data-atmos/airports/airports.json')return {url:String(url),status:503,headers:new Headers({'content-type':'application/json'}),body:{cancel:async()=>{}}};
     return response(url,path.endsWith('/gfs')?'gfs':'ecmwf');
-  }}),/required staging data.*tides.*status 503.*expected 200/);
-  assert.deepEqual(paths,['/data-atmos/tides/tides.json']);
+  }}),/required staging data.*airports.*status 503.*expected 200/);
+  assert.deepEqual(paths,['/data-atmos/airports/airports.json']);
 });
