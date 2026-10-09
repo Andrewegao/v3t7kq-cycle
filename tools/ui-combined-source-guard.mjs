@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Reviewed merged master head (master head 04:03Z), first production-bound pin since the 2026-09-27 release; retain the exact-current-master and clean-checkout guard.
-export const UI_SOURCE = '9ee63cb2638d39b0c99b4fa7a508447e17d775d5';
+export const UI_SOURCE = '9398ab00032c8d4f511a8f8c72be31474116e2cf';
 export const REVIEWED_MASTER = UI_SOURCE;
 export const EDGE_ONLY_DIFF = Object.freeze([]);
 
