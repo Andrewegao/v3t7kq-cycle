@@ -76,7 +76,7 @@
       "0eeec07e06e5e48b53d41bf3590218a856432b32": [
         "tools/ui-release.mjs"
       ],
-      "9398ab00032c8d4f511a8f8c72be31474116e2cf": [
+      "34efee01d95942145c6dfc79732278728cef0ddf": [
         ".github/workflows/ui-release.yml",
         ".github/workflows/ui-staging.yml",
         "tools/ui-combined-source-guard.mjs",
