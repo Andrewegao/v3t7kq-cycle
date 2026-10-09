@@ -13,7 +13,7 @@ import {verifyProductionGround} from './ui-production-ground.mjs';
 import {accountQualificationRequired,runAccountQualification,readAccountProof,accountQualificationBinding,
   requireAccountQualificationBinding} from './ui-staging-account-proof.mjs';
 import {PUBLIC_JOURNEY_PROOF_MAX_BYTES,runPublicReleaseJourneys,readPublicJourneyProof,
-  validatePublicJourneyProofBytes,publicJourneyBinding,requirePublicJourneyBinding} from './ui-public-release-journeys.mjs';
+  validatePublicJourneyProofBytes,publicJourneyBinding,requirePublicJourneyBinding,productionWindFallbackPolicy} from './ui-public-release-journeys.mjs';
 import { controlShaFor, TC_CONTROL_SHA, REPOSITORY, MAX_BYTES, gate, hash, createCandidate, validateCandidate,
   readTree, validateFiles, seal, unseal, restore, eligibleRun } from './ui-candidate.mjs';
 import { packBuild, unpackBuild, eligibleBuild } from './ui-build-transfer.mjs';
@@ -824,7 +824,8 @@ async function deploy(stage) {
     }
     if(publicCombinedProfile(c.profile)){
       const publicProof=readPublicJourneyProof({runnerTemp:process.env.RUNNER_TEMP,controlRoot:CONTROL,stage,
-        sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId,requireFreshWind:false});
+        sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId,requireFreshWind:false,
+        windFallback:productionWindFallbackPolicy(stage,process.env)});
       Object.assign(c.qualification,publicJourneyBinding(publicProof));
     }
     if(staticCompressionProfile(c.profile)){
@@ -879,7 +880,8 @@ async function verify(stage) {
     if(accountQualificationRequired(stage,phase,c.profile))await runAccountQualification({candidate:c,
       releaseId:validateCandidate(c).releaseId,runnerTemp:process.env.RUNNER_TEMP,controlRoot:CONTROL});
     if(publicCombinedProfile(c.profile))runPublicReleaseJourneys({runnerTemp:process.env.RUNNER_TEMP,
-      controlRoot:CONTROL,stage,sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId});
+      controlRoot:CONTROL,stage,sourceSha:c.sourceSha,releaseId:validateCandidate(c).releaseId,
+      windFallback:productionWindFallbackPolicy(stage,process.env)});
   }
 }
 async function retain() {

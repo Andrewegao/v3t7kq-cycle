@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `61144d04a4993b592805c27b0571b06d7ab339dd66cf03324c0997bb831a5920`.
+Source digest (registry and workflow bytes): `4579024bcf4ac5137e0d60e48ce29db9a7e4fa993c6f22c8073f0846ac04c6e6`.
 
 66 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -1662,7 +1662,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | [promote / step 1](../.github/workflows/ui-release.yml#L100) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 | [promote / checkout reviewed release controller (not candidate source)](../.github/workflows/ui-release.yml#L102) | <code>weatherx-hq/atmos</code> | <code>${{ env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-wind100-onboarding-v2' &amp;&amp; '9398ab00032c8d4f511a8f8c72be31474116e2cf' &#124;&#124; env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-beta-v1' &amp;&amp; 'b9db38dd22eed1da56c6c4dd4140480da7e89153' &#124;&#124; env.MODEL_SELECTION_SHA256 == 'production-account-billing-v1' &amp;&amp; '6fcec22638f6696be71daa2f2e974ebc4b24318e' &#124;&#124; '25c402db5149daa018e349a34a4beeba1f2dca45' }}</code> |
 
-Variable references (declared names only; values and activation unknown): [UI_AUTO_PROMOTE_ENABLED](../.github/workflows/ui-release.yml#L9), [UI_AUTO_PROMOTE_PROFILE](../.github/workflows/ui-release.yml#L9), [UI_DEPLOYMENT_HOLD_UNTIL](../.github/workflows/ui-release.yml#L91), [UI_ISOLATION_APPROVED](../.github/workflows/ui-release.yml#L90), [UI_PAGES_CONFIG_SHA256](../.github/workflows/ui-release.yml#L148), [UI_RELEASES_ENABLED](../.github/workflows/ui-release.yml#L89).
+Variable references (declared names only; values and activation unknown): [UI_AUTO_PROMOTE_ENABLED](../.github/workflows/ui-release.yml#L9), [UI_AUTO_PROMOTE_PROFILE](../.github/workflows/ui-release.yml#L9), [UI_DEPLOYMENT_HOLD_UNTIL](../.github/workflows/ui-release.yml#L91), [UI_ISOLATION_APPROVED](../.github/workflows/ui-release.yml#L90), [UI_PAGES_CONFIG_SHA256](../.github/workflows/ui-release.yml#L148), [UI_PRODUCTION_WIND100_FALLBACK](../.github/workflows/ui-release.yml#L149), [UI_RELEASES_ENABLED](../.github/workflows/ui-release.yml#L89).
 
 
 ## ui-staging-tc

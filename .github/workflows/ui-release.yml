@@ -146,6 +146,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.UI_PRODUCTION_PAGES_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
           UI_PAGES_CONFIG_SHA256: ${{ vars.UI_PAGES_CONFIG_SHA256 }}
+          UI_PRODUCTION_WIND100_FALLBACK: ${{ vars.UI_PRODUCTION_WIND100_FALLBACK }}
         run: node cycle/tools/ui-release.mjs deploy production
       - name: retain automatic rollback evidence
         if: ${{ always() }}

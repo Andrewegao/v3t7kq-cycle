@@ -29,6 +29,17 @@ export const PUBLIC_JOURNEY_REQUIRED_STEPS = Object.freeze([
   'real-native100m-chart',
   'wind-energy-reference-output-chart',
 ]);
+// The honest fallback journey (origin answers 404 wind100_unavailable; the chart opens from the
+// ordinary point series without a native claim). Accepted only for production and only while the
+// owner's variable UI_PRODUCTION_WIND100_FALLBACK is 'accept' (decision 2026-10-09).
+export const PUBLIC_JOURNEY_FALLBACK_STEPS = Object.freeze(PUBLIC_JOURNEY_REQUIRED_STEPS
+  .map(step => (step === 'real-native100m-chart' ? 'fallback-100m-chart' : step)));
+export const PUBLIC_JOURNEY_FALLBACK_VARIABLE = 'UI_PRODUCTION_WIND100_FALLBACK';
+
+/** 'accept' only for production and only when the owner's variable says so; otherwise 'refuse'. */
+export function productionWindFallbackPolicy(stage, env = process.env) {
+  return stage === 'production' && env?.[PUBLIC_JOURNEY_FALLBACK_VARIABLE] === 'accept' ? 'accept' : 'refuse';
+}
 const ORIGINS = Object.freeze({
   staging: 'https://staging.weatherx.org',
   production: 'https://weatherx.org',
@@ -76,7 +87,16 @@ function validateMockedAuth(values) {
   }
 }
 
-function validateWind(stage, wind, now, requireFreshWind) {
+function validateWind(stage, wind, now, requireFreshWind, windFallback) {
+  if (wind !== null && typeof wind === 'object' && wind.native === false) {
+    assert.equal(stage, 'production', 'the Wind100 fallback journey is accepted for production only');
+    assert.equal(windFallback, 'accept', `the Wind100 fallback journey requires ${PUBLIC_JOURNEY_FALLBACK_VARIABLE}=accept`);
+    exact(wind, ['native', 'selectorStatus', 'selectorCode', 'chartSource'], 'public Wind100 fallback proof');
+    assert.equal(wind.selectorStatus, 404, 'Wind100 fallback requires the unavailable selector answer');
+    assert.equal(wind.selectorCode, 'wind100_unavailable', 'Wind100 fallback requires the documented unavailable code');
+    assert.match(wind.chartSource ?? '', /^[a-z0-9-]{1,32}$/, 'Wind100 fallback chart source is invalid');
+    return;
+  }
   exact(wind, ['runId', 'catalogId', 'samples', 'freshUntil', 'source', 'distinctFromSurface'], 'public Wind100 proof');
   assert.match(wind.runId ?? '', /^[0-9]{10}$/, 'Wind100 run ID must be ten digits');
   assert.match(wind.catalogId ?? '', stage === 'staging'
@@ -134,9 +154,10 @@ export function validatePublicJourneyProofBytes(bytes, context, now = Date.now()
     for (const field of ['blockedWrites', 'pageErrors', 'assetErrors']) {
       assert.deepEqual(journey[field], [], `public journey ${field} must be empty`);
     }
-    assert.deepEqual(journey.steps, PUBLIC_JOURNEY_REQUIRED_STEPS,
+    const fallback = journey.wind !== null && typeof journey.wind === 'object' && journey.wind.native === false;
+    assert.deepEqual(journey.steps, fallback ? PUBLIC_JOURNEY_FALLBACK_STEPS : PUBLIC_JOURNEY_REQUIRED_STEPS,
       'public journey did not prove the exact reviewed onboarding sequence');
-    validateWind(context.stage, journey.wind, now, context.requireFreshWind !== false);
+    validateWind(context.stage, journey.wind, now, context.requireFreshWind !== false, context.windFallback);
   }
   assert.deepEqual([...seen].sort(), [...VIEWPORTS].sort(), 'public journey viewport coverage differs');
   const sanitized = Buffer.from(`${JSON.stringify({
@@ -191,17 +212,18 @@ export function requirePublicJourneyBinding(candidate, proof) {
 }
 
 export function readPublicJourneyProof({ runnerTemp, controlRoot, stage, sourceSha, releaseId,
-  now = Date.now(), requireFreshWind = true }) {
+  now = Date.now(), requireFreshWind = true, windFallback = 'refuse' }) {
   const outputPath = publicJourneyProofPath(runnerTemp, stage);
   const harnessPath = resolve(controlRoot, PUBLIC_JOURNEY_HARNESS);
   const harnessSha256 = hash(boundedRegularFile(harnessPath, PUBLIC_JOURNEY_PROOF_MAX_BYTES, 'public journey harness'));
   const proof = validatePublicJourneyProofBytes(
     boundedRegularFile(outputPath, PUBLIC_JOURNEY_PROOF_MAX_BYTES, 'public journey proof'),
-    { stage, sourceSha, releaseId, requireFreshWind }, now);
+    { stage, sourceSha, releaseId, requireFreshWind, windFallback }, now);
   return { ...proof, harnessSha256, outputPath };
 }
 
-export function runPublicReleaseJourneys({ runnerTemp, controlRoot, stage, sourceSha, releaseId, env = process.env }) {
+export function runPublicReleaseJourneys({ runnerTemp, controlRoot, stage, sourceSha, releaseId, env = process.env,
+  windFallback = 'refuse' }) {
   const outputPath = publicJourneyProofPath(runnerTemp, stage);
   mkdirSync(dirname(outputPath), { recursive: true, mode: 0o700 });
   const harnessPath = resolve(controlRoot, PUBLIC_JOURNEY_HARNESS);
@@ -210,7 +232,7 @@ export function runPublicReleaseJourneys({ runnerTemp, controlRoot, stage, sourc
     env: publicJourneyEnvironment(env, { stage, sourceSha, releaseId, outputPath }),
     stdio: 'inherit',
   });
-  const proof = readPublicJourneyProof({ runnerTemp, controlRoot, stage, sourceSha, releaseId });
+  const proof = readPublicJourneyProof({ runnerTemp, controlRoot, stage, sourceSha, releaseId, windFallback });
   writeFileSync(outputPath, proof.bytes, { flag: 'w', mode: 0o600 });
   return proof;
 }

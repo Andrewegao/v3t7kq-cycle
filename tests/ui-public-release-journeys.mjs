@@ -5,7 +5,10 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import {
   PUBLIC_JOURNEY_AUTH_EVIDENCE,
+  PUBLIC_JOURNEY_FALLBACK_STEPS,
+  PUBLIC_JOURNEY_FALLBACK_VARIABLE,
   PUBLIC_JOURNEY_REQUIRED_STEPS,
+  productionWindFallbackPolicy,
   publicJourneyBinding,
   publicJourneyEnvironment,
   requirePublicJourneyBinding,
@@ -128,4 +131,45 @@ test('guard success receipt is exact, candidate-bound and read without following
     symlinkSync(path,link);
     assert.throws(()=>readGuardSuccessReceipt(link,context));
   }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+function fallbackReport(stage='production'){
+  const value=report(stage);
+  for(const journey of value.journeys){journey.steps=[...PUBLIC_JOURNEY_FALLBACK_STEPS];
+    journey.wind={native:false,selectorStatus:404,selectorCode:'wind100_unavailable',chartSource:'fusion'};}
+  return value;
+}
+
+test('the honest Wind100 fallback receipt promotes only on production and only under the owner variable',()=>{
+  const proof=validatePublicJourneyProofBytes(encode(fallbackReport()),{stage:'production',sourceSha,releaseId,windFallback:'accept'},now);
+  assert.match(proof.sha256,/^[a-f0-9]{64}$/);
+  assert.deepEqual(proof.journeys.map(row=>row.wind.native),[false,false]);
+  assert.deepEqual(proof.journeys[0].steps,PUBLIC_JOURNEY_FALLBACK_STEPS);
+  assert.equal(PUBLIC_JOURNEY_FALLBACK_STEPS.length,PUBLIC_JOURNEY_REQUIRED_STEPS.length);
+  assert.ok(PUBLIC_JOURNEY_FALLBACK_STEPS.includes('fallback-100m-chart')&&!PUBLIC_JOURNEY_FALLBACK_STEPS.includes('real-native100m-chart'));
+  const refuse=(value,context)=>assert.throws(()=>validatePublicJourneyProofBytes(encode(value),context,now));
+  refuse(fallbackReport(),{stage:'production',sourceSha,releaseId});
+  refuse(fallbackReport(),{stage:'production',sourceSha,releaseId,windFallback:'refuse'});
+  refuse(fallbackReport('staging'),{stage:'staging',sourceSha,releaseId,windFallback:'accept'});
+  const check=mutate=>{const value=fallbackReport();mutate(value);refuse(value,{stage:'production',sourceSha,releaseId,windFallback:'accept'});};
+  check(value=>{value.journeys[0].steps=[...PUBLIC_JOURNEY_REQUIRED_STEPS];});
+  check(value=>{value.journeys[0].wind.selectorStatus=503;});
+  check(value=>{value.journeys[0].wind.selectorCode='not_found';});
+  check(value=>{value.journeys[0].wind.chartSource='';});
+  check(value=>{value.journeys[0].wind.samples=8;});
+  check(value=>{delete value.journeys[0].wind.chartSource;});
+  const live=report('production');live.journeys[0].steps=[...PUBLIC_JOURNEY_FALLBACK_STEPS];
+  refuse(live,{stage:'production',sourceSha,releaseId,windFallback:'accept'});
+  assert.doesNotThrow(()=>validatePublicJourneyProofBytes(encode(report('production')),{stage:'production',sourceSha,releaseId,windFallback:'accept'},now),
+    'a live native receipt still promotes while the fallback is accepted');
+});
+
+test('the fallback policy reads one explicit owner variable and never applies to staging',()=>{
+  assert.equal(PUBLIC_JOURNEY_FALLBACK_VARIABLE,'UI_PRODUCTION_WIND100_FALLBACK');
+  assert.equal(productionWindFallbackPolicy('production',{UI_PRODUCTION_WIND100_FALLBACK:'accept'}),'accept');
+  assert.equal(productionWindFallbackPolicy('production',{UI_PRODUCTION_WIND100_FALLBACK:'true'}),'refuse');
+  assert.equal(productionWindFallbackPolicy('production',{}),'refuse');
+  assert.equal(productionWindFallbackPolicy('staging',{UI_PRODUCTION_WIND100_FALLBACK:'accept'}),'refuse');
+  const workflow=readFileSync(resolve('.github/workflows/ui-release.yml'),'utf8');
+  assert.match(workflow,/UI_PRODUCTION_WIND100_FALLBACK: \$\{\{ vars\.UI_PRODUCTION_WIND100_FALLBACK \}\}/);
 });
