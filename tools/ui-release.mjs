@@ -852,7 +852,7 @@ async function verify(stage) {
     // exits on TERM before timeout can escalate the rest of its group.
     run('/usr/bin/timeout',['--signal=KILL','15m','bash',verifier,ORIGINS[stage]],
       {env:platformVerificationEnvironment(stage,phase)});
-  } else run('bash',[verifier,ORIGINS[stage]]);
+  } else run('bash',[verifier,ORIGINS[stage]],{env:platformVerificationEnvironment(stage,phase)});
   if (phase !== 'rollback') {
     // Real built-site checks inside the rollback transaction, not after declaring success.
     if(stage==='staging'&&staticCompressionProfile(c.profile)) {
