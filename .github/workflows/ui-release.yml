@@ -103,7 +103,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          ref: ${{ env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-wind100-onboarding-v2' && '9ee63cb2638d39b0c99b4fa7a508447e17d775d5' || env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-beta-v1' && 'b9db38dd22eed1da56c6c4dd4140480da7e89153' || env.MODEL_SELECTION_SHA256 == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || '25c402db5149daa018e349a34a4beeba1f2dca45' }}
+          ref: ${{ env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-wind100-onboarding-v2' && '9398ab00032c8d4f511a8f8c72be31474116e2cf' || env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-beta-v1' && 'b9db38dd22eed1da56c6c4dd4140480da7e89153' || env.MODEL_SELECTION_SHA256 == 'production-account-billing-v1' && '6fcec22638f6696be71daa2f2e974ebc4b24318e' || '25c402db5149daa018e349a34a4beeba1f2dca45' }}
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           persist-credentials: false
           path: control
