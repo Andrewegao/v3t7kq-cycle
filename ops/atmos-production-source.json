@@ -79,9 +79,6 @@
       "164a469189da2c8303c997d4020b3ae20da84cd7": [
         "tools/ui-release.mjs"
       ],
-      "332bd0d05ce3cfc1f085059cbc618c94b4121cb0": [
-        ".github/workflows/catalog-bake.yml"
-      ],
       "25c402db5149daa018e349a34a4beeba1f2dca45": [
         ".github/workflows/source-checkout-probe.yml",
         ".github/workflows/ui-release.yml",
@@ -147,7 +144,8 @@
         ".github/workflows/ui-release.yml",
         ".github/workflows/ui-staging.yml",
         "tools/ui-combined-source-guard.mjs",
-        "tools/ui-public-combined.mjs"
+        "tools/ui-public-combined.mjs",
+        ".github/workflows/catalog-bake.yml"
       ],
       "b9db38dd22eed1da56c6c4dd4140480da7e89153": [
         ".github/workflows/ui-release.yml",
