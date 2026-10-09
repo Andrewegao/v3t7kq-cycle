@@ -91,7 +91,7 @@
       ]
     },
     {
-      "pin": "101a2ef0f05bca67bf94dbb41e7217548aa6d44b",
+      "pin": "9ee63cb2638d39b0c99b4fa7a508447e17d775d5",
       "files": [
         "app/e2e/layer-switch-surface.mjs",
         "app/e2e/layer-switch-tint.mjs",
@@ -129,7 +129,7 @@
   ],
   "stagingBuild": {
     "profile": "production-account-ru-kk-wind100-onboarding-v2",
-    "pin": "101a2ef0f05bca67bf94dbb41e7217548aa6d44b",
+    "pin": "9ee63cb2638d39b0c99b4fa7a508447e17d775d5",
     "paths": [
       ".gitignore",
       "platform/edge/package.json",
@@ -137,6 +137,6 @@
       "ops/release/build-release-receipt.mjs"
     ],
     "coneMode": false,
-    "provenance": "Merged Atmos PR #520 source 101a2ef0f05bca67bf94dbb41e7217548aa6d44b, tree ff4343b3f3561a458b31293b8deecd3e0b09324e, merged at 2026-10-08T20:49:06-05:00 (atmos master head at pin time). Supersedes the 13b578c96acb62172385e83f8e31aa6c45e17296 pin of the same release attempt, which was never qualified. Relative to 13b578c96a master advanced by #520 only (docs: unattended publication record), which is outside the UI closure. The 13b578c96a candidate itself reached staging (run 37871478987): build, app tests, platform verification, feeds and the layer-paint guard passed; the account harness refused it on one aborted /assets fetch and the guard rolled staging back (fuse #402). None of the 22 qualification inventory files, the four sparse build paths, the two release layer harnesses or the 43 account/onboarding sources changed relative to 13b578c96acb62172385e83f8e31aa6c45e17296; relative to the last qualified pin b3f63183dbcde01e388fda7720726cc53f28134b (PR #486) the inventory delta is unchanged from the #504 admission (.gitignore, app/package.json and lockfile, platform/edge/package.json and lockfile, ops/release/test-guard-pages-deploy.mjs). The production platform Worker is not part of this UI candidate and is not deployed by it. Fresh controller CI, current-master/clean-checkout admission and one new exact-source guarded staging run remain required; no deployment, performance or memory completion is asserted. See docs/ui-public-combined.md."
+    "provenance": "Merged Atmos master head 04:03Z source 9ee63cb2638d39b0c99b4fa7a508447e17d775d5, tree 9a140ec46e83c2168ec8bba658f807dff09bfef5, merged at 2026-10-08T22:53:52-05:00 (atmos master head at pin time). Supersedes the 101a2ef0f05bca67bf94dbb41e7217548aa6d44b pin of the same release attempt, which was never qualified. Relative to 101a2ef0f0 master advanced by the owner's latest merge; see the PR for the delta. The 13b578c96a candidate (same UI closure) reached staging in run 37871478987 and was refused only by the account harness on one aborted /assets fetch; fuse #402 was closed with that diagnosis. None of the 22 qualification inventory files, the four sparse build paths, the two release layer harnesses or the 43 account/onboarding sources changed relative to 101a2ef0f05bca67bf94dbb41e7217548aa6d44b; relative to the last qualified pin b3f63183dbcde01e388fda7720726cc53f28134b (PR #486) the inventory delta is unchanged from the #504 admission (.gitignore, app/package.json and lockfile, platform/edge/package.json and lockfile, ops/release/test-guard-pages-deploy.mjs). The production platform Worker is not part of this UI candidate and is not deployed by it. Fresh controller CI, current-master/clean-checkout admission and one new exact-source guarded staging run remain required; no deployment, performance or memory completion is asserted. See docs/ui-public-combined.md."
   }
 }
