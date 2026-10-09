@@ -76,6 +76,12 @@
       "0eeec07e06e5e48b53d41bf3590218a856432b32": [
         "tools/ui-release.mjs"
       ],
+      "13b578c96acb62172385e83f8e31aa6c45e17296": [
+        ".github/workflows/ui-release.yml",
+        ".github/workflows/ui-staging.yml",
+        "tools/ui-combined-source-guard.mjs",
+        "tools/ui-public-combined.mjs"
+      ],
       "164a469189da2c8303c997d4020b3ae20da84cd7": [
         "tools/ui-release.mjs"
       ],
@@ -140,13 +146,6 @@
         "tools/staging-live-proof.mjs",
         "tools/staging-model-components.mjs"
       ],
-      "deb0ac7e61fc8f138267dbe51521b2a25a732051": [
-        ".github/workflows/ui-release.yml",
-        ".github/workflows/ui-staging.yml",
-        "tools/ui-combined-source-guard.mjs",
-        "tools/ui-public-combined.mjs",
-        ".github/workflows/catalog-bake.yml"
-      ],
       "b9db38dd22eed1da56c6c4dd4140480da7e89153": [
         ".github/workflows/ui-release.yml",
         ".github/workflows/ui-staging.yml"
@@ -156,6 +155,9 @@
         ".github/workflows/staging-data.yml",
         "tools/shared-data.mjs",
         "tools/staging-current-selection.mjs"
+      ],
+      "deb0ac7e61fc8f138267dbe51521b2a25a732051": [
+        ".github/workflows/catalog-bake.yml"
       ],
       "dfa25e9f473f15d5e2f630fe78c268b73234bd3a": [
         ".github/workflows/staging-search.yml",
