@@ -48,6 +48,7 @@ on:
       - ".github/workflows/consumer-refresh.yml"
       - ".github/workflows/data-reader-refresh.yml"
       - ".github/workflows/gdacs-feed-release.yml"
+      - ".github/workflows/gdacs-route-retire.yml"
       - ".github/workflows/glofas-ingest.yml"
       - ".github/workflows/cams-ingest.yml"
       - ".github/workflows/fusion-*.yml"
@@ -139,3 +140,4 @@ jobs:
         run: |
           node tests/gdacs-feed-workflow.mjs
           node --test tests/gdacs-feed-release.mjs
+          node --test tests/gdacs-route-retire.mjs

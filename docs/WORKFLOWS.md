@@ -6,9 +6,9 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `fba5a9af42f78da827a3f7a0bbb8bf27ff898896fe2d08cbac0fe839ce242c62`.
+Source digest (registry and workflow bytes): `705a4f28a0b9b420d2c77b7e8747243d2af3765fc12badb5f1284993cd311b00`.
 
-69 workflows. Ordering and output are deterministic; no API request or clock is used.
+70 workflows. Ordering and output are deterministic; no API request or clock is used.
 
 | Workflow | Family / subsystem | Lifecycle | Purpose | Runbook |
 | --- | --- | --- | --- | --- |
@@ -32,7 +32,8 @@ Source digest (registry and workflow bytes): `fba5a9af42f78da827a3f7a0bbb8bf27ff
 | [fusion-issue](#fusion-issue) | maintenance / Fusion issuance | recurring | Record source-bound Fusion forecasts with canary/full completeness, exact archive readback, and a complete-network archive manifest; dispatched by the scheduler Worker (caller=scheduler) every 6 h. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [fusion-promote](#fusion-promote) | maintenance / Fusion promotion | manual-supported | Promote a qualified fusion candidate through the guarded controller. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [fusion-staging-evidence](#fusion-staging-evidence) | staging / Fusion evidence | manual-supported | Manually diagnose isolated staging forecast evidence without relying on an aging fixed catalog. | [guide](../docs/FUSION_STAGING_EVIDENCE.md) |
-| [gdacs-feed-release](#gdacs-feed-release) | releases / Hazard feed | manual-supported | Release the isolated GDACS route through guarded verification and recovery. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
+| [gdacs-feed-release](#gdacs-feed-release) | releases / Hazard feed | manual-supported | One-time 2026-08-31 bootstrap of the isolated GDACS repair Worker and its routes; never re-run (its routes are retired by gdacs-route-retire). | [guide](../docs/platform-production-feed-routes.md) |
+| [gdacs-route-retire](#gdacs-route-retire) | releases / Hazard feed | manual-supported | Plan, then detach the four GDACS repair Worker routes so the platform Worker serves /api/gdacs/* and /api/tc/*; verify live, re-attach on failure. | [guide](../docs/platform-production-feed-routes.md) |
 | [glofas-ingest](#glofas-ingest) | maintenance / Energy own ingest | recurring | Ingest the GloFAS v4 ensemble for the five Energy Desk dams from the Copernicus EWDS daily and publish the energy-glofas component. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [hydrology](#hydrology) | archives / Hydrology | manual-supported | Prepare hydrology artifacts through the explicit staging path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [model-inputs](#model-inputs) | staging / Experimental models | manual-supported | Collect isolated experimental model inputs with bounded provider concurrency. | [guide](../docs/MODEL_CLOUD_INPUTS.md) |
@@ -637,6 +638,32 @@ Checkout declarations (not a claim of approval or checkout success):
 Variable references (declared names only; values and activation unknown): none detected.
 
 
+## gdacs-route-retire
+
+[.github/workflows/gdacs-route-retire.yml](../.github/workflows/gdacs-route-retire.yml#L1) · <code>WeatherX GDACS repair route retirement</code>
+
+Declared triggers: [workflow_dispatch](../.github/workflows/gdacs-route-retire.yml#L10); input names <code>["atmos_sha","mode","expected_platform_version","expected_repair_version","confirm"]</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-production-data-edge","cancel-in-progress":false}</code>.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [retire](../.github/workflows/gdacs-route-retire.yml#L41) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"production","url":"https://weatherx.org"}</code> | <code>30</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+
+Declared job conditions (additional step/helper checks may apply):
+
+- [retire](../.github/workflows/gdacs-route-retire.yml#L41): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; github.event_name == 'workflow_dispatch' &amp;&amp; github.repository == 'Andrewegao/v3t7kq-cycle' }}</code>
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [retire / step 3](../.github/workflows/gdacs-route-retire.yml#L69) | caller repository (implicit) | <code>${{ github.sha }}</code> |
+| [retire / step 4](../.github/workflows/gdacs-route-retire.yml#L74) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmos_sha }}</code> |
+
+Variable references (declared names only; values and activation unknown): none detected.
+
+
 ## glofas-ingest
 
 [.github/workflows/glofas-ingest.yml](../.github/workflows/glofas-ingest.yml#L1) · <code>Energy GloFAS dams ingest</code>
@@ -1208,19 +1235,19 @@ Variable references (declared names only; values and activation unknown): [R2_CO
 
 [.github/workflows/scheduler-ci.yml](../.github/workflows/scheduler-ci.yml#L1) · <code>WeatherX scheduler CI</code>
 
-Declared triggers: [pull_request](../.github/workflows/scheduler-ci.yml#L4); [push](../.github/workflows/scheduler-ci.yml#L6) <code>{"branches":["main"],"paths":[".github/workflows/**","ops/workflows.json","ops/atmos-production-source.json","ops/train3-validation-contract.json","docs/WORKFLOWS.md","docs/WORKFLOW_OPERATIONS.md","README.md",".github/workflows/bake.yml",".github/workflows/collect-core-model.yml",".github/workflows/collect-regional-model.yml",".github/workflows/publish-current-model-production.yml",".github/workflows/resume-model-publication.yml",".github/workflows/catalog-bake.yml",".github/workflows/scheduler-ci.yml",".github/workflows/source-checkout-probe.yml",".github/workflows/scheduler-deploy.yml",".github/workflows/satellite-archive.yml",".github/workflows/ui-release.yml",".github/workflows/ui-staging.yml",".github/workflows/ui-staging-tc.yml",".github/workflows/staging-follow-master.yml",".github/workflows/staging-data.yml",".github/workflows/staging-current-selection.yml",".github/workflows/model-inputs.yml",".github/workflows/nam-hi-diagnostic.yml",".github/workflows/staging-model-components.yml",".github/workflows/staging-model-selection.yml",".github/workflows/staging-consumer-refresh.yml",".github/workflows/staging-search.yml",".github/workflows/staging-tc-guidance.yml",".github/workflows/staging-place-renewal.yml",".github/workflows/production-place-renewal.yml",".github/workflows/staging-wind100.yml",".github/workflows/staging-wind100-recurring.yml",".github/workflows/production-wind100-recurring.yml",".github/workflows/production-wind100-retention.yml",".github/workflows/staging-wind100-preflight.yml",".github/workflows/staging-search-reader.yml",".github/workflows/staging-data-activate.yml",".github/workflows/verify-backfill.yml",".github/workflows/consumer-refresh.yml",".github/workflows/data-reader-refresh.yml",".github/workflows/gdacs-feed-release.yml",".github/workflows/glofas-ingest.yml",".github/workflows/cams-ingest.yml",".github/workflows/fusion-*.yml","scheduler/**","tests/**","tools/**","staging-controller/**"]}</code>.
+Declared triggers: [pull_request](../.github/workflows/scheduler-ci.yml#L4); [push](../.github/workflows/scheduler-ci.yml#L6) <code>{"branches":["main"],"paths":[".github/workflows/**","ops/workflows.json","ops/atmos-production-source.json","ops/train3-validation-contract.json","docs/WORKFLOWS.md","docs/WORKFLOW_OPERATIONS.md","README.md",".github/workflows/bake.yml",".github/workflows/collect-core-model.yml",".github/workflows/collect-regional-model.yml",".github/workflows/publish-current-model-production.yml",".github/workflows/resume-model-publication.yml",".github/workflows/catalog-bake.yml",".github/workflows/scheduler-ci.yml",".github/workflows/source-checkout-probe.yml",".github/workflows/scheduler-deploy.yml",".github/workflows/satellite-archive.yml",".github/workflows/ui-release.yml",".github/workflows/ui-staging.yml",".github/workflows/ui-staging-tc.yml",".github/workflows/staging-follow-master.yml",".github/workflows/staging-data.yml",".github/workflows/staging-current-selection.yml",".github/workflows/model-inputs.yml",".github/workflows/nam-hi-diagnostic.yml",".github/workflows/staging-model-components.yml",".github/workflows/staging-model-selection.yml",".github/workflows/staging-consumer-refresh.yml",".github/workflows/staging-search.yml",".github/workflows/staging-tc-guidance.yml",".github/workflows/staging-place-renewal.yml",".github/workflows/production-place-renewal.yml",".github/workflows/staging-wind100.yml",".github/workflows/staging-wind100-recurring.yml",".github/workflows/production-wind100-recurring.yml",".github/workflows/production-wind100-retention.yml",".github/workflows/staging-wind100-preflight.yml",".github/workflows/staging-search-reader.yml",".github/workflows/staging-data-activate.yml",".github/workflows/verify-backfill.yml",".github/workflows/consumer-refresh.yml",".github/workflows/data-reader-refresh.yml",".github/workflows/gdacs-feed-release.yml",".github/workflows/gdacs-route-retire.yml",".github/workflows/glofas-ingest.yml",".github/workflows/cams-ingest.yml",".github/workflows/fusion-*.yml","scheduler/**","tests/**","tools/**","staging-controller/**"]}</code>.
 
 Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: not declared.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [scheduler](../.github/workflows/scheduler-ci.yml#L64) ← no needs | <code>ubuntu-latest</code> | not declared | <code>10</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [scheduler](../.github/workflows/scheduler-ci.yml#L65) ← no needs | <code>ubuntu-latest</code> | not declared | <code>10</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [scheduler / step 1](../.github/workflows/scheduler-ci.yml#L67) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [scheduler / step 1](../.github/workflows/scheduler-ci.yml#L68) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
 Variable references (declared names only; values and activation unknown): none detected.
 

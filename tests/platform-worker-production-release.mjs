@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
-  admit, assertCodeOnly, assertSchedules, bindingSummary, confirmation, DATA_WORKER, HEALTH, POINT_ROUTE,
-  previousSource, recoveryAction, REQUIRED_ROUTES, routeBoundary, validateLiveSelector, validateReleaseConfig,
-  verifierEnvironment, WORKER,
+  admit, assertCodeOnly, assertSchedules, bindingSummary, confirmation, DATA_WORKER, foreignOverlaps, HEALTH,
+  patternsOverlap, POINT_ROUTE, previousSource, recoveryAction, REQUIRED_ROUTES, REVIEWED_OVERLAPS, routeBoundary,
+  validateLiveSelector, validateReleaseConfig, verifierEnvironment, WORKER,
 } from '../tools/platform-worker-production-release.mjs';
 
 const SHA = '34efee01d95942145c6dfc79732278728cef0ddf';
@@ -108,6 +108,40 @@ test('route boundary keeps the point reader on the data Worker and reports unatt
     assert.throws(() => routeBoundary(routes().filter(route => route.pattern !== pattern), reviewed));
   assert.throws(() => routeBoundary([...routes(), { id: id(99), pattern: PATTERNS[0], script: WORKER }], reviewed));
   assert.throws(() => routeBoundary([...routes(), { id: 'not-a-route', pattern: 'x', script: WORKER }], reviewed));
+});
+
+test('pattern overlap follows Cloudflare wildcards, queries and hosts', () => {
+  for (const [a, b] of [['weatherx.org/api/gdacs/list*', 'weatherx.org/api/gdacs/*'], ['weatherx.org/api/*', 'weatherx.org/api/hazards'],
+    ['*weatherx.org/api/tc/*', 'weatherx.org/api/tc/list*'], ['https://weatherx.org/api/hazards', 'weatherx.org/api/hazards'],
+    ['weatherx.org/api/platform/saved-*', 'weatherx.org/api/platform/saved-places'], ['weatherx.org/api/hazards*', 'weatherx.org/api/hazards']])
+    assert.equal(patternsOverlap(a, b), true, `${a} ~ ${b}`);
+  for (const [a, b] of [['weatherx.org/api/eonet/*', 'weatherx.org/api/gdacs/*'], ['staging.weatherx.org/api/gdacs/*', 'weatherx.org/api/gdacs/*'],
+    ['weatherx.org/api/hazards', 'weatherx.org/api/hazards/x'], ['weatherx.org/api/platform/internal/fusion-archive*', 'weatherx.org/api/platform/health'],
+    ['weatherx.org/data/*', 'weatherx.org/api/v1/*']])
+    assert.equal(patternsOverlap(a, b), false, `${a} !~ ${b}`);
+});
+
+test('route boundary flags foreign routes that shadow a declared platform pattern (F4)', () => {
+  assert.deepEqual(routeBoundary(routes(), reviewed).foreignOverlaps, []);
+  assert.deepEqual(REVIEWED_OVERLAPS, [{ pattern: POINT_ROUTE, script: DATA_WORKER }]);
+  // The four routes the 2026-08-31 GDACS repair Worker still held on 2026-10-10 (plan run 38025285361).
+  const declared = { ...reviewed, routes: [...reviewed.routes, { pattern: 'weatherx.org/api/gdacs/*' }, { pattern: 'weatherx.org/api/tc/*' }] };
+  const repair = [['09f9904da861456e8aa137519ab67c77', 'weatherx.org/api/gdacs/list*'], ['704e2f1ea00a45829008b303ae75894c', 'weatherx.org/api/gdacs/geom*'],
+    ['e5aaf75591dc428b910ba443dc76d110', 'weatherx.org/api/tc/list*'], ['568f224b50a3416eaee92c7a1ac14cfc', 'weatherx.org/api/tc/geom*']]
+    .map(([id, pattern]) => ({ id, pattern, script: 'weatherx-gdacs-feed-production' }));
+  const live = [...routes(), { id: id(60), pattern: 'weatherx.org/api/gdacs/*', script: WORKER }, { id: id(61), pattern: 'weatherx.org/api/tc/*', script: WORKER },
+    ...repair, { id: id(62), pattern: 'staging.weatherx.org/api/gdacs/*', script: 'weatherx-platform-edge-staging' },
+    { id: id(63), pattern: 'weatherx.org/api/platform/internal/fusion-archive*', script: 'weatherx-fusion-archive-production' }];
+  const boundary = routeBoundary(live, declared);
+  assert.deepEqual(boundary.declaredNotAttached, []);
+  assert.deepEqual(boundary.attachedNotDeclared, []);
+  assert.deepEqual(boundary.foreignOverlaps.map(row => [row.pattern, row.overlaps]), [
+    ['weatherx.org/api/gdacs/geom*', ['weatherx.org/api/gdacs/*']], ['weatherx.org/api/gdacs/list*', ['weatherx.org/api/gdacs/*']],
+    ['weatherx.org/api/tc/geom*', ['weatherx.org/api/tc/*']], ['weatherx.org/api/tc/list*', ['weatherx.org/api/tc/*']]]);
+  // The reviewed point reader stays quiet; an unreviewed reader under /api/v1/* does not.
+  const reader = [...routes(), { id: id(64), pattern: 'weatherx.org/api/v1/forecast*', script: DATA_WORKER }];
+  assert.deepEqual(foreignOverlaps(routeBoundary(reader, reviewed).rows, reviewed.routes.map(r => r.pattern)).map(r => r.pattern),
+    ['weatherx.org/api/v1/forecast*']);
 });
 
 test('live selector must be a valid production selector and never regress', () => {
