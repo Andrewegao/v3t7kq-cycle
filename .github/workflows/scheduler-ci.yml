@@ -125,7 +125,7 @@ jobs:
           node tests/consumer-workflow.mjs
           node --test tests/satellite-archive.mjs
           node --test tests/source-checkout-probe.mjs
-          node --test tests/scheduler-deploy-plan.mjs
+          node --test tests/scheduler-release.mjs
       - name: Consumer refresh preflight and rollback contracts
         run: node --test tests/consumer-refresh*.mjs
       - name: Data-only reader upgrade and compatible fallback contracts

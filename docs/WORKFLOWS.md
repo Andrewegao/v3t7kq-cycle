@@ -6,13 +6,13 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `69302d51f6512a15b562dd59959a7e62040d78122f463c2b7dc711fd532151fd`.
+Source digest (registry and workflow bytes): `612cd2179423fe7a7b841391e112534e800b00dc3690cf79939f2bd5471f1f8a`.
 
 68 workflows. Ordering and output are deterministic; no API request or clock is used.
 
 | Workflow | Family / subsystem | Lifecycle | Purpose | Runbook |
 | --- | --- | --- | --- | --- |
-| [bake](#bake) | models / Model collection | recurring | Collect independent model inputs and assemble the whole-maintenance fallback. | [guide](../docs/single-model-refresh.md) |
+| [bake](#bake) | models / Model collection | recurring | Collect independent model inputs and assemble the whole-maintenance fallback; dispatched on time by the scheduler Worker at 35 2,8,14,20 UTC, the GitHub cron is the fallback. | [guide](../docs/single-model-refresh.md) |
 | [cams-ingest](#cams-ingest) | maintenance / Energy own ingest | recurring | Ingest CAMS dust and total aerosol optical depth for the Energy Desk solar clusters from the Copernicus ADS twice daily and publish the energy-cams component. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [catalog-bake](#catalog-bake) | models / Component freshness | recurring | Refresh individual core model components from provider schedules or a manual request. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [catalog-bootstrap](#catalog-bootstrap) | models / Catalog bootstrap | manual-supported | Initialize the staging catalog through its guarded bootstrap path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
@@ -29,7 +29,7 @@ Source digest (registry and workflow bytes): `69302d51f6512a15b562dd59959a7e6204
 | [five-feed-recovery](#five-feed-recovery) | maintenance / Observation component recovery | manual-supported | Manually refresh all five observation/fire components or none, through the shared observation lane with a literal confirmation. | [guide](../docs/five-feed-recovery-20261006.md) |
 | [fusion-evaluate](#fusion-evaluate) | maintenance / Fusion evaluation | manual-supported | Evaluate retained fusion inputs through the existing guarded evaluation path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [fusion-infra](#fusion-infra) | control-plane / Fusion infrastructure | manual-supported | Deploy the exact isolated Fusion archive or complete infrastructure pair through explicit scope guards. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
-| [fusion-issue](#fusion-issue) | maintenance / Fusion issuance | recurring | Record source-bound Fusion forecasts with canary/full completeness, exact archive readback, and a complete-network archive manifest. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
+| [fusion-issue](#fusion-issue) | maintenance / Fusion issuance | recurring | Record source-bound Fusion forecasts with canary/full completeness, exact archive readback, and a complete-network archive manifest; dispatched by the scheduler Worker (caller=scheduler) every 6 h. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [fusion-promote](#fusion-promote) | maintenance / Fusion promotion | manual-supported | Promote a qualified fusion candidate through the guarded controller. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [fusion-staging-evidence](#fusion-staging-evidence) | staging / Fusion evidence | manual-supported | Manually diagnose isolated staging forecast evidence without relying on an aging fixed catalog. | [guide](../docs/FUSION_STAGING_EVIDENCE.md) |
 | [gdacs-feed-release](#gdacs-feed-release) | releases / Hazard feed | manual-supported | Release the isolated GDACS route through guarded verification and recovery. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
@@ -55,7 +55,7 @@ Source digest (registry and workflow bytes): `69302d51f6512a15b562dd59959a7e6204
 | [road-production-release](#road-production-release) | releases / Road product | manual-supported | Build, reseal and publish an exact Atmos master SHA to road.weatherx.org through the Atmos release guard. | [guide](../docs/road-production-release.md) |
 | [satellite-archive](#satellite-archive) | archives / Satellite and radar | recurring | Collect hourly archive tails or explicit bounded historical batches. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [scheduler-ci](#scheduler-ci) | control-plane / Controller evidence | recurring | Check scheduler, publication, source, and recovery contracts. | [guide](../scheduler/README.md) |
-| [scheduler-deploy](#scheduler-deploy) | control-plane / Scheduler | manual-supported | Deploy and verify the selected scheduler revision through existing guards. | [guide](../scheduler/README.md) |
+| [scheduler-deploy](#scheduler-deploy) | control-plane / Scheduler | manual-supported | Plan, then compare-and-swap release the scheduler Worker code and cron triggers, verify the live readback, and restore the predecessor on failure. Manual only. | [guide](../scheduler/README.md) |
 | [source-checkout-probe](#source-checkout-probe) | control-plane / Source provenance | diagnostic | Probe exact source checkout isolation without granting deployment authority. | [guide](../docs/source-checkout-isolation.md) |
 | [staging-consumer-refresh](#staging-consumer-refresh) | staging / Staging consumers | manual-supported | Refresh staging consumers with existing verification and restore controls. | [guide](../docs/staging-consumer-restore-20260905.md) |
 | [staging-current-selection](#staging-current-selection) | staging / Staging selection | recurring | Record the current eligible selection for the staging controller. | [guide](../docs/CLOUD-STAGING.md) |
@@ -64,10 +64,10 @@ Source digest (registry and workflow bytes): `69302d51f6512a15b562dd59959a7e6204
 | [staging-follow-master](#staging-follow-master) | staging / Staging selection | recurring | Follow qualified master changes through the staging controller. | [guide](../docs/staging-latency-controller.md) |
 | [staging-model-components](#staging-model-components) | staging / Experimental models | manual-supported | Prepare isolated model components for staging qualification. | [guide](../docs/STAGING_MODEL_COMPONENTS.md) |
 | [staging-model-selection](#staging-model-selection) | staging / Experimental models | manual-supported | Select the reviewed model components for a staging candidate. | [guide](../docs/STAGING_MODEL_COMPONENTS.md) |
-| [staging-place-renewal](#staging-place-renewal) | staging / Places | manual-supported | Renew the reviewed staging place data through the existing controller. | [guide](../docs/staging-place-renewal-plan.md) |
+| [staging-place-renewal](#staging-place-renewal) | staging / Places | recurring | Renew the reviewed staging place data through the existing controller; dispatched by the scheduler Worker on the policy slots. | [guide](../docs/staging-place-renewal-plan.md) |
 | [staging-places](#staging-places) | staging / Places | manual-supported | Prepare and qualify the isolated staging place data. | [guide](../docs/staging-places.md) |
 | [staging-search-reader](#staging-search-reader) | staging / Search | manual-supported | Activate the guarded staging search reader and verify its boundary. | [guide](../docs/staging-search-reader.md) |
-| [staging-search](#staging-search) | staging / Search | manual-supported | Prepare isolated search data for staging qualification. | [guide](../docs/staging-search.md) |
+| [staging-search](#staging-search) | staging / Search | recurring | Prepare isolated search data for staging qualification and renew its lease; the scheduler Worker dispatches the renewal every 6 h. | [guide](../docs/staging-search.md) |
 | [staging-shared-read-pin](#staging-shared-read-pin) | staging / Shared data reading | manual-supported | Pin the reviewed shared-data selection for staging. | [guide](../docs/STAGING_SHARED_READ.md) |
 | [staging-shared-read-probe](#staging-shared-read-probe) | staging / Shared data reading | diagnostic | Probe staging shared-data access without treating the probe as activation. | [guide](../docs/STAGING_SHARED_READ.md) |
 | [staging-tc-guidance](#staging-tc-guidance) | staging / Tropical cyclone guidance | manual-supported | Prepare reviewed tropical cyclone guidance for isolated staging use. | [guide](../docs/STAGING_TC_GUIDANCE.md) |
@@ -537,26 +537,26 @@ Variable references (declared names only; values and activation unknown): [FUSIO
 
 [.github/workflows/fusion-issue.yml](../.github/workflows/fusion-issue.yml#L1) · <code>WeatherX fusion issuance</code>
 
-Declared triggers: [workflow_dispatch](../.github/workflows/fusion-issue.yml#L4); input names <code>["scope","confirmation"]</code>; [schedule](../.github/workflows/fusion-issue.yml#L16) <code>["23 */6 * * *"]</code>.
+Declared triggers: [workflow_dispatch](../.github/workflows/fusion-issue.yml#L4); input names <code>["scope","confirmation","caller"]</code>; [schedule](../.github/workflows/fusion-issue.yml#L22) <code>["23 */6 * * *"]</code>.
 
 Workflow permissions: <code>{"contents":"read","actions":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-fusion-issuance","cancel-in-progress":false}</code>.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [record](../.github/workflows/fusion-issue.yml#L25) ← no needs | <code>ubuntu-latest</code> | <code>production</code> | <code>45</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [record](../.github/workflows/fusion-issue.yml#L31) ← no needs | <code>ubuntu-latest</code> | <code>production</code> | <code>45</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [record](../.github/workflows/fusion-issue.yml#L25): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; (github.event_name == 'workflow_dispatch' &#124;&#124; vars.FUSION_ISSUANCE_ENABLED == 'true') }}</code>
+- [record](../.github/workflows/fusion-issue.yml#L31): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; ((github.event_name == 'workflow_dispatch' &amp;&amp; inputs.caller != 'scheduler') &#124;&#124; vars.FUSION_ISSUANCE_ENABLED == 'true') }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [record / step 1](../.github/workflows/fusion-issue.yml#L33) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [record / step 4](../.github/workflows/fusion-issue.yml#L55) | <code>weatherx-hq/atmos</code> | <code>${{ env.ENGINE_SHA }}</code> |
+| [record / step 1](../.github/workflows/fusion-issue.yml#L39) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [record / step 4](../.github/workflows/fusion-issue.yml#L63) | <code>weatherx-hq/atmos</code> | <code>${{ env.ENGINE_SHA }}</code> |
 
-Variable references (declared names only; values and activation unknown): [FUSION_ENGINE_SHA](../.github/workflows/fusion-issue.yml#L30), [FUSION_ISSUANCE_ENABLED](../.github/workflows/fusion-issue.yml#L25).
+Variable references (declared names only; values and activation unknown): [FUSION_ENGINE_SHA](../.github/workflows/fusion-issue.yml#L36), [FUSION_ISSUANCE_ENABLED](../.github/workflows/fusion-issue.yml#L31).
 
 
 ## fusion-promote
@@ -1201,25 +1201,23 @@ Variable references (declared names only; values and activation unknown): none d
 
 [.github/workflows/scheduler-deploy.yml](../.github/workflows/scheduler-deploy.yml#L1) · <code>WeatherX scheduler deploy</code>
 
-Declared triggers: [push](../.github/workflows/scheduler-deploy.yml#L5) <code>{"branches":["main"],"paths":[".github/workflows/catalog-bake.yml",".github/workflows/scheduler-deploy.yml","scheduler/**"]}</code>; [workflow_dispatch](../.github/workflows/scheduler-deploy.yml#L10).
+Declared triggers: [workflow_dispatch](../.github/workflows/scheduler-deploy.yml#L9); input names <code>["mode","expected_active_version_id","confirm"]</code>.
 
 Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-model-scheduler-production","cancel-in-progress":false}</code>.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [changes](../.github/workflows/scheduler-deploy.yml#L23) ← no needs | <code>ubuntu-latest</code> | not declared | <code>5</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [deploy](../.github/workflows/scheduler-deploy.yml#L35) ← <code>changes</code> | <code>ubuntu-latest</code> | <code>production</code> | <code>15</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [release](../.github/workflows/scheduler-deploy.yml#L31) ← no needs | <code>ubuntu-latest</code> | <code>production</code> | <code>20</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [deploy](../.github/workflows/scheduler-deploy.yml#L36): <code>${{ needs.changes.outputs.deploy == 'true' }}</code>
+- [release](../.github/workflows/scheduler-deploy.yml#L31): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; github.event_name == 'workflow_dispatch' &amp;&amp; github.repository == 'Andrewegao/v3t7kq-cycle' }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [changes / step 1](../.github/workflows/scheduler-deploy.yml#L28) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [deploy / step 1](../.github/workflows/scheduler-deploy.yml#L41) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [release / step 2](../.github/workflows/scheduler-deploy.yml#L43) | caller repository (implicit) | <code>${{ github.sha }}</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
 
@@ -1485,26 +1483,26 @@ Variable references (declared names only; values and activation unknown): [STAGI
 
 [.github/workflows/staging-search.yml](../.github/workflows/staging-search.yml#L1) · <code>WeatherX staging search candidate</code>
 
-Declared triggers: [schedule](../.github/workflows/staging-search.yml#L5) <code>["17 */6 * * *"]</code>; [workflow_dispatch](../.github/workflows/staging-search.yml#L7); input names <code>["action","source_release","candidate_sha256","expected_pointer_sha256"]</code>.
+Declared triggers: [schedule](../.github/workflows/staging-search.yml#L6) <code>["17 */6 * * *"]</code>; [workflow_dispatch](../.github/workflows/staging-search.yml#L8); input names <code>["action","source_release","candidate_sha256","expected_pointer_sha256","caller"]</code>.
 
 Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-staging-search","cancel-in-progress":false}</code>.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [search](../.github/workflows/staging-search.yml#L32) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"data-staging","url":"https://staging.weatherx.org"}</code> | <code>15</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [search](../.github/workflows/staging-search.yml#L39) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"data-staging","url":"https://staging.weatherx.org"}</code> | <code>15</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [search](../.github/workflows/staging-search.yml#L32): <code>github.event_name != 'schedule' &#124;&#124; vars.STAGING_SEARCH_SCHEDULE_ENABLED == 'true'</code>
+- [search](../.github/workflows/staging-search.yml#L39): <code>(github.event_name == 'workflow_dispatch' &amp;&amp; inputs.caller != 'scheduler') &#124;&#124; ((github.event_name == 'schedule' &#124;&#124; (inputs.caller == 'scheduler' &amp;&amp; inputs.action == 'renew')) &amp;&amp; vars.STAGING_SEARCH_SCHEDULE_ENABLED == 'true')</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [search / step 1](../.github/workflows/staging-search.yml#L51) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [search / Checkout the fixed producer or exact reviewed UI source](../.github/workflows/staging-search.yml#L63) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.action == 'prepare' &amp;&amp; 'dfa25e9f473f15d5e2f630fe78c268b73234bd3a' &#124;&#124; vars.STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA }}</code> |
+| [search / step 1](../.github/workflows/staging-search.yml#L58) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [search / Checkout the fixed producer or exact reviewed UI source](../.github/workflows/staging-search.yml#L70) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.action == 'prepare' &amp;&amp; 'dfa25e9f473f15d5e2f630fe78c268b73234bd3a' &#124;&#124; vars.STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA }}</code> |
 
-Variable references (declared names only; values and activation unknown): [STAGING_DATA_ISOLATION_APPROVED](../.github/workflows/staging-search.yml#L48), [STAGING_R2_ACCOUNT_ID](../.github/workflows/staging-search.yml#L49), [STAGING_SEARCH_APPROVED_CANDIDATE_SHA256](../.github/workflows/staging-search.yml#L45), [STAGING_SEARCH_ENABLED](../.github/workflows/staging-search.yml#L43), [STAGING_SEARCH_RENEWAL_ENABLED](../.github/workflows/staging-search.yml#L44), [STAGING_SEARCH_SCHEDULE_ENABLED](../.github/workflows/staging-search.yml#L32), [STAGING_SEARCH_V4_APPROVED_RELEASE_ID](../.github/workflows/staging-search.yml#L47), [STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA](../.github/workflows/staging-search.yml#L46).
+Variable references (declared names only; values and activation unknown): [STAGING_DATA_ISOLATION_APPROVED](../.github/workflows/staging-search.yml#L55), [STAGING_R2_ACCOUNT_ID](../.github/workflows/staging-search.yml#L56), [STAGING_SEARCH_APPROVED_CANDIDATE_SHA256](../.github/workflows/staging-search.yml#L52), [STAGING_SEARCH_ENABLED](../.github/workflows/staging-search.yml#L50), [STAGING_SEARCH_RENEWAL_ENABLED](../.github/workflows/staging-search.yml#L51), [STAGING_SEARCH_SCHEDULE_ENABLED](../.github/workflows/staging-search.yml#L39), [STAGING_SEARCH_V4_APPROVED_RELEASE_ID](../.github/workflows/staging-search.yml#L54), [STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA](../.github/workflows/staging-search.yml#L53).
 
 
 ## staging-shared-read-pin

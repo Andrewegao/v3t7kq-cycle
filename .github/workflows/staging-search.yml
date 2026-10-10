@@ -2,6 +2,7 @@
 name: WeatherX staging search candidate
 on:
   schedule:
+    # Fallback only: the Cloudflare scheduler Worker dispatches the renewal at the same minutes.
     - cron: '17 */6 * * *'
   workflow_dispatch:
     inputs:
@@ -22,6 +23,10 @@ on:
         description: Activate/revoke - reviewed current pointer digest, or absent
         required: false
         type: string
+      caller:
+        description: Leave empty. Set only by the Cloudflare scheduler Worker (renew only, scheduled path)
+        required: false
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -29,14 +34,16 @@ concurrency:
   cancel-in-progress: false
 jobs:
   search:
-    if: github.event_name != 'schedule' || vars.STAGING_SEARCH_SCHEDULE_ENABLED == 'true'
+    # The Cloudflare scheduler Worker dispatches the renewal at the cron minute with caller=scheduler;
+    # it takes the scheduled path and obeys the same STAGING_SEARCH_SCHEDULE_ENABLED switch.
+    if: (github.event_name == 'workflow_dispatch' && inputs.caller != 'scheduler') || ((github.event_name == 'schedule' || (inputs.caller == 'scheduler' && inputs.action == 'renew')) && vars.STAGING_SEARCH_SCHEDULE_ENABLED == 'true')
     environment:
       name: data-staging
       url: https://staging.weatherx.org
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      SEARCH_ACTION: ${{ github.event_name == 'schedule' && 'renew' || inputs.action }}
+      SEARCH_ACTION: ${{ (github.event_name == 'schedule' || inputs.caller == 'scheduler') && 'renew' || inputs.action }}
       SOURCE_RELEASE: ${{ inputs.source_release }}
       CANDIDATE_SHA256: ${{ inputs.candidate_sha256 }}
       EXPECTED_POINTER_SHA256: ${{ inputs.expected_pointer_sha256 }}

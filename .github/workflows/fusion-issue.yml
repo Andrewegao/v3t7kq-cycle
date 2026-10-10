@@ -11,8 +11,14 @@ on:
       confirmation:
         description: Enter RECORD FUSION EVIDENCE
         type: string
-        required: true
+        required: false
+      caller:
+        description: Leave empty. Set only by the Cloudflare scheduler Worker (takes the scheduled path)
+        type: string
+        required: false
   schedule:
+    # Fallback only: the Cloudflare scheduler Worker dispatches this at the same minutes with
+    # caller=scheduler, which takes the scheduled path below (FUSION_ISSUANCE_ENABLED, 64 stations).
     - cron: '23 */6 * * *'
 permissions:
   contents: read
@@ -22,7 +28,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   record:
-    if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || vars.FUSION_ISSUANCE_ENABLED == 'true') }}
+    if: ${{ github.ref == 'refs/heads/main' && ((github.event_name == 'workflow_dispatch' && inputs.caller != 'scheduler') || vars.FUSION_ISSUANCE_ENABLED == 'true') }}
     environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -41,10 +47,12 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           SCOPE: ${{ inputs.scope }}
           CONFIRMATION: ${{ inputs.confirmation }}
+          CALLER: ${{ inputs.caller }}
           SCHEDULE_ENABLED: ${{ vars.FUSION_ISSUANCE_ENABLED }}
         run: |
           [[ "$ENGINE_SHA" =~ ^[a-f0-9]{40}$ ]]
-          if [ "$EVENT_NAME" = 'workflow_dispatch' ]; then
+          case "$CALLER" in ''|scheduler) ;; *) exit 1 ;; esac
+          if [ "$EVENT_NAME" = 'workflow_dispatch' ] && [ "$CALLER" != 'scheduler' ]; then
             test "$CONFIRMATION" = 'RECORD FUSION EVIDENCE'
             case "$SCOPE" in canary) stations=1 ;; full) stations=64 ;; *) exit 1 ;; esac
           else
