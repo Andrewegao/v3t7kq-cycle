@@ -26,7 +26,7 @@ export const PUBLIC_COMBINED_ONBOARDING_SOURCES = Object.freeze({
   'onboarding/extraReads.ts': '725da8ef3634be80d0bd3ec4605e44acefb5984bfaa60a29dc74bd5ef772929e',
   'onboarding/icons.ts': '51958fd6c47166a9e2849198aefefb7b4e5ad954a09c681ea32dfd6ba342a9d1',
   'onboarding/intent.ts': '0111ac4a418eb8a77ffa856e0de499e6943c311529f6622b9e1a562c1f1045fa',
-  'onboarding/onboarding.css': '5dd07ebd4e71501777966180aed001709bb33e86c53d7476d931c7c0a13df170',
+  'onboarding/onboarding.css': '2ecb6cdbf33bb5d6c03ff70227f7993b4e7d1af2e79711a8f90a1d8c19f1290c',
   'onboarding/screens/AddPlace.tsx': '0c0cbb7ee3374fd0130c0e7de9d51957246a7a23b37def011584114b1ab317f8',
   'onboarding/screens/Check.tsx': 'aa7b46764382dbc2885e8bf1ba63bcf362d2d94f7415e00b42ca37f175c21c10',
   'onboarding/screens/Purpose.tsx': '57f03edc68f55ab25543ed6f7757a3fa1ac87fba5b2f17c8e6f1312d4cbb967b',
@@ -57,7 +57,7 @@ export const PUBLIC_COMBINED_ONBOARDING_SOURCES = Object.freeze({
 });
 export const PUBLIC_COMBINED_SIDECAR = 'assets/weatherx-production-account-build-v1.json';
 // Reviewed merged master head (master head 04:03Z); new-source staging acceptance remains pending.
-export const PUBLIC_COMBINED_ATMOS_SHA = 'b5a3088d001d6947790f123f5e0248c4aa0768bc';
+export const PUBLIC_COMBINED_ATMOS_SHA = 'ead7aa3903835cc06da34f457bf566ddff0a81fc';
 
 export function assertPublicCombinedReady() {
   assert.match(PUBLIC_COMBINED_ATMOS_SHA, /^[a-f0-9]{40}$/);
