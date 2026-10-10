@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { activeRunInSlot, dispatchForCron } from '../src/index';
-import { SCHEDULER_CRONS } from '../src/schedules';
+import { MAX_CRON_TRIGGERS, SCHEDULER_CRONS, UNDECLARED_CRONS } from '../src/schedules';
 
 const env = {
   GITHUB_DISPATCH_TOKEN: 'test-token',
@@ -154,8 +154,16 @@ describe('Cloudflare scheduler dispatch bridge', () => {
       expect(fetcher.mock.calls[0]![1]?.method).toBe('POST');
     });
 
-  it('maps every declared trigger to a dispatch plan', async () => {
-    for (const cron of SCHEDULER_CRONS) {
+  it('declares exactly the five prioritised triggers the Workers Free account fires', () => {
+    expect(MAX_CRON_TRIGGERS).toBe(5);
+    expect([...SCHEDULER_CRONS]).toEqual([
+      '8-59/10 * * * *', '7 * * * *', '35 2,8,14,20 * * *', '23 */6 * * *', '52 9 * * *',
+    ]);
+    expect(UNDECLARED_CRONS.filter((cron) => (SCHEDULER_CRONS as readonly string[]).includes(cron))).toEqual([]);
+  });
+
+  it('maps every declared trigger, and every undeclared routable cron, to a dispatch plan', async () => {
+    for (const cron of [...SCHEDULER_CRONS, ...UNDECLARED_CRONS]) {
       const fetcher = github(() => runs([]), () => new Response(null, { status: 204 }));
       await expect(dispatchForCron(cron, env, fetcher, undefined, TICK)).resolves.toBeTruthy();
     }

@@ -1,6 +1,11 @@
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  assertExactDispatchBindings, assertExactSchedules, assertExactTarget, fetchLiveSchedules, fetchLiveTarget,
+  MAX_CRON_TRIGGERS, assertExactDispatchBindings, assertExactSchedules, assertExactTarget, fetchLiveSchedules,
+  fetchLiveTarget, loadSchedulerConfig,
 } from '../scripts/live-schedules.mjs';
 
 const expectedCrons = ['8-59/10 * * * *', '7 * * * *'];
@@ -61,6 +66,24 @@ describe('live Cloudflare schedule verification', () => {
       expectedCrons,
       fetcher,
     })).rejects.toThrow('Cloudflare schedules API failed (403): forbidden');
+  });
+});
+
+describe('declared trigger limit', () => {
+  const reviewed = new URL('../wrangler.jsonc', import.meta.url);
+
+  it('loads the reviewed declaration: five triggers, the Workers Free account limit', async () => {
+    const { expectedCrons } = await loadSchedulerConfig(reviewed);
+    expect(MAX_CRON_TRIGGERS).toBe(5);
+    expect(expectedCrons).toHaveLength(MAX_CRON_TRIGGERS);
+  });
+
+  it('refuses a declaration with more triggers than the account fires', async () => {
+    const config = JSON.parse(await readFile(reviewed, 'utf8'));
+    config.triggers.crons = [...config.triggers.crons, '17 */6 * * *'];
+    const path = join(await mkdtemp(join(tmpdir(), 'scheduler-crons-')), 'wrangler.jsonc');
+    await writeFile(path, JSON.stringify(config));
+    await expect(loadSchedulerConfig(pathToFileURL(path))).rejects.toThrow('fires at most 5 (Workers Free)');
   });
 });
 
