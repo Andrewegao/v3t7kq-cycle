@@ -14,6 +14,8 @@ const fusionIssueWorkflow = await readFile(new URL('../.github/workflows/fusion-
 const searchWorkflow = await readFile(new URL('../.github/workflows/staging-search.yml', import.meta.url), 'utf8');
 const placeWorkflow = await readFile(new URL('../.github/workflows/staging-place-renewal.yml', import.meta.url), 'utf8');
 const placePolicy = JSON.parse(await readFile(new URL('../tools/staging-place-renewal-policy.json', import.meta.url), 'utf8'));
+const productionPlaceWorkflow = await readFile(new URL('../.github/workflows/production-place-renewal.yml', import.meta.url), 'utf8');
+const productionPlacePolicy = JSON.parse(await readFile(new URL('../tools/production-place-renewal-policy.json', import.meta.url), 'utf8'));
 const ENERGY_CRONS = { glofas: '15 11,13 * * *', cams: '40 0,10,12,22 * * *' };
 // Every on-time lane the Worker dispatches (2026-10-10): its trigger, its GitHub-native fallback
 // cron(s) in the target workflow, and why the minute is what it is.
@@ -24,6 +26,8 @@ const LANES = [
   { lane: 'staging surf renewal', cron: placePolicy.surfSchedule, workflow: placeWorkflow, fallback: [placePolicy.surfSchedule] },
   { lane: 'staging directory and tide renewal', cron: placePolicy.directoryTideSchedule, workflow: placeWorkflow,
     fallback: [placePolicy.directoryTideSchedule] },
+  { lane: 'production tide renewal', cron: productionPlacePolicy.schedules[0], workflow: productionPlaceWorkflow,
+    fallback: productionPlacePolicy.schedules },
   { lane: 'energy glofas', cron: ENERGY_CRONS.glofas, workflow: glofasWorkflow, fallback: [ENERGY_CRONS.glofas] },
   { lane: 'energy cams', cron: ENERGY_CRONS.cams, workflow: camsWorkflow, fallback: [ENERGY_CRONS.cams] },
 ];
@@ -50,6 +54,9 @@ assert.match(fusionIssueWorkflow, /\(github\.event_name == 'workflow_dispatch' &
 assert.match(fusionIssueWorkflow, /if \[ "\$EVENT_NAME" = 'workflow_dispatch' \] && \[ "\$CALLER" != 'scheduler' \]; then/);
 assert.match(fusionIssueWorkflow, /case "\$CALLER" in ''\|scheduler\) ;; \*\) exit 1 ;; esac/);
 assert.match(searchWorkflow, /inputs\.caller == 'scheduler' && inputs\.action == 'renew'\)\) && vars\.STAGING_SEARCH_SCHEDULE_ENABLED == 'true'/);
+assert.match(productionPlaceWorkflow, /if: \(github\.event_name == 'workflow_dispatch' && inputs\.caller != 'scheduler'\) \|\| vars\.PRODUCTION_PLACES_RENEWAL_ENABLED == 'true'/,
+  'a scheduler dispatch of the production tide renewal obeys the same switch as its schedule');
+assert.deepEqual(productionPlacePolicy.schedules, ['52 9 * * *', '52 21 * * *'], 'the production place policy owns the tide slots');
 assert.deepEqual([placePolicy.surfSchedule, placePolicy.directoryTideSchedule], ['37 1,7,13,19 * * *', '47 5,17 * * *'],
   'the place renewal policy owns the surf and directory/tide slots');
 assert.match(archiveWorkflow, /cron: '25 \* \* \* \*'/,

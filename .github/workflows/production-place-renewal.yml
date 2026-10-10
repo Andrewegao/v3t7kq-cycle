@@ -32,7 +32,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   renew:
-    if: vars.PRODUCTION_PLACES_RENEWAL_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
+    # A person's dispatch always reaches the gate (which still requires the switch); a scheduler
+    # dispatch, like the schedule, runs only while the lane is enabled.
+    if: (github.event_name == 'workflow_dispatch' && inputs.caller != 'scheduler') || vars.PRODUCTION_PLACES_RENEWAL_ENABLED == 'true'
     environment:
       name: production
       url: https://weatherx.org

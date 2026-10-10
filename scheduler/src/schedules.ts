@@ -15,6 +15,10 @@ export const STAGING_SEARCH_CRON = '17 */6 * * *';
 // at `37 1,7,13,19` and the paragliding directory plus tides at `47 5,17`.
 export const PLACE_SURF_CRON = '37 1,7,13,19 * * *';
 export const PLACE_DIRECTORY_CRON = '47 5,17 * * *';
+// Production tide renewal (tools/production-place-renewal-policy.json): daily at the first of its two
+// GitHub fallback slots (`52 9,21`); caller=scheduler stands aside when production already serves a
+// dataset collected in the last 20 h, so a late fallback cannot renew twice.
+export const PRODUCTION_PLACE_CRON = '52 9 * * *';
 // Energy Desk own ingest (Kazakhstan energy edition). GloFAS daily forecast is available from about
 // 10:45 UTC; 13:15 is the retry. CAMS 00/12 UTC runs are asked 10 h 40 min after init and again 2 h
 // later (ADS publication time 待考). Both workflows are idempotent: a served run is a no-op.
@@ -23,7 +27,7 @@ export const CAMS_CRON = '40 0,10,12,22 * * *';
 
 export const SCHEDULER_CRONS = [
   HRRR_CRON, SLOW_CRON, ARCHIVE_CRON, WHOLE_BAKE_CRON, FUSION_ISSUE_CRON, STAGING_SEARCH_CRON,
-  PLACE_SURF_CRON, PLACE_DIRECTORY_CRON, GLOFAS_CRON, CAMS_CRON,
+  PLACE_SURF_CRON, PLACE_DIRECTORY_CRON, PRODUCTION_PLACE_CRON, GLOFAS_CRON, CAMS_CRON,
 ] as const;
 
 // Lanes whose dispatch first asks GitHub whether a run of the same workflow is already queued or

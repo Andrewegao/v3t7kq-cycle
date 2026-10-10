@@ -44,7 +44,7 @@ test('the declaration is the reviewed Worker, its sorted triggers, vars and secr
   assert.equal(decl.worker, 'weatherx-model-scheduler');
   assert.equal(decl.account, ACCOUNT);
   assert.deepEqual(decl.crons, [...config.expectedCrons].sort());
-  assert.equal(decl.crons.length, 10);
+  assert.equal(decl.crons.length, 11);
   assert.equal(decl.vars.BAKE_GITHUB_WORKFLOW, 'bake.yml');
   assert.equal(decl.vars.CATALOG_TARGET, 'production');
   assert.deepEqual(decl.secrets, ['GITHUB_DISPATCH_TOKEN']);
@@ -74,7 +74,7 @@ test('plan reports declared vs live crons and vars and refuses a Worker without 
   assert.equal(report.activeVersionId, V1);
   assert.deepEqual(report.crons.remove, []);
   assert.deepEqual(report.crons.add, ['15 11,13 * * *', '17 */6 * * *', '23 */6 * * *', '37 1,7,13,19 * * *',
-    '40 0,10,12,22 * * *', '47 5,17 * * *']);
+    '40 0,10,12,22 * * *', '47 5,17 * * *', '52 9 * * *']);
   assert.deepEqual(report.crons.keep, [...LIVE_0912].sort());
   assert.deepEqual(report.vars, [
     { name: 'BAKE_GITHUB_WORKFLOW', live: null, declared: 'bake.yml' },

@@ -305,7 +305,7 @@ test('workflow isolates credentials to publish, pins actions and sources, and st
   const text = await readFile('.github/workflows/production-place-renewal.yml', 'utf8');
   const declaration = JSON.parse(await readFile('ops/atmos-production-source.json'));
   assert(text.includes('group: weatherx-places-production') && text.includes('cancel-in-progress: false'));
-  assert(text.includes('name: production') && text.includes("if: vars.PRODUCTION_PLACES_RENEWAL_ENABLED == 'true' || github.event_name == 'workflow_dispatch'"));
+  assert(text.includes('name: production') && text.includes("if: (github.event_name == 'workflow_dispatch' && inputs.caller != 'scheduler') || vars.PRODUCTION_PLACES_RENEWAL_ENABLED == 'true'"));
   for (const slot of policy.schedules) assert(text.includes(`- cron: '${slot}'`));
   assert.equal(text.split(declaration.atmosSha).length - 1, 2, 'publisher is the declared production source');
   assert(!/upload-artifact|contents: write|wrangler|weatherx-data-staging|STAGING_R2|STAGING_PLACES_SEED_KEY|staging-controller/.test(text));

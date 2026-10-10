@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `249fb5ed997267977fdd1fb320635d9b2ad150363eac1d52cdae1f84c6b46dde`.
+Source digest (registry and workflow bytes): `fba5a9af42f78da827a3f7a0bbb8bf27ff898896fe2d08cbac0fe839ce242c62`.
 
 69 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -950,21 +950,21 @@ Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <c
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [renew](../.github/workflows/production-place-renewal.yml#L35) ← no needs | <code>ubuntu-24.04</code> | <code>{"name":"production","url":"https://weatherx.org"}</code> | <code>75</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [renew](../.github/workflows/production-place-renewal.yml#L37) ← no needs | <code>ubuntu-24.04</code> | <code>{"name":"production","url":"https://weatherx.org"}</code> | <code>75</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [renew](../.github/workflows/production-place-renewal.yml#L35): <code>vars.PRODUCTION_PLACES_RENEWAL_ENABLED == 'true' &#124;&#124; github.event_name == 'workflow_dispatch'</code>
+- [renew](../.github/workflows/production-place-renewal.yml#L37): <code>(github.event_name == 'workflow_dispatch' &amp;&amp; inputs.caller != 'scheduler') &#124;&#124; vars.PRODUCTION_PLACES_RENEWAL_ENABLED == 'true'</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [renew / step 1](../.github/workflows/production-place-renewal.yml#L52) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [renew / Checkout exact reviewed producer and consumer without retained credentials](../.github/workflows/production-place-renewal.yml#L59) | <code>weatherx-hq/atmos</code> | <code>${{ env.ATMOS_SHA }}</code> |
-| [renew / Checkout the declared production publisher without retained credentials](../.github/workflows/production-place-renewal.yml#L82) | <code>weatherx-hq/atmos</code> | <code>81e061dae0a03cc39e014dc08586bbd144823108</code> |
+| [renew / step 1](../.github/workflows/production-place-renewal.yml#L54) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [renew / Checkout exact reviewed producer and consumer without retained credentials](../.github/workflows/production-place-renewal.yml#L61) | <code>weatherx-hq/atmos</code> | <code>${{ env.ATMOS_SHA }}</code> |
+| [renew / Checkout the declared production publisher without retained credentials](../.github/workflows/production-place-renewal.yml#L84) | <code>weatherx-hq/atmos</code> | <code>81e061dae0a03cc39e014dc08586bbd144823108</code> |
 
-Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/production-place-renewal.yml#L48), [PRODUCTION_PLACES_RENEWAL_ATMOS_SHA](../.github/workflows/production-place-renewal.yml#L46), [PRODUCTION_PLACES_RENEWAL_CONTROLLER_SHA256](../.github/workflows/production-place-renewal.yml#L50), [PRODUCTION_PLACES_RENEWAL_ENABLED](../.github/workflows/production-place-renewal.yml#L35).
+Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/production-place-renewal.yml#L50), [PRODUCTION_PLACES_RENEWAL_ATMOS_SHA](../.github/workflows/production-place-renewal.yml#L48), [PRODUCTION_PLACES_RENEWAL_CONTROLLER_SHA256](../.github/workflows/production-place-renewal.yml#L52), [PRODUCTION_PLACES_RENEWAL_ENABLED](../.github/workflows/production-place-renewal.yml#L37).
 
 
 ## production-wind100-point-reader-release
