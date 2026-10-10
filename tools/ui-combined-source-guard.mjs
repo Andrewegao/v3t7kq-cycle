@@ -11,7 +11,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Reviewed merged master head (2026-10-09 04:16Z, PR #521), first production-bound pin since the 2026-09-27 release.
-export const UI_SOURCE = '78e1cf76af49b8cc26dd06e66beb31d28f27df99';
+export const UI_SOURCE = 'b5a3088d001d6947790f123f5e0248c4aa0768bc';
 export const REVIEWED_MASTER = UI_SOURCE;
 /** Exact extra paths allowed to differ between the pin and master (none at this pin). */
 export const EDGE_ONLY_DIFF = Object.freeze([]);
