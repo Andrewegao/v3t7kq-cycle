@@ -24,7 +24,19 @@ The staging place renewal controller hashes its own workflow file (`STAGING_PLAC
 
 **Dedupe.** Before dispatching any lane except the catalog and archive ones, the Worker lists that workflow's runs on `main` created since ten minutes before the tick. If one is `queued`, `in_progress`, `waiting`, `pending` or `requested`, it logs `github_workflow_dispatch_skipped` with that run id and does not dispatch. If the list cannot be read it dispatches anyway (`dedupe: unreadable`): every lane is concurrency-guarded and idempotent, so a duplicate costs minutes and a missed slot costs data. The catalog and archive dispatches are byte-identical to the 2026-09-12 Worker and never read first.
 
-Each GitHub-native schedule stays as an independent fallback at its own minute (`scheduler/test-schedule-contract.mjs` holds them to this table). For the catalog lanes, `CATALOG_GITHUB_FALLBACK_DISABLED=true` turns the fallback off; the other fallbacks have no such switch yet, so a late fallback run can repeat a slot the Worker already served.
+Each GitHub-native schedule stays as an independent fallback at its own minute (`scheduler/test-schedule-contract.mjs` holds them to this table). For the catalog lanes, `CATALOG_GITHUB_FALLBACK_DISABLED=true` turns the fallback off.
+
+**Fallback stand-aside.** GitHub delivers these schedules hours late, so a late fallback used to repeat a slot the Worker had already served (2026-10-10: the bake cron run 38077160747 started at 18:46Z, four hours after the Worker's 14:35Z whole bake 38060223583, and repeated the whole three-hour bake). Each workflow below now starts with one `fallback-gate` job that runs only on `schedule`: with the workflow token (`actions: read`, no checkout, no secret) it lists this workflow's `workflow_dispatch` runs on `main` created inside the lane's window, and when one succeeded or is still queued, waiting or running it outputs `run=false` and every other job skips. A dispatched run skips the gate, and the condition appended to its first jobs is then true, so dispatched runs are unchanged. The gate is fail-open: an API or parse error, a timeout or a failed gate job leaves the fallback running, so the fallback still covers a Worker outage.
+
+| Workflow | Window | Counts as already run |
+| --- | --- | --- |
+| `bake.yml` | 330 min | a dispatched `bake: all models + whole-data maintenance` (not a single-model, recovery or staging-Wind100-only run) |
+| `fusion-issue.yml` | 330 min | any dispatched run (no run-name) |
+| `staging-search.yml` | 330 min | any dispatched run (no run-name) |
+| `glofas-ingest.yml` | 90 min | a dispatched `energy glofas: dispatched (today)` |
+| `cams-ingest.yml` | 90 min | a dispatched `energy cams: dispatched (newest published run)` |
+
+Each window is 30 min shorter than the lane's shortest gap between slots, so an on-time fallback never sees the previous slot's dispatch: it runs, and the Worker's own dedupe then stands aside. Not gated: `catalog-bake.yml` (its switch above already turns the fallback off, and the file is a component-bake definition path), `satellite-archive.yml` (disabled), `staging-place-renewal.yml` (its controller digest covers the workflow file, and a surf dispatch cannot be told from an all-families one in the run list) and `production-place-renewal.yml` (a scheduled run already stands aside when production serves tides under 20 h old). `tests/fallback-stand-aside.mjs` holds every Worker-dispatched workflow with a schedule to this split.
 
 ## Credential
 

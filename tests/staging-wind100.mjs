@@ -353,7 +353,7 @@ test('bake staging-only pilot can start only the fresh ECMWF collector and recur
   const jobs = Object.fromEntries(starts.map((match, index) => [match[1],
     jobsSource.slice(match.index, starts[index + 1]?.index)]));
   assert.deepEqual(Object.keys(jobs), [
-    'core-ecmwf', 'staging-wind100', 'production-wind100',
+    'fallback-gate', 'core-ecmwf', 'staging-wind100', 'production-wind100',
     'core-gfs', 'core-hrrr', 'core-aifs',
     'regional-icon', 'regional-hrdps', 'regional-arome-antilles', 'regional-hrrr-ak',
     'regional-nam', 'regional-nam-hi', 'regional-nam-ak',
@@ -365,7 +365,9 @@ test('bake staging-only pilot can start only the fresh ECMWF collector and recur
   // The run summary must also run in a staging-only pilot (to say maintenance was skipped); it
   // is reporting-only: no secrets, environment, lock, reusable workflow or write permission.
   assert.doesNotMatch(jobs['run-summary'], /secrets\.|environment:|concurrency:|uses: \.\/|: write/);
-  assert.match(jobs['run-summary'], /^    if: \$\{\{ always\(\) \}\}$/m);
+  assert.match(jobs['run-summary'], /^    if: \$\{\{ always\(\) && needs\.fallback-gate\.outputs\.run != 'false' \}\}$/m);
+  // The cron fallback gate never runs in a dispatched pilot (tests/fallback-stand-aside.mjs).
+  assert.match(jobs['fallback-gate'], /^    if: \$\{\{ github\.event_name == 'schedule' \}\}$/m);
   assert.match(jobs['core-ecmwf'], /inputs\.staging_wind100_only == true && github\.event_name == 'workflow_dispatch' && inputs\.model == 'ecmwf' && inputs\.recovery_run_id == ''/);
   assert.match(jobs['core-ecmwf'], /inputs\.staging_wind100_only != true && \(inputs\.model == '' \|\| inputs\.model == 'all' \|\| inputs\.model == 'ecmwf'\)/);
   assert.match(jobs['staging-wind100'], /needs\.core-ecmwf\.result == 'success'/);
@@ -374,7 +376,7 @@ test('bake staging-only pilot can start only the fresh ECMWF collector and recur
   assert.doesNotMatch(jobs['staging-wind100'], /secrets: inherit/);
   assert.doesNotMatch(jobs['staging-wind100'], /R2_PRODUCTION|CATALOG_ENDPOINT_PRODUCTION|CATALOG_PROMOTION_KEY_PRODUCTION/);
   for (const [name, block] of Object.entries(jobs)) {
-    if (name === 'core-ecmwf' || name === 'staging-wind100' || name === 'run-summary') continue;
+    if (name === 'fallback-gate' || name === 'core-ecmwf' || name === 'staging-wind100' || name === 'run-summary') continue;
     assert.match(block, /^    if: \$\{\{ inputs\.staging_wind100_only != true && \(/m,
       `${name} can start during a staging-only pilot`);
   }

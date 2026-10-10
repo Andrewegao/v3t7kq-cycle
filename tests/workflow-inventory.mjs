@@ -144,7 +144,8 @@ test('repository inventory covers every workflow and keeps legacy recovery visib
   const output = await generateInventory();
   assert.match(output, /weatherx-data-maintenance/);
   assert.match(output, /weatherx-component-production-/);
-  assert.match(output, /core-ecmwf.*no needs/);
+  assert.match(output, /fallback-gate.*no needs/);
+  assert.match(output, /core-ecmwf.*←.*fallback-gate/);
   assert.match(output, /publish-ecmwf.*←.*core-ecmwf/);
   assert.deepEqual(await Promise.all(paths.map(path => readFile(join(ROOT, path), 'utf8'))), before);
 });
