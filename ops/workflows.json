@@ -506,6 +506,15 @@
       "runbook": "docs/production-wind100-retention.md"
     },
     {
+      "id": "production-components-retention",
+      "path": ".github/workflows/production-components-retention.yml",
+      "family": "maintenance",
+      "purpose": "Plan or approve bounded cleanup of model components no catalog in the last seven days references.",
+      "subsystem": "Component storage",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/production-components-retention.md"
+    },
+    {
       "id": "production-wind100-retention",
       "path": ".github/workflows/production-wind100-retention.yml",
       "family": "maintenance",

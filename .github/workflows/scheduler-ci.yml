@@ -41,6 +41,7 @@ on:
       - ".github/workflows/staging-wind100-recurring.yml"
       - ".github/workflows/production-wind100-recurring.yml"
       - ".github/workflows/production-wind100-retention.yml"
+      - ".github/workflows/production-components-retention.yml"
       - ".github/workflows/staging-wind100-preflight.yml"
       - ".github/workflows/staging-search-reader.yml"
       - ".github/workflows/staging-data-activate.yml"
@@ -124,6 +125,8 @@ jobs:
         run: node --test tests/production-place-renewal.mjs
       - name: Production Wind100 isolated publisher and selector contracts
         run: node --test tests/production-wind100.mjs
+      - name: Production component retention planner, guard and workflow contracts
+        run: node --test tests/production-components-retention.mjs
       - name: Consumer refresh workflow safety contract
         run: |
           node tests/consumer-workflow.mjs
