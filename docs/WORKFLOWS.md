@@ -6,9 +6,9 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `89e3fb34da1496aee3e0b3bc68fa6d87b75af3a17aba5413c9d4261648851dab`.
+Source digest (registry and workflow bytes): `ace99236d7daa2122cb97284a6bd47122093aec574ecb4838f8e7db5e599ca61`.
 
-67 workflows. Ordering and output are deterministic; no API request or clock is used.
+68 workflows. Ordering and output are deterministic; no API request or clock is used.
 
 | Workflow | Family / subsystem | Lifecycle | Purpose | Runbook |
 | --- | --- | --- | --- | --- |
@@ -52,6 +52,7 @@ Source digest (registry and workflow bytes): `89e3fb34da1496aee3e0b3bc68fa6d87b7
 | [publish-current-model-production](#publish-current-model-production) | models / Component publication | recurring | Qualify and publish one authenticated collector result independently of sibling models. | [guide](../docs/current-model-artifact-handoff.md) |
 | [qualify-bake-throughput](#qualify-bake-throughput) | models / Bake qualification | diagnostic | Qualify full-grid GFS frame throughput and runner memory without provider or publication access. | [guide](../docs/bake-throughput-qualification.md) |
 | [resume-model-publication](#resume-model-publication) | models / Publication recovery | manual-supported | Recover publication from the explicitly reviewed retained run without recollecting models. | [guide](../docs/resume-model-publication.md) |
+| [road-production-release](#road-production-release) | releases / Road product | manual-supported | Build, reseal and publish an exact Atmos master SHA to road.weatherx.org through the Atmos release guard. | [guide](../docs/road-production-release.md) |
 | [satellite-archive](#satellite-archive) | archives / Satellite and radar | recurring | Collect hourly archive tails or explicit bounded historical batches. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [scheduler-ci](#scheduler-ci) | control-plane / Controller evidence | recurring | Check scheduler, publication, source, and recovery contracts. | [guide](../scheduler/README.md) |
 | [scheduler-deploy](#scheduler-deploy) | control-plane / Scheduler | manual-supported | Deploy and verify the selected scheduler revision through existing guards. | [guide](../scheduler/README.md) |
@@ -1109,6 +1110,39 @@ Checkout declarations (not a claim of approval or checkout success):
 | No direct checkout; inspect linked reusable jobs | — | — |
 
 Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/resume-model-publication.yml#L16).
+
+
+## road-production-release
+
+[.github/workflows/road-production-release.yml](../.github/workflows/road-production-release.yml#L1) · <code>WeatherX Road production release</code>
+
+Declared triggers: [workflow_dispatch](../.github/workflows/road-production-release.yml#L10); input names <code>["atmos_sha","confirm"]</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-road-production","cancel-in-progress":false}</code>.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [build](../.github/workflows/road-production-release.yml#L27) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"atmos-source-read-ui"}</code> | <code>60</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read"}</code> |
+| [transfer](../.github/workflows/road-production-release.yml#L84) ← <code>build</code> | <code>ubuntu-latest</code> | <code>{"name":"ui-staging"}</code> | <code>15</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read"}</code> |
+| [release](../.github/workflows/road-production-release.yml#L122) ← <code>transfer</code> | <code>ubuntu-latest</code> | <code>{"name":"ui-production","url":"https://road.weatherx.org"}</code> | <code>30</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","issues":"write"}</code> |
+
+Declared job conditions (additional step/helper checks may apply):
+
+- [build](../.github/workflows/road-production-release.yml#L27): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; github.event_name == 'workflow_dispatch' &amp;&amp; github.repository == 'Andrewegao/v3t7kq-cycle' }}</code>
+- [transfer](../.github/workflows/road-production-release.yml#L85): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; github.event_name == 'workflow_dispatch' }}</code>
+- [release](../.github/workflows/road-production-release.yml#L123): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; github.event_name == 'workflow_dispatch' }}</code>
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [build / step 2](../.github/workflows/road-production-release.yml#L45) | caller repository (implicit) | <code>${{ github.sha }}</code> |
+| [build / step 3](../.github/workflows/road-production-release.yml#L50) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmos_sha }}</code> |
+| [transfer / step 1](../.github/workflows/road-production-release.yml#L96) | caller repository (implicit) | <code>${{ github.sha }}</code> |
+| [release / step 1](../.github/workflows/road-production-release.yml#L140) | caller repository (implicit) | <code>${{ github.sha }}</code> |
+| [release / Checkout only the exact source's release guard and Wrangler lock](../.github/workflows/road-production-release.yml#L145) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmos_sha }}</code> |
+
+Variable references (declared names only; values and activation unknown): [UI_BUILDS_ENABLED](../.github/workflows/road-production-release.yml#L38), [UI_BUILD_PUBLIC_KEY](../.github/workflows/road-production-release.yml#L39), [UI_DEPLOYMENT_HOLD_UNTIL](../.github/workflows/road-production-release.yml#L138), [UI_ISOLATION_APPROVED](../.github/workflows/road-production-release.yml#L137), [UI_RELEASES_ENABLED](../.github/workflows/road-production-release.yml#L136).
 
 
 ## satellite-archive

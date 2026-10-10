@@ -82,6 +82,8 @@ jobs:
         run: node --test tests/fusion-production-evidence.mjs
       - name: Production platform Worker release contracts
         run: node --test tests/platform-worker-production-release.mjs
+      - name: Road production release contracts
+        run: node --test tests/road-release.mjs
       - run: npm run check --prefix scheduler
       - name: Late-failure bake diagnostic retention contract
         run: |
