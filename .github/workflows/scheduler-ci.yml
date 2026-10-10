@@ -80,6 +80,8 @@ jobs:
         run: node --test tests/fusion-staging-evidence.mjs
       - name: Production fusion evidence safety contracts
         run: node --test tests/fusion-production-evidence.mjs
+      - name: Production platform Worker release contracts
+        run: node --test tests/platform-worker-production-release.mjs
       - run: npm run check --prefix scheduler
       - name: Late-failure bake diagnostic retention contract
         run: |

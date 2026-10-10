@@ -31,3 +31,6 @@ If live verification fails, recovery restores only the previous version recorded
 this run and refuses to overwrite a different publisher. Inspect the receipt and active
 version before retrying; a runner interruption can require manual inspection. Do not
 promote the UI unless this release and its live checks pass.
+
+This one-time workflow is pinned to its 2026-09-23 source and refuses any later master. Use the
+general [production platform Worker release](platform-worker-production-release.md) for later sources.

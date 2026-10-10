@@ -515,6 +515,15 @@
       "runbook": "docs/platform-wind100-worker-release.md"
     },
     {
+      "id": "platform-worker-production-release",
+      "path": ".github/workflows/platform-worker-production-release.yml",
+      "family": "releases",
+      "purpose": "Plan, then release an exact Atmos master SHA as the production platform Worker (code only, restore on failure).",
+      "subsystem": "Production platform",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/platform-worker-production-release.md"
+    },
+    {
       "id": "platform-production-feed-routes",
       "path": ".github/workflows/platform-production-feed-routes.yml",
       "family": "releases",
