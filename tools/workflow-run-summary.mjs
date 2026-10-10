@@ -302,6 +302,14 @@ export async function componentPlan({env, token, fetcher = fetch}) {
     models.length ? `\nPublishing: ${models.join(', ')}.` : '\nNo model is published by this run.', ''].join('\n')};
 }
 
+// catalog-bake.yml model job: the stand-aside step succeeded and the production bake step was skipped.
+export const STAND_ASIDE_STEP = 'Stand aside when production already serves the newest upstream run';
+export const PRODUCTION_BAKE_STEP = 'Bake, validate, upload, and CAS-promote one production model';
+export function stoodAsideOnServedRun(job) {
+  const step = name => (job?.steps ?? []).find(row => row?.name === name);
+  return job?.conclusion === 'success' && step(STAND_ASIDE_STEP)?.conclusion === 'success' && step(PRODUCTION_BAKE_STEP)?.conclusion === 'skipped';
+}
+
 export function componentMarkdown({jobs, target, event, holders, now, stoodAside = []}) {
   const lines = [`## component bake summary (target: ${target.replace(/[^a-z]/g, '')})`, '',
     `Trigger: ${event.replace(/[^a-z_]/g, '')}. Ages are measured when this summary ran (${new Date(now).toISOString()}).`, '',
@@ -310,6 +318,10 @@ export function componentMarkdown({jobs, target, event, holders, now, stoodAside
   for (const job of ours) {
     const model = holderJobName(job.name);
     const conclusion = result(job.conclusion);
+    if (stoodAsideOnServedRun(job)) {
+      lines.push(`| ${model} | unchanged | stood aside: production already serves the newest upstream run; nothing collected or uploaded (job summary has the run) |`);
+      continue;
+    }
     const outcome = conclusion === 'success' ? 'refreshed' : conclusion === 'cancelled' ? 'CANCELLED' : conclusion === 'skipped' ? 'skipped' : conclusion.toUpperCase();
     const detail = conclusion === 'success' ? `published ${ago(minutesSince(job.completed_at, now))}`
       : conclusion === 'cancelled' ? `never ran: superseded while queued for lock weatherx-component-${target}-${model}; previous component kept`
