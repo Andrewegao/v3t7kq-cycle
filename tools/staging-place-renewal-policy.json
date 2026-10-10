@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "e5bc38aeebb15515ad45ca5b2dfdef1cffba4deb",
-  "qualifierSha256": "740b495b7649d377d62e4d821ddd58928389326649ec229c6b450cc12be617cd",
+  "sourceSha": "681deba659e7faa9600e25e3ec7f578e0fcb5511",
+  "qualifierSha256": "f0a1e29b4a0231b141a726ba29bf8e3cd7499c922cc0edd69c7d4448b3e5c663",
   "surfSchedule": "37 1,7,13,19 * * *",
   "directoryTideSchedule": "47 5,17 * * *",
   "tideRequestsPerSecond": 2,

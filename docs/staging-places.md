@@ -12,7 +12,7 @@
 
 `WXPS1` 使用随机 96 位 IV 的 AES-256-GCM；完整认证及加密/明文两个精确摘要通过后，才解释文件清单。文件按显式长度逐块处理，不执行 tar、脚本或任意归档路径。资料和证据总计最多 20,000 文件、256 MiB；发布资料每文件最多 16 MiB，元数据最多约 4 MiB。仅独立证据中的 PG `all-sites.json` 允许最多 32 MiB，仍逐块处理，不改变发布资料上限。已有输出、符号链接、硬链接、遍历、额外字节、错误摘要均拒绝。提取目录权限 0700、文件 0600，失败只移除本次新建目录。
 
-潮汐检查点属于独立 `tide-checkpoint` 清单，仅允许 `manifest.json` 和 `products/<数字站号>/{hilo,6}.json`，站号必须属于冻结请求名单。检查点永远不进入 publisher manifest 或 R2。当前真实候选 1,254 个资料文件共 129,386,433 字节，加 2,503 个检查点文件 125,743,069 字节，合计 255,129,502 字节，低于既有上限；包含全部 1,256 个请求站，其中 1,251 个可用、5 个明确无资料，不伪造缺失产品。
+潮汐检查点属于独立 `tide-checkpoint` 清单，仅允许 `manifest.json` 和 `products/<数字站号>/{hilo,6}.json`，站号必须属于冻结请求名单。检查点永远不进入 publisher manifest 或 R2。当前真实候选 1,254 个资料文件共 129,386,433 字节，加 2,503 个检查点文件 125,743,069 字节，合计 255,129,502 字节，低于既有上限；包含全部 1,256 个请求站，其中 1,251 个可用、5 个明确无资料，不伪造缺失产品。该数字记录 2026-09-10 的 1,256 站名单。NOAA 于 2026-10-07 起列出 1,260 个参考站（新增 8725441、8725586、8725899、8729333，均在佛罗里达），名单合同改为 1,260 站、最少 1,255 站可用，仍只容许同样 5 个明确无资料的站；按 2026-09-10 每站约 204 KB 估算，资料加检查点约增加 0.8 MB，仍低于上限。
 
 PG 证据类别为 `paragliding-snapshot`，必须且只能包含 `all-sites.json` 和 `manifest.json`；冲浪证据类别为 `surf-stage`，必须且只能包含 `stage.json`。全部证据经独立清单认证和逐文件摘要验证，运行资格检查前再次验证；PG/冲浪主证据 SHA 从这份认证清单导出，不信任种子内自带的资格声明。
 
@@ -34,7 +34,7 @@ PG N=11,581：首次准备为 23,166 GET + 11,583 PUT，共 34,749 次请求；�
 
 ## 实际资格证明的接入边界
 
-固定入口为精确 Atmos SHA 内的 `app/e2e/qualify-staging-places.mjs`，文件摘要也须批准。执行参数：`--family tides --candidate-root <candidate> --source-sha <sha> --publisher-module <cycle>/tools/staging-places.mjs --manifest-sha256 <sha> --checkpoint-root <checkpoint> --scope staging-partial --min-available-stations 1251 --out <qualification.json>`。
+固定入口为精确 Atmos SHA 内的 `app/e2e/qualify-staging-places.mjs`，文件摘要也须批准。执行参数：`--family tides --candidate-root <candidate> --source-sha <sha> --publisher-module <cycle>/tools/staging-places.mjs --manifest-sha256 <sha> --checkpoint-root <checkpoint> --scope staging-partial --min-available-stations 1255 --out <qualification.json>`。
 
 该入口须导入完整实际消费者模块与实际 producer，比较冻结源产品、完整请求名单、六分钟连续性及七天覆盖，只在成功后生成 publisher 所需精确证明：`{schemaVersion:1,kind,identity,sourceSha,manifestSha256,checks:{producer:true,consumer:true,coverage:true,roster:true}}`。工具不能通过单位测试成功、种子自带声明或手写 true 来冒充这份证明。
 

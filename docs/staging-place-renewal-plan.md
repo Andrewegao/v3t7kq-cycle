@@ -96,3 +96,49 @@ qualification and publication policy; then use one instrumented hosted run to
 identify the remaining station failures. Targeted provider probes can follow for
 those stations only. This diagnostic change is not a tide-data repair or a release
 qualification by itself, and does not change the frozen Atmos source.
+
+## Tide roster 1,256 → 1,260, 2026-10-10
+
+Every scheduled tide renewal since 2026-10-07 22:17Z refused at
+`phase: roster, class: contract` after one successful metadata request, and the
+staging tide lease (last identity `noaa-coops-20261006T141344Z`) expired, so
+`/data-atmos/tides/tides.json` answers 503 `place_data_unavailable`. The last run
+on the old roster (2026-10-07 12:03Z) still saw 1,256 stations.
+
+The pinned producer's own request
+(`stations.json?type=tidepredictions`, `fetch_stations` then
+`_canonical_roster(..., ("R",))`) now returns 3,502 rows: 1,260 reference and
+2,242 subordinate. A Wayback Machine copy of the same URL from 2026-10-05 has 3,499
+rows (1,256 R, 2,243 S). The difference is four Florida reference stations and no
+removals:
+
+| id | name | change | zone |
+| --- | --- | --- | --- |
+| 8725441 | Redfish Pass, Captiva Island (north end) | subordinate of 8726520 → reference | America/New_York |
+| 8725586 | Snook Haven | new reference | America/New_York |
+| 8725899 | Nokomis, Venice Inlet | new reference | America/New_York |
+| 8729333 | Lagrange Bayou | new reference | America/Chicago |
+
+All four have `type: "R"`, an empty `reference_id`, pass `_valid_meta`, and get a
+time zone from the existing `(state, timezonecorr)` map. A probe run through the
+pinned producer's `_fetch_station_v2`, over the collector's own window, returned
+complete high/low events covering the forecast window and 2,400 contiguous
+six-minute samples for each, with no gaps. The same probe still finds the five
+stations that were already known to have no predictions (8660754, 8762483, 8764311,
+9450623, 9751388) as `events-unavailable`.
+
+The contract keeps its rule of tolerating those five stations with no data and
+nothing else: the roster becomes 1,260 and the minimum 1,255 (1,251/1,256 and
+1,255/1,260 both round to 99.6%). Pacing, the single bounded resume, the deadline,
+checkpoints, qualification, immutable publication and the pointer CAS are unchanged.
+The producer and consumer need no change. The Atmos qualifier
+(`app/e2e/qualify-staging-places.mjs`) hard-coded 1,256 as both the roster length
+and the minimum cap, so it moves too. The new pin is Atmos `681deba659e7`, a single
+commit on top of the old pin `e5bc38aeebb` that changes only that qualifier and its
+test (`data/`, `app/src/` and `app/package*.json` are byte-identical). The policy
+pins that commit and the new qualifier digest.
+
+The controller closure digest changes. The renewal job refuses to run, for every
+family, until both repository variables match the merged `main`:
+`STAGING_PLACES_RENEWAL_ATMOS_SHA` and `STAGING_PLACES_RENEWAL_CONTROLLER_SHA256`
+(`node tools/staging-place-renewal.mjs digest`). Set them right after the merge.
