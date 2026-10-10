@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { loadSchedulerConfig } from './scripts/live-schedules.mjs';
+import { MAX_CRON_TRIGGERS, loadSchedulerConfig } from './scripts/live-schedules.mjs';
 
 const { expectedCrons, expectedTarget, expectedVars } = await loadSchedulerConfig();
 const runtime = await readFile(new URL('./src/schedules.ts', import.meta.url), 'utf8');
@@ -17,33 +17,64 @@ const placePolicy = JSON.parse(await readFile(new URL('../tools/staging-place-re
 const productionPlaceWorkflow = await readFile(new URL('../.github/workflows/production-place-renewal.yml', import.meta.url), 'utf8');
 const productionPlacePolicy = JSON.parse(await readFile(new URL('../tools/production-place-renewal-policy.json', import.meta.url), 'utf8'));
 const ENERGY_CRONS = { glofas: '15 11,13 * * *', cams: '40 0,10,12,22 * * *' };
-// Every on-time lane the Worker dispatches (2026-10-10): its trigger, its GitHub-native fallback
-// cron(s) in the target workflow, and why the minute is what it is.
+// The account is on Workers Free: five Cron Triggers, and past five Cloudflare fires an arbitrary
+// five (2026-10-10). The Worker declares exactly these five, in this priority order.
+const DECLARED = ['8-59/10 * * * *', '7 * * * *', '35 2,8,14,20 * * *', '23 */6 * * *', '52 9 * * *'];
+const CATALOG_CRONS = ['8-59/10 * * * *', '7 * * * *'];
+// Worker-dispatched lanes besides the catalog: trigger, GitHub-native fallback cron(s), workflow.
 const LANES = [
   { lane: 'whole-data bake', cron: '35 2,8,14,20 * * *', workflow: bakeWorkflow, fallback: ['30 2,8,14,20 * * *'] },
   { lane: 'fusion issuance', cron: '23 */6 * * *', workflow: fusionIssueWorkflow, fallback: ['23 */6 * * *'] },
+  { lane: 'production tide renewal', cron: productionPlacePolicy.schedules[0], workflow: productionPlaceWorkflow,
+    fallback: productionPlacePolicy.schedules },
+];
+// Lanes the Worker still routes (dispatchForSchedule) but does not declare: they run from their
+// GitHub-native fallback only. Each must keep that fallback, or it would stop running at all.
+const FALLBACK_ONLY = [
+  { lane: 'satellite archive tail', cron: '23 * * * *', workflow: archiveWorkflow, fallback: ['25 * * * *'] },
   { lane: 'staging search renewal', cron: '17 */6 * * *', workflow: searchWorkflow, fallback: ['17 */6 * * *'] },
   { lane: 'staging surf renewal', cron: placePolicy.surfSchedule, workflow: placeWorkflow, fallback: [placePolicy.surfSchedule] },
   { lane: 'staging directory and tide renewal', cron: placePolicy.directoryTideSchedule, workflow: placeWorkflow,
     fallback: [placePolicy.directoryTideSchedule] },
-  { lane: 'production tide renewal', cron: productionPlacePolicy.schedules[0], workflow: productionPlaceWorkflow,
-    fallback: productionPlacePolicy.schedules },
   { lane: 'energy glofas', cron: ENERGY_CRONS.glofas, workflow: glofasWorkflow, fallback: [ENERGY_CRONS.glofas] },
   { lane: 'energy cams', cron: ENERGY_CRONS.cams, workflow: camsWorkflow, fallback: [ENERGY_CRONS.cams] },
 ];
 
-const runtimeCrons = [...runtime.matchAll(/export const \w+_CRON = '([^']+)'/g)].map((match) => match[1]);
+const constants = Object.fromEntries([...runtime.matchAll(/export const (\w+_CRON) = '([^']+)'/g)].map((m) => [m[1], m[2]]));
+const listOf = (name) => {
+  const body = runtime.match(new RegExp(`export const ${name} = \\[([^\\]]*)\\] as const;`))?.[1];
+  assert.ok(body, `schedules.ts must export ${name}`);
+  return body.split(',').map((id) => id.trim()).filter(Boolean).map((id) => {
+    assert.ok(id in constants, `${name} names an unknown constant ${id}`);
+    return constants[id];
+  });
+};
+const runtimeDeclared = listOf('SCHEDULER_CRONS');
+const runtimeUndeclared = listOf('UNDECLARED_CRONS');
 const workflowCrons = [...catalogWorkflow.matchAll(/^\s+- cron: '([^']+)'$/gm)].map((match) => match[1]);
 
-assert.deepEqual([...runtimeCrons].sort(), [...expectedCrons].sort(), 'runtime cron mapping must match wrangler triggers');
-assert.deepEqual([...workflowCrons].sort(), expectedCrons.filter((cron) => !['23 * * * *', ...LANES.map(({ cron }) => cron)].includes(cron)).sort(),
+assert.equal(MAX_CRON_TRIGGERS, 5, 'Workers Free fires at most five Cron Triggers per account');
+assert.match(runtime, /export const MAX_CRON_TRIGGERS = 5;/, 'schedules.ts mirrors the loader limit');
+assert.deepEqual(expectedCrons, DECLARED, 'wrangler.jsonc declares exactly the five prioritised triggers, in order');
+assert.deepEqual(runtimeDeclared, DECLARED, 'SCHEDULER_CRONS is the wrangler trigger list, in order');
+assert.ok(expectedCrons.length <= MAX_CRON_TRIGGERS);
+assert.deepEqual([...runtimeDeclared, ...runtimeUndeclared].sort(), Object.values(constants).sort(),
+  'every routed cron constant is either declared or listed as undeclared');
+assert.deepEqual(runtimeUndeclared.sort(), FALLBACK_ONLY.map(({ cron }) => cron).sort(),
+  'the undeclared crons are exactly the fallback-only lanes');
+assert.deepEqual([...workflowCrons].sort(), [...CATALOG_CRONS].sort(),
   'catalog GitHub fallback crons must match the catalog scheduler triggers');
-assert.equal(expectedCrons.length, 3 + LANES.length, 'every trigger is a catalog, archive or on-time lane trigger');
+assert.deepEqual([...CATALOG_CRONS, ...LANES.map(({ cron }) => cron)].sort(), [...expectedCrons].sort(),
+  'every trigger is a catalog or an on-time lane trigger');
 assert.equal(new Set(LANES.map(({ cron }) => cron)).size, LANES.length, 'one trigger per lane');
 for (const { lane, cron, workflow, fallback } of LANES) {
   assert.ok(expectedCrons.includes(cron), `the scheduler must dispatch the ${lane}`);
   for (const slot of fallback) assert.ok(workflow.includes(`- cron: '${slot}'`), `the ${lane} must keep its GitHub-native fallback ${slot}`);
   assert.match(workflow, /workflow_dispatch:/, `the ${lane} workflow must accept a dispatch`);
+}
+for (const { lane, cron, workflow, fallback } of FALLBACK_ONLY) {
+  assert.ok(!expectedCrons.includes(cron), `the ${lane} is fallback-only and must not take one of the five triggers`);
+  for (const slot of fallback) assert.ok(workflow.includes(`- cron: '${slot}'`), `the fallback-only ${lane} must keep its GitHub-native schedule ${slot}`);
 }
 // The whole bake follows the ECMWF landing (~:10) and its own GitHub fallback (:30) by five minutes.
 assert.match(bakeWorkflow, /cron: '30 2,8,14,20 \* \* \*'   # ~20 min after each ECMWF publication lands/);
@@ -70,8 +101,7 @@ assert.match(bakeWorkflow,
   /staging-wind100:\n[\s\S]*?if: \$\{\{ needs\.core-ecmwf\.result == 'success' && \(inputs\.staging_wind100_only != true/,
   'the whole bake still publishes staging Wind100 after the ECMWF collector');
 for (const [family, text] of [['glofas', glofasWorkflow], ['cams', camsWorkflow]]) {
-  assert.ok(expectedCrons.includes(ENERGY_CRONS[family]), `the scheduler must dispatch the energy ${family} ingest`);
-  assert.ok(text.includes(`- cron: '${ENERGY_CRONS[family]}'`), `energy ${family} ingest must keep its GitHub-native fallback at the same slots`);
+  assert.ok(text.includes(`- cron: '${ENERGY_CRONS[family]}'`), `energy ${family} ingest must keep its GitHub-native schedule`);
   assert.match(text, /test "\$APPROVED_SHA" = "\$ATMOS_SHA"/, `energy ${family} ingest must run only the approved producer source`);
   assert.match(text, /served=true/, `energy ${family} ingest must stand aside when its run is already served`);
 }

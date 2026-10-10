@@ -1,6 +1,11 @@
 import { readFile } from 'node:fs/promises';
 
 const MAX_ERROR_BYTES = 2_048;
+// Cron Triggers per account: Workers Free 5, Workers Paid 250. Past the limit Cloudflare accepts
+// and lists every trigger but fires only an arbitrary five, so a larger declaration is refused here
+// (plan, release, verify:live and every contract read the declaration through this loader).
+// Mirrors MAX_CRON_TRIGGERS in src/schedules.ts.
+export const MAX_CRON_TRIGGERS = 5;
 
 export async function loadSchedulerConfig(configUrl = new URL('../wrangler.jsonc', import.meta.url)) {
   const config = JSON.parse(await readFile(configUrl, 'utf8'));
@@ -21,6 +26,9 @@ export async function loadSchedulerConfig(configUrl = new URL('../wrangler.jsonc
   }
   if (new Set(expectedCrons).size !== expectedCrons.length) {
     throw new Error('wrangler.jsonc contains duplicate cron triggers');
+  }
+  if (expectedCrons.length > MAX_CRON_TRIGGERS) {
+    throw new Error(`wrangler.jsonc declares ${expectedCrons.length} cron triggers; the account fires at most ${MAX_CRON_TRIGGERS} (Workers Free)`);
   }
   if (expectedTarget !== 'staging' && expectedTarget !== 'production') {
     throw new Error('wrangler.jsonc must declare a valid CATALOG_TARGET');

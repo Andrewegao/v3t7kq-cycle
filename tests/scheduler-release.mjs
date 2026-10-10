@@ -13,6 +13,9 @@ const digest = declarationSha256(decl);
 const V1 = '11111111-2222-4333-8444-555555555555', V2 = '66666666-7777-4888-8999-aaaaaaaaaaaa';
 // The trigger set the live Worker has carried since the 2026-09-12 deploy (run 34674247439).
 const LIVE_0912 = ['8-59/10 * * * *', '7 * * * *', '23 * * * *', '35 2,8,14,20 * * *'];
+// The eleven triggers live since the 2026-10-10 07:11Z release; only five of them ever fired.
+const LIVE_1010 = [...LIVE_0912, '23 */6 * * *', '17 */6 * * *', '37 1,7,13,19 * * *', '47 5,17 * * *',
+  '52 9 * * *', '15 11,13 * * *', '40 0,10,12,22 * * *'];
 const liveVars = { ...decl.vars, WIND100_GITHUB_WORKFLOW: 'bake.yml' };
 delete liveVars.BAKE_GITHUB_WORKFLOW;
 const bindingsOf = (vars, secrets = ['GITHUB_DISPATCH_TOKEN']) => [
@@ -44,7 +47,8 @@ test('the declaration is the reviewed Worker, its sorted triggers, vars and secr
   assert.equal(decl.worker, 'weatherx-model-scheduler');
   assert.equal(decl.account, ACCOUNT);
   assert.deepEqual(decl.crons, [...config.expectedCrons].sort());
-  assert.equal(decl.crons.length, 11);
+  assert.deepEqual(decl.crons, ['23 */6 * * *', '35 2,8,14,20 * * *', '52 9 * * *', '7 * * * *', '8-59/10 * * * *'],
+    'five triggers: the Workers Free account limit');
   assert.equal(decl.vars.BAKE_GITHUB_WORKFLOW, 'bake.yml');
   assert.equal(decl.vars.CATALOG_TARGET, 'production');
   assert.deepEqual(decl.secrets, ['GITHUB_DISPATCH_TOKEN']);
@@ -72,21 +76,30 @@ test('plan reports declared vs live crons and vars and refuses a Worker without 
   const live = { active: V1, crons: LIVE_0912, bindings: bindingsOf(liveVars) };
   const report = planReport(decl, live);
   assert.equal(report.activeVersionId, V1);
-  assert.deepEqual(report.crons.remove, []);
-  assert.deepEqual(report.crons.add, ['15 11,13 * * *', '17 */6 * * *', '23 */6 * * *', '37 1,7,13,19 * * *',
-    '40 0,10,12,22 * * *', '47 5,17 * * *', '52 9 * * *']);
-  assert.deepEqual(report.crons.keep, [...LIVE_0912].sort());
+  assert.deepEqual(report.crons.remove, ['23 * * * *']);
+  assert.deepEqual(report.crons.add, ['23 */6 * * *', '52 9 * * *']);
+  assert.deepEqual(report.crons.keep, ['35 2,8,14,20 * * *', '7 * * * *', '8-59/10 * * * *']);
   assert.deepEqual(report.vars, [
     { name: 'BAKE_GITHUB_WORKFLOW', live: null, declared: 'bake.yml' },
     { name: 'WIND100_GITHUB_WORKFLOW', live: 'bake.yml', declared: null },
   ]);
   assert.throws(() => planReport(decl, { ...live, bindings: bindingsOf(liveVars, []) }), /lacks required secret/);
   const lines = summaryLines(report, digest, 'plan').join('\n');
-  assert.match(lines, /\| `47 5,17 \* \* \*` \| no \| yes \|/);
+  assert.match(lines, /\| `52 9 \* \* \*` \| no \| yes \|/);
+  assert.match(lines, /\| `23 \* \* \* \*` \| yes \| no \|/);
   assert.match(lines, /\| `35 2,8,14,20 \* \* \*` \| yes \| yes \|/);
   assert.ok(lines.includes(releaseCommand(V1, digest)));
   assert.equal(releaseCommand(V1, digest), 'gh workflow run scheduler-deploy.yml -R Andrewegao/v3t7kq-cycle --ref main '
     + `-f mode=release -f expected_active_version_id=${V1} -f confirm=RELEASE-SCHEDULER:${digest}`);
+});
+
+test('plan against the eleven live triggers removes the six that are not declared and adds none', () => {
+  const report = planReport(decl, { active: V1, crons: LIVE_1010, bindings: bindingsOf(decl.vars) });
+  assert.deepEqual(report.crons.add, []);
+  assert.deepEqual(report.crons.remove, ['15 11,13 * * *', '17 */6 * * *', '23 * * * *', '37 1,7,13,19 * * *',
+    '40 0,10,12,22 * * *', '47 5,17 * * *']);
+  assert.deepEqual(report.crons.keep, decl.crons);
+  assert.deepEqual(report.vars, []);
 });
 
 test('diff helpers', () => {

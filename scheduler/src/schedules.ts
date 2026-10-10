@@ -25,9 +25,24 @@ export const PRODUCTION_PLACE_CRON = '52 9 * * *';
 export const GLOFAS_CRON = '15 11,13 * * *';
 export const CAMS_CRON = '40 0,10,12,22 * * *';
 
+// Cloudflare allows five Cron Triggers per account on Workers Free (250 on Workers Paid). With more
+// declared, the schedules API lists them all but only an arbitrary five ever fire: on 2026-10-10,
+// with eleven declared, only the HRRR, slow, archive, whole-bake and surf triggers invoked (GraphQL
+// workersInvocationsAdaptive, 07:00-21:20Z). So the Worker declares exactly five, in priority order.
+// Raising this needs the account on Workers Paid first (owner's call).
+export const MAX_CRON_TRIGGERS = 5;
+
+// The declared triggers (wrangler.jsonc `triggers.crons`, same order), highest priority first.
 export const SCHEDULER_CRONS = [
-  HRRR_CRON, SLOW_CRON, ARCHIVE_CRON, WHOLE_BAKE_CRON, FUSION_ISSUE_CRON, STAGING_SEARCH_CRON,
-  PLACE_SURF_CRON, PLACE_DIRECTORY_CRON, PRODUCTION_PLACE_CRON, GLOFAS_CRON, CAMS_CRON,
+  HRRR_CRON, SLOW_CRON, WHOLE_BAKE_CRON, FUSION_ISSUE_CRON, PRODUCTION_PLACE_CRON,
+] as const;
+
+// Still routed by the Worker, but not declared: these lanes run from their GitHub-native fallback
+// crons only (late but running). Re-adding one is a one-line change here and in wrangler.jsonc,
+// once the account allows more than five triggers. The archive lane's workflow has been disabled
+// since 2026-09-19, so its trigger only threw every hour.
+export const UNDECLARED_CRONS = [
+  ARCHIVE_CRON, STAGING_SEARCH_CRON, PLACE_SURF_CRON, PLACE_DIRECTORY_CRON, GLOFAS_CRON, CAMS_CRON,
 ] as const;
 
 // Lanes whose dispatch first asks GitHub whether a run of the same workflow is already queued or
