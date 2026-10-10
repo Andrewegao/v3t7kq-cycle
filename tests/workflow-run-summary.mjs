@@ -118,7 +118,7 @@ test('both bakes and the observation lane declare a run name and a read-only fin
   for (const text of [bake, catalog, observations]) assert.match(text, /^run-name: /m);
   assert.match(bake, /staging Wind100 only \(whole-data maintenance skipped\)/);
   const summary = bake.split('\n  run-summary:\n')[1];
-  assert.match(summary, /if: \$\{\{ always\(\) \}\}/);assert.match(summary, /NEEDS_JSON: \$\{\{ toJSON\(needs\) \}\}/);
+  assert.match(summary, /if: \$\{\{ always\(\) && needs\.fallback-gate\.outputs\.run != 'false' \}\}/);assert.match(summary, /NEEDS_JSON: \$\{\{ toJSON\(needs\) \}\}/);
   for (const job of ['bake', 'staging-wind100', 'production-wind100', ...MODELS.map(m => `publish-${m}`)]) assert.ok(summary.includes(job), job);
   assert.doesNotMatch(summary, /secrets\.|environment:|concurrency:|: write/);
   const component = catalog.split('\n  summary:\n')[1];

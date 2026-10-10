@@ -35,10 +35,13 @@ test('manual single-model requests collect only that model; schedules still coll
   // a failed HRRR/AIFS abstains (atmos decisions 2026-10-07). Cancelled or skipped never bakes.
   const maintenance=bake.split('\n  bake:')[1].split(/\n  [a-z]/)[0];
   const gate=maintenance.match(/\n    if: \$\{\{ (.+) \}\}/)[1];
-  const evaluate=(core,recovery,regional,{wind100=false,runCancelled=false}={})=>Function('inputs','needs','always','cancelled',
-    `return ${gate.replace(/needs\.([a-z0-9-]+)\.result/g,"needs['$1'].result")}`)(
+  // fallback: '' is a dispatched run (the schedule-only fallback gate is skipped, no output);
+  // 'true'/'false' are a schedule run whose gate let the fallback run or stood it aside.
+  const evaluate=(core,recovery,regional,{wind100=false,runCancelled=false,fallback=''}={})=>Function('inputs','needs','always','cancelled',
+    `return ${gate.replace(/needs\.([a-z0-9-]+)\.(result|outputs)/g,"needs['$1'].$2")}`)(
     {staging_wind100_only:wind100,recovery_run_id:recovery},
-    Object.fromEntries([...coreModels.map((m,i)=>[`core-${m}`,{result:core[i]}]),...regionalModels.map((m,i)=>[`regional-${m}`,{result:regional[i]}])]),
+    Object.fromEntries([...coreModels.map((m,i)=>[`core-${m}`,{result:core[i]}]),...regionalModels.map((m,i)=>[`regional-${m}`,{result:regional[i]}]),
+      ['fallback-gate',fallback===''?{result:'skipped',outputs:{}}:{result:'success',outputs:{run:fallback}}]]),
     ()=>true,()=>runCancelled);
   // Exhaustive: 4^4 core results x recovery off/on x 9 regional shapes (all ok, all failed, each one failed).
   const results=['success','failure','cancelled','skipped'];
@@ -52,6 +55,8 @@ test('manual single-model requests collect only that model; schedules still coll
       const expected=ecmwf==='success'&&gfs==='success'&&finished(hrrr)&&finished(aifs)&&
         (recovery===''||(core.every(r=>r==='success')&&regional.every(r=>r==='success')));
       assert.equal(evaluate(core,recovery,regional),expected,`${core} recovery=${recovery} regional=${regional}`);
+      assert.equal(evaluate(core,recovery,regional,{fallback:'true'}),expected);
+      assert.equal(evaluate(core,recovery,regional,{fallback:'false'}),false);
       assert.equal(evaluate(core,recovery,regional,{runCancelled:true}),false);
       assert.equal(evaluate(core,recovery,regional,{wind100:true}),false);
       cases++;
