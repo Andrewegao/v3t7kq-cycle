@@ -37,7 +37,9 @@ test('manual staging workflow keeps writer secrets out of checkout, build and te
   assert.match(workflow, /workflow_dispatch:/);
   assert.doesNotMatch(workflow, /\n  (?:push|pull_request|workflow_run):/);
   assert.match(workflow, /cron: '17 \*\/6 \* \* \*'/);
-  assert.match(workflow, /github.event_name == 'schedule' && 'renew'/);
+  assert.match(workflow, /\(github\.event_name == 'schedule' \|\| inputs\.caller == 'scheduler'\) && 'renew' \|\| inputs\.action/);
+  assert.match(workflow, /inputs\.caller == 'scheduler' && inputs\.action == 'renew'\)\) && vars\.STAGING_SEARCH_SCHEDULE_ENABLED == 'true'/,
+    'a scheduler dispatch may only renew, behind the same switch as the GitHub-native schedule');
   assert.match(workflow, /name: data-staging/);
   assert.match(workflow, /cancel-in-progress: false/);
   assert.match(workflow, /permissions:\n  contents: read/);

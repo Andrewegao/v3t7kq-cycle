@@ -1,66 +1,76 @@
+# Manual, compare-and-swap release of the Cloudflare model scheduler Worker
+# (weatherx-model-scheduler): code, plain-text vars and cron triggers. Nothing runs on push.
+# plan is read-only and prints declared vs live crons; release requires the plan's active version
+# and declaration digest, verifies the live readback, and restores the predecessor on failure.
 name: WeatherX scheduler deploy
-
+run-name: "${{ format('Scheduler Worker {0}', inputs.mode) }}"
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/catalog-bake.yml"
-      - ".github/workflows/scheduler-deploy.yml"
-      - "scheduler/**"
   workflow_dispatch:
-
+    inputs:
+      mode:
+        description: plan is read-only; release replaces the planned active version
+        required: true
+        default: plan
+        type: choice
+        options: [plan, release]
+      expected_active_version_id:
+        description: Active Worker version reported by the plan run (release only)
+        required: false
+        type: string
+      confirm:
+        description: PLAN-SCHEDULER, or RELEASE-SCHEDULER:<declaration digest printed by the plan>
+        required: true
+        type: string
 permissions:
   contents: read
-
 concurrency:
   group: weatherx-model-scheduler-production
   cancel-in-progress: false
-
 jobs:
-  changes:
-    # Read-only, no protected environment or deployment credentials. Workflow-only
-    # edits still receive full CI; manual dispatch can redeploy after tool changes.
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      deploy: ${{ steps.plan.outputs.deploy }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with: { fetch-depth: 0, persist-credentials: false }
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with: { node-version: 22 }
-      - id: plan
-        run: node tools/scheduler-deploy-plan.mjs
-  deploy:
-    needs: changes
-    if: ${{ needs.changes.outputs.deploy == 'true' }}
+  release:
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.repository == 'Andrewegao/v3t7kq-cycle' }}
     environment: production
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    env:
+      RELEASE_MODE: ${{ inputs.mode }}
+      EXPECTED_ACTIVE_VERSION_ID: ${{ inputs.expected_active_version_id }}
+      CONFIRM: ${{ inputs.confirm }}
+      WORKER_RELEASE_ENVIRONMENT: production
     steps:
+      - name: Resolve the release directory under the runner temp
+        run: echo "RELEASE_DIR=$RUNNER_TEMP/scheduler-release" >> "$GITHUB_ENV"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: scheduler/package-lock.json
       - name: Install locked scheduler dependencies
-        working-directory: scheduler
-        run: npm ci
-      - name: Run scheduler release gates
-        working-directory: scheduler
-        run: npm run check
-      - name: Require Cloudflare deployment credential
+        run: npm ci --prefix scheduler
+      - name: Scheduler release gates (types, unit, schedule table, workflow contracts, dry-run bundle)
+        run: |
+          npm run check --prefix scheduler
+          node --test tests/scheduler-release.mjs
+          git diff --exit-code HEAD
+      - name: Plan, or upload one inactive version, activate it, apply the declared triggers and verify
+        id: release_worker
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
-        run: test -n "$CLOUDFLARE_API_TOKEN"
-      - name: Deploy Worker code and cron triggers
-        working-directory: scheduler
+          SCHEDULER_WORKER_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+        run: node tools/scheduler-release.mjs "$RELEASE_MODE"
+      - name: Restore only this run's predecessor version and trigger set if the release failed
+        if: ${{ always() && inputs.mode == 'release' && (steps.release_worker.outcome == 'failure' || steps.release_worker.outcome == 'cancelled') }}
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
-        run: npx wrangler deploy
-      - name: Require exact live cron trigger set
-        working-directory: scheduler
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
-        run: npm run verify:live
+          SCHEDULER_WORKER_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+        run: node tools/scheduler-release.mjs recover
+      - name: Retain non-secret plan, release and rollback receipts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: scheduler-${{ inputs.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/scheduler-release/*.json
+          if-no-files-found: ignore
+          retention-days: 30

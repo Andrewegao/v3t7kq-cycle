@@ -5,7 +5,7 @@
       "id": "bake",
       "path": ".github/workflows/bake.yml",
       "family": "models",
-      "purpose": "Collect independent model inputs and assemble the whole-maintenance fallback.",
+      "purpose": "Collect independent model inputs and assemble the whole-maintenance fallback; dispatched on time by the scheduler Worker at 35 2,8,14,20 UTC, the GitHub cron is the fallback.",
       "subsystem": "Model collection",
       "lifecycle": "recurring",
       "runbook": "docs/single-model-refresh.md"
@@ -140,7 +140,7 @@
       "id": "fusion-issue",
       "path": ".github/workflows/fusion-issue.yml",
       "family": "maintenance",
-      "purpose": "Record source-bound Fusion forecasts with canary/full completeness, exact archive readback, and a complete-network archive manifest.",
+      "purpose": "Record source-bound Fusion forecasts with canary/full completeness, exact archive readback, and a complete-network archive manifest; dispatched by the scheduler Worker (caller=scheduler) every 6 h.",
       "subsystem": "Fusion issuance",
       "lifecycle": "recurring",
       "runbook": "docs/WORKFLOW_OPERATIONS.md"
@@ -257,7 +257,7 @@
       "id": "scheduler-deploy",
       "path": ".github/workflows/scheduler-deploy.yml",
       "family": "control-plane",
-      "purpose": "Deploy and verify the selected scheduler revision through existing guards.",
+      "purpose": "Plan, then compare-and-swap release the scheduler Worker code and cron triggers, verify the live readback, and restore the predecessor on failure. Manual only.",
       "subsystem": "Scheduler",
       "lifecycle": "manual-supported",
       "runbook": "scheduler/README.md"
@@ -347,9 +347,9 @@
       "id": "staging-place-renewal",
       "path": ".github/workflows/staging-place-renewal.yml",
       "family": "staging",
-      "purpose": "Renew the reviewed staging place data through the existing controller.",
+      "purpose": "Renew the reviewed staging place data through the existing controller; dispatched by the scheduler Worker on the policy slots.",
       "subsystem": "Places",
-      "lifecycle": "manual-supported",
+      "lifecycle": "recurring",
       "runbook": "docs/staging-place-renewal-plan.md"
     },
     {
@@ -374,9 +374,9 @@
       "id": "staging-search",
       "path": ".github/workflows/staging-search.yml",
       "family": "staging",
-      "purpose": "Prepare isolated search data for staging qualification.",
+      "purpose": "Prepare isolated search data for staging qualification and renew its lease; the scheduler Worker dispatches the renewal every 6 h.",
       "subsystem": "Search",
-      "lifecycle": "manual-supported",
+      "lifecycle": "recurring",
       "runbook": "docs/staging-search.md"
     },
     {

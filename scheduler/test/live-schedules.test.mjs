@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  assertExactSchedules, assertExactTarget, assertExactWind100DispatchBindings, fetchLiveSchedules, fetchLiveTarget,
+  assertExactDispatchBindings, assertExactSchedules, assertExactTarget, fetchLiveSchedules, fetchLiveTarget,
 } from '../scripts/live-schedules.mjs';
 
 const expectedCrons = ['8-59/10 * * * *', '7 * * * *'];
@@ -65,10 +65,12 @@ describe('live Cloudflare schedule verification', () => {
 });
 
 describe('live Cloudflare scheduler target verification', () => {
+  const expectedVars = { CATALOG_TARGET: 'production', BAKE_GITHUB_WORKFLOW: 'bake.yml', GITHUB_REF: 'main' };
   const bindings = [
     { name: 'CATALOG_TARGET', type: 'plain_text', text: 'production' },
-    { name: 'WIND100_GITHUB_WORKFLOW', type: 'plain_text', text: 'bake.yml' },
+    { name: 'BAKE_GITHUB_WORKFLOW', type: 'plain_text', text: 'bake.yml' },
     { name: 'GITHUB_REF', type: 'plain_text', text: 'main' },
+    { name: 'GITHUB_DISPATCH_TOKEN', type: 'secret_text' },
   ];
 
   it('accepts the exact production plain-text binding', () => {
@@ -89,19 +91,21 @@ describe('live Cloudflare scheduler target verification', () => {
     expect(() => assertExactTarget(payload, 'production')).toThrow('live catalog target mismatch');
   });
 
-  it('accepts only the exact staging Wind100 workflow and ref bindings', () => {
-    expect(assertExactWind100DispatchBindings({ success: true, result: { bindings } }, 'bake.yml', 'main'))
-      .toEqual({ workflow: 'bake.yml', ref: 'main' });
+  it('accepts only the exact declared dispatch bindings and the bound dispatch secret', () => {
+    expect(assertExactDispatchBindings({ success: true, result: { bindings } }, expectedVars))
+      .toEqual({ vars: 3, secrets: 1 });
   });
 
   it.each([
-    [bindings.filter(({ name }) => name !== 'WIND100_GITHUB_WORKFLOW')],
-    [bindings.map((binding) => binding.name === 'WIND100_GITHUB_WORKFLOW' ? { ...binding, text: 'other.yml' } : binding)],
-    [[...bindings, { name: 'GITHUB_REF', type: 'plain_text', text: 'main' }]],
-    [bindings.map((binding) => binding.name === 'GITHUB_REF' ? { ...binding, text: 'feature' } : binding)],
-  ])('rejects a missing, mismatched, or duplicate staging Wind100 dispatch binding %#', (changed) => {
-    expect(() => assertExactWind100DispatchBindings({ success: true, result: { bindings: changed } }, 'bake.yml', 'main'))
-      .toThrow('live staging Wind100 dispatch binding mismatch');
+    [bindings.filter(({ name }) => name !== 'BAKE_GITHUB_WORKFLOW'), 'binding mismatch: BAKE_GITHUB_WORKFLOW'],
+    [bindings.map((binding) => binding.name === 'BAKE_GITHUB_WORKFLOW' ? { ...binding, text: 'other.yml' } : binding), 'binding mismatch: BAKE_GITHUB_WORKFLOW'],
+    [[...bindings, { name: 'GITHUB_REF', type: 'plain_text', text: 'main' }], 'binding mismatch: GITHUB_REF'],
+    [bindings.map((binding) => binding.name === 'GITHUB_REF' ? { ...binding, text: 'feature' } : binding), 'binding mismatch: GITHUB_REF'],
+    [bindings.filter(({ name }) => name !== 'GITHUB_DISPATCH_TOKEN'), 'secret missing: GITHUB_DISPATCH_TOKEN'],
+    [bindings.map((binding) => binding.name === 'GITHUB_DISPATCH_TOKEN' ? { ...binding, type: 'plain_text', text: 'x' } : binding), 'secret missing: GITHUB_DISPATCH_TOKEN'],
+  ])('rejects a missing, mismatched, or duplicate dispatch binding %#', (changed, message) => {
+    expect(() => assertExactDispatchBindings({ success: true, result: { bindings: changed } }, expectedVars))
+      .toThrow(message);
   });
 
   it('reads script-and-version settings from the official account-scoped endpoint', async () => {
@@ -111,7 +115,7 @@ describe('live Cloudflare scheduler target verification', () => {
     }), { status: 200 }));
     await expect(fetchLiveTarget({
       accountId: 'account id', workerName: 'scheduler/name', apiToken: 'secret-token',
-      expectedTarget: 'production', expectedWind100Workflow: 'bake.yml', expectedRef: 'main', fetcher,
+      expectedTarget: 'production', expectedVars, requiredSecrets: ['GITHUB_DISPATCH_TOKEN'], fetcher,
     })).resolves.toBe('production');
     const [url, init] = fetcher.mock.calls[0];
     expect(url).toBe('https://api.cloudflare.com/client/v4/accounts/account%20id/workers/scripts/scheduler%2Fname/settings');
