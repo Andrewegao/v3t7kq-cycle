@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "retentionProfileStatus": "catalog-chain-window-gc-v1",
+  "accountId": "a89f9a1af485021fbc60a68b163c7c6e",
+  "dataBucket": "weatherx-data-production",
+  "componentBucket": "weatherx-components-production",
+  "stagingControlBucket": "weatherx-data-staging",
+  "catalogPointerKey": "catalogs/current.json",
+  "stagingPinKey": "shared-read/pin.json",
+  "models": ["ecmwf", "gfs", "hrrr", "aifs", "icon", "hrdps", "arome-antilles", "hrrr-ak", "nam", "nam-hi", "nam-ak"],
+  "windowHours": 168,
+  "maximumPlanAgeHours": 48,
+  "maximumChainSnapshots": 6000,
+  "maximumDeletesPerRun": 500000,
+  "deleteConcurrency": 16,
+  "capacity": {
+    "objects": 12000000,
+    "bytes": 1500000000000,
+    "warnRatio": 0.8,
+    "basis": "owner budget; R2 sets no per-bucket object or byte limit"
+  }
+}

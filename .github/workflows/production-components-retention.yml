@@ -1,0 +1,78 @@
+name: inspect or clean unreferenced production model components
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Inspect an immutable plan without deleting objects
+        type: boolean
+        required: true
+        default: true
+      baseline_catalog_id:
+        description: Execute only; the baselineCatalogId printed by the approved dry run
+        type: string
+        required: false
+        default: ''
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-production-components-retention
+  cancel-in-progress: false
+jobs:
+  retention:
+    if: ${{ github.ref == 'refs/heads/main' && vars.PRODUCTION_COMPONENTS_GC_CALL_ENABLED == 'true' }}
+    environment:
+      name: data-production-components-cleanup
+      url: https://weatherx.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      COMPONENTS_GC_ENVIRONMENT: data-production-components-cleanup
+      PRODUCTION_COMPONENTS_GC_ENABLED: ${{ vars.PRODUCTION_COMPONENTS_GC_ENABLED }}
+      PRODUCTION_COMPONENTS_GC_EXECUTE_ENABLED: ${{ vars.PRODUCTION_COMPONENTS_GC_EXECUTE_ENABLED }}
+      PRODUCTION_COMPONENTS_GC_CONTROLLER_SHA256: ${{ vars.PRODUCTION_COMPONENTS_GC_CONTROLLER_SHA256 }}
+      PRODUCTION_COMPONENTS_GC_APPROVED_PLAN_SHA256: ${{ vars.PRODUCTION_COMPONENTS_GC_APPROVED_PLAN_SHA256 }}
+      PRODUCTION_COMPONENTS_R2_ACCOUNT_ID: ${{ vars.PRODUCTION_COMPONENTS_R2_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Verify the controller source and install its S3 client
+        run: |
+          set -euo pipefail
+          test "$(git -C cycle rev-parse HEAD)" = "$GITHUB_SHA"
+          git -C cycle diff --exit-code HEAD
+          npm ci --ignore-scripts --prefix cycle/staging-controller
+      - name: Produce dry-run deletion plan for review
+        if: ${{ inputs.dry_run == true }}
+        env:
+          PRODUCTION_COMPONENTS_GC_READ_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_COMPONENTS_GC_READ_ACCESS_KEY_ID }}
+          PRODUCTION_COMPONENTS_GC_READ_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_COMPONENTS_GC_READ_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          plan="$RUNNER_TEMP/production-components-retention-plan.json"
+          node cycle/tools/production-components-retention.mjs dry-run > "$plan"
+          node --input-type=module -e '
+            import { readFileSync, appendFileSync } from "node:fs";
+            import { planSummary } from "./cycle/tools/production-components-retention.mjs";
+            const plan = JSON.parse(readFileSync(process.argv[1], "utf8"));
+            const text = planSummary(plan);
+            console.log(text);
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, text);
+          ' "$plan"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ inputs.dry_run == true }}
+        with:
+          name: production-components-retention-plan
+          path: ${{ runner.temp }}/production-components-retention-plan.json
+          retention-days: 7
+          if-no-files-found: error
+      - name: Delete only an approved, still-unreferenced plan with per-root temporary credentials
+        if: ${{ inputs.dry_run == false }}
+        env:
+          INPUT_BASELINE_CATALOG_ID: ${{ inputs.baseline_catalog_id }}
+          PRODUCTION_COMPONENTS_GC_READ_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_COMPONENTS_GC_READ_ACCESS_KEY_ID }}
+          PRODUCTION_COMPONENTS_GC_READ_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_COMPONENTS_GC_READ_SECRET_ACCESS_KEY }}
+          PRODUCTION_COMPONENTS_GC_DELETE_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_COMPONENTS_GC_DELETE_ACCESS_KEY_ID }}
+          PRODUCTION_COMPONENTS_GC_DELETE_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_COMPONENTS_GC_DELETE_SECRET_ACCESS_KEY }}
+        run: node cycle/tools/production-components-retention.mjs execute
