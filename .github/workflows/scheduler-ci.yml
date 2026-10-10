@@ -102,10 +102,10 @@ jobs:
           python3 -I tests/test_train3_offline_attestation.py
           node --test tests/nam-hi-diagnostic.mjs
           node --test tests/component-publish-diagnostic.mjs tests/resume-model-publication.mjs
-      - name: Observation lane, five-feed collection and atomic promotion contracts
+      - name: Observation lane, five-feed collection, component stand-aside and atomic promotion contracts
         run: |
           node tools/atmos-source-pin.mjs --check
-          node --test tests/atmos-source-pin.mjs tests/five-feed-recovery.mjs tests/observation-summary.mjs tests/workflow-run-summary.mjs tests/observation-chain.mjs
+          node --test tests/atmos-source-pin.mjs tests/five-feed-recovery.mjs tests/observation-summary.mjs tests/workflow-run-summary.mjs tests/component-bake-stand-aside.mjs tests/observation-chain.mjs
           python3 -I tests/test_five_feed_collect.py
       - name: Staged UI artifact, manual promotion and privacy contracts
         run: node --test tests/ui-*.mjs
