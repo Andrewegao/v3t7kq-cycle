@@ -22,6 +22,11 @@ on:
         type: boolean
         required: false
         default: false
+      rebake_served_run:
+        description: Re-bake ECMWF/GFS even when production already serves the newest upstream run
+        type: boolean
+        required: false
+        default: false
   schedule:
     # GitHub may delay or drop schedules on busy round-number boundaries. Keep the
     # ten-minute provider poll cadence, but offset it to a quieter minute.
@@ -118,6 +123,16 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "81e061dae0a03cc39e014dc08586bbd144823108"
           git diff --exit-code HEAD
+      - name: Checkout the stand-aside check
+        if: ${{ env.CATALOG_TARGET == 'production' && (matrix.model == 'ecmwf' || matrix.model == 'gfs') }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          path: cycle
+          sparse-checkout: |
+            tools/component-bake-stand-aside.mjs
+            tools/component-upstream-probe.py
+          sparse-checkout-cone-mode: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22 }
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -172,8 +187,32 @@ jobs:
           RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
           RCLONE_CONFIG_WEATHERX_REGION: auto
         run: bash ops/platform/hydrate-r2-component.sh
+      # Hourly ECMWF/GFS: when production already serves the run the pinned collector would select
+      # now (map and point), and that component was completed after this lane's definition last
+      # changed, stand aside before hydrate: nothing is collected, uploaded or promoted. Fails open:
+      # any error, timeout or missing evidence leaves stand_aside unset and every step below runs
+      # exactly as before. It reads only; GITHUB_ENV and the Atmos checkout are left untouched.
+      - name: Stand aside when production already serves the newest upstream run
+        id: live_run
+        if: ${{ env.CATALOG_TARGET == 'production' && (matrix.model == 'ecmwf' || matrix.model == 'gfs') && inputs.bootstrap_missing != true && inputs.rebake_served_run != true }}
+        continue-on-error: true
+        timeout-minutes: 8
+        working-directory: atmos
+        env:
+          BOOTSTRAP_MISSING: ${{ inputs.bootstrap_missing || false }}
+          REBAKE_SERVED_RUN: ${{ inputs.rebake_served_run || false }}
+          GH_TOKEN: ${{ github.token }}
+          CATALOG_R2_REMOTE: weatherx:weatherx-data-production
+          COMPONENT_R2_REMOTE: weatherx:weatherx-components-production
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+        run: node "$GITHUB_WORKSPACE/cycle/tools/component-bake-stand-aside.mjs" "$GITHUB_WORKSPACE/atmos" "$GITHUB_WORKSPACE/cycle/tools/component-upstream-probe.py"
       - name: Restore only this model's last-known-good production component
-        if: ${{ env.CATALOG_TARGET == 'production' }}
+        if: ${{ env.CATALOG_TARGET == 'production' && steps.live_run.outputs.stand_aside != 'true' }}
         working-directory: atmos
         env:
           COMPONENT_ID: ${{ matrix.model }}
@@ -218,7 +257,7 @@ jobs:
           : "${CATALOG_PROMOTION_KEY:?CATALOG_PROMOTION_KEY required before collection}"
           bash ops/bake-model-component.sh
       - name: Bake, validate, upload, and CAS-promote one production model
-        if: ${{ env.CATALOG_TARGET == 'production' }}
+        if: ${{ env.CATALOG_TARGET == 'production' && steps.live_run.outputs.stand_aside != 'true' }}
         working-directory: atmos
         env:
           MODEL: ${{ matrix.model }}
