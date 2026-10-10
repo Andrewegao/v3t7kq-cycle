@@ -158,10 +158,19 @@
       "id": "gdacs-feed-release",
       "path": ".github/workflows/gdacs-feed-release.yml",
       "family": "releases",
-      "purpose": "Release the isolated GDACS route through guarded verification and recovery.",
+      "purpose": "One-time 2026-08-31 bootstrap of the isolated GDACS repair Worker and its routes; never re-run (its routes are retired by gdacs-route-retire).",
       "subsystem": "Hazard feed",
       "lifecycle": "manual-supported",
-      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+      "runbook": "docs/platform-production-feed-routes.md"
+    },
+    {
+      "id": "gdacs-route-retire",
+      "path": ".github/workflows/gdacs-route-retire.yml",
+      "family": "releases",
+      "purpose": "Plan, then detach the four GDACS repair Worker routes so the platform Worker serves /api/gdacs/* and /api/tc/*; verify live, re-attach on failure.",
+      "subsystem": "Hazard feed",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/platform-production-feed-routes.md"
     },
     {
       "id": "hydrology",

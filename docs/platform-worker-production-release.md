@@ -33,7 +33,12 @@ Every run, in both modes:
    - `wrangler deploy --dry-run --env production`.
 5. A read-only step with the route token records the zone route inventory. The health and Wind100
    routes must be on the platform Worker and the point route on the data Worker. The receipt lists
-   declared routes that are not attached, and attached routes that are not declared.
+   declared routes that are not attached, and attached routes that are not declared. It also lists
+   `foreignOverlaps`: routes owned by another script whose pattern overlaps a declared platform
+   pattern. Cloudflare serves the most specific match, so those routes, not this Worker, answer the
+   overlapping paths. Each one becomes a warning annotation and a row in the job summary. The data
+   Worker's point route is the only reviewed exception. See
+   [GDACS repair route retirement](platform-production-feed-routes.md#gdacs-repair-worker-routes-and-their-retirement-f4-2026-10-10).
 6. The Worker preflight runs with the Worker token only:
    - The active version and the latest uploaded settings must both equal the reviewed config
      exactly (bindings, secret names, compatibility date and flags). Crons must equal the reviewed

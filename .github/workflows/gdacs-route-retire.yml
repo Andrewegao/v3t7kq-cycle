@@ -1,0 +1,137 @@
+# Route-only retirement of the four production routes held by the 2026-08-31 GDACS repair Worker.
+# plan is read-only. retire detaches only the four pinned route IDs so the platform Worker's
+# declared /api/gdacs/* and /api/tc/* routes answer, verifies live, and re-attaches the same
+# patterns to the same script on failure. No Worker, version, secret, cron, data or Pages writes;
+# the repair Worker is never deleted here.
+name: WeatherX GDACS repair route retirement
+run-name: "${{ format('GDACS route retirement {0} {1}', inputs.mode, inputs.atmos_sha) }}"
+on:
+  workflow_dispatch:
+    inputs:
+      atmos_sha:
+        description: Exact 40-character Atmos master SHA the active platform Worker was released from
+        required: true
+        type: string
+      mode:
+        description: plan is read-only; retire detaches the four repair Worker routes
+        required: true
+        default: plan
+        type: choice
+        options: [plan, retire]
+      expected_platform_version:
+        description: Active platform Worker version reported by the plan run (retire only)
+        required: false
+        type: string
+      expected_repair_version:
+        description: Active repair Worker version reported by the plan run (retire only)
+        required: false
+        type: string
+      confirm:
+        description: Exact PLAN-GDACS-ROUTE-RETIREMENT or RETIRE-GDACS-FEED-ROUTES:<platform version>
+        required: true
+        type: string
+permissions:
+  contents: read
+# Serialized with the platform Worker release and the feed route repair.
+concurrency:
+  group: weatherx-production-data-edge
+  cancel-in-progress: false
+jobs:
+  retire:
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.repository == 'Andrewegao/v3t7kq-cycle' }}
+    environment:
+      name: production
+      url: https://weatherx.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ATMOS_SHA: ${{ inputs.atmos_sha }}
+      ATMOS_ROOT: ${{ github.workspace }}/atmos
+      RETIRE_MODE: ${{ inputs.mode }}
+      EXPECTED_PLATFORM_VERSION: ${{ inputs.expected_platform_version }}
+      EXPECTED_REPAIR_VERSION: ${{ inputs.expected_repair_version }}
+      CONFIRM: ${{ inputs.confirm }}
+      RETIRE_ENVIRONMENT: production
+    steps:
+      - name: Resolve the receipt directory under the runner temp
+        run: echo "RETIRE_DIR=$RUNNER_TEMP/gdacs-route-retire" >> "$GITHUB_ENV"
+      - name: Require exact mode and version confirmation
+        run: |
+          [[ "$ATMOS_SHA" =~ ^[a-f0-9]{40}$ ]]
+          uuid='^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$'
+          case "$RETIRE_MODE" in
+            plan) test "$CONFIRM" = PLAN-GDACS-ROUTE-RETIREMENT
+              test -z "$EXPECTED_PLATFORM_VERSION$EXPECTED_REPAIR_VERSION" ;;
+            retire) [[ "$EXPECTED_PLATFORM_VERSION" =~ $uuid ]]; [[ "$EXPECTED_REPAIR_VERSION" =~ $uuid ]]
+              test "$CONFIRM" = "RETIRE-GDACS-FEED-ROUTES:$EXPECTED_PLATFORM_VERSION" ;;
+            *) exit 1 ;;
+          esac
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: cycle
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: ${{ inputs.atmos_sha }}
+          fetch-depth: 0
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: atmos
+          persist-credentials: false
+      - name: Verify exact merged source and clean checkouts
+        run: |
+          test "$(git -C cycle rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C atmos rev-parse HEAD)" = "$ATMOS_SHA"
+          git -C atmos merge-base --is-ancestor "$ATMOS_SHA" refs/remotes/origin/master
+          git -C cycle diff --exit-code HEAD
+          git -C atmos diff --exit-code HEAD
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Controller contracts
+        run: node --test cycle/tests/gdacs-route-retire.mjs cycle/tests/platform-worker-production-release.mjs
+      - name: Record both Workers' active versions, crons and bindings (read-only Worker token)
+        id: versions_before
+        env:
+          PLATFORM_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+        run: node cycle/tools/gdacs-route-retire.mjs versions-before
+      - name: Plan the exact route IDs to detach and their fallthrough owner (read-only route token)
+        env:
+          DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
+        run: node cycle/tools/gdacs-route-retire.mjs plan
+      - name: Prove production is healthy and still served by the repair Worker (no credential)
+        run: node cycle/tools/gdacs-route-retire.mjs live-before
+      - name: Detach only the four pinned repair Worker routes
+        id: detach
+        if: ${{ inputs.mode == 'retire' }}
+        env:
+          DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
+        run: node cycle/tools/gdacs-route-retire.mjs detach
+      - name: Verify the platform Worker answers every retired path, three rounds (no credential)
+        id: live_after
+        if: ${{ inputs.mode == 'retire' && steps.detach.outcome == 'success' }}
+        run: node cycle/tools/gdacs-route-retire.mjs live-after
+      - name: Prove the route boundary is the plan minus the four detached routes (read-only route token)
+        id: routes_after
+        if: ${{ inputs.mode == 'retire' && steps.live_after.outcome == 'success' }}
+        env:
+          DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
+        run: node cycle/tools/gdacs-route-retire.mjs routes-after
+      - name: Re-attach the same patterns to the repair Worker if retirement failed
+        if: ${{ always() && inputs.mode == 'retire' && (steps.detach.outcome == 'failure' || steps.detach.outcome == 'cancelled' || steps.live_after.outcome == 'failure' || steps.live_after.outcome == 'cancelled' || steps.routes_after.outcome == 'failure' || steps.routes_after.outcome == 'cancelled') }}
+        env:
+          DATA_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_DATA_EDGE_API_TOKEN }}
+        run: node cycle/tools/gdacs-route-retire.mjs restore
+      - name: Prove neither Worker changed and the repair Worker still exists (read-only Worker token)
+        if: ${{ always() && inputs.mode == 'retire' && steps.versions_before.outcome == 'success' }}
+        env:
+          PLATFORM_EDGE_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+        run: node cycle/tools/gdacs-route-retire.mjs versions-after
+      - name: Retain non-secret plan, retirement and restore receipts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gdacs-route-retire-${{ inputs.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gdacs-route-retire/*.json
+          if-no-files-found: ignore
+          retention-days: 30

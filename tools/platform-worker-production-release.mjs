@@ -5,7 +5,8 @@
 //   plan     read-only preflight; records the active version a release must replace
 //   release  compare-and-swap: upload one inactive version, verify it, activate, verify live
 //   recover  restore only this run's predecessor if this run's candidate is still active
-//   routes-before / routes-after  read-only zone route inventory with the dedicated route token
+//   routes-before / routes-after  read-only zone route inventory with the dedicated route token; flags
+//                                 foreign routes that overlap (and so shadow) declared platform patterns
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFile, execFileSync } from 'node:child_process';
@@ -96,6 +97,40 @@ export function previousSource(version) {
   return typeof tag === 'string' && RELEASE_TAG.exec(tag)?.[1] || null;
 }
 
+// Reviewed foreign routes that deliberately sit inside a declared platform pattern. Cloudflare
+// serves the most specific match, so any other foreign overlap silently takes paths the platform
+// Worker declares (finding F4: the GDACS repair Worker held /api/gdacs/list* and three siblings).
+export const REVIEWED_OVERLAPS = Object.freeze([Object.freeze({ pattern: POINT_ROUTE, script: DATA_WORKER })]);
+
+const bare = pattern => pattern.replace(/^https?:\/\//i, '').toLowerCase();
+
+// True when some URL matches both route patterns. Cloudflare patterns use `*` as "any characters"
+// (leading host wildcard, trailing path wildcard), and match the URL including its query string.
+export function patternsOverlap(left, right) {
+  const a = bare(left), b = bare(right), memo = new Map();
+  const walk = (i, j) => {
+    const key = i * (b.length + 1) + j;
+    if (memo.has(key)) return memo.get(key);
+    let result;
+    if (i === a.length && j === b.length) result = true;
+    else if (a[i] === '*') result = walk(i + 1, j) || (j < b.length && walk(i, j + 1));
+    else if (b[j] === '*') result = walk(i, j + 1) || (i < a.length && walk(i + 1, j));
+    else result = i < a.length && j < b.length && a[i] === b[j] && walk(i + 1, j + 1);
+    memo.set(key, result);
+    return result;
+  };
+  return walk(0, 0);
+}
+
+// Every route owned by another script that overlaps a pattern the platform Worker declares.
+export function foreignOverlaps(rows, declared, reviewed = REVIEWED_OVERLAPS) {
+  return rows.filter(row => row.script !== WORKER
+    && !reviewed.some(item => item.pattern === row.pattern && item.script === row.script))
+    .map(row => ({ ...row, overlaps: declared.filter(pattern => patternsOverlap(row.pattern, pattern)).sort() }))
+    .filter(row => row.overlaps.length)
+    .sort((a, b) => a.pattern.localeCompare(b.pattern));
+}
+
 export function routeBoundary(routes, config) {
   assert.ok(Array.isArray(routes), 'route inventory missing');
   const rows = routes.map(({ id, pattern, script }) => ({ id, pattern, script: script ?? null }))
@@ -110,7 +145,8 @@ export function routeBoundary(routes, config) {
   const declared = config.routes.map(route => route.pattern).sort();
   return { rows, platform: owned,
     declaredNotAttached: declared.filter(pattern => !owned.includes(pattern)),
-    attachedNotDeclared: owned.filter(pattern => !declared.includes(pattern)) };
+    attachedNotDeclared: owned.filter(pattern => !declared.includes(pattern)),
+    foreignOverlaps: foreignOverlaps(rows, declared) };
 }
 
 export function settingsOf(version) {
@@ -305,8 +341,17 @@ async function routes(ctx, command) {
   save(path, { schemaVersion: 1, kind: 'weatherx-platform-worker-production-routes', command,
     sourceSha: ctx.sha, controllerSha: ctx.env.GITHUB_SHA, runId: ctx.env.GITHUB_RUN_ID,
     attempt: ctx.env.GITHUB_RUN_ATTEMPT, ...boundary });
+  if (command === 'routes-before' && boundary.foreignOverlaps.length) {
+    // Not a refusal: a code-only release cannot fix routing. It must never read as clean, though.
+    for (const row of boundary.foreignOverlaps)
+      console.log(`::warning title=Foreign route overlaps the platform Worker::${row.pattern} (${row.id}) -> ${row.script ?? 'no script'} shadows ${row.overlaps.join(', ')}`);
+    summary(['## Foreign routes overlap platform Worker routes', '',
+      'Cloudflare serves the most specific pattern, so these routes, not the platform Worker, answer the overlapping paths.', '',
+      '| Route ID | Pattern | Script | Overlaps declared |', '| --- | --- | --- | --- |',
+      ...boundary.foreignOverlaps.map(row => `| \`${row.id}\` | \`${row.pattern}\` | \`${row.script ?? 'none'}\` | ${row.overlaps.map(p => `\`${p}\``).join(', ')} |`)]);
+  }
   return { status: 'recorded', platformRoutes: boundary.platform.length, declaredNotAttached: boundary.declaredNotAttached,
-    attachedNotDeclared: boundary.attachedNotDeclared };
+    attachedNotDeclared: boundary.attachedNotDeclared, foreignOverlaps: boundary.foreignOverlaps.map(row => row.pattern) };
 }
 
 export async function main(command, env = process.env) {
