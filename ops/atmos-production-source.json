@@ -156,9 +156,6 @@
         "tools/shared-data.mjs",
         "tools/staging-current-selection.mjs"
       ],
-      "deb0ac7e61fc8f138267dbe51521b2a25a732051": [
-        ".github/workflows/catalog-bake.yml"
-      ],
       "dfa25e9f473f15d5e2f630fe78c268b73234bd3a": [
         ".github/workflows/staging-search.yml",
         "tools/staging-search-source.mjs"
@@ -173,6 +170,9 @@
       "f5dc141ef83f209a4cb7637447f87e1b43da7450": [
         ".github/workflows/production-wind100-point-reader-release.yml",
         "tools/production-wind100-point-reader-release.mjs"
+      ],
+      "81e061dae0a03cc39e014dc08586bbd144823108": [
+        ".github/workflows/catalog-bake.yml"
       ]
     }
   },

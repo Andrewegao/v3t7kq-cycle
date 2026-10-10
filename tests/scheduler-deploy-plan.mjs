@@ -38,6 +38,6 @@ test('classifier precedes protected deployment and immutable fast-source verific
   assert.match(workflow,/run: npm run check/);assert.match(workflow,/run: npm run verify:live/);
   const catalog=readFileSync(new URL('../.github/workflows/catalog-bake.yml',import.meta.url),'utf8');
   assert.match(catalog,/repository: weatherx-hq\/atmos/);
-  assert.match(catalog,/ref: deb0ac7e61fc8f138267dbe51521b2a25a732051/);
-  assert.match(catalog,/test "\$\(git rev-parse HEAD\)" = "deb0ac7e61fc8f138267dbe51521b2a25a732051"/);
+  assert.match(catalog,/ref: 81e061dae0a03cc39e014dc08586bbd144823108/);
+  assert.match(catalog,/test "\$\(git rev-parse HEAD\)" = "81e061dae0a03cc39e014dc08586bbd144823108"/);
 });

@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `f8b9ff2c9b08a84acce2c51e8db1031d22db1152ac9ef8e4d6ff0e138192ce60`.
+Source digest (registry and workflow bytes): `69302d51f6512a15b562dd59959a7e62040d78122f463c2b7dc711fd532151fd`.
 
 68 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -211,7 +211,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
 | [plan / step 1](../.github/workflows/catalog-bake.yml#L52) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [model / Checkout WeatherX](../.github/workflows/catalog-bake.yml#L107) | <code>weatherx-hq/atmos</code> | <code>deb0ac7e61fc8f138267dbe51521b2a25a732051</code> |
+| [model / Checkout WeatherX](../.github/workflows/catalog-bake.yml#L107) | <code>weatherx-hq/atmos</code> | <code>81e061dae0a03cc39e014dc08586bbd144823108</code> |
 | [summary / step 1](../.github/workflows/catalog-bake.yml#L275) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
 Variable references (declared names only; values and activation unknown): [CATALOG_DEFAULT_TARGET](../.github/workflows/catalog-bake.yml#L63), [CATALOG_GITHUB_FALLBACK_DISABLED](../.github/workflows/catalog-bake.yml#L42), [CURRENT_RUN_CATALOG_BAKE_ATMOS_SHA](../.github/workflows/catalog-bake.yml#L90), [CURRENT_RUN_POINT_REUSE_MODEL](../.github/workflows/catalog-bake.yml#L91).
