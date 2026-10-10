@@ -524,6 +524,15 @@
       "runbook": "docs/platform-worker-production-release.md"
     },
     {
+      "id": "road-production-release",
+      "path": ".github/workflows/road-production-release.yml",
+      "family": "releases",
+      "purpose": "Build, reseal and publish an exact Atmos master SHA to road.weatherx.org through the Atmos release guard.",
+      "subsystem": "Road product",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/road-production-release.md"
+    },
+    {
       "id": "platform-production-feed-routes",
       "path": ".github/workflows/platform-production-feed-routes.yml",
       "family": "releases",
