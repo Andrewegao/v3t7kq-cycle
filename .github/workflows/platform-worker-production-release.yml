@@ -42,9 +42,11 @@ jobs:
       RELEASE_MODE: ${{ inputs.mode }}
       EXPECTED_ACTIVE_VERSION_ID: ${{ inputs.expected_active_version_id }}
       CONFIRM: ${{ inputs.confirm }}
-      RELEASE_DIR: ${{ runner.temp }}/platform-worker-release
       WORKER_RELEASE_ENVIRONMENT: production
     steps:
+      # `runner` is not available in job-level env; resolve the release directory in a step.
+      - name: Resolve the release directory under the runner temp
+        run: echo "RELEASE_DIR=$RUNNER_TEMP/platform-worker-release" >> "$GITHUB_ENV"
       - name: Require exact mode and source confirmation
         run: |
           [[ "$ATMOS_SHA" =~ ^[a-f0-9]{40}$ ]]
