@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "target": "production",
+  "families": ["tides"],
+  "sourceSha": "681deba659e7faa9600e25e3ec7f578e0fcb5511",
+  "qualifierSha256": "f0a1e29b4a0231b141a726ba29bf8e3cd7499c922cc0edd69c7d4448b3e5c663",
+  "schedules": ["52 9 * * *", "52 21 * * *"],
+  "renewAfterHours": 20,
+  "tideRequestsPerSecond": 2,
+  "minimumForecastLeaseHours": 6,
+  "tides": {
+    "componentId": "places-tides",
+    "mount": "data-atmos/tides/"
+  }
+}

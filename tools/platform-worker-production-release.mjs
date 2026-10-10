@@ -213,12 +213,15 @@ async function runWrangler(ctx, args) {
   } catch { throw Error(`Wrangler ${args[0]} ${args[1] ?? ''} failed`.trim()); }
 }
 
-// The pinned whole-site verifier never receives a Cloudflare credential.
+// The pinned whole-site verifier never receives a Cloudflare credential. Its whole-release data
+// probe is the airports route: the verifier's default tides route is served by the places-tides
+// catalog component (docs/production-place-renewal.md), which carries no X-WeatherX-Release.
+export const RELEASE_DATA_PROBE_PATH = '/data-atmos/airports/airports.json';
 export function verifierEnvironment(phase, successes, base = process.env) {
   assert.ok(['candidate', 'rollback'].includes(phase));
   return { PATH: base.PATH, HOME: base.HOME, RELEASE_GUARD_PHASE: phase,
     RELEASE_GUARD_VERIFY_REQUIRED_SUCCESSES: String(successes),
-    RELEASE_GUARD_VERIFY_SLEEP_SECONDS: successes > 1 ? '15' : '5' };
+    RELEASE_GUARD_VERIFY_SLEEP_SECONDS: successes > 1 ? '15' : '5', EDGE_DATA_PROBE_PATH: RELEASE_DATA_PROBE_PATH };
 }
 
 async function siteVerifier(ctx, phase, successes) {

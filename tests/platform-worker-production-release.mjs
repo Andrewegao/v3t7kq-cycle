@@ -139,7 +139,8 @@ test('site verifier receives no Cloudflare credential', () => {
   const env = verifierEnvironment('candidate', 3, { PATH: '/bin', HOME: '/h', PLATFORM_EDGE_TOKEN: 'secret',
     DATA_EDGE_TOKEN: 'secret', CLOUDFLARE_API_TOKEN: 'secret' });
   assert.deepEqual(env, { PATH: '/bin', HOME: '/h', RELEASE_GUARD_PHASE: 'candidate',
-    RELEASE_GUARD_VERIFY_REQUIRED_SUCCESSES: '3', RELEASE_GUARD_VERIFY_SLEEP_SECONDS: '15' });
+    RELEASE_GUARD_VERIFY_REQUIRED_SUCCESSES: '3', RELEASE_GUARD_VERIFY_SLEEP_SECONDS: '15',
+    EDGE_DATA_PROBE_PATH: '/data-atmos/airports/airports.json' });
   assert.equal(verifierEnvironment('rollback', 1, {}).RELEASE_GUARD_VERIFY_SLEEP_SECONDS, '5');
   assert.throws(() => verifierEnvironment('preflight', 1, {}));
 });

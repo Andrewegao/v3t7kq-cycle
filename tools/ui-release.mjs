@@ -750,12 +750,12 @@ export function platformVerificationEnvironment(stage,phase,env=process.env) {
   // ordinary three-success/15-second soak intact, but give only this candidate transaction enough
   // bounded observations to see that convergence. Production and exact rollback retain the pinned
   // verifier's existing attempt policy byte-for-byte through the original environment object.
-  // Staging's whole-release data probe is the shared-read airports route (see
-  // ui-required-data-preflight.mjs); the pinned verifier's default tides route is a staging-only
-  // place family whose lease can lapse. Candidate and exact rollback on staging both probe it.
+  // The whole-release data probe is the airports route on both origins (see
+  // ui-required-data-preflight.mjs). The pinned verifier's default tides route requires
+  // X-WeatherX-Release, but tides are a place family on both origins: a leased staging pointer,
+  // and on production the places-tides catalog component (docs/production-place-renewal.md).
   if(stage==='staging'&&phase==='candidate')return {...env,RELEASE_GUARD_VERIFY_ATTEMPTS:'50',EDGE_DATA_PROBE_PATH:REQUIRED_DATA_PATH};
-  if(stage==='staging')return {...env,EDGE_DATA_PROBE_PATH:REQUIRED_DATA_PATH};
-  return env;
+  return {...env,EDGE_DATA_PROBE_PATH:REQUIRED_DATA_PATH};
 }
 async function exactStaging(c) {
   // Conservative: promotion refuses if staging has since changed; never promote an unreviewed
