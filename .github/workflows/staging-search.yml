@@ -33,10 +33,60 @@ concurrency:
   group: weatherx-staging-search
   cancel-in-progress: false
 jobs:
+  # Cron fallback stand-aside (scheduler/README.md). Only a GitHub `schedule` run consults it: a
+  # dispatched run skips this job and every job below runs exactly as before. Read-only (workflow
+  # token with actions: read; no checkout, no secret) and fail-open: an unreadable run list, a
+  # timeout or a failure of this job leaves the fallback running.
+  fallback-gate:
+    name: fallback gate
+    if: ${{ github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: read
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - name: Stand aside when the scheduler already ran this lane
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Six-hourly (Worker and fallback :17). 30 min under the shortest slot gap: this slot's dispatch counts, the previous one's never.
+          WINDOW_MINUTES: '330'
+          # No run-name: any dispatched run of this workflow counts.
+          DISPATCH_TITLE: ''
+        run: |
+          # Fail-open: the fallback runs unless a matching dispatched run is found.
+          run=true
+          workflow="${GITHUB_WORKFLOW_REF%@*}"
+          workflow="${workflow##*/}"
+          if since="$(jq -nr --argjson minutes "$WINDOW_MINUTES" '(now - $minutes * 60) | strftime("%Y-%m-%dT%H:%M:%SZ")')" &&
+            body="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs" \
+              -f event=workflow_dispatch -f branch=main -f "created=>=$since" -f per_page=100 -f exclude_pull_requests=true)" &&
+            found="$(jq -er --arg since "$since" --arg title "$DISPATCH_TITLE" --argjson self "$GITHUB_RUN_ID" '
+              .workflow_runs | if type == "array" then . else error("no run list") end
+              | map(select(.id != $self and .event == "workflow_dispatch" and .head_branch == "main"
+                  and (.created_at | type) == "string" and .created_at >= $since
+                  and ($title == "" or .display_title == $title)
+                  and (.conclusion == "success" or (.status | IN("queued", "in_progress", "waiting", "pending", "requested")))))
+              | first | if . == null then "none" else "\(.id) \(.status) \(.conclusion // "-") \(.created_at)" end' <<<"$body")"; then
+            if [ "$found" != none ]; then run=false; fi
+          else
+            found=unreadable
+            echo "::warning::Could not read this workflow's dispatched runs; the fallback runs."
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          if [ "$run" = false ]; then
+            echo "::notice::Stood aside: dispatched run ${found%% *} already covers this slot (last $WINDOW_MINUTES min)."
+            echo "Fallback schedule stood aside: dispatched run ${found%% *} (${found#* }) is inside the last $WINDOW_MINUTES min." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Fallback schedule runs: no successful or active dispatched run in the last $WINDOW_MINUTES min ($found)." >> "$GITHUB_STEP_SUMMARY"
+          fi
   search:
     # The Cloudflare scheduler Worker dispatches the renewal at the cron minute with caller=scheduler;
     # it takes the scheduled path and obeys the same STAGING_SEARCH_SCHEDULE_ENABLED switch.
-    if: (github.event_name == 'workflow_dispatch' && inputs.caller != 'scheduler') || ((github.event_name == 'schedule' || (inputs.caller == 'scheduler' && inputs.action == 'renew')) && vars.STAGING_SEARCH_SCHEDULE_ENABLED == 'true')
+    needs: fallback-gate
+    if: ((github.event_name == 'workflow_dispatch' && inputs.caller != 'scheduler') || ((github.event_name == 'schedule' || (inputs.caller == 'scheduler' && inputs.action == 'renew')) && vars.STAGING_SEARCH_SCHEDULE_ENABLED == 'true')) && !cancelled() && needs.fallback-gate.outputs.run != 'false'
     environment:
       name: data-staging
       url: https://staging.weatherx.org

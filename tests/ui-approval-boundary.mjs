@@ -27,7 +27,23 @@ function assertDataOnly(source, allowedKeys) {
   assert.doesNotMatch(text, /uses:\s*[^\n]*(?:ui-release|ui-staging)/);
 }
 
+// The schedule-only fallback gate (tests/fallback-stand-aside.mjs) is the one Actions API read a
+// data bake may hold: one GET of this workflow's own run list with the read-only workflow token. It
+// cannot dispatch, write or receive a secret; it is pinned here, then set aside for the checks below.
+function withoutFallbackGate(source) {
+  const blocks = [...source.matchAll(/^  fallback-gate:\n[\s\S]*?(?=^  [a-z][a-z0-9-]*:|$(?![\s\S]))/gm)];
+  assert.equal(blocks.length, 1, 'one fallback gate is required');
+  const block = executable(blocks[0][0]);
+  assert.match(block, /^    if: \$\{\{ github\.event_name == 'schedule' \}\}$/m);
+  assert.match(block, /^    permissions:\n      actions: read\n    outputs:\n/m);
+  assert.doesNotMatch(block, /secrets|write|\/dispatches|workflow\s+run|uses:|environment:|--method (?!GET )|-X\s/);
+  assert.equal(block.match(/gh\s+api/g).length, 1);
+  assert.match(block, /gh api --method GET "repos\/\$GITHUB_REPOSITORY\/actions\/workflows\/\$workflow\/runs"/);
+  return source.replace(blocks[0][0], '');
+}
+
 function assertBakeDataOnly(source) {
+  source = withoutFallbackGate(source);
   // Provider access is confined to this execution step; it is not a shared data credential.
   const text = executable(source);
   const marker = '      - name: bake → gate → publish immutable data release\n';

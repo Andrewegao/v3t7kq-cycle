@@ -31,7 +31,9 @@ assert.match(issue, /fusion-production-evidence\.mjs readback/);
 assert.match(issue, /vars\.FUSION_ISSUANCE_ENABLED == 'true'/);
 assert.doesNotMatch(issue, /vars\.FUSION_FEEDBACK_ENABLED/);
 assert.match(issue, /github\.event_name == 'workflow_dispatch'/);
-assert.doesNotMatch(issue, /needs:|workflow_run:/,
+assert.equal((issue.match(/needs:/g) || []).length, 1);
+assert.match(issue, /^  record:\n    needs: fallback-gate\n/m);
+assert.doesNotMatch(issue.replace(/^    needs: fallback-gate\n/m, ''), /needs:|workflow_run:/,
   'issuance failure must remain isolated from every weather publication workflow');
 assert.doesNotMatch(issue, /path: .*\/(issues|truth)(?:\/|$)/,
   'private forecast and truth bodies must not be uploaded as workflow artifacts');

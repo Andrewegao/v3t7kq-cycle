@@ -79,6 +79,8 @@ jobs:
         run: |
           node --test tests/workflow-inventory.mjs tests/workflow-timing.mjs tests/platform-staging-transaction.mjs tests/production-account-audit.mjs
           node tools/workflow-inventory.mjs --check
+      - name: Cron fallback stand-aside contracts
+        run: node --test tests/fallback-stand-aside.mjs
       - name: Isolated staging forecast evidence policy
         run: node --test tests/fusion-staging-evidence.mjs
       - name: Production fusion evidence safety contracts
