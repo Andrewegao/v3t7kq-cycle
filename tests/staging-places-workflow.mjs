@@ -33,7 +33,7 @@ test('activation needs exact reviewed completion plus pointer precondition', () 
   assert.throws(() => placesGate({ ...env, STAGING_PLACES_APPROVED_POINTER_SHA256: 'absent' }));
 });
 test('all three proof scopes use exact authenticated evidence pins and tide-only roster policy', () => {
-  assert.deepEqual(proofScopeArguments('tides', { kind: 'tide-checkpoint' }), ['--scope', 'staging-partial', '--min-available-stations', '1251']);
+  assert.deepEqual(proofScopeArguments('tides', { kind: 'tide-checkpoint' }), ['--scope', 'staging-partial', '--min-available-stations', '1255']);
   for (const [family, kind, path, scope] of [['surf', 'surf-stage', 'stage.json', 'full-pilot'], ['paragliding', 'paragliding-snapshot', 'all-sites.json', 'worldwide-snapshot']]) {
     const args = proofScopeArguments(family, { kind, files: [{ path, sha256: 'a'.repeat(64) }] }); assert.deepEqual(args, ['--scope', scope, '--evidence-sha256', 'a'.repeat(64)]);
     assert(!args.includes('--min-available-stations')); assert.throws(() => proofScopeArguments(family, { kind: 'tide-checkpoint', files: [] }));
