@@ -9,8 +9,8 @@ import {PUBLIC_COMBINED_ATMOS_SHA} from './ui-public-combined.mjs';
 import {addDiagnostics,addStageDiagnostics,filterLine,diagnosticFailure} from './ui-layer-diagnostics.mjs';
 // Current release admission is independent of the historical diagnostics target.
 export const RELEASE_LAYER_FILES=Object.freeze({
- 'app/e2e/layer-switch-tint.mjs':'df65cf5409c67f0001a6cbf5edf7847c0d1798a2bf437714b9035b06d8d2c67a',
- 'app/e2e/layer-switch-surface.mjs':'441de2a52996646a8540a6df2f7f346c143f6efcd41daf3d9ab4c6ddf4ca9809',
+ 'app/e2e/layer-switch-tint.mjs':'7f4acb74f23d69c2a38c702a8a5e9c532e666827b833695fa6a55f71278d98f3',
+ 'app/e2e/layer-switch-surface.mjs':'067e97b7203304e78715980098940bc6c63337e60ec89d529e6288c014582265',
 });
 const ORIGINS=Object.freeze({staging:'https://staging.weatherx.org',production:'https://weatherx.org'});
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
