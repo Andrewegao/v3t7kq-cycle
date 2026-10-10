@@ -29,6 +29,8 @@ The [main bake](../.github/workflows/bake.yml) has eleven independent collectors
 
 The [catalog bake](../.github/workflows/catalog-bake.yml) provides independent core-model freshness updates. Its matrix and the main bake's per-model publishers already allow parallel work. Preserve the existing shared environment/model writer groups; using a new lock for manual work would permit it to race scheduled work on the same target. Whole maintenance has its own shared writer group and must rebase current model data before final nonregression checks. GitHub keeps one pending job per group and a newer pending job cancels the older one, even with cancel-in-progress false; on 2026-10-07 routine component dispatches cancelled the whole bake's queued hrrr, ecmwf and gfs publishers (run 37679425040). The component bake's `plan` job therefore leaves out of that run any model whose `bake.yml` `publish-<model> / publisher` (or `resume-model-publication.yml` `resume (<model>) / publisher`) job is queued, pending or waiting on the production lock, or whose whole-bake collector is still running or has just succeeded with no publisher listed yet; component publishes for that model pause until the publisher holds the lock. It keeps every requested model when the Actions API is unreadable, and the component summary lists each model it left out.
 
+Do not put required reviewers on an environment that a recurring job enters while it holds a shared writer group. A job waiting at an approval gate keeps its concurrency group, so every later dispatch for that group queues behind it and replaces the previous pending one: from 2026-10-01 to 10-06 one HRRR component job waited at the `production` reviewer gate and 144–151 catalog-bake dispatches a day were cancelled with no HRRR component published. Keep human approval on separate, manually dispatched workflows (as `production-wind100-retention.yml` does with `data-production-wind100-cleanup`).
+
 Do not rename workflow paths, job names, collector step names, artifact names, or local reusable callers as cosmetic cleanup. [Current-model admission](../tools/current-model-artifact.py) authenticates the existing closure and original producer evidence. Atmos source pins must be qualified and changed through their existing coordinated review, not copied into this registry.
 
 ## Scheduling
@@ -37,12 +39,16 @@ The external scheduler's declared dispatches live in [its runtime](../scheduler/
 
 Repository configuration alone cannot establish which scheduler is deployed or which fallback is enabled. Before changing ownership, inspect current protected settings and use the existing [live schedule verification](../scheduler/scripts/verify-live-schedules.mjs) with authorized read access. Its use is separate from this credential-free inventory. Do not enable both paths merely because both appear in the index. Ambiguous dispatch failures can duplicate requests, so idempotence and final admission checks remain necessary.
 
+GitHub-native `schedule` is not an on-time trigger for this repository. Measured 2026-10-03 to 2026-10-10 from the Actions run history: four-a-day schedules fired 59–68% of their slots (bake 17 of 29, fusion-issue 17 of 29, staging-search 18 of 29) with a median start 3.5–4.6 h after the cron time; quarter-hour and half-hour schedules fired 4–8% of their slots (staging-follow-master 28 of 696, staging-shared-read-probe 28 of 348). Treat a GitHub schedule as a best-effort fallback only. A lane that must run near its cron time, or that refuses when it starts late, needs an external dispatcher (this scheduler Worker, or a dedicated Cloudflare cron Worker as Atmos uses for fusion reference collection).
+
+A merge to `scheduler/**` is live only after the **WeatherX scheduler deploy** workflow runs, and that workflow can be disabled in GitHub (it was `disabled_manually` from 2026-09-12; the live Worker then kept its 2026-09-12 trigger set). Before relying on a newly merged dispatch, confirm the live trigger set with `npm run verify:live` (or the Workers schedules API) and look for matching `workflow_dispatch` runs of the target workflow.
+
 No queue setting changes are part of this inventory. Freshness work generally benefits from finishing the running transaction and coalescing replaceable pending requests. Historical batches and explicit recovery carry distinct identities and need their own reviewed retention policy. GitHub queue order is not scientific chronology; expanding a queue does not make an old forecast eligible. Keep archive catalog writers and history/ledger updates serialized under their existing controls.
 
 ## Energy own ingest (GloFAS dams, CAMS dust)
 
 `glofas-ingest.yml` (11:15 and 13:15 UTC) and `cams-ingest.yml` (00:40, 10:40, 12:40, 22:40 UTC) are
-dispatched by the scheduler Worker with identical GitHub-native fallbacks. Each runs the pinned Atmos
+declared in the scheduler Worker with identical GitHub-native fallbacks (the dispatch is live only once the scheduler is redeployed; see Scheduling). Each runs the pinned Atmos
 producer (`data/fetch_glofas.py --dams`, `data/fetch_cams.py`), checks the output tree
 (`tools/energy-ingest.mjs check-tree`), publishes one immutable component (`energy-glofas` at
 `data-atmos/energy/glofas/`, `energy-cams` at `data-atmos/energy/cams/`) through
