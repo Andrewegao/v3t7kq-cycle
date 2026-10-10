@@ -89,14 +89,14 @@ class TideDiagnosticTests(unittest.TestCase):
 
     def test_station_diagnostics_are_bounded_and_ignore_untrusted_fields(self):
         diagnostics = collector._TideDiagnostics()
-        diagnostics.set_roster([{"id": str(1000000 + i)} for i in range(1256)])
-        for i in range(1256):
+        diagnostics.set_roster([{"id": str(1000000 + i)} for i in range(1260)])
+        for i in range(1260):
             diagnostics.record(str(1000000 + i), "provider-body", "private-url")
         diagnostics.record("secret", "events-unavailable", "hilo")
         diagnostics.observe_request({"station": "1000000", "interval": "hilo", "token": "secret"}, 403)
         diagnostics.observe_request({"station": "9999999", "interval": "hilo"}, 403)
         row = diagnostics.snapshot()
-        self.assertEqual(row["failedStationCount"], 1256)
+        self.assertEqual(row["failedStationCount"], 1260)
         self.assertTrue(row["truncated"])
         self.assertEqual(len(row["stations"]), 32)
         self.assertEqual(row["stations"][0]["reason"], "station-fetch-failed")
@@ -216,7 +216,7 @@ class TideProducer:
 
     def fetch_stations(self, session):
         assert session.trust_env is False
-        return [{"id": str(i), "type": "R"} for i in range(1256)]
+        return [{"id": str(i), "type": "R"} for i in range(1260)]
 
     def _canonical_roster(self, stations, kinds):
         assert kinds == ("R",)
@@ -236,17 +236,31 @@ class TideProducer:
     def bake_v2(self, session, stations, output, legacy, **kwargs):
         self.bake_args = (session, stations, output, legacy, kwargs)
         assert kwargs["staging_partial"] is True
-        assert kwargs["min_available_stations"] == 1251
+        assert kwargs["min_available_stations"] == 1255
         assert self._checkpoint_manifest(kwargs["checkpoint_dir"])["retrievedAt"] == self._iso(kwargs["now"])
         output.mkdir(parents=True)
         legacy.parent.mkdir(parents=True, exist_ok=True)
         legacy.write_text("{}")
-        available = [{"id": str(i)} for i in range(1251)]
+        available = [{"id": str(i)} for i in range(1255)]
         catalog = {"datasetId": "noaa-coops-" + kwargs["now"].strftime("%Y%m%dT%H%M%SZ"),
                    "retrievedAt": self._iso(kwargs["now"]), "stations": available,
-                   "availability": {"requestedCount": 1256, "availableCount": 1251, "unavailableCount": 5}}
+                   "availability": {"requestedCount": 1260, "availableCount": 1255, "unavailableCount": 5}}
         (output / "catalog.json").write_text(json.dumps(catalog))
         return catalog, 5
+
+
+class RosterSizeTideProducer(TideProducer):
+    def __init__(self, count):
+        super().__init__()
+        self.count = count
+        self.bake_calls = 0
+
+    def fetch_stations(self, session):
+        return [{"id": str(i), "type": "R"} for i in range(self.count)]
+
+    def bake_v2(self, *args, **kwargs):
+        self.bake_calls += 1
+        raise AssertionError("a roster outside the contract must not be fetched")
 
 
 class FailingTideProducer(TideProducer):
@@ -309,19 +323,19 @@ class ResumableTideProducer(TideProducer):
             if self.tamper_manifest:
                 manifest_path.write_bytes(manifest_path.read_bytes() + b"\n")
             raise RuntimeError(
-                "Staging tide minimum not met (1169 available, 1251 required); previous catalog preserved"
+                "Staging tide minimum not met (1169 available, 1255 required); previous catalog preserved"
             )
         assert cached.read_bytes() == self.cached_product
         if self.fail_second:
             raise RuntimeError(
-                "Staging tide minimum not met (1249 available, 1251 required); previous catalog preserved"
+                "Staging tide minimum not met (1253 available, 1255 required); previous catalog preserved"
             )
         return super().bake_v2(session, stations, output, legacy, **kwargs)
 
 
 class DiagnosedTideProducer(ResumableTideProducer):
     def fetch_stations(self, session):
-        return [{"id": str(1000000 + i), "type": "R"} for i in range(1256)]
+        return [{"id": str(1000000 + i), "type": "R"} for i in range(1260)]
 
     def _fetch_station_v2(self, session, meta, *args, **kwargs):
         session.get("https://private.invalid?secret=DO-NOT-PRINT", params={"station": meta["id"], "interval": "hilo"})
@@ -338,7 +352,7 @@ class WrongTypeMinimumTideProducer(FailingTideProducer):
     def bake_v2(self, *args, **kwargs):
         self.bake_calls += 1
         raise ValueError(
-            "Staging tide minimum not met (1169 available, 1251 required); previous catalog preserved"
+            "Staging tide minimum not met (1169 available, 1255 required); previous catalog preserved"
         )
 
 
@@ -486,11 +500,25 @@ class PlaceCollector(unittest.TestCase):
         self.assertEqual(manifest["retrievedAt"], "2026-09-10T17:19:59Z")
         self.assertEqual(manifest["beginDate"], "2026-09-09")
         self.assertEqual(manifest["endDate"], "2026-09-18")
-        self.assertEqual(len(manifest["stations"]), 1256)
+        self.assertEqual(len(manifest["stations"]), 1260)
         self.assertEqual(producer.bake_args[-1]["now"], datetime(2026, 9, 10, 17, 19, 59, tzinfo=timezone.utc))
-        self.assertEqual(result["availableStationCount"], 1251)
+        self.assertEqual(result["availableStationCount"], 1255)
         self.assertFalse(producer.bake_args[0].trust_env)
         self.assertTrue(producer.bake_args[0].closed)
+
+    def test_tides_refuse_any_reference_roster_other_than_1260_before_fetching(self):
+        # 1,256 was the roster before NOAA added four Florida reference stations on 2026-10-07.
+        for index, count in enumerate((1256, 1259, 1261)):
+            producer = RosterSizeTideProducer(count)
+            session = Session()
+            with self.assertRaises(collector.CollectionFailure) as caught:
+                collector.collect(self.source, self.base / f"roster-{index}", "tides", env={},
+                    modules={"tides": producer}, session_factory=lambda: session)
+            receipt = collector.failure_receipt("tides", caught.exception)
+            self.assertEqual((receipt["phase"], receipt["class"]), ("roster", "contract"))
+            self.assertEqual(producer.bake_calls, 0)
+            self.assertTrue(session.closed)
+            self.assertFalse((self.base / f"roster-{index}" / "candidate").exists())
 
     def test_tides_resume_exact_minimum_failure_once_using_same_frozen_checkpoint(self):
         now = datetime(2026, 9, 10, 17, 19, 59, tzinfo=timezone.utc)
@@ -503,7 +531,7 @@ class PlaceCollector(unittest.TestCase):
         self.assertEqual(producer.manifest_hashes[0], producer.manifest_hashes[1])
         self.assertEqual(result["resumeAttempts"], 1)
         self.assertEqual(result["firstPassAvailableStationCount"], 1169)
-        self.assertEqual(result["availableStationCount"], 1251)
+        self.assertEqual(result["availableStationCount"], 1255)
         self.assertTrue(session.closed)
 
     def test_tides_do_not_retry_nonminimum_errors_or_matching_text_of_wrong_type(self):
@@ -529,9 +557,9 @@ class PlaceCollector(unittest.TestCase):
         receipt = collector.failure_receipt("tides", caught.exception)
         self.assertEqual(receipt["phase"], "fetch")
         self.assertEqual(receipt["class"], "minimum-availability")
-        self.assertEqual(receipt["rosterStationCount"], 1256)
-        self.assertEqual(receipt["availableStationCount"], 1249)
-        self.assertEqual(receipt["requiredStationCount"], 1251)
+        self.assertEqual(receipt["rosterStationCount"], 1260)
+        self.assertEqual(receipt["availableStationCount"], 1253)
+        self.assertEqual(receipt["requiredStationCount"], 1255)
         self.assertEqual(receipt["resumeAttempts"], 1)
         self.assertEqual(receipt["firstPassAvailableStationCount"], 1169)
 
@@ -546,7 +574,7 @@ class PlaceCollector(unittest.TestCase):
         receipt = collector.failure_receipt("tides", caught.exception)
         self.assertEqual(receipt["stationDiagnostics"]["failedStationCount"], 7)
         self.assertEqual(receipt["stationDiagnostics"]["stations"][0], {
-            "id": "1001249", "reason": "events-unavailable", "product": "hilo",
+            "id": "1001253", "reason": "events-unavailable", "product": "hilo",
             "requests": [{"product": "hilo", "attempts": 2, "lastStatus": 403}],
         })
         self.assertEqual(producer.bake_calls, 2)
@@ -567,7 +595,7 @@ class PlaceCollector(unittest.TestCase):
         self.assertEqual(producer.bake_calls, 1)
         self.assertEqual(receipt["class"], "provider-cooldown")
         self.assertEqual(receipt["availableStationCount"], 1169)
-        self.assertEqual(receipt["requiredStationCount"], 1251)
+        self.assertEqual(receipt["requiredStationCount"], 1255)
         self.assertEqual(receipt["resumeAttempts"], 0)
         self.assertEqual(receipt["requestCounts"], {
             "http2xx": 0, "http403": 0, "http429": 1, "http5xx": 0, "httpOther": 0,

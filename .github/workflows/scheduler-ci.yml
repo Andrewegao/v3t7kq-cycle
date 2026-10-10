@@ -36,6 +36,7 @@ on:
       - ".github/workflows/staging-search.yml"
       - ".github/workflows/staging-tc-guidance.yml"
       - ".github/workflows/staging-place-renewal.yml"
+      - ".github/workflows/production-place-renewal.yml"
       - ".github/workflows/staging-wind100.yml"
       - ".github/workflows/staging-wind100-recurring.yml"
       - ".github/workflows/production-wind100-recurring.yml"
@@ -47,6 +48,7 @@ on:
       - ".github/workflows/consumer-refresh.yml"
       - ".github/workflows/data-reader-refresh.yml"
       - ".github/workflows/gdacs-feed-release.yml"
+      - ".github/workflows/gdacs-route-retire.yml"
       - ".github/workflows/glofas-ingest.yml"
       - ".github/workflows/cams-ingest.yml"
       - ".github/workflows/fusion-*.yml"
@@ -80,6 +82,10 @@ jobs:
         run: node --test tests/fusion-staging-evidence.mjs
       - name: Production fusion evidence safety contracts
         run: node --test tests/fusion-production-evidence.mjs
+      - name: Production platform Worker release contracts
+        run: node --test tests/platform-worker-production-release.mjs
+      - name: Road production release contracts
+        run: node --test tests/road-release.mjs
       - run: npm run check --prefix scheduler
       - name: Late-failure bake diagnostic retention contract
         run: |
@@ -114,6 +120,8 @@ jobs:
           python3 tests/staging-place-collect.py
           python3 tests/staging-consumer-reuse.py
           node --test tests/model-inputs*.mjs
+      - name: Production place renewal controller, catalog component and workflow contracts
+        run: node --test tests/production-place-renewal.mjs
       - name: Production Wind100 isolated publisher and selector contracts
         run: node --test tests/production-wind100.mjs
       - name: Consumer refresh workflow safety contract
@@ -121,7 +129,7 @@ jobs:
           node tests/consumer-workflow.mjs
           node --test tests/satellite-archive.mjs
           node --test tests/source-checkout-probe.mjs
-          node --test tests/scheduler-deploy-plan.mjs
+          node --test tests/scheduler-release.mjs
       - name: Consumer refresh preflight and rollback contracts
         run: node --test tests/consumer-refresh*.mjs
       - name: Data-only reader upgrade and compatible fallback contracts
@@ -132,3 +140,4 @@ jobs:
         run: |
           node tests/gdacs-feed-workflow.mjs
           node --test tests/gdacs-feed-release.mjs
+          node --test tests/gdacs-route-retire.mjs

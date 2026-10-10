@@ -63,24 +63,29 @@ test('collector success exposes only exact validated bounded counts', () => {
     spotCount: 49, leadCount: 73, requestCounts: { ...emptyRequestCounts, http2xx: 74 } };
   assert.deepEqual(parseCollectorSuccess(`${JSON.stringify(surf)}\n`, 'surf'), surf);
   const tides = { schemaVersion: 1, kind: 'staging-place-collection', status: 'succeeded', family: 'tides',
-    rosterStationCount: 1256, requiredStationCount: 1251, availableStationCount: 1251, resumeAttempts: 1,
+    rosterStationCount: 1260, requiredStationCount: 1255, availableStationCount: 1255, resumeAttempts: 1,
     firstPassAvailableStationCount: 1169,
     firstPassRequestCounts: { ...emptyRequestCounts, http2xx: 1169, http5xx: 1 },
-    requestCounts: { ...emptyRequestCounts, http2xx: 1251, http5xx: 1 } };
+    requestCounts: { ...emptyRequestCounts, http2xx: 1255, http5xx: 1 } };
   assert.deepEqual(parseCollectorSuccess(JSON.stringify(tides), 'tides'), tides);
   for (const corrupt of [
     { ...tides, privateMessage: '/private/provider?token=DO-NOT-PRINT' },
-    { ...tides, availableStationCount: 1250 },
+    { ...tides, availableStationCount: 1254 },
+    // The superseded 1,256-station roster and its 1,251 minimum no longer qualify.
+    { ...tides, rosterStationCount: 1256, requiredStationCount: 1251, availableStationCount: 1251,
+      requestCounts: { ...emptyRequestCounts, http2xx: 1251, http5xx: 1 } },
+    { ...tides, requiredStationCount: 1251 },
+    { ...tides, availableStationCount: 1261 },
     { ...tides, requestCounts: { ...tides.requestCounts, privateUrl: 'https://private.invalid' } },
   ]) assert.throws(() => parseCollectorSuccess(JSON.stringify(corrupt), 'tides'));
   assert.throws(() => parseCollectorSuccess(`${JSON.stringify(tides)}\nPRIVATE`, 'tides'));
 });
 test('collector failure accepts only its exact safe schema and otherwise classifies the process', () => {
   const receipt = { schemaVersion: 1, kind: 'staging-place-collection', status: 'failed', family: 'tides',
-    phase: 'fetch', class: 'minimum-availability', rosterStationCount: 1256, availableStationCount: 1250,
-    requiredStationCount: 1251, resumeAttempts: 1, firstPassAvailableStationCount: 1169,
+    phase: 'fetch', class: 'minimum-availability', rosterStationCount: 1260, availableStationCount: 1254,
+    requiredStationCount: 1255, resumeAttempts: 1, firstPassAvailableStationCount: 1169,
     firstPassRequestCounts: { ...emptyRequestCounts, http2xx: 1169, http5xx: 1 },
-    requestCounts: { ...emptyRequestCounts, http2xx: 1250, http5xx: 2 } };
+    requestCounts: { ...emptyRequestCounts, http2xx: 1254, http5xx: 2 } };
   const exact = Object.assign(new Error('outer private path'), { status: 1, stdout: '', stderr: `${JSON.stringify(receipt)}\n` });
   assert.deepEqual(collectorProcessFailure(exact, 'tides'), receipt);
   const secret = '/private/provider?token=DO-NOT-PRINT';
@@ -97,8 +102,8 @@ test('collector failure accepts only its exact safe schema and otherwise classif
 test('collector preserves the exact stopped-pacer receipt without claiming a resume', () => {
   const counts = { ...emptyRequestCounts, http429: 1, overlongRetryAfter: 1, pacerStopped: true };
   const receipt = { schemaVersion: 1, kind: 'staging-place-collection', status: 'failed', family: 'tides',
-    phase: 'fetch', class: 'provider-cooldown', rosterStationCount: 1256, availableStationCount: 1169,
-    requiredStationCount: 1251, resumeAttempts: 0, firstPassAvailableStationCount: 1169,
+    phase: 'fetch', class: 'provider-cooldown', rosterStationCount: 1260, availableStationCount: 1169,
+    requiredStationCount: 1255, resumeAttempts: 0, firstPassAvailableStationCount: 1169,
     firstPassRequestCounts: counts, requestCounts: counts };
   assert.deepEqual(collectorProcessFailure({ status: 1, stdout: '', stderr: `${JSON.stringify(receipt)}\n` }, 'tides'), receipt);
   assert.equal(collectorProcessFailure({ status: 1, stdout: '', stderr: JSON.stringify({
@@ -119,8 +124,8 @@ test('station diagnostics survive the process boundary only with bounded allowli
   const station = { id: '1234567', reason: 'events-unavailable', product: 'hilo',
     requests: [{ product: 'hilo', attempts: 10, lastStatus: 403 }] };
   const receipt = { schemaVersion: 1, kind: 'staging-place-collection', status: 'failed', family: 'tides',
-    phase: 'fetch', class: 'minimum-availability', rosterStationCount: 1256, availableStationCount: 1249,
-    requiredStationCount: 1251, resumeAttempts: 1, firstPassAvailableStationCount: 1219,
+    phase: 'fetch', class: 'minimum-availability', rosterStationCount: 1260, availableStationCount: 1253,
+    requiredStationCount: 1255, resumeAttempts: 1, firstPassAvailableStationCount: 1219,
     firstPassRequestCounts: emptyRequestCounts, requestCounts: emptyRequestCounts,
     stationDiagnostics: { failedStationCount: 7, truncated: false,
       stations: Array.from({ length: 7 }, (_, i) => ({ ...station, id: String(1234567 + i) })) } };
@@ -133,14 +138,14 @@ test('station diagnostics survive the process boundary only with bounded allowli
     row => { row.stationDiagnostics.stations[0].requests[0].lastStatus = 99; },
     row => { row.stationDiagnostics.stations[0].requests[0].attempts = 20001; },
     row => { row.stationDiagnostics.stations[1].id = row.stationDiagnostics.stations[0].id; },
-    row => { row.stationDiagnostics.failedStationCount = 1257; },
+    row => { row.stationDiagnostics.failedStationCount = 1261; },
     row => { row.stationDiagnostics.truncated = true; },
   ]) {
     const corrupt = structuredClone(receipt); mutation(corrupt);
     assert.equal(parse(corrupt).class, 'process-exit');
   }
   const bounded = structuredClone(receipt);
-  bounded.stationDiagnostics = { failedStationCount: 1256, truncated: true,
+  bounded.stationDiagnostics = { failedStationCount: 1260, truncated: true,
     stations: Array.from({ length: 32 }, (_, i) => ({ ...station, id: String(1234567 + i),
       requests: [{ product: 'hilo', attempts: 20000, lastStatus: 503 }, { product: '6', attempts: 20000, lastStatus: 0 }] })) };
   assert.deepEqual(parse(bounded), bounded);

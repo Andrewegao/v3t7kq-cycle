@@ -1,0 +1,122 @@
+# Production place renewal (docs/production-place-renewal.md). Production serves only the tides
+# family. The staging renewal's pinned collector and runtime qualifier run unchanged; the qualified
+# candidate is published as ONE immutable catalog component (places-tides, mount data-atmos/tides/)
+# through the declared production publisher with PROMOTE=0, byte-verified, then promoted with a
+# compare-and-swap on the served component and the rollback epoch, and read back from weatherx.org.
+# A failed run never changes what production serves.
+name: WeatherX production place renewal
+run-name: "${{ github.event_name == 'schedule' && 'production places: scheduled tides renewal' || inputs.caller == 'scheduler' && 'production places: scheduler tides renewal' || format('production places: dispatched {0}', inputs.family) }}"
+on:
+  schedule:
+    # Daily. Two slots because GitHub drops or delays about a third of scheduled events here; the
+    # plan stands aside (green, no credential) when production already serves a dataset collected
+    # in the last 20 hours, so normally exactly one slot a day renews.
+    - cron: '52 9 * * *'
+    - cron: '52 21 * * *'
+  workflow_dispatch:
+    inputs:
+      family:
+        description: Renew this production place family (tides is the only family production serves)
+        required: true
+        type: choice
+        default: tides
+        options: [tides]
+      caller:
+        description: Leave empty. Set only by the Cloudflare scheduler Worker
+        type: string
+        required: false
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-places-production
+  cancel-in-progress: false
+jobs:
+  renew:
+    # A person's dispatch always reaches the gate (which still requires the switch); a scheduler
+    # dispatch, like the schedule, runs only while the lane is enabled.
+    if: (github.event_name == 'workflow_dispatch' && inputs.caller != 'scheduler') || vars.PRODUCTION_PLACES_RENEWAL_ENABLED == 'true'
+    environment:
+      name: production
+      url: https://weatherx.org
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      PLACES_KIND: tides
+      REQUESTED_FAMILY: ${{ inputs.family }}
+      CALLER: ${{ inputs.caller }}
+      RENEWAL_SCHEDULE: ${{ github.event.schedule }}
+      ATMOS_SHA: ${{ vars.PRODUCTION_PLACES_RENEWAL_ATMOS_SHA }}
+      PUBLISHER_ATMOS_SHA: 81e061dae0a03cc39e014dc08586bbd144823108
+      APPROVED_PUBLISHER_SHA: ${{ vars.CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA }}
+      PRODUCTION_PLACES_RENEWAL_ENABLED: ${{ vars.PRODUCTION_PLACES_RENEWAL_ENABLED }}
+      PRODUCTION_PLACES_RENEWAL_CONTROLLER_SHA256: ${{ vars.PRODUCTION_PLACES_RENEWAL_CONTROLLER_SHA256 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Check reviewed closure and production scope; stand aside when production is already fresh
+        id: plan
+        run: node cycle/tools/production-place-renewal.mjs plan
+      - name: Checkout exact reviewed producer and consumer without retained credentials
+        if: steps.plan.outputs.run == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: ${{ env.ATMOS_SHA }}
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: control
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        if: steps.plan.outputs.run == 'true'
+        with: { python-version: '3.12' }
+      - name: Install offline consumer and hash-locked producer dependencies
+        if: steps.plan.outputs.run == 'true'
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund --prefix control/app
+          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r cycle/tools/staging-places-requirements.txt
+      - name: Collect NOAA CO-OPS predictions with no storage or catalog credential
+        if: steps.plan.outputs.run == 'true'
+        run: node cycle/tools/production-place-renewal.mjs collect
+      - name: Require actual producer, consumer, complete roster and coverage qualification
+        if: steps.plan.outputs.run == 'true'
+        run: node cycle/tools/production-place-renewal.mjs qualify
+      - name: Checkout the declared production publisher without retained credentials
+        if: steps.plan.outputs.run == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: 81e061dae0a03cc39e014dc08586bbd144823108
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: publisher
+          persist-credentials: false
+          sparse-checkout: |
+            ops/platform
+          sparse-checkout-cone-mode: true
+      - name: Install hash-locked rclone
+        if: steps.plan.outputs.run == 'true'
+        timeout-minutes: 5
+        run: |
+          archive="$RUNNER_TEMP/rclone-v1.75.0-linux-amd64.zip"
+          curl --fail --silent --show-error --location --max-time 120 \
+            https://github.com/rclone/rclone/releases/download/v1.75.0/rclone-v1.75.0-linux-amd64.zip --output "$archive"
+          printf '%s  %s\n' aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa "$archive" | sha256sum --check --status
+          unzip -q "$archive" -d "$RUNNER_TEMP"
+          sudo install -m 0755 "$RUNNER_TEMP/rclone-v1.75.0-linux-amd64/rclone" /usr/local/bin/rclone
+          rclone version | head -1 | grep -Fx 'rclone v1.75.0'
+      - name: Stage the immutable component, verify it, then conditionally promote it in the production catalog
+        if: steps.plan.outputs.run == 'true'
+        timeout-minutes: 30
+        env:
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+          CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
+        run: node cycle/tools/production-place-renewal.mjs publish
+      - name: Verify weatherx.org serves the exact catalog, legacy file and a representative station
+        if: steps.plan.outputs.run == 'true'
+        timeout-minutes: 5
+        run: node cycle/tools/production-place-renewal.mjs verify-live

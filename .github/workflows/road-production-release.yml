@@ -1,0 +1,205 @@
+# Exact-source WeatherX Road release to road.weatherx.org (Pages project weatherx-road).
+# Build, transfer and publish are separate jobs with separate credentials, like the Lab UI release:
+# the builder holds a public key only, the transfer re-validates and reseals, and the protected
+# ui-production job uploads the exact bytes through the pinned Atmos release guard (last-good
+# rollback and release fuse). No data, Worker, route, secret or Lab Pages writes.
+name: WeatherX Road production release
+run-name: "${{ format('Road production release {0}', inputs.atmos_sha) }}"
+on:
+  workflow_dispatch:
+    inputs:
+      atmos_sha:
+        description: Exact 40-character Atmos master SHA to release to road.weatherx.org
+        required: true
+        type: string
+      confirm:
+        description: Type RELEASE-ROAD:<atmos_sha>
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: weatherx-road-production
+  cancel-in-progress: false
+jobs:
+  build:
+    # Source-read key and build public key only. No Cloudflare, decryption or candidate key.
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.repository == 'Andrewegao/v3t7kq-cycle' }}
+    environment:
+      name: atmos-source-read-ui
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ATMOS_SHA: ${{ inputs.atmos_sha }}
+      CONFIRM: ${{ inputs.confirm }}
+      ATMOS_ROOT: ${{ github.workspace }}/atmos
+      UI_BUILDS_ENABLED: ${{ vars.UI_BUILDS_ENABLED }}
+      UI_BUILD_PUBLIC_KEY: ${{ vars.UI_BUILD_PUBLIC_KEY }}
+    steps:
+      - name: Require exact source confirmation
+        run: |
+          [[ "$ATMOS_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$CONFIRM" = "RELEASE-ROAD:$ATMOS_SHA"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: cycle
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: ${{ inputs.atmos_sha }}
+          fetch-depth: 0
+          ssh-key: ${{ secrets.ATMOS_READONLY_KEY }}
+          path: atmos
+          persist-credentials: false
+      - name: Verify exact merged source
+        run: |
+          test "$(git -C atmos rev-parse HEAD)" = "$ATMOS_SHA"
+          git -C atmos merge-base --is-ancestor "$ATMOS_SHA" refs/remotes/origin/master
+          git -C atmos diff --exit-code HEAD
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with: { python-version: '3.11' }
+      - name: Install locked dependencies
+        run: |
+          python3.11 -m pip install pillow
+          npm ci --prefix atmos/app --no-audit --no-fund
+          npm ci --prefix atmos/platform/edge --ignore-scripts --no-audit --no-fund
+      - name: Build the public Road shell and Pages Functions once, then encrypt
+        run: node cycle/tools/road-release.mjs build
+      - name: Retain encrypted build transport only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: road-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/road-build/build.wxrb
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+  transfer:
+    # Decrypts, re-validates and reseals the exact bytes. No Cloudflare credential, no source checkout.
+    needs: build
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' }}
+    environment:
+      name: ui-staging
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ATMOS_SHA: ${{ inputs.atmos_sha }}
+      CONFIRM: ${{ inputs.confirm }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: cycle
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: road-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/road-build-download
+      - name: Validate and reseal the exact Road candidate
+        env:
+          UI_BUILD_PRIVATE_KEY: ${{ secrets.UI_BUILD_PRIVATE_KEY }}
+          UI_CANDIDATE_KEY: ${{ secrets.UI_CANDIDATE_KEY }}
+        run: node cycle/tools/road-release.mjs transfer
+      - name: Retain sealed candidate only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: road-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/road-candidate/candidate.wxrc
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+  release:
+    # Protected by ui-production's required reviewer. Candidate source is never built or executed here.
+    needs: transfer
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' }}
+    environment:
+      name: ui-production
+      url: https://road.weatherx.org
+    permissions:
+      contents: read
+      issues: write # Atmos release fuse, opened only after a failed verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ATMOS_SHA: ${{ inputs.atmos_sha }}
+      CONFIRM: ${{ inputs.confirm }}
+      ATMOS_ROOT: ${{ github.workspace }}/atmos
+      UI_RELEASES_ENABLED: ${{ vars.UI_RELEASES_ENABLED }}
+      UI_ISOLATION_APPROVED: ${{ vars.UI_ISOLATION_APPROVED }}
+      UI_DEPLOYMENT_HOLD_UNTIL: ${{ vars.UI_DEPLOYMENT_HOLD_UNTIL }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: cycle
+          persist-credentials: false
+      - name: Checkout only the exact source's release guard and Wrangler lock
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: weatherx-hq/atmos
+          ref: ${{ inputs.atmos_sha }}
+          fetch-depth: 0
+          ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
+          path: atmos
+          persist-credentials: false
+          sparse-checkout: |
+            /ops/release/
+            /platform/edge/package.json
+            /platform/edge/package-lock.json
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Install the source's locked Wrangler without lifecycle scripts
+        run: npm ci --prefix atmos/platform/edge --ignore-scripts --no-audit --no-fund
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: road-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/road-candidate-download
+      - name: Unseal and restore the exact candidate bytes
+        env:
+          UI_CANDIDATE_KEY: ${{ secrets.UI_CANDIDATE_KEY }}
+        run: node cycle/tools/road-release.mjs restore
+      - name: Record the Road Pages project configuration (read-only)
+        env:
+          CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
+          CLOUDFLARE_API_TOKEN: ${{ secrets.UI_PRODUCTION_PAGES_TOKEN }}
+        run: node cycle/tools/road-release.mjs project
+      - name: Upload through the Atmos release guard, verify, restore last-good on failure
+        env:
+          CLOUDFLARE_ACCOUNT_ID: a89f9a1af485021fbc60a68b163c7c6e
+          CLOUDFLARE_API_TOKEN: ${{ secrets.UI_PRODUCTION_PAGES_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_GUARD_FUSE_MODE: github
+          RELEASE_GUARD_EXPECTED_GIT_SHA: ${{ inputs.atmos_sha }}
+          RELEASE_GUARD_INCIDENT_DIR: ${{ runner.temp }}/road-release-receipts/incidents
+          # Exactly the receipt profile deploy-road-shell.sh exports for the guard's re-verification.
+          VITE_PRODUCT: road
+          VITE_PLATFORM_ACCOUNT: '0'
+          VITE_PLATFORM_DATA_AUTH: public
+        run: |
+          export UI_WRANGLER_BIN="$ATMOS_ROOT/platform/edge/node_modules/.bin/wrangler"
+          mkdir -m 700 "$RUNNER_TEMP/road-upload-cwd"
+          cd "$RUNNER_TEMP/road-upload-cwd"
+          bash "$ATMOS_ROOT/ops/release/guard-pages-deploy.sh" --project weatherx-road --branch main \
+            --dir "$RUNNER_TEMP/road-dist" --receipt "$RUNNER_TEMP/road-dist/health/release.json" \
+            --success-receipt "$RUNNER_TEMP/road-release-receipts/guard-success.json" -- \
+            bash "$ATMOS_ROOT/ops/release/verify-road-production.sh" https://road.weatherx.org
+      - name: Bind the guard receipt to this exact candidate
+        run: node cycle/tools/road-release.mjs confirm
+      - name: Retain non-secret Road release receipts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: road-production-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/road-release-receipts/
+          if-no-files-found: ignore
+          retention-days: 30

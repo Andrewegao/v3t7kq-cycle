@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CONTROL_SHA, STAGING_CONTROL_SHA } from '../tools/ui-candidate.mjs';
 const root=new URL('../',import.meta.url);
-const COMBINED_ATMOS_SHA='34efee01d95942145c6dfc79732278728cef0ddf';
+const COMBINED_ATMOS_SHA='78e1cf76af49b8cc26dd06e66beb31d28f27df99';
 const BETA_ATMOS_SHA='b9db38dd22eed1da56c6c4dd4140480da7e89153';
 const read=p=>readFileSync(new URL(p,root),'utf8');
 const staging=read('.github/workflows/ui-staging.yml'), prod=read('.github/workflows/ui-release.yml'), source=read('tools/ui-release.mjs'), candidate=read('tools/ui-candidate.mjs');
@@ -155,8 +155,10 @@ test('only a staging candidate receives the bounded degraded-cache convergence w
   assert.ok((Number(staging.RELEASE_GUARD_VERIFY_ATTEMPTS)-1)*Number(staging.RELEASE_GUARD_VERIFY_SLEEP_SECONDS)>=690);
   // Exact staging rollback probes the same shared-read route without the widened attempt window.
   assert.deepEqual(platformVerificationEnvironment('staging','rollback',base),{...base,EDGE_DATA_PROBE_PATH:'/data-atmos/airports/airports.json'});
+  // Production keeps the verifier's own attempt policy; only its data probe leaves the tides route,
+  // which the places-tides catalog component serves (docs/production-place-renewal.md).
   for(const [stage,phase] of [['production','candidate'],['production','rollback']]){
-    assert.equal(platformVerificationEnvironment(stage,phase,base),base);
+    assert.deepEqual(platformVerificationEnvironment(stage,phase,base),{...base,EDGE_DATA_PROBE_PATH:'/data-atmos/airports/airports.json'});
     assert.equal(base.RELEASE_GUARD_VERIFY_ATTEMPTS,undefined);
   }
   assert.equal(base.EDGE_DATA_PROBE_PATH,undefined);

@@ -127,8 +127,15 @@ test('staging writer slots remain confined to the non-executable wind caller', (
 test('only the protected promotion workflow references the production UI credential', () => {
   for (const [name, source] of Object.entries(workflows)) {
     assert.doesNotMatch(source, /secrets\.CLOUDFLARE_API_TOKEN\b/, `${name}: retired repository-wide Pages credential`);
-    if (name !== 'ui-release.yml') assert.doesNotMatch(source, /secrets\.UI_PRODUCTION_PAGES_TOKEN\b/, name);
+    // road-production-release.yml publishes the separate weatherx-road project from the same
+    // protected ui-production environment; tests/road-release.mjs pins its job/credential split.
+    if (name !== 'ui-release.yml' && name !== 'road-production-release.yml')
+      assert.doesNotMatch(source, /secrets\.UI_PRODUCTION_PAGES_TOKEN\b/, name);
   }
+  const road = workflows['road-production-release.yml'].split('\n  release:\n');
+  assert.equal(road.length, 2);
+  assert.doesNotMatch(road[0], /UI_PRODUCTION_PAGES_TOKEN/);
+  assert.match(road[1], /^    \S[\s\S]*\n    environment:\n      name: ui-production\n/);
   assert.match(workflows['ui-release.yml'], /\n    environment:\n      name: ui-production\n/);
   assert.match(workflows['ui-release.yml'], /CLOUDFLARE_API_TOKEN: \$\{\{ secrets.UI_PRODUCTION_PAGES_TOKEN \}\}/);
   assert.match(workflows['gdacs-feed-release.yml'], /PAGES_TOKEN: \$\{\{ secrets.PAGES_READ_TOKEN \}\}/);

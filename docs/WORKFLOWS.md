@@ -6,13 +6,13 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `b296efcdd3b903d9e189d2c86f7cbc6a4948ff7f43f1c5c00646eff383d1b5f7`.
+Source digest (registry and workflow bytes): `56f807bd39bd23d42e772399267a02c0be83b5a2cc67870dc5831f6f75e75d3f`.
 
-66 workflows. Ordering and output are deterministic; no API request or clock is used.
+70 workflows. Ordering and output are deterministic; no API request or clock is used.
 
 | Workflow | Family / subsystem | Lifecycle | Purpose | Runbook |
 | --- | --- | --- | --- | --- |
-| [bake](#bake) | models / Model collection | recurring | Collect independent model inputs and assemble the whole-maintenance fallback. | [guide](../docs/single-model-refresh.md) |
+| [bake](#bake) | models / Model collection | recurring | Collect independent model inputs and assemble the whole-maintenance fallback; dispatched on time by the scheduler Worker at 35 2,8,14,20 UTC, the GitHub cron is the fallback. | [guide](../docs/single-model-refresh.md) |
 | [cams-ingest](#cams-ingest) | maintenance / Energy own ingest | recurring | Ingest CAMS dust and total aerosol optical depth for the Energy Desk solar clusters from the Copernicus ADS twice daily and publish the energy-cams component. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [catalog-bake](#catalog-bake) | models / Component freshness | recurring | Refresh individual core model components from provider schedules or a manual request. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [catalog-bootstrap](#catalog-bootstrap) | models / Catalog bootstrap | manual-supported | Initialize the staging catalog through its guarded bootstrap path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
@@ -29,10 +29,11 @@ Source digest (registry and workflow bytes): `b296efcdd3b903d9e189d2c86f7cbc6a49
 | [five-feed-recovery](#five-feed-recovery) | maintenance / Observation component recovery | manual-supported | Manually refresh all five observation/fire components or none, through the shared observation lane with a literal confirmation. | [guide](../docs/five-feed-recovery-20261006.md) |
 | [fusion-evaluate](#fusion-evaluate) | maintenance / Fusion evaluation | manual-supported | Evaluate retained fusion inputs through the existing guarded evaluation path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [fusion-infra](#fusion-infra) | control-plane / Fusion infrastructure | manual-supported | Deploy the exact isolated Fusion archive or complete infrastructure pair through explicit scope guards. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
-| [fusion-issue](#fusion-issue) | maintenance / Fusion issuance | recurring | Record source-bound Fusion forecasts with canary/full completeness, exact archive readback, and a complete-network archive manifest. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
+| [fusion-issue](#fusion-issue) | maintenance / Fusion issuance | recurring | Record source-bound Fusion forecasts with canary/full completeness, exact archive readback, and a complete-network archive manifest; dispatched by the scheduler Worker (caller=scheduler) every 6 h. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [fusion-promote](#fusion-promote) | maintenance / Fusion promotion | manual-supported | Promote a qualified fusion candidate through the guarded controller. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [fusion-staging-evidence](#fusion-staging-evidence) | staging / Fusion evidence | manual-supported | Manually diagnose isolated staging forecast evidence without relying on an aging fixed catalog. | [guide](../docs/FUSION_STAGING_EVIDENCE.md) |
-| [gdacs-feed-release](#gdacs-feed-release) | releases / Hazard feed | manual-supported | Release the isolated GDACS route through guarded verification and recovery. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
+| [gdacs-feed-release](#gdacs-feed-release) | releases / Hazard feed | manual-supported | One-time 2026-08-31 bootstrap of the isolated GDACS repair Worker and its routes; never re-run (its routes are retired by gdacs-route-retire). | [guide](../docs/platform-production-feed-routes.md) |
+| [gdacs-route-retire](#gdacs-route-retire) | releases / Hazard feed | manual-supported | Plan, then detach the four GDACS repair Worker routes so the platform Worker serves /api/gdacs/* and /api/tc/*; verify live, re-attach on failure. | [guide](../docs/platform-production-feed-routes.md) |
 | [glofas-ingest](#glofas-ingest) | maintenance / Energy own ingest | recurring | Ingest the GloFAS v4 ensemble for the five Energy Desk dams from the Copernicus EWDS daily and publish the energy-glofas component. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [hydrology](#hydrology) | archives / Hydrology | manual-supported | Prepare hydrology artifacts through the explicit staging path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [model-inputs](#model-inputs) | staging / Experimental models | manual-supported | Collect isolated experimental model inputs with bounded provider concurrency. | [guide](../docs/MODEL_CLOUD_INPUTS.md) |
@@ -42,8 +43,10 @@ Source digest (registry and workflow bytes): `b296efcdd3b903d9e189d2c86f7cbc6a49
 | [platform-production-feed-routes](#platform-production-feed-routes) | releases / Production platform | manual-supported | Attach and verify only the missing production USGS and composed-hazard Worker routes. | [guide](../docs/platform-production-feed-routes.md) |
 | [platform-staging-transaction](#platform-staging-transaction) | releases / Platform staging | manual-supported | Execute one authorized Atmos backend rehearsal stage against frozen staging identities. | [guide](../docs/platform-staging-transaction.md) |
 | [platform-wind100-worker-release](#platform-wind100-worker-release) | releases / Production platform | manual-supported | Release the exact reviewed production platform Worker for the qualified Wind100 selector. | [guide](../docs/platform-wind100-worker-release.md) |
+| [platform-worker-production-release](#platform-worker-production-release) | releases / Production platform | manual-supported | Plan, then release an exact Atmos master SHA as the production platform Worker (code only, restore on failure). | [guide](../docs/platform-worker-production-release.md) |
 | [point-route-activate](#point-route-activate) | releases / Production point routes | manual-supported | Activate reviewed point routes with ownership-aware rollback. | [guide](../docs/point-route-activation.md) |
 | [production-account-audit](#production-account-audit) | control-plane / Production account safety | diagnostic | Reconcile exhaustive live Stripe inventory against sanitized production account state without mutation. | [guide](../docs/production-account-audit.md) |
+| [production-place-renewal](#production-place-renewal) | maintenance / Places | recurring | Renew production NOAA tide predictions daily as the places-tides catalog component, reusing the staging-qualified collector. | [guide](../docs/production-place-renewal.md) |
 | [production-wind100-point-reader-release](#production-wind100-point-reader-release) | releases / Production data reader | manual-supported | Release the exact production data Worker Wind100 point reader while preserving base forecasts and routes. | [guide](../docs/production-wind100-point-reader-release.md) |
 | [production-wind100-recurring](#production-wind100-recurring) | models / Native wind | recurring | Publish a guarded production-only native wind point candidate under dedicated approval. | [guide](../docs/production-wind100-retention.md) |
 | [production-wind100-retention](#production-wind100-retention) | maintenance / Native wind | manual-supported | Plan or approve bounded cleanup of journal-proven retired production wind components. | [guide](../docs/production-wind100-retention.md) |
@@ -51,9 +54,10 @@ Source digest (registry and workflow bytes): `b296efcdd3b903d9e189d2c86f7cbc6a49
 | [publish-current-model-production](#publish-current-model-production) | models / Component publication | recurring | Qualify and publish one authenticated collector result independently of sibling models. | [guide](../docs/current-model-artifact-handoff.md) |
 | [qualify-bake-throughput](#qualify-bake-throughput) | models / Bake qualification | diagnostic | Qualify full-grid GFS frame throughput and runner memory without provider or publication access. | [guide](../docs/bake-throughput-qualification.md) |
 | [resume-model-publication](#resume-model-publication) | models / Publication recovery | manual-supported | Recover publication from the explicitly reviewed retained run without recollecting models. | [guide](../docs/resume-model-publication.md) |
+| [road-production-release](#road-production-release) | releases / Road product | manual-supported | Build, reseal and publish an exact Atmos master SHA to road.weatherx.org through the Atmos release guard. | [guide](../docs/road-production-release.md) |
 | [satellite-archive](#satellite-archive) | archives / Satellite and radar | recurring | Collect hourly archive tails or explicit bounded historical batches. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [scheduler-ci](#scheduler-ci) | control-plane / Controller evidence | recurring | Check scheduler, publication, source, and recovery contracts. | [guide](../scheduler/README.md) |
-| [scheduler-deploy](#scheduler-deploy) | control-plane / Scheduler | manual-supported | Deploy and verify the selected scheduler revision through existing guards. | [guide](../scheduler/README.md) |
+| [scheduler-deploy](#scheduler-deploy) | control-plane / Scheduler | manual-supported | Plan, then compare-and-swap release the scheduler Worker code and cron triggers, verify the live readback, and restore the predecessor on failure. Manual only. | [guide](../scheduler/README.md) |
 | [source-checkout-probe](#source-checkout-probe) | control-plane / Source provenance | diagnostic | Probe exact source checkout isolation without granting deployment authority. | [guide](../docs/source-checkout-isolation.md) |
 | [staging-consumer-refresh](#staging-consumer-refresh) | staging / Staging consumers | manual-supported | Refresh staging consumers with existing verification and restore controls. | [guide](../docs/staging-consumer-restore-20260905.md) |
 | [staging-current-selection](#staging-current-selection) | staging / Staging selection | recurring | Record the current eligible selection for the staging controller. | [guide](../docs/CLOUD-STAGING.md) |
@@ -62,10 +66,10 @@ Source digest (registry and workflow bytes): `b296efcdd3b903d9e189d2c86f7cbc6a49
 | [staging-follow-master](#staging-follow-master) | staging / Staging selection | recurring | Follow qualified master changes through the staging controller. | [guide](../docs/staging-latency-controller.md) |
 | [staging-model-components](#staging-model-components) | staging / Experimental models | manual-supported | Prepare isolated model components for staging qualification. | [guide](../docs/STAGING_MODEL_COMPONENTS.md) |
 | [staging-model-selection](#staging-model-selection) | staging / Experimental models | manual-supported | Select the reviewed model components for a staging candidate. | [guide](../docs/STAGING_MODEL_COMPONENTS.md) |
-| [staging-place-renewal](#staging-place-renewal) | staging / Places | manual-supported | Renew the reviewed staging place data through the existing controller. | [guide](../docs/staging-place-renewal-plan.md) |
+| [staging-place-renewal](#staging-place-renewal) | staging / Places | recurring | Renew the reviewed staging place data through the existing controller; dispatched by the scheduler Worker on the policy slots. | [guide](../docs/staging-place-renewal-plan.md) |
 | [staging-places](#staging-places) | staging / Places | manual-supported | Prepare and qualify the isolated staging place data. | [guide](../docs/staging-places.md) |
 | [staging-search-reader](#staging-search-reader) | staging / Search | manual-supported | Activate the guarded staging search reader and verify its boundary. | [guide](../docs/staging-search-reader.md) |
-| [staging-search](#staging-search) | staging / Search | manual-supported | Prepare isolated search data for staging qualification. | [guide](../docs/staging-search.md) |
+| [staging-search](#staging-search) | staging / Search | recurring | Prepare isolated search data for staging qualification and renew its lease; the scheduler Worker dispatches the renewal every 6 h. | [guide](../docs/staging-search.md) |
 | [staging-shared-read-pin](#staging-shared-read-pin) | staging / Shared data reading | manual-supported | Pin the reviewed shared-data selection for staging. | [guide](../docs/STAGING_SHARED_READ.md) |
 | [staging-shared-read-probe](#staging-shared-read-probe) | staging / Shared data reading | diagnostic | Probe staging shared-data access without treating the probe as activation. | [guide](../docs/STAGING_SHARED_READ.md) |
 | [staging-tc-guidance](#staging-tc-guidance) | staging / Tropical cyclone guidance | manual-supported | Prepare reviewed tropical cyclone guidance for isolated staging use. | [guide](../docs/STAGING_TC_GUIDANCE.md) |
@@ -154,7 +158,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
 | [bake / checkout exact public bake diagnostic controller](../.github/workflows/bake.yml#L281) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
-| [bake / checkout atmos (private, read-only deploy key)](../.github/workflows/bake.yml#L295) | <code>weatherx-hq/atmos</code> | <code>4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88</code> |
+| [bake / checkout atmos (private, read-only deploy key)](../.github/workflows/bake.yml#L295) | <code>weatherx-hq/atmos</code> | <code>81e061dae0a03cc39e014dc08586bbd144823108</code> |
 | [bake / checkout this reviewed recovery transfer checker](../.github/workflows/bake.yml#L393) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
 | [model-status / step 1](../.github/workflows/bake.yml#L589) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 | [run-summary / step 1](../.github/workflows/bake.yml#L617) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
@@ -179,7 +183,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
 | [ingest / Checkout exact controller](../.github/workflows/cams-ingest.yml#L65) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [ingest / Checkout pinned Atmos producers](../.github/workflows/cams-ingest.yml#L74) | <code>weatherx-hq/atmos</code> | <code>4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88</code> |
+| [ingest / Checkout pinned Atmos producers](../.github/workflows/cams-ingest.yml#L74) | <code>weatherx-hq/atmos</code> | <code>81e061dae0a03cc39e014dc08586bbd144823108</code> |
 
 Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/cams-ingest.yml#L47).
 
@@ -209,7 +213,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
 | [plan / step 1](../.github/workflows/catalog-bake.yml#L52) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [model / Checkout WeatherX](../.github/workflows/catalog-bake.yml#L107) | <code>weatherx-hq/atmos</code> | <code>deb0ac7e61fc8f138267dbe51521b2a25a732051</code> |
+| [model / Checkout WeatherX](../.github/workflows/catalog-bake.yml#L107) | <code>weatherx-hq/atmos</code> | <code>81e061dae0a03cc39e014dc08586bbd144823108</code> |
 | [summary / step 1](../.github/workflows/catalog-bake.yml#L275) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
 Variable references (declared names only; values and activation unknown): [CATALOG_DEFAULT_TARGET](../.github/workflows/catalog-bake.yml#L63), [CATALOG_GITHUB_FALLBACK_DISABLED](../.github/workflows/catalog-bake.yml#L42), [CURRENT_RUN_CATALOG_BAKE_ATMOS_SHA](../.github/workflows/catalog-bake.yml#L90), [CURRENT_RUN_POINT_REUSE_MODEL](../.github/workflows/catalog-bake.yml#L91).
@@ -358,7 +362,7 @@ Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [collector / checkout atmos core collector (same approved commit, read-only deploy key)](../.github/workflows/collect-core-model.yml#L35) | <code>weatherx-hq/atmos</code> | <code>4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88</code> |
+| [collector / checkout atmos core collector (same approved commit, read-only deploy key)](../.github/workflows/collect-core-model.yml#L35) | <code>weatherx-hq/atmos</code> | <code>81e061dae0a03cc39e014dc08586bbd144823108</code> |
 | [collector / checkout this reviewed recovery controller](../.github/workflows/collect-core-model.yml#L47) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
@@ -380,7 +384,7 @@ Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [collector / checkout atmos regional collector (same approved commit, read-only deploy key)](../.github/workflows/collect-regional-model.yml#L35) | <code>weatherx-hq/atmos</code> | <code>4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88</code> |
+| [collector / checkout atmos regional collector (same approved commit, read-only deploy key)](../.github/workflows/collect-regional-model.yml#L35) | <code>weatherx-hq/atmos</code> | <code>81e061dae0a03cc39e014dc08586bbd144823108</code> |
 | [collector / checkout this reviewed recovery controller](../.github/workflows/collect-regional-model.yml#L47) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
@@ -476,7 +480,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
 | [recover / Checkout exact recovery controller](../.github/workflows/five-feed-recovery.yml#L60) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
-| [recover / Checkout unchanged qualified five-feed producers](../.github/workflows/five-feed-recovery.yml#L67) | <code>weatherx-hq/atmos</code> | <code>4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88</code> |
+| [recover / Checkout unchanged qualified five-feed producers](../.github/workflows/five-feed-recovery.yml#L67) | <code>weatherx-hq/atmos</code> | <code>81e061dae0a03cc39e014dc08586bbd144823108</code> |
 
 Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/five-feed-recovery.yml#L30), [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/five-feed-recovery.yml#L37).
 
@@ -535,26 +539,26 @@ Variable references (declared names only; values and activation unknown): [FUSIO
 
 [.github/workflows/fusion-issue.yml](../.github/workflows/fusion-issue.yml#L1) · <code>WeatherX fusion issuance</code>
 
-Declared triggers: [workflow_dispatch](../.github/workflows/fusion-issue.yml#L4); input names <code>["scope","confirmation"]</code>; [schedule](../.github/workflows/fusion-issue.yml#L16) <code>["23 */6 * * *"]</code>.
+Declared triggers: [workflow_dispatch](../.github/workflows/fusion-issue.yml#L4); input names <code>["scope","confirmation","caller"]</code>; [schedule](../.github/workflows/fusion-issue.yml#L22) <code>["23 */6 * * *"]</code>.
 
 Workflow permissions: <code>{"contents":"read","actions":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-fusion-issuance","cancel-in-progress":false}</code>.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [record](../.github/workflows/fusion-issue.yml#L25) ← no needs | <code>ubuntu-latest</code> | <code>production</code> | <code>45</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [record](../.github/workflows/fusion-issue.yml#L31) ← no needs | <code>ubuntu-latest</code> | <code>production</code> | <code>45</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [record](../.github/workflows/fusion-issue.yml#L25): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; (github.event_name == 'workflow_dispatch' &#124;&#124; vars.FUSION_ISSUANCE_ENABLED == 'true') }}</code>
+- [record](../.github/workflows/fusion-issue.yml#L31): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; ((github.event_name == 'workflow_dispatch' &amp;&amp; inputs.caller != 'scheduler') &#124;&#124; vars.FUSION_ISSUANCE_ENABLED == 'true') }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [record / step 1](../.github/workflows/fusion-issue.yml#L33) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [record / step 4](../.github/workflows/fusion-issue.yml#L55) | <code>weatherx-hq/atmos</code> | <code>${{ env.ENGINE_SHA }}</code> |
+| [record / step 1](../.github/workflows/fusion-issue.yml#L39) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [record / step 4](../.github/workflows/fusion-issue.yml#L63) | <code>weatherx-hq/atmos</code> | <code>${{ env.ENGINE_SHA }}</code> |
 
-Variable references (declared names only; values and activation unknown): [FUSION_ENGINE_SHA](../.github/workflows/fusion-issue.yml#L30), [FUSION_ISSUANCE_ENABLED](../.github/workflows/fusion-issue.yml#L25).
+Variable references (declared names only; values and activation unknown): [FUSION_ENGINE_SHA](../.github/workflows/fusion-issue.yml#L36), [FUSION_ISSUANCE_ENABLED](../.github/workflows/fusion-issue.yml#L31).
 
 
 ## fusion-promote
@@ -634,6 +638,32 @@ Checkout declarations (not a claim of approval or checkout success):
 Variable references (declared names only; values and activation unknown): none detected.
 
 
+## gdacs-route-retire
+
+[.github/workflows/gdacs-route-retire.yml](../.github/workflows/gdacs-route-retire.yml#L1) · <code>WeatherX GDACS repair route retirement</code>
+
+Declared triggers: [workflow_dispatch](../.github/workflows/gdacs-route-retire.yml#L10); input names <code>["atmos_sha","mode","expected_platform_version","expected_repair_version","confirm"]</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-production-data-edge","cancel-in-progress":false}</code>.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [retire](../.github/workflows/gdacs-route-retire.yml#L41) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"production","url":"https://weatherx.org"}</code> | <code>30</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+
+Declared job conditions (additional step/helper checks may apply):
+
+- [retire](../.github/workflows/gdacs-route-retire.yml#L41): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; github.event_name == 'workflow_dispatch' &amp;&amp; github.repository == 'Andrewegao/v3t7kq-cycle' }}</code>
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [retire / step 3](../.github/workflows/gdacs-route-retire.yml#L69) | caller repository (implicit) | <code>${{ github.sha }}</code> |
+| [retire / step 4](../.github/workflows/gdacs-route-retire.yml#L74) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmos_sha }}</code> |
+
+Variable references (declared names only; values and activation unknown): none detected.
+
+
 ## glofas-ingest
 
 [.github/workflows/glofas-ingest.yml](../.github/workflows/glofas-ingest.yml#L1) · <code>Energy GloFAS dams ingest</code>
@@ -651,7 +681,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
 | [ingest / Checkout exact controller](../.github/workflows/glofas-ingest.yml#L58) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [ingest / Checkout pinned Atmos producers](../.github/workflows/glofas-ingest.yml#L67) | <code>weatherx-hq/atmos</code> | <code>4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88</code> |
+| [ingest / Checkout pinned Atmos producers](../.github/workflows/glofas-ingest.yml#L67) | <code>weatherx-hq/atmos</code> | <code>81e061dae0a03cc39e014dc08586bbd144823108</code> |
 
 Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/glofas-ingest.yml#L45).
 
@@ -776,7 +806,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | --- | --- | --- |
 | [plan / step 1](../.github/workflows/observation-refresh.yml#L48) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 | [refresh / Checkout exact recovery controller](../.github/workflows/observation-refresh.yml#L107) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
-| [refresh / Checkout unchanged qualified five-feed producers](../.github/workflows/observation-refresh.yml#L114) | <code>weatherx-hq/atmos</code> | <code>4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88</code> |
+| [refresh / Checkout unchanged qualified five-feed producers](../.github/workflows/observation-refresh.yml#L114) | <code>weatherx-hq/atmos</code> | <code>81e061dae0a03cc39e014dc08586bbd144823108</code> |
 
 Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/observation-refresh.yml#L77), [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/observation-refresh.yml#L84), [OBSERVATION_REFRESH_ENABLED](../.github/workflows/observation-refresh.yml#L58).
 
@@ -859,6 +889,32 @@ Checkout declarations (not a claim of approval or checkout success):
 Variable references (declared names only; values and activation unknown): none detected.
 
 
+## platform-worker-production-release
+
+[.github/workflows/platform-worker-production-release.yml](../.github/workflows/platform-worker-production-release.yml#L1) · <code>WeatherX production platform Worker release</code>
+
+Declared triggers: [workflow_dispatch](../.github/workflows/platform-worker-production-release.yml#L7); input names <code>["atmos_sha","mode","expected_active_version_id","confirm"]</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-production-data-edge","cancel-in-progress":false}</code>.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [release](../.github/workflows/platform-worker-production-release.yml#L33) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"production","url":"https://weatherx.org"}</code> | <code>60</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+
+Declared job conditions (additional step/helper checks may apply):
+
+- [release](../.github/workflows/platform-worker-production-release.yml#L33): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; github.event_name == 'workflow_dispatch' &amp;&amp; github.repository == 'Andrewegao/v3t7kq-cycle' }}</code>
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [release / step 3](../.github/workflows/platform-worker-production-release.yml#L59) | caller repository (implicit) | <code>${{ github.sha }}</code> |
+| [release / step 4](../.github/workflows/platform-worker-production-release.yml#L64) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmos_sha }}</code> |
+
+Variable references (declared names only; values and activation unknown): none detected.
+
+
 ## point-route-activate
 
 [.github/workflows/point-route-activate.yml](../.github/workflows/point-route-activate.yml#L1) · <code>WeatherX paired point route activation</code>
@@ -911,6 +967,33 @@ Checkout declarations (not a claim of approval or checkout success):
 Variable references (declared names only; values and activation unknown): [PRODUCTION_ACCOUNT_AUDIT_CLOUDFLARE_ACCOUNT_ID](../.github/workflows/production-account-audit.yml#L48), [PRODUCTION_ACCOUNT_AUDIT_ENABLED](../.github/workflows/production-account-audit.yml#L47).
 
 
+## production-place-renewal
+
+[.github/workflows/production-place-renewal.yml](../.github/workflows/production-place-renewal.yml#L1) · <code>WeatherX production place renewal</code>
+
+Declared triggers: [schedule](../.github/workflows/production-place-renewal.yml#L14) <code>["52 9 * * *","52 21 * * *"]</code>; [workflow_dispatch](../.github/workflows/production-place-renewal.yml#L17); input names <code>["family","caller"]</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-places-production","cancel-in-progress":false}</code>.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [renew](../.github/workflows/production-place-renewal.yml#L37) ← no needs | <code>ubuntu-24.04</code> | <code>{"name":"production","url":"https://weatherx.org"}</code> | <code>75</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+
+Declared job conditions (additional step/helper checks may apply):
+
+- [renew](../.github/workflows/production-place-renewal.yml#L37): <code>(github.event_name == 'workflow_dispatch' &amp;&amp; inputs.caller != 'scheduler') &#124;&#124; vars.PRODUCTION_PLACES_RENEWAL_ENABLED == 'true'</code>
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [renew / step 1](../.github/workflows/production-place-renewal.yml#L54) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [renew / Checkout exact reviewed producer and consumer without retained credentials](../.github/workflows/production-place-renewal.yml#L61) | <code>weatherx-hq/atmos</code> | <code>${{ env.ATMOS_SHA }}</code> |
+| [renew / Checkout the declared production publisher without retained credentials](../.github/workflows/production-place-renewal.yml#L84) | <code>weatherx-hq/atmos</code> | <code>81e061dae0a03cc39e014dc08586bbd144823108</code> |
+
+Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/production-place-renewal.yml#L50), [PRODUCTION_PLACES_RENEWAL_ATMOS_SHA](../.github/workflows/production-place-renewal.yml#L48), [PRODUCTION_PLACES_RENEWAL_CONTROLLER_SHA256](../.github/workflows/production-place-renewal.yml#L52), [PRODUCTION_PLACES_RENEWAL_ENABLED](../.github/workflows/production-place-renewal.yml#L37).
+
+
 ## production-wind100-point-reader-release
 
 [.github/workflows/production-wind100-point-reader-release.yml](../.github/workflows/production-wind100-point-reader-release.yml#L1) · <code>WeatherX production Wind100 point reader release</code>
@@ -954,7 +1037,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
 | [wind100 / step 3](../.github/workflows/production-wind100-recurring.yml#L69) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [wind100 / Checkout the exact ordinary core producer](../.github/workflows/production-wind100-recurring.yml#L75) | <code>weatherx-hq/atmos</code> | <code>4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88</code> |
+| [wind100 / Checkout the exact ordinary core producer](../.github/workflows/production-wind100-recurring.yml#L75) | <code>weatherx-hq/atmos</code> | <code>81e061dae0a03cc39e014dc08586bbd144823108</code> |
 | [wind100 / Checkout the exact reviewed point-only augmenter and publisher](../.github/workflows/production-wind100-recurring.yml#L84) | <code>weatherx-hq/atmos</code> | <code>9174329db6ca8527569e67f14ef70406dedefb69</code> |
 
 Variable references (declared names only; values and activation unknown): [PRODUCTION_WIND100_APPROVED_SOURCE_SHA](../.github/workflows/production-wind100-recurring.yml#L41), [PRODUCTION_WIND100_CONTROLLER_SHA256](../.github/workflows/production-wind100-recurring.yml#L43), [PRODUCTION_WIND100_ENABLED](../.github/workflows/production-wind100-recurring.yml#L42), [PRODUCTION_WIND100_GC_READY_SHA256](../.github/workflows/production-wind100-recurring.yml#L44), [PRODUCTION_WIND100_R2_ACCOUNT_ID](../.github/workflows/production-wind100-recurring.yml#L45).
@@ -1028,7 +1111,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
 | [publisher / checkout authenticated current-run controller](../.github/workflows/publish-current-model-production.yml#L82) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
-| [publisher / checkout exact qualified Atmos component publisher](../.github/workflows/publish-current-model-production.yml#L89) | <code>weatherx-hq/atmos</code> | <code>4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88</code> |
+| [publisher / checkout exact qualified Atmos component publisher](../.github/workflows/publish-current-model-production.yml#L89) | <code>weatherx-hq/atmos</code> | <code>81e061dae0a03cc39e014dc08586bbd144823108</code> |
 
 Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/publish-current-model-production.yml#L53), [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/publish-current-model-production.yml#L52), [CURRENT_RUN_POINT_REUSE_MODEL](../.github/workflows/publish-current-model-production.yml#L73).
 
@@ -1084,6 +1167,39 @@ Checkout declarations (not a claim of approval or checkout success):
 Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/resume-model-publication.yml#L16).
 
 
+## road-production-release
+
+[.github/workflows/road-production-release.yml](../.github/workflows/road-production-release.yml#L1) · <code>WeatherX Road production release</code>
+
+Declared triggers: [workflow_dispatch](../.github/workflows/road-production-release.yml#L10); input names <code>["atmos_sha","confirm"]</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-road-production","cancel-in-progress":false}</code>.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [build](../.github/workflows/road-production-release.yml#L27) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"atmos-source-read-ui"}</code> | <code>60</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read"}</code> |
+| [transfer](../.github/workflows/road-production-release.yml#L84) ← <code>build</code> | <code>ubuntu-latest</code> | <code>{"name":"ui-staging"}</code> | <code>15</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read"}</code> |
+| [release](../.github/workflows/road-production-release.yml#L122) ← <code>transfer</code> | <code>ubuntu-latest</code> | <code>{"name":"ui-production","url":"https://road.weatherx.org"}</code> | <code>30</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","issues":"write"}</code> |
+
+Declared job conditions (additional step/helper checks may apply):
+
+- [build](../.github/workflows/road-production-release.yml#L27): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; github.event_name == 'workflow_dispatch' &amp;&amp; github.repository == 'Andrewegao/v3t7kq-cycle' }}</code>
+- [transfer](../.github/workflows/road-production-release.yml#L85): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; github.event_name == 'workflow_dispatch' }}</code>
+- [release](../.github/workflows/road-production-release.yml#L123): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; github.event_name == 'workflow_dispatch' }}</code>
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [build / step 2](../.github/workflows/road-production-release.yml#L45) | caller repository (implicit) | <code>${{ github.sha }}</code> |
+| [build / step 3](../.github/workflows/road-production-release.yml#L50) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmos_sha }}</code> |
+| [transfer / step 1](../.github/workflows/road-production-release.yml#L96) | caller repository (implicit) | <code>${{ github.sha }}</code> |
+| [release / step 1](../.github/workflows/road-production-release.yml#L140) | caller repository (implicit) | <code>${{ github.sha }}</code> |
+| [release / Checkout only the exact source's release guard and Wrangler lock](../.github/workflows/road-production-release.yml#L145) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmos_sha }}</code> |
+
+Variable references (declared names only; values and activation unknown): [UI_BUILDS_ENABLED](../.github/workflows/road-production-release.yml#L38), [UI_BUILD_PUBLIC_KEY](../.github/workflows/road-production-release.yml#L39), [UI_DEPLOYMENT_HOLD_UNTIL](../.github/workflows/road-production-release.yml#L138), [UI_ISOLATION_APPROVED](../.github/workflows/road-production-release.yml#L137), [UI_RELEASES_ENABLED](../.github/workflows/road-production-release.yml#L136).
+
+
 ## satellite-archive
 
 [.github/workflows/satellite-archive.yml](../.github/workflows/satellite-archive.yml#L1) · <code>satellite-archive</code>
@@ -1119,19 +1235,19 @@ Variable references (declared names only; values and activation unknown): [R2_CO
 
 [.github/workflows/scheduler-ci.yml](../.github/workflows/scheduler-ci.yml#L1) · <code>WeatherX scheduler CI</code>
 
-Declared triggers: [pull_request](../.github/workflows/scheduler-ci.yml#L4); [push](../.github/workflows/scheduler-ci.yml#L6) <code>{"branches":["main"],"paths":[".github/workflows/**","ops/workflows.json","ops/atmos-production-source.json","ops/train3-validation-contract.json","docs/WORKFLOWS.md","docs/WORKFLOW_OPERATIONS.md","README.md",".github/workflows/bake.yml",".github/workflows/collect-core-model.yml",".github/workflows/collect-regional-model.yml",".github/workflows/publish-current-model-production.yml",".github/workflows/resume-model-publication.yml",".github/workflows/catalog-bake.yml",".github/workflows/scheduler-ci.yml",".github/workflows/source-checkout-probe.yml",".github/workflows/scheduler-deploy.yml",".github/workflows/satellite-archive.yml",".github/workflows/ui-release.yml",".github/workflows/ui-staging.yml",".github/workflows/ui-staging-tc.yml",".github/workflows/staging-follow-master.yml",".github/workflows/staging-data.yml",".github/workflows/staging-current-selection.yml",".github/workflows/model-inputs.yml",".github/workflows/nam-hi-diagnostic.yml",".github/workflows/staging-model-components.yml",".github/workflows/staging-model-selection.yml",".github/workflows/staging-consumer-refresh.yml",".github/workflows/staging-search.yml",".github/workflows/staging-tc-guidance.yml",".github/workflows/staging-place-renewal.yml",".github/workflows/staging-wind100.yml",".github/workflows/staging-wind100-recurring.yml",".github/workflows/production-wind100-recurring.yml",".github/workflows/production-wind100-retention.yml",".github/workflows/staging-wind100-preflight.yml",".github/workflows/staging-search-reader.yml",".github/workflows/staging-data-activate.yml",".github/workflows/verify-backfill.yml",".github/workflows/consumer-refresh.yml",".github/workflows/data-reader-refresh.yml",".github/workflows/gdacs-feed-release.yml",".github/workflows/glofas-ingest.yml",".github/workflows/cams-ingest.yml",".github/workflows/fusion-*.yml","scheduler/**","tests/**","tools/**","staging-controller/**"]}</code>.
+Declared triggers: [pull_request](../.github/workflows/scheduler-ci.yml#L4); [push](../.github/workflows/scheduler-ci.yml#L6) <code>{"branches":["main"],"paths":[".github/workflows/**","ops/workflows.json","ops/atmos-production-source.json","ops/train3-validation-contract.json","docs/WORKFLOWS.md","docs/WORKFLOW_OPERATIONS.md","README.md",".github/workflows/bake.yml",".github/workflows/collect-core-model.yml",".github/workflows/collect-regional-model.yml",".github/workflows/publish-current-model-production.yml",".github/workflows/resume-model-publication.yml",".github/workflows/catalog-bake.yml",".github/workflows/scheduler-ci.yml",".github/workflows/source-checkout-probe.yml",".github/workflows/scheduler-deploy.yml",".github/workflows/satellite-archive.yml",".github/workflows/ui-release.yml",".github/workflows/ui-staging.yml",".github/workflows/ui-staging-tc.yml",".github/workflows/staging-follow-master.yml",".github/workflows/staging-data.yml",".github/workflows/staging-current-selection.yml",".github/workflows/model-inputs.yml",".github/workflows/nam-hi-diagnostic.yml",".github/workflows/staging-model-components.yml",".github/workflows/staging-model-selection.yml",".github/workflows/staging-consumer-refresh.yml",".github/workflows/staging-search.yml",".github/workflows/staging-tc-guidance.yml",".github/workflows/staging-place-renewal.yml",".github/workflows/production-place-renewal.yml",".github/workflows/staging-wind100.yml",".github/workflows/staging-wind100-recurring.yml",".github/workflows/production-wind100-recurring.yml",".github/workflows/production-wind100-retention.yml",".github/workflows/staging-wind100-preflight.yml",".github/workflows/staging-search-reader.yml",".github/workflows/staging-data-activate.yml",".github/workflows/verify-backfill.yml",".github/workflows/consumer-refresh.yml",".github/workflows/data-reader-refresh.yml",".github/workflows/gdacs-feed-release.yml",".github/workflows/gdacs-route-retire.yml",".github/workflows/glofas-ingest.yml",".github/workflows/cams-ingest.yml",".github/workflows/fusion-*.yml","scheduler/**","tests/**","tools/**","staging-controller/**"]}</code>.
 
 Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: not declared.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [scheduler](../.github/workflows/scheduler-ci.yml#L63) ← no needs | <code>ubuntu-latest</code> | not declared | <code>10</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [scheduler](../.github/workflows/scheduler-ci.yml#L65) ← no needs | <code>ubuntu-latest</code> | not declared | <code>10</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [scheduler / step 1](../.github/workflows/scheduler-ci.yml#L66) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [scheduler / step 1](../.github/workflows/scheduler-ci.yml#L68) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
 Variable references (declared names only; values and activation unknown): none detected.
 
@@ -1140,25 +1256,23 @@ Variable references (declared names only; values and activation unknown): none d
 
 [.github/workflows/scheduler-deploy.yml](../.github/workflows/scheduler-deploy.yml#L1) · <code>WeatherX scheduler deploy</code>
 
-Declared triggers: [push](../.github/workflows/scheduler-deploy.yml#L5) <code>{"branches":["main"],"paths":[".github/workflows/catalog-bake.yml",".github/workflows/scheduler-deploy.yml","scheduler/**"]}</code>; [workflow_dispatch](../.github/workflows/scheduler-deploy.yml#L10).
+Declared triggers: [workflow_dispatch](../.github/workflows/scheduler-deploy.yml#L9); input names <code>["mode","expected_active_version_id","confirm"]</code>.
 
 Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-model-scheduler-production","cancel-in-progress":false}</code>.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [changes](../.github/workflows/scheduler-deploy.yml#L23) ← no needs | <code>ubuntu-latest</code> | not declared | <code>5</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
-| [deploy](../.github/workflows/scheduler-deploy.yml#L35) ← <code>changes</code> | <code>ubuntu-latest</code> | <code>production</code> | <code>15</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [release](../.github/workflows/scheduler-deploy.yml#L31) ← no needs | <code>ubuntu-latest</code> | <code>production</code> | <code>20</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [deploy](../.github/workflows/scheduler-deploy.yml#L36): <code>${{ needs.changes.outputs.deploy == 'true' }}</code>
+- [release](../.github/workflows/scheduler-deploy.yml#L31): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; github.event_name == 'workflow_dispatch' &amp;&amp; github.repository == 'Andrewegao/v3t7kq-cycle' }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [changes / step 1](../.github/workflows/scheduler-deploy.yml#L28) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [deploy / step 1](../.github/workflows/scheduler-deploy.yml#L41) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [release / step 2](../.github/workflows/scheduler-deploy.yml#L43) | caller repository (implicit) | <code>${{ github.sha }}</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
 
@@ -1424,26 +1538,26 @@ Variable references (declared names only; values and activation unknown): [STAGI
 
 [.github/workflows/staging-search.yml](../.github/workflows/staging-search.yml#L1) · <code>WeatherX staging search candidate</code>
 
-Declared triggers: [schedule](../.github/workflows/staging-search.yml#L5) <code>["17 */6 * * *"]</code>; [workflow_dispatch](../.github/workflows/staging-search.yml#L7); input names <code>["action","source_release","candidate_sha256","expected_pointer_sha256"]</code>.
+Declared triggers: [schedule](../.github/workflows/staging-search.yml#L6) <code>["17 */6 * * *"]</code>; [workflow_dispatch](../.github/workflows/staging-search.yml#L8); input names <code>["action","source_release","candidate_sha256","expected_pointer_sha256","caller"]</code>.
 
 Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <code>{"group":"weatherx-staging-search","cancel-in-progress":false}</code>.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [search](../.github/workflows/staging-search.yml#L32) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"data-staging","url":"https://staging.weatherx.org"}</code> | <code>15</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [search](../.github/workflows/staging-search.yml#L39) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"data-staging","url":"https://staging.weatherx.org"}</code> | <code>15</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [search](../.github/workflows/staging-search.yml#L32): <code>github.event_name != 'schedule' &#124;&#124; vars.STAGING_SEARCH_SCHEDULE_ENABLED == 'true'</code>
+- [search](../.github/workflows/staging-search.yml#L39): <code>(github.event_name == 'workflow_dispatch' &amp;&amp; inputs.caller != 'scheduler') &#124;&#124; ((github.event_name == 'schedule' &#124;&#124; (inputs.caller == 'scheduler' &amp;&amp; inputs.action == 'renew')) &amp;&amp; vars.STAGING_SEARCH_SCHEDULE_ENABLED == 'true')</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [search / step 1](../.github/workflows/staging-search.yml#L51) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [search / Checkout the fixed producer or exact reviewed UI source](../.github/workflows/staging-search.yml#L63) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.action == 'prepare' &amp;&amp; 'dfa25e9f473f15d5e2f630fe78c268b73234bd3a' &#124;&#124; vars.STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA }}</code> |
+| [search / step 1](../.github/workflows/staging-search.yml#L58) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [search / Checkout the fixed producer or exact reviewed UI source](../.github/workflows/staging-search.yml#L70) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.action == 'prepare' &amp;&amp; 'dfa25e9f473f15d5e2f630fe78c268b73234bd3a' &#124;&#124; vars.STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA }}</code> |
 
-Variable references (declared names only; values and activation unknown): [STAGING_DATA_ISOLATION_APPROVED](../.github/workflows/staging-search.yml#L48), [STAGING_R2_ACCOUNT_ID](../.github/workflows/staging-search.yml#L49), [STAGING_SEARCH_APPROVED_CANDIDATE_SHA256](../.github/workflows/staging-search.yml#L45), [STAGING_SEARCH_ENABLED](../.github/workflows/staging-search.yml#L43), [STAGING_SEARCH_RENEWAL_ENABLED](../.github/workflows/staging-search.yml#L44), [STAGING_SEARCH_SCHEDULE_ENABLED](../.github/workflows/staging-search.yml#L32), [STAGING_SEARCH_V4_APPROVED_RELEASE_ID](../.github/workflows/staging-search.yml#L47), [STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA](../.github/workflows/staging-search.yml#L46).
+Variable references (declared names only; values and activation unknown): [STAGING_DATA_ISOLATION_APPROVED](../.github/workflows/staging-search.yml#L55), [STAGING_R2_ACCOUNT_ID](../.github/workflows/staging-search.yml#L56), [STAGING_SEARCH_APPROVED_CANDIDATE_SHA256](../.github/workflows/staging-search.yml#L52), [STAGING_SEARCH_ENABLED](../.github/workflows/staging-search.yml#L50), [STAGING_SEARCH_RENEWAL_ENABLED](../.github/workflows/staging-search.yml#L51), [STAGING_SEARCH_SCHEDULE_ENABLED](../.github/workflows/staging-search.yml#L39), [STAGING_SEARCH_V4_APPROVED_RELEASE_ID](../.github/workflows/staging-search.yml#L54), [STAGING_SEARCH_V4_APPROVED_UI_SOURCE_SHA](../.github/workflows/staging-search.yml#L53).
 
 
 ## staging-shared-read-pin
@@ -1556,7 +1670,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
 | [wind100 / step 3](../.github/workflows/staging-wind100-recurring.yml#L67) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [wind100 / Checkout the exact ordinary core producer](../.github/workflows/staging-wind100-recurring.yml#L73) | <code>weatherx-hq/atmos</code> | <code>4ca4efd69bdd2b235de5ccd9a68e3bc74ef82a88</code> |
+| [wind100 / Checkout the exact ordinary core producer](../.github/workflows/staging-wind100-recurring.yml#L73) | <code>weatherx-hq/atmos</code> | <code>81e061dae0a03cc39e014dc08586bbd144823108</code> |
 | [wind100 / Checkout the exact reviewed point-only augmenter and publisher](../.github/workflows/staging-wind100-recurring.yml#L82) | <code>weatherx-hq/atmos</code> | <code>9174329db6ca8527569e67f14ef70406dedefb69</code> |
 
 Variable references (declared names only; values and activation unknown): [STAGING_DATA_ISOLATION_APPROVED](../.github/workflows/staging-wind100-recurring.yml#L40), [STAGING_R2_ACCOUNT_ID](../.github/workflows/staging-wind100-recurring.yml#L43), [STAGING_WIND100_CONTROLLER_SHA256](../.github/workflows/staging-wind100-recurring.yml#L42), [STAGING_WIND100_ENABLED](../.github/workflows/staging-wind100-recurring.yml#L41).
@@ -1660,7 +1774,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | --- | --- | --- |
 | [resolve / step 1](../.github/workflows/ui-release.yml#L62) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 | [promote / step 1](../.github/workflows/ui-release.yml#L100) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [promote / checkout reviewed release controller (not candidate source)](../.github/workflows/ui-release.yml#L102) | <code>weatherx-hq/atmos</code> | <code>${{ env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-wind100-onboarding-v2' &amp;&amp; '34efee01d95942145c6dfc79732278728cef0ddf' &#124;&#124; env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-beta-v1' &amp;&amp; 'b9db38dd22eed1da56c6c4dd4140480da7e89153' &#124;&#124; env.MODEL_SELECTION_SHA256 == 'production-account-billing-v1' &amp;&amp; '6fcec22638f6696be71daa2f2e974ebc4b24318e' &#124;&#124; '25c402db5149daa018e349a34a4beeba1f2dca45' }}</code> |
+| [promote / checkout reviewed release controller (not candidate source)](../.github/workflows/ui-release.yml#L102) | <code>weatherx-hq/atmos</code> | <code>${{ env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-wind100-onboarding-v2' &amp;&amp; '78e1cf76af49b8cc26dd06e66beb31d28f27df99' &#124;&#124; env.MODEL_SELECTION_SHA256 == 'production-account-ru-kk-beta-v1' &amp;&amp; 'b9db38dd22eed1da56c6c4dd4140480da7e89153' &#124;&#124; env.MODEL_SELECTION_SHA256 == 'production-account-billing-v1' &amp;&amp; '6fcec22638f6696be71daa2f2e974ebc4b24318e' &#124;&#124; '25c402db5149daa018e349a34a4beeba1f2dca45' }}</code> |
 
 Variable references (declared names only; values and activation unknown): [UI_AUTO_PROMOTE_ENABLED](../.github/workflows/ui-release.yml#L9), [UI_AUTO_PROMOTE_PROFILE](../.github/workflows/ui-release.yml#L9), [UI_DEPLOYMENT_HOLD_UNTIL](../.github/workflows/ui-release.yml#L91), [UI_ISOLATION_APPROVED](../.github/workflows/ui-release.yml#L90), [UI_PAGES_CONFIG_SHA256](../.github/workflows/ui-release.yml#L148), [UI_RELEASES_ENABLED](../.github/workflows/ui-release.yml#L89).
 
@@ -1721,12 +1835,12 @@ Checkout declarations (not a claim of approval or checkout success):
 | [profile / step 1](../.github/workflows/ui-staging.yml#L41) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 | [atmos-evidence / step 1](../.github/workflows/ui-staging.yml#L105) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 | [build / step 2](../.github/workflows/ui-staging.yml#L152) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [build / checkout reviewed release controller](../.github/workflows/ui-staging.yml#L154) | <code>weatherx-hq/atmos</code> | <code>${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2' &amp;&amp; '34efee01d95942145c6dfc79732278728cef0ddf' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' &amp;&amp; 'b9db38dd22eed1da56c6c4dd4140480da7e89153' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'production-account-billing-v1' &amp;&amp; '6fcec22638f6696be71daa2f2e974ebc4b24318e' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'none' &amp;&amp; '25c402db5149daa018e349a34a4beeba1f2dca45' &#124;&#124; '4dafd26387d5917604deb7379a8d45a994fc5b67' }}</code> |
+| [build / checkout reviewed release controller](../.github/workflows/ui-staging.yml#L154) | <code>weatherx-hq/atmos</code> | <code>${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2' &amp;&amp; '78e1cf76af49b8cc26dd06e66beb31d28f27df99' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' &amp;&amp; 'b9db38dd22eed1da56c6c4dd4140480da7e89153' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'production-account-billing-v1' &amp;&amp; '6fcec22638f6696be71daa2f2e974ebc4b24318e' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'none' &amp;&amp; '25c402db5149daa018e349a34a4beeba1f2dca45' &#124;&#124; '4dafd26387d5917604deb7379a8d45a994fc5b67' }}</code> |
 | [build / checkout exact candidate Atmos source](../.github/workflows/ui-staging.yml#L185) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmos_sha }}</code> |
 | [app-tests / step 2](../.github/workflows/ui-staging.yml#L286) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 | [app-tests / checkout exact app test source](../.github/workflows/ui-staging.yml#L288) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmos_sha }}</code> |
 | [qualify / step 1](../.github/workflows/ui-staging.yml#L380) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [qualify / checkout pinned controller, NOT candidate source](../.github/workflows/ui-staging.yml#L382) | <code>weatherx-hq/atmos</code> | <code>${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2' &amp;&amp; '34efee01d95942145c6dfc79732278728cef0ddf' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' &amp;&amp; 'b9db38dd22eed1da56c6c4dd4140480da7e89153' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'production-account-billing-v1' &amp;&amp; '6fcec22638f6696be71daa2f2e974ebc4b24318e' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'none' &amp;&amp; '25c402db5149daa018e349a34a4beeba1f2dca45' &#124;&#124; '4dafd26387d5917604deb7379a8d45a994fc5b67' }}</code> |
+| [qualify / checkout pinned controller, NOT candidate source](../.github/workflows/ui-staging.yml#L382) | <code>weatherx-hq/atmos</code> | <code>${{ needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-wind100-onboarding-v2' &amp;&amp; '78e1cf76af49b8cc26dd06e66beb31d28f27df99' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'production-account-ru-kk-beta-v1' &amp;&amp; 'b9db38dd22eed1da56c6c4dd4140480da7e89153' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'production-account-billing-v1' &amp;&amp; '6fcec22638f6696be71daa2f2e974ebc4b24318e' &#124;&#124; needs.profile.outputs.model_selection_sha256 == 'none' &amp;&amp; '25c402db5149daa018e349a34a4beeba1f2dca45' &#124;&#124; '4dafd26387d5917604deb7379a8d45a994fc5b67' }}</code> |
 
 Variable references (declared names only; values and activation unknown): [FUSION_CALIBRATION_RUNTIME_ENABLED](../.github/workflows/ui-staging.yml#L134), [STAGING_WIND100_UI_CATALOG_ID](../.github/workflows/ui-staging.yml#L59), [STAGING_WIND100_UI_DYNAMIC](../.github/workflows/ui-staging.yml#L62), [STAGING_WIND100_UI_ENABLED](../.github/workflows/ui-staging.yml#L58), [STAGING_WIND100_UI_RUN_ID](../.github/workflows/ui-staging.yml#L60), [STAGING_WIND100_UI_SELECTION_SHA256](../.github/workflows/ui-staging.yml#L61), [UI_AUTO_PROMOTE_ENABLED](../.github/workflows/ui-staging.yml#L49), [UI_AUTO_PROMOTE_PROFILE](../.github/workflows/ui-staging.yml#L50), [UI_BUILDS_ENABLED](../.github/workflows/ui-staging.yml#L125), [UI_BUILD_PUBLIC_KEY](../.github/workflows/ui-staging.yml#L126), [UI_DEPLOYMENT_HOLD_UNTIL](../.github/workflows/ui-staging.yml#L364), [UI_ISOLATION_APPROVED](../.github/workflows/ui-staging.yml#L363), [UI_PAGES_CONFIG_SHA256](../.github/workflows/ui-staging.yml#L416), [UI_PRODUCTION_ACCOUNT_PROFILE_APPROVED](../.github/workflows/ui-staging.yml#L55), [UI_PUBLIC_COMBINED_PROFILE_APPROVED](../.github/workflows/ui-staging.yml#L57), [UI_PUBLIC_LOCALE_BETA_PROFILE_APPROVED](../.github/workflows/ui-staging.yml#L56), [UI_RELEASES_ENABLED](../.github/workflows/ui-staging.yml#L362), [UI_STAGING_ACCOUNT_ID](../.github/workflows/ui-staging.yml#L415), [UI_STAGING_ACCOUNT_PROFILE_APPROVED](../.github/workflows/ui-staging.yml#L54), [UI_STAGING_CORE_PROFILE_APPROVED](../.github/workflows/ui-staging.yml#L52), [UI_STAGING_MODEL_SELECTION_APPROVED_SHA256](../.github/workflows/ui-staging.yml#L51), [UI_STAGING_STATIC_COMPRESSION_APPROVED](../.github/workflows/ui-staging.yml#L53).
 

@@ -1,11 +1,9 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { checkInventory, generateInventory, OUTPUT, parseWorkflow, ROOT, validateRegistry } from '../tools/workflow-inventory.mjs';
-import { deployPlan, schedulerChanged } from '../tools/scheduler-deploy-plan.mjs';
 
 const path = '.github/workflows/example.yml';
 const row = { id: 'example', path, family: 'models', purpose: 'Example navigation.',
@@ -162,37 +160,13 @@ test('scheduler CI runs inventory checks and selects all workflow changes and me
   assert.equal(data.jobs.scheduler.steps.find(step => step.run === 'npm run check --prefix scheduler').run, 'npm run check --prefix scheduler');
 });
 
-test('actual inventory paths and its isolated dependency package leave the scheduler deployment classifier false', async t => {
-  const root = await mkdtemp(join(tmpdir(), 'weatherx-inventory-deploy-boundary-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: 'pipe' }).trim();
-  const commit = () => { git('add', '-A'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture'); return git('rev-parse', 'HEAD'); };
-  const copy = async path => {
-    await mkdir(join(root, path, '..'), { recursive: true });
-    await writeFile(join(root, path), await readFile(join(ROOT, path)));
-  };
-  git('init', '-q');
-  for (const path of ['scheduler/package.json', 'scheduler/package-lock.json', 'scheduler/src/index.ts', 'scheduler/wrangler.jsonc']) await copy(path);
-  const before = commit();
-  const metadataPaths = ['ops/workflows.json', 'tools/workflow-inventory.mjs', 'tools/workflow-timing.mjs',
-    'tools/inventory/package.json', 'tools/inventory/package-lock.json', 'tools/inventory/.gitignore',
-    'tests/workflow-inventory.mjs', 'tests/workflow-timing.mjs',
-    'docs/WORKFLOWS.md', 'docs/WORKFLOW_OPERATIONS.md', 'README.md', '.github/workflows/scheduler-ci.yml'];
-  for (const path of metadataPaths) await copy(path);
-  const after = commit();
-  assert.equal(schedulerChanged(before, after, root), false);
-  assert.equal(deployPlan('push', { ref: 'refs/heads/main', before, after }, after,
-    (a, b) => schedulerChanged(a, b, root)).deploy, false);
+test('inventory metadata and its isolated parser can never deploy the scheduler', async () => {
+  // The scheduler deploy is manual-only (plan, then a compare-and-swap release), so no metadata or
+  // inventory commit can start it; the parser dependency stays out of the deployed package.
   const tooling = JSON.parse(await readFile(join(ROOT, 'tools/inventory/package.json'), 'utf8'));
   const scheduler = JSON.parse(await readFile(join(ROOT, 'scheduler/package.json'), 'utf8'));
   assert.equal(tooling.devDependencies.yaml, '2.9.1');
   assert.equal(scheduler.devDependencies.yaml, undefined, 'inventory parser must not change the deployed scheduler dependency tree');
   const deploy = parseWorkflow(await readFile(join(ROOT, '.github/workflows/scheduler-deploy.yml'), 'utf8'), 'scheduler-deploy.yml').data;
-  assert.deepEqual(deploy.on.push.paths, ['.github/workflows/catalog-bake.yml', '.github/workflows/scheduler-deploy.yml', 'scheduler/**']);
-  // Recreate the reviewed regression: the same parser dependency placed in the
-  // scheduler package must still trigger the unchanged deployment classifier.
-  scheduler.devDependencies.yaml = tooling.devDependencies.yaml;
-  await writeFile(join(root, 'scheduler/package.json'), JSON.stringify(scheduler));
-  const unsafe = commit();
-  assert.equal(schedulerChanged(after, unsafe, root), true);
+  assert.deepEqual(Object.keys(deploy.on), ['workflow_dispatch']);
 });

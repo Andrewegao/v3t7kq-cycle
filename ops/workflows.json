@@ -5,7 +5,7 @@
       "id": "bake",
       "path": ".github/workflows/bake.yml",
       "family": "models",
-      "purpose": "Collect independent model inputs and assemble the whole-maintenance fallback.",
+      "purpose": "Collect independent model inputs and assemble the whole-maintenance fallback; dispatched on time by the scheduler Worker at 35 2,8,14,20 UTC, the GitHub cron is the fallback.",
       "subsystem": "Model collection",
       "lifecycle": "recurring",
       "runbook": "docs/single-model-refresh.md"
@@ -140,7 +140,7 @@
       "id": "fusion-issue",
       "path": ".github/workflows/fusion-issue.yml",
       "family": "maintenance",
-      "purpose": "Record source-bound Fusion forecasts with canary/full completeness, exact archive readback, and a complete-network archive manifest.",
+      "purpose": "Record source-bound Fusion forecasts with canary/full completeness, exact archive readback, and a complete-network archive manifest; dispatched by the scheduler Worker (caller=scheduler) every 6 h.",
       "subsystem": "Fusion issuance",
       "lifecycle": "recurring",
       "runbook": "docs/WORKFLOW_OPERATIONS.md"
@@ -158,10 +158,19 @@
       "id": "gdacs-feed-release",
       "path": ".github/workflows/gdacs-feed-release.yml",
       "family": "releases",
-      "purpose": "Release the isolated GDACS route through guarded verification and recovery.",
+      "purpose": "One-time 2026-08-31 bootstrap of the isolated GDACS repair Worker and its routes; never re-run (its routes are retired by gdacs-route-retire).",
       "subsystem": "Hazard feed",
       "lifecycle": "manual-supported",
-      "runbook": "docs/WORKFLOW_OPERATIONS.md"
+      "runbook": "docs/platform-production-feed-routes.md"
+    },
+    {
+      "id": "gdacs-route-retire",
+      "path": ".github/workflows/gdacs-route-retire.yml",
+      "family": "releases",
+      "purpose": "Plan, then detach the four GDACS repair Worker routes so the platform Worker serves /api/gdacs/* and /api/tc/*; verify live, re-attach on failure.",
+      "subsystem": "Hazard feed",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/platform-production-feed-routes.md"
     },
     {
       "id": "hydrology",
@@ -257,7 +266,7 @@
       "id": "scheduler-deploy",
       "path": ".github/workflows/scheduler-deploy.yml",
       "family": "control-plane",
-      "purpose": "Deploy and verify the selected scheduler revision through existing guards.",
+      "purpose": "Plan, then compare-and-swap release the scheduler Worker code and cron triggers, verify the live readback, and restore the predecessor on failure. Manual only.",
       "subsystem": "Scheduler",
       "lifecycle": "manual-supported",
       "runbook": "scheduler/README.md"
@@ -344,12 +353,21 @@
       "runbook": "docs/STAGING_MODEL_COMPONENTS.md"
     },
     {
+      "id": "production-place-renewal",
+      "path": ".github/workflows/production-place-renewal.yml",
+      "family": "maintenance",
+      "purpose": "Renew production NOAA tide predictions daily as the places-tides catalog component, reusing the staging-qualified collector.",
+      "subsystem": "Places",
+      "lifecycle": "recurring",
+      "runbook": "docs/production-place-renewal.md"
+    },
+    {
       "id": "staging-place-renewal",
       "path": ".github/workflows/staging-place-renewal.yml",
       "family": "staging",
-      "purpose": "Renew the reviewed staging place data through the existing controller.",
+      "purpose": "Renew the reviewed staging place data through the existing controller; dispatched by the scheduler Worker on the policy slots.",
       "subsystem": "Places",
-      "lifecycle": "manual-supported",
+      "lifecycle": "recurring",
       "runbook": "docs/staging-place-renewal-plan.md"
     },
     {
@@ -374,9 +392,9 @@
       "id": "staging-search",
       "path": ".github/workflows/staging-search.yml",
       "family": "staging",
-      "purpose": "Prepare isolated search data for staging qualification.",
+      "purpose": "Prepare isolated search data for staging qualification and renew its lease; the scheduler Worker dispatches the renewal every 6 h.",
       "subsystem": "Search",
-      "lifecycle": "manual-supported",
+      "lifecycle": "recurring",
       "runbook": "docs/staging-search.md"
     },
     {
@@ -513,6 +531,24 @@
       "subsystem": "Production platform",
       "lifecycle": "manual-supported",
       "runbook": "docs/platform-wind100-worker-release.md"
+    },
+    {
+      "id": "platform-worker-production-release",
+      "path": ".github/workflows/platform-worker-production-release.yml",
+      "family": "releases",
+      "purpose": "Plan, then release an exact Atmos master SHA as the production platform Worker (code only, restore on failure).",
+      "subsystem": "Production platform",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/platform-worker-production-release.md"
+    },
+    {
+      "id": "road-production-release",
+      "path": ".github/workflows/road-production-release.yml",
+      "family": "releases",
+      "purpose": "Build, reseal and publish an exact Atmos master SHA to road.weatherx.org through the Atmos release guard.",
+      "subsystem": "Road product",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/road-production-release.md"
     },
     {
       "id": "platform-production-feed-routes",

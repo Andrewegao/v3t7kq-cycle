@@ -91,7 +91,7 @@
       ]
     },
     {
-      "pin": "34efee01d95942145c6dfc79732278728cef0ddf",
+      "pin": "78e1cf76af49b8cc26dd06e66beb31d28f27df99",
       "files": [
         "app/e2e/layer-switch-surface.mjs",
         "app/e2e/layer-switch-tint.mjs",
@@ -122,14 +122,14 @@
         "pngjs"
       ],
       "releaseLayerFiles": {
-        "app/e2e/layer-switch-tint.mjs": "df65cf5409c67f0001a6cbf5edf7847c0d1798a2bf437714b9035b06d8d2c67a",
-        "app/e2e/layer-switch-surface.mjs": "441de2a52996646a8540a6df2f7f346c143f6efcd41daf3d9ab4c6ddf4ca9809"
+        "app/e2e/layer-switch-tint.mjs": "7f4acb74f23d69c2a38c702a8a5e9c532e666827b833695fa6a55f71278d98f3",
+        "app/e2e/layer-switch-surface.mjs": "067e97b7203304e78715980098940bc6c63337e60ec89d529e6288c014582265"
       }
     }
   ],
   "stagingBuild": {
     "profile": "production-account-ru-kk-wind100-onboarding-v2",
-    "pin": "34efee01d95942145c6dfc79732278728cef0ddf",
+    "pin": "78e1cf76af49b8cc26dd06e66beb31d28f27df99",
     "paths": [
       ".gitignore",
       "platform/edge/package.json",
@@ -137,6 +137,6 @@
       "ops/release/build-release-receipt.mjs"
     ],
     "coneMode": false,
-    "provenance": "Merged Atmos master head 04:27Z source 34efee01d95942145c6dfc79732278728cef0ddf, tree 7fc636de41bbaf581aa2159f978aa838b94fc6fe, merged at 2026-10-08T23:16:17-05:00 (atmos master head at pin time). Supersedes the 9ee63cb2638d39b0c99b4fa7a508447e17d775d5 pin of the same release attempt, which was never qualified. Relative to 9ee63cb2 master advanced by the owner's latest merge; see the PR for the delta. Run 37882729296 for 9ee63cb2 passed app tests and failed only the local layer-switch-tint paint gate on a timeout (Temperature did not paint before Wind ABA) on bytes identical to run 37871478987, which passed that gate. None of the 22 qualification inventory files, the four sparse build paths, the two release layer harnesses or the 43 account/onboarding sources changed relative to 9ee63cb2638d39b0c99b4fa7a508447e17d775d5; relative to the last qualified pin b3f63183dbcde01e388fda7720726cc53f28134b (PR #486) the inventory delta is unchanged from the #504 admission (.gitignore, app/package.json and lockfile, platform/edge/package.json and lockfile, ops/release/test-guard-pages-deploy.mjs). The production platform Worker is not part of this UI candidate and is not deployed by it. Fresh controller CI, current-master/clean-checkout admission and one new exact-source guarded staging run remain required; no deployment, performance or memory completion is asserted. See docs/ui-public-combined.md."
+    "provenance": "Merged Atmos master head 04:27Z source 78e1cf76af49b8cc26dd06e66beb31d28f27df99, tree 7fc636de41bbaf581aa2159f978aa838b94fc6fe, merged at 2026-10-08T23:16:17-05:00 (atmos master head at pin time). Supersedes the 9ee63cb2638d39b0c99b4fa7a508447e17d775d5 pin of the same release attempt, which was never qualified. Relative to 9ee63cb2 master advanced by the owner's latest merge; see the PR for the delta. Run 37882729296 for 9ee63cb2 passed app tests and failed only the local layer-switch-tint paint gate on a timeout (Temperature did not paint before Wind ABA) on bytes identical to run 37871478987, which passed that gate. None of the 22 qualification inventory files, the four sparse build paths, the two release layer harnesses or the 43 account/onboarding sources changed relative to 9ee63cb2638d39b0c99b4fa7a508447e17d775d5; relative to the last qualified pin b3f63183dbcde01e388fda7720726cc53f28134b (PR #486) the inventory delta is unchanged from the #504 admission (.gitignore, app/package.json and lockfile, platform/edge/package.json and lockfile, ops/release/test-guard-pages-deploy.mjs). The production platform Worker is not part of this UI candidate and is not deployed by it. Fresh controller CI, current-master/clean-checkout admission and one new exact-source guarded staging run remain required; no deployment, performance or memory completion is asserted. See docs/ui-public-combined.md."
   }
 }

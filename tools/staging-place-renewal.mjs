@@ -186,15 +186,15 @@ function validateCollectorBase(value, family, status, required, optional = []) {
   assert.equal(value.status, status); assert.equal(value.family, family);
 }
 function validateTideCounts(value, { success, suppressedResume = false }) {
-  assert.equal(boundedInteger(value.rosterStationCount, 5000), 1256);
-  assert.equal(boundedInteger(value.requiredStationCount, 5000), 1251);
+  assert.equal(boundedInteger(value.rosterStationCount, 5000), 1260);
+  assert.equal(boundedInteger(value.requiredStationCount, 5000), 1255);
   const available = boundedInteger(value.availableStationCount, 5000);
-  assert(success ? available >= 1251 && available <= 1256 : available > 0 && available < 1251,
+  assert(success ? available >= 1255 && available <= 1260 : available > 0 && available < 1255,
     'invalid tide availability');
   const resumes = boundedInteger(value.resumeAttempts, 1);
   if (resumes === 1 || suppressedResume) {
     const first = boundedInteger(value.firstPassAvailableStationCount, 5000);
-    assert(first > 0 && first < 1251, 'invalid first tide availability');
+    assert(first > 0 && first < 1255, 'invalid first tide availability');
     if (suppressedResume) assert.equal(first, available, 'invalid suppressed tide resume counts');
     value.firstPassRequestCounts = validatedRequestCounts(value.firstPassRequestCounts);
     assert.equal(value.firstPassRequestCounts.pacerStopped, suppressedResume, 'invalid first-pass pacer state');
@@ -248,7 +248,7 @@ function parseCollectorFailure(output, family) {
     assert.equal(family, 'tides');
     const diagnostic = value.stationDiagnostics;
     exactKeys(diagnostic, ['failedStationCount', 'truncated', 'stations']);
-    const count = boundedInteger(diagnostic.failedStationCount, 1256);
+    const count = boundedInteger(diagnostic.failedStationCount, 1260);
     assert.equal(diagnostic.truncated, count > 32);
     assert(Array.isArray(diagnostic.stations) && diagnostic.stations.length === Math.min(count, 32));
     let previous = '';

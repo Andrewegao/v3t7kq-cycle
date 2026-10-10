@@ -35,7 +35,7 @@ export function placesGate(env) {
 }
 async function boundedJSON(path, max) { assert.equal(await realpath(path), path); const stat = await lstat(path); assert(stat.isFile() && stat.nlink === 1 && stat.size <= max); const body = await readFile(path); assert(body.length <= max); return JSON.parse(body); }
 export function proofScopeArguments(kind, evidence) {
-  if (kind === 'tides') { assert.equal(evidence?.kind, 'tide-checkpoint'); return ['--scope', 'staging-partial', '--min-available-stations', '1251']; }
+  if (kind === 'tides') { assert.equal(evidence?.kind, 'tide-checkpoint'); return ['--scope', 'staging-partial', '--min-available-stations', '1255']; }
   assert(kind === 'surf' || kind === 'paragliding');
   assert.equal(evidence?.kind, kind === 'surf' ? 'surf-stage' : 'paragliding-snapshot');
   const primary = evidence.files.find(file => file.path === (kind === 'surf' ? 'stage.json' : 'all-sites.json')); assert(primary && SHA.test(primary.sha256));
