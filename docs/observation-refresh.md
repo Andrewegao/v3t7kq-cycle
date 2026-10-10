@@ -48,6 +48,7 @@ Moving the pin always requires these protected values to change at the same time
 - `production` environment variable `CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA` = the new declared SHA (model publishers and this lane).
 - `data-staging` environment variable `STAGING_WIND100_CONTROLLER_SHA256` = `node -e "import('./tools/staging-wind100.mjs').then(m=>console.log(m.controllerDigest()))"` at the merged commit (the policy's `coreSourceSha` is in that digest), only when the staging Wind100 lane is enabled.
 - `data-production-wind100` variables `PRODUCTION_WIND100_CONTROLLER_SHA256` and `PRODUCTION_WIND100_GC_READY_SHA256`, and `data-production-wind100-cleanup` variable `PRODUCTION_WIND100_GC_CONTROLLER_SHA256` = the production controller digest (`node tools/production-wind100.mjs digest` at the merged commit; it also covers `bake.yml`), only when that lane is enabled.
+- `production` variable `PRODUCTION_PLACES_RENEWAL_CONTROLLER_SHA256` = `node tools/production-place-renewal.mjs digest` at the merged commit (the workflow's publisher pin is in that digest), only when `PRODUCTION_PLACES_RENEWAL_ENABLED` is `true` ([production place renewal](production-place-renewal.md)).
 
 ## Owner controls
 

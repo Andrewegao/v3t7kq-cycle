@@ -91,6 +91,7 @@ describe('Cloudflare scheduler dispatch bridge', () => {
     ['17 */6 * * *', 'staging-search.yml', { action: 'renew', caller: 'scheduler' }, { kind: 'staging-search', action: 'renew' }],
     ['37 1,7,13,19 * * *', 'staging-place-renewal.yml', { family: 'surf' }, { kind: 'place-renewal', family: 'surf' }],
     ['47 5,17 * * *', 'staging-place-renewal.yml', { family: 'all' }, { kind: 'place-renewal', family: 'all' }],
+    ['52 9 * * *', 'production-place-renewal.yml', { family: 'tides', caller: 'scheduler' }, { kind: 'production-place-renewal', family: 'tides' }],
   ])('maps %s to its fixed workflow %s and schedule-equivalent inputs', async (cron, workflow, inputs, result) => {
     const fetcher = github(() => runs([]), dispatched(77));
     await expect(dispatchForCron(cron, env, fetcher, undefined, TICK)).resolves.toEqual({ ...result, runId: 77, dedupe: 'clear' });

@@ -53,6 +53,10 @@
     {
       "path": ".github/workflows/cams-ingest.yml",
       "occurrences": 2
+    },
+    {
+      "path": ".github/workflows/production-place-renewal.yml",
+      "occurrences": 2
     }
   ],
   "otherAtmosCommits": {
@@ -161,6 +165,7 @@
         "tools/staging-search-source.mjs"
       ],
       "681deba659e7faa9600e25e3ec7f578e0fcb5511": [
+        "tools/production-place-renewal-policy.json",
         "tools/staging-place-renewal-policy.json"
       ],
       "f23664837274fc06a4a94b9bb0fc8d7fa1ee8c58": [

@@ -9,7 +9,9 @@
 // 2026-10-07 because NOAA CO-OPS now lists 1260 reference stations against the frozen
 // 1256-station roster contract (`tools/staging-place-renewal.mjs`). A staging-only lease can
 // not stand in for proof that the shared data edge is healthy, so the probe moved to a route
-// that staging reads from production. Production verification is unchanged.
+// that staging reads from production. Since 2026-10-10 production verification probes the same
+// route: production tides are the places-tides catalog component (docs/production-place-renewal.md),
+// which carries X-WeatherX-Catalog, not X-WeatherX-Release.
 import assert from 'node:assert/strict';
 import {STAGING_ORIGIN} from './ui-staging-models.mjs';
 

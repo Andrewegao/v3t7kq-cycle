@@ -1,6 +1,6 @@
 import {
   ARCHIVE_CRON, CAMS_CRON, DEDUPE_LOOKBACK_MS, FUSION_ISSUE_CRON, GLOFAS_CRON, HRRR_CRON, PLACE_DIRECTORY_CRON,
-  PLACE_SURF_CRON, SLOW_CRON, STAGING_SEARCH_CRON, WHOLE_BAKE_CRON,
+  PLACE_SURF_CRON, PRODUCTION_PLACE_CRON, SLOW_CRON, STAGING_SEARCH_CRON, WHOLE_BAKE_CRON,
 } from './schedules';
 const MAX_ATTEMPTS = 4;
 const MAX_ERROR_BYTES = 4_096;
@@ -12,7 +12,7 @@ type ModelSelection = 'hrrr' | 'slow';
 type EnergyFamily = 'glofas' | 'cams';
 type PlaceFamily = 'surf' | 'all';
 type Dedupe = 'clear' | 'unreadable';
-type DedupedLane = 'whole-bake' | 'fusion-issue' | 'staging-search' | 'place-renewal' | 'energy-ingest';
+type DedupedLane = 'whole-bake' | 'fusion-issue' | 'staging-search' | 'place-renewal' | 'production-place-renewal' | 'energy-ingest';
 type DispatchResult =
   | { kind: 'catalog'; model: ModelSelection; runId: number | null }
   | { kind: 'satellite-archive'; policy: 'hourly-tail-v1'; runId: number | null }
@@ -20,6 +20,7 @@ type DispatchResult =
   | { kind: 'fusion-issue'; scope: 'full'; runId: number | null; dedupe: Dedupe }
   | { kind: 'staging-search'; action: 'renew'; runId: number | null; dedupe: Dedupe }
   | { kind: 'place-renewal'; family: PlaceFamily; runId: number | null; dedupe: Dedupe }
+  | { kind: 'production-place-renewal'; family: 'tides'; runId: number | null; dedupe: Dedupe }
   | { kind: 'energy-ingest'; family: EnergyFamily; runId: number | null; dedupe: Dedupe }
   | { kind: 'skipped'; lane: DedupedLane; workflow: string; activeRunId: number; activeStatus: string; activeEvent: string };
 type DispatchPlan =
@@ -31,6 +32,7 @@ type DispatchPlan =
   | { kind: 'fusion-issue'; workflow: 'fusion-issue.yml'; inputs: { scope: 'full'; caller: 'scheduler' } }
   | { kind: 'staging-search'; workflow: 'staging-search.yml'; inputs: { action: 'renew'; caller: 'scheduler' } }
   | { kind: 'place-renewal'; workflow: 'staging-place-renewal.yml'; family: PlaceFamily; inputs: { family: PlaceFamily } }
+  | { kind: 'production-place-renewal'; workflow: 'production-place-renewal.yml'; inputs: { family: 'tides'; caller: 'scheduler' } }
   | { kind: 'energy-ingest'; workflow: 'glofas-ingest.yml' | 'cams-ingest.yml'; family: EnergyFamily; inputs: { caller: 'scheduler' } };
 type Fetcher = typeof fetch;
 type Sleeper = (delayMs: number) => Promise<void>;
@@ -83,6 +85,11 @@ function dispatchForSchedule(cron: string, env: CloudflareBindings): DispatchPla
     // so a second pending run can never replace it in the shared staging publication group).
     const family: PlaceFamily = cron === PLACE_SURF_CRON ? 'surf' : 'all';
     return { kind: 'place-renewal', workflow: 'staging-place-renewal.yml', family, inputs: { family } };
+  }
+  if (cron === PRODUCTION_PLACE_CRON) {
+    requireMainRef(env, 'production place renewal');
+    // caller=scheduler takes the scheduled path: PRODUCTION_PLACES_RENEWAL_ENABLED and the 20 h stand-aside.
+    return { kind: 'production-place-renewal', workflow: 'production-place-renewal.yml', inputs: { family: 'tides', caller: 'scheduler' } };
   }
   if (cron === GLOFAS_CRON || cron === CAMS_CRON) {
     const family: EnergyFamily = cron === GLOFAS_CRON ? 'glofas' : 'cams';
@@ -233,6 +240,7 @@ export async function dispatchForCron(
       if (plan.kind === 'whole-bake') return { kind: 'whole-bake', model: 'all', runId, dedupe };
       if (plan.kind === 'fusion-issue') return { kind: 'fusion-issue', scope: 'full', runId, dedupe };
       if (plan.kind === 'staging-search') return { kind: 'staging-search', action: 'renew', runId, dedupe };
+      if (plan.kind === 'production-place-renewal') return { kind: 'production-place-renewal', family: 'tides', runId, dedupe };
       return { kind: 'place-renewal', family: plan.family, runId, dedupe };
     }
 

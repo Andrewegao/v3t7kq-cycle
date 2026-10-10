@@ -16,6 +16,7 @@ GitHub's own `schedule` is a fallback, not a clock: from 2026-10-03 to 10-10 the
 | `17 */6 * * *` | staging search renewal | `staging-search.yml` `action=renew caller=scheduler` | the fallback's minute; 24 h lease renewed every 6 h, behind `STAGING_SEARCH_SCHEDULE_ENABLED` and `STAGING_SEARCH_RENEWAL_ENABLED` |
 | `37 1,7,13,19 * * *` | staging surf renewal | `staging-place-renewal.yml` `family=surf` | the policy's `surfSchedule` |
 | `47 5,17 * * *` | staging directory and tide renewal | `staging-place-renewal.yml` `family=all` | the policy's `directoryTideSchedule`; `all` keeps it one run (a second pending run would replace the first in the shared `weatherx-staging-publication` group) and adds a ~2 min surf renewal |
+| `52 9 * * *` | production tide renewal | `production-place-renewal.yml` `family=tides caller=scheduler` | the first of the policy's two daily fallback slots (`52 9,21`); scheduled path: `PRODUCTION_PLACES_RENEWAL_ENABLED`, and it stands aside when production already serves a dataset under 20 h old ([runbook](../docs/production-place-renewal.md)) |
 | `15 11,13 * * *` | Energy Desk GloFAS | `glofas-ingest.yml` `caller=scheduler` | daily forecast from ~10:45; 13:15 is the retry |
 | `40 0,10,12,22 * * *` | Energy Desk CAMS | `cams-ingest.yml` `caller=scheduler` | each 00/12 UTC run asked 10 h 40 min after init and again 2 h later |
 

@@ -344,6 +344,15 @@
       "runbook": "docs/STAGING_MODEL_COMPONENTS.md"
     },
     {
+      "id": "production-place-renewal",
+      "path": ".github/workflows/production-place-renewal.yml",
+      "family": "maintenance",
+      "purpose": "Renew production NOAA tide predictions daily as the places-tides catalog component, reusing the staging-qualified collector.",
+      "subsystem": "Places",
+      "lifecycle": "recurring",
+      "runbook": "docs/production-place-renewal.md"
+    },
+    {
       "id": "staging-place-renewal",
       "path": ".github/workflows/staging-place-renewal.yml",
       "family": "staging",

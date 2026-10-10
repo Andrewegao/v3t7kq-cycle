@@ -155,8 +155,10 @@ test('only a staging candidate receives the bounded degraded-cache convergence w
   assert.ok((Number(staging.RELEASE_GUARD_VERIFY_ATTEMPTS)-1)*Number(staging.RELEASE_GUARD_VERIFY_SLEEP_SECONDS)>=690);
   // Exact staging rollback probes the same shared-read route without the widened attempt window.
   assert.deepEqual(platformVerificationEnvironment('staging','rollback',base),{...base,EDGE_DATA_PROBE_PATH:'/data-atmos/airports/airports.json'});
+  // Production keeps the verifier's own attempt policy; only its data probe leaves the tides route,
+  // which the places-tides catalog component serves (docs/production-place-renewal.md).
   for(const [stage,phase] of [['production','candidate'],['production','rollback']]){
-    assert.equal(platformVerificationEnvironment(stage,phase,base),base);
+    assert.deepEqual(platformVerificationEnvironment(stage,phase,base),{...base,EDGE_DATA_PROBE_PATH:'/data-atmos/airports/airports.json'});
     assert.equal(base.RELEASE_GUARD_VERIFY_ATTEMPTS,undefined);
   }
   assert.equal(base.EDGE_DATA_PROBE_PATH,undefined);
