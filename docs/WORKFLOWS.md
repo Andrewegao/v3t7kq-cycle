@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `0a964168ae91928029027fe451e975ebaa09b4a24e720d849c0cf6b0d832038a`.
+Source digest (registry and workflow bytes): `89e3fb34da1496aee3e0b3bc68fa6d87b75af3a17aba5413c9d4261648851dab`.
 
 67 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -880,8 +880,8 @@ Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [release / step 2](../.github/workflows/platform-worker-production-release.yml#L57) | caller repository (implicit) | <code>${{ github.sha }}</code> |
-| [release / step 3](../.github/workflows/platform-worker-production-release.yml#L62) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmos_sha }}</code> |
+| [release / step 3](../.github/workflows/platform-worker-production-release.yml#L59) | caller repository (implicit) | <code>${{ github.sha }}</code> |
+| [release / step 4](../.github/workflows/platform-worker-production-release.yml#L64) | <code>weatherx-hq/atmos</code> | <code>${{ inputs.atmos_sha }}</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
 
