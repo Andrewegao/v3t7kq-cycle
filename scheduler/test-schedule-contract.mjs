@@ -98,7 +98,7 @@ assert.match(bakeWorkflow,
   /\(inputs\.staging_wind100_only != true && \(inputs\.model == '' \|\| inputs\.model == 'all' \|\| inputs\.model == 'ecmwf'\)\)/,
   'a model=all dispatch must run the ECMWF collector');
 assert.match(bakeWorkflow,
-  /staging-wind100:\n[\s\S]*?if: \$\{\{ needs\.core-ecmwf\.result == 'success' && \(inputs\.staging_wind100_only != true/,
+  /staging-wind100:\n[\s\S]*?if: \$\{\{ !cancelled\(\) && needs\.core-ecmwf\.result == 'success' && \(inputs\.staging_wind100_only != true/,
   'the whole bake still publishes staging Wind100 after the ECMWF collector');
 for (const [family, text] of [['glofas', glofasWorkflow], ['cams', camsWorkflow]]) {
   assert.ok(text.includes(`- cron: '${ENERGY_CRONS[family]}'`), `energy ${family} ingest must keep its GitHub-native schedule`);
