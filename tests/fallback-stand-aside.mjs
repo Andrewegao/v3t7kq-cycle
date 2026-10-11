@@ -102,8 +102,12 @@ function gatedJobs(jobs) {
     const job = jobs[id];
     const needs = [job.needs ?? []].flat();
     const condition = String(job.if ?? '');
+    // Gated when it reads the gate itself, when it inherits the gate's skip (no status function, so
+    // GitHub's implicit success() fails once an upstream job is skipped), or when it demands the
+    // success of a gated job (a skipped collector never reports 'success').
     const value = (needs.includes('fallback-gate') && condition.includes(GATE)) ||
-      (!STATUS.test(condition) && needs.some(gated));
+      (!STATUS.test(condition) && needs.some(gated)) ||
+      needs.some(need => gated(need) && condition.includes(`needs.${need}.result == 'success'`));
     memo.set(id, value);
     return value;
   };
@@ -195,6 +199,19 @@ test('every other job depends on the gate, and dispatched runs keep their condit
         assert.ok(STATUS.test(bare.slice(0, -` && ${GATE}`.length)), `${name}: ${id}`);
         assert.equal(needs.at(-1), 'fallback-gate');
       }
+    }
+  }
+});
+
+test('dispatched runs never inherit the skipped gate: every job past the gate carries a status function', () => {
+  // On workflow_dispatch the gate job itself is skipped. GitHub then skips every transitive dependant
+  // whose condition has no status function, because the implicit success() sees a skipped upstream job.
+  // 2026-10-11: the bake's publish-* and Wind100 jobs were skipped in three dispatched whole bakes this way.
+  for (const name of Object.keys(LANES)) {
+    const { jobs } = workflows[name].data;
+    for (const [id, job] of Object.entries(jobs)) {
+      if (id === 'fallback-gate') continue;
+      assert.match(String(job.if ?? ''), STATUS, `${name}: ${id} would be skipped on every dispatched run`);
     }
   }
 });
