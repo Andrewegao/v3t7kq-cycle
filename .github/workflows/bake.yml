@@ -96,7 +96,7 @@ jobs:
   production-wind100:
     name: production native 100m wind
     needs: core-ecmwf
-    if: ${{ !cancelled() && inputs.staging_wind100_only != true && (vars.PRODUCTION_WIND100_CALL_ENABLED == 'true' && needs.core-ecmwf.result == 'success' && inputs.recovery_run_id == '') }}
+    if: ${{ inputs.staging_wind100_only != true && (!cancelled() && vars.PRODUCTION_WIND100_CALL_ENABLED == 'true' && needs.core-ecmwf.result == 'success' && inputs.recovery_run_id == '') }}
     uses: ./.github/workflows/production-wind100-recurring.yml
     secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}",
       PRODUCTION_WIND100_R2_ACCESS_KEY_ID: "${{ secrets.PRODUCTION_WIND100_R2_ACCESS_KEY_ID }}",
@@ -173,7 +173,7 @@ jobs:
     secrets: { ATMOS_DEPLOY_KEY: "${{ secrets.ATMOS_DEPLOY_KEY }}" }
   publish-ecmwf:
     needs: core-ecmwf
-    if: ${{ !cancelled() && inputs.staging_wind100_only != true && (needs.core-ecmwf.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
+    if: ${{ inputs.staging_wind100_only != true && (!cancelled() && needs.core-ecmwf.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
     uses: ./.github/workflows/publish-current-model-production.yml
     with: { model: ecmwf, kind: core }
     secrets:
@@ -184,7 +184,7 @@ jobs:
       CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
   publish-gfs:
     needs: core-gfs
-    if: ${{ !cancelled() && inputs.staging_wind100_only != true && (needs.core-gfs.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
+    if: ${{ inputs.staging_wind100_only != true && (!cancelled() && needs.core-gfs.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
     uses: ./.github/workflows/publish-current-model-production.yml
     with: { model: gfs, kind: core }
     secrets:
@@ -195,7 +195,7 @@ jobs:
       CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
   publish-hrrr:
     needs: core-hrrr
-    if: ${{ !cancelled() && inputs.staging_wind100_only != true && (needs.core-hrrr.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
+    if: ${{ inputs.staging_wind100_only != true && (!cancelled() && needs.core-hrrr.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
     uses: ./.github/workflows/publish-current-model-production.yml
     with: { model: hrrr, kind: core }
     secrets:
@@ -206,7 +206,7 @@ jobs:
       CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
   publish-aifs:
     needs: core-aifs
-    if: ${{ !cancelled() && inputs.staging_wind100_only != true && (needs.core-aifs.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
+    if: ${{ inputs.staging_wind100_only != true && (!cancelled() && needs.core-aifs.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
     uses: ./.github/workflows/publish-current-model-production.yml
     with: { model: aifs, kind: core }
     secrets:
@@ -217,7 +217,7 @@ jobs:
       CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
   publish-icon:
     needs: regional-icon
-    if: ${{ !cancelled() && inputs.staging_wind100_only != true && (needs.regional-icon.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
+    if: ${{ inputs.staging_wind100_only != true && (!cancelled() && needs.regional-icon.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
     uses: ./.github/workflows/publish-current-model-production.yml
     with: { model: icon, kind: regional }
     secrets:
@@ -228,7 +228,7 @@ jobs:
       CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
   publish-hrdps:
     needs: regional-hrdps
-    if: ${{ !cancelled() && inputs.staging_wind100_only != true && (needs.regional-hrdps.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
+    if: ${{ inputs.staging_wind100_only != true && (!cancelled() && needs.regional-hrdps.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
     uses: ./.github/workflows/publish-current-model-production.yml
     with: { model: hrdps, kind: regional }
     secrets:
@@ -239,7 +239,7 @@ jobs:
       CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
   publish-arome-antilles:
     needs: regional-arome-antilles
-    if: ${{ !cancelled() && inputs.staging_wind100_only != true && (needs.regional-arome-antilles.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
+    if: ${{ inputs.staging_wind100_only != true && (!cancelled() && needs.regional-arome-antilles.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
     uses: ./.github/workflows/publish-current-model-production.yml
     with: { model: arome-antilles, kind: regional }
     secrets:
@@ -250,7 +250,7 @@ jobs:
       CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
   publish-hrrr-ak:
     needs: regional-hrrr-ak
-    if: ${{ !cancelled() && inputs.staging_wind100_only != true && (needs.regional-hrrr-ak.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
+    if: ${{ inputs.staging_wind100_only != true && (!cancelled() && needs.regional-hrrr-ak.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
     uses: ./.github/workflows/publish-current-model-production.yml
     with: { model: hrrr-ak, kind: regional }
     secrets:
@@ -261,7 +261,7 @@ jobs:
       CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
   publish-nam:
     needs: regional-nam
-    if: ${{ !cancelled() && inputs.staging_wind100_only != true && (needs.regional-nam.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
+    if: ${{ inputs.staging_wind100_only != true && (!cancelled() && needs.regional-nam.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
     uses: ./.github/workflows/publish-current-model-production.yml
     with: { model: nam, kind: regional }
     secrets:
@@ -272,7 +272,7 @@ jobs:
       CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
   publish-nam-hi:
     needs: regional-nam-hi
-    if: ${{ !cancelled() && inputs.staging_wind100_only != true && (needs.regional-nam-hi.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
+    if: ${{ inputs.staging_wind100_only != true && (!cancelled() && needs.regional-nam-hi.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
     uses: ./.github/workflows/publish-current-model-production.yml
     with: { model: nam-hi, kind: regional }
     secrets:
@@ -283,7 +283,7 @@ jobs:
       CATALOG_PROMOTION_KEY_PRODUCTION: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
   publish-nam-ak:
     needs: regional-nam-ak
-    if: ${{ !cancelled() && inputs.staging_wind100_only != true && (needs.regional-nam-ak.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
+    if: ${{ inputs.staging_wind100_only != true && (!cancelled() && needs.regional-nam-ak.result == 'success' && vars.CURRENT_RUN_COMPONENT_PUBLISH_ENABLED == 'true') }}
     uses: ./.github/workflows/publish-current-model-production.yml
     with: { model: nam-ak, kind: regional }
     secrets:
