@@ -55,7 +55,8 @@ jobs:
         run: |
           set -euo pipefail
           node cycle/tools/production-wind100-retention.mjs dry-run "$GITHUB_WORKSPACE/atmos" > "$RUNNER_TEMP/production-wind100-retention-plan.json"
-          node -e 'const p=JSON.parse(require("node:fs").readFileSync(process.argv[1]));console.log(JSON.stringify({planSha256:p.planSha256,pointerSha256:p.pointerSha256,candidates:p.candidates.map(x=>x.catalogId),objects:p.totalObjects}))' "$RUNNER_TEMP/production-wind100-retention-plan.json"
+          node -e 'const p=JSON.parse(require("node:fs").readFileSync(process.argv[1]));console.log(JSON.stringify({planSha256:p.planSha256,pointerSha256:p.pointerSha256,candidates:p.candidates.map(x=>x.catalogId),objects:p.totalObjects,skippedEmpty:p.skippedEmptyCatalogIds,refused:p.refusalReasons}))' "$RUNNER_TEMP/production-wind100-retention-plan.json"
+          node --input-type=module -e 'import { readFileSync, appendFileSync } from "node:fs"; import { retentionNotices } from "./cycle/tools/production-wind100-retention.mjs"; const n = retentionNotices(JSON.parse(readFileSync(process.argv[1]))); for (const w of n.warnings) console.log(`::warning title=Production Wind100 retention::${w}`); appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${n.summary}\n`)' "$RUNNER_TEMP/production-wind100-retention-plan.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: ${{ inputs.dry_run == true }}
         with:

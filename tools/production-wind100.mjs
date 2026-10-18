@@ -2,7 +2,7 @@
 // Production-only native Wind100 control. This file never promotes catalogs/current.json.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadCatalogValidator, qualifyPointPacks, readPolicy as readIntegrityPolicy,
@@ -14,6 +14,10 @@ const REPOSITORY = 'Andrewegao/v3t7kq-cycle';
 const BAKE_WORKFLOW = `${REPOSITORY}/.github/workflows/bake.yml@refs/heads/main`;
 const SOURCE = 'ECMWF IFS 0.25 degree direct open-data GRIB';
 const SHA = /^[a-f0-9]{64}$/;
+const COMMIT = /^[a-f0-9]{40}$/;
+const MAX_PREVIOUS_SOURCE_PINS = 8;
+// Warn while fewer than this many publications of the planned size still fit.
+export const HEADROOM_WARNING_PUBLICATIONS = 3;
 const RUN = /^\d{10}$/;
 const INVOCATION = /^[1-9]\d{0,19}-[1-9]\d{0,5}$/;
 const CATALOG = /^prod-wind100-recurring-[1-9]\d{0,19}-[1-9]\d{0,5}$/;
@@ -77,7 +81,7 @@ const catalogKeyFor = catalogId => `catalogs/snapshots/${catalogId}.json`;
 
 export function readProductionPolicy() {
   const value = JSON.parse(readFileSync(resolve(ROOT, 'tools/production-wind100-policy.json'), 'utf8'));
-  exact(value, ['schemaVersion', 'targetOrigin', 'model', 'sourceSha', 'coreSourceSha',
+  exact(value, ['schemaVersion', 'targetOrigin', 'model', 'sourceSha', 'previousSourceShas', 'coreSourceSha',
     'dataBucket', 'componentBucket', 'pointerKey', 'componentPrefix', 'catalogPrefix',
     'selectionPrefix', 'publicationMode', 'maximumComponentPrefixObjects',
     'freshnessHours', 'minimumForecastLeaseHours', 'retentionProfileStatus']);
@@ -85,6 +89,13 @@ export function readProductionPolicy() {
   assert.equal(value.schemaVersion, 1); assert.equal(value.targetOrigin, ORIGIN);
   assert.equal(value.model, 'ecmwf'); assert.equal(value.sourceSha, integrity.sourceSha);
   assert.equal(value.coreSourceSha, integrity.coreSourceSha);
+  // Earlier reviewed Wind100 pins whose entries may still sit in the pointer or its journal.
+  // New selections always carry the current sourceSha.
+  assert.ok(Array.isArray(value.previousSourceShas)
+    && value.previousSourceShas.length <= MAX_PREVIOUS_SOURCE_PINS);
+  for (const pin of value.previousSourceShas) assert.match(pin ?? '', COMMIT);
+  assert.equal(new Set(value.previousSourceShas).size, value.previousSourceShas.length);
+  assert.ok(!value.previousSourceShas.includes(value.sourceSha));
   assert.equal(value.dataBucket, DATA); assert.equal(value.componentBucket, COMPONENTS);
   assert.equal(value.pointerKey, POINTER_KEY); assert.equal(value.componentPrefix, COMPONENT_PREFIX);
   assert.equal(value.catalogPrefix, 'catalogs/snapshots/prod-wind100-recurring-');
@@ -225,7 +236,17 @@ function validateComponentMetadata(object) {
   assert.equal(object.contentEncoding, undefined);
 }
 
-export function validateSelection(value, now = Date.now(), policy = readProductionPolicy()) {
+// Prior pointer, journal and selection entries may carry an allowlisted earlier pin; a new
+// selection or activation must carry the current pin.
+function assertSourcePin(sourceSha, policy, allowPrevious) {
+  assert.ok(sourceSha === policy.sourceSha
+    || (allowPrevious && policy.previousSourceShas.includes(sourceSha)),
+  allowPrevious ? 'Wind100 entry source is neither the current nor an allowlisted previous pin'
+    : 'Wind100 entry source is not the current pin');
+}
+
+export function validateSelection(value, now = Date.now(), policy = readProductionPolicy(),
+  { allowPrevious = false } = {}) {
   exact(value, ['schemaVersion', 'kind', 'status', 'targetOrigin', 'model', 'runId', 'catalogId',
     'catalogSha256', 'sourceSha', 'inputSha256', 'invocation', 'qualificationCanonicalSha256',
     'initializedAt', 'freshUntil', 'createdAt', 'publicationMode', 'isolatedProductionCandidate',
@@ -234,7 +255,7 @@ export function validateSelection(value, now = Date.now(), policy = readProducti
   assert.equal(value.status, 'DATA_QUALIFIED_NOT_ACTIVATED'); assert.equal(value.targetOrigin, ORIGIN);
   assert.equal(value.model, 'ecmwf'); assert.equal(value.catalogId, catalogIdFor(value.invocation));
   assert.equal(value.publicationMode, policy.publicationMode);
-  assert.equal(value.sourceSha, policy.sourceSha);
+  assertSourcePin(value.sourceSha, policy, allowPrevious);
   for (const key of ['catalogSha256', 'inputSha256', 'qualificationCanonicalSha256']) assert.match(value[key], SHA);
   assert.equal(utc(value.initializedAt), runTime(value.runId));
   assert.ok(utc(value.createdAt) >= utc(value.initializedAt) && utc(value.createdAt) <= now);
@@ -244,15 +265,16 @@ export function validateSelection(value, now = Date.now(), policy = readProducti
   return value;
 }
 
-export function pointerEntry(selection, selectionSha256, now = Date.now()) {
-  validateSelection(selection, now); assert.match(selectionSha256 ?? '', SHA);
+export function pointerEntry(selection, selectionSha256, now = Date.now(),
+  { policy = readProductionPolicy(), allowPrevious = false } = {}) {
+  validateSelection(selection, now, policy, { allowPrevious }); assert.match(selectionSha256 ?? '', SHA);
   return { runId: selection.runId, catalogId: selection.catalogId,
     catalogSha256: selection.catalogSha256, selectionKey: selectionKeyFor(selection.catalogId),
     selectionSha256, sourceSha: selection.sourceSha, inputSha256: selection.inputSha256,
     initializedAt: selection.initializedAt, freshUntil: selection.freshUntil };
 }
 
-export function validatePointer(value, now = Date.now()) {
+export function validatePointer(value, now = Date.now(), policy = readProductionPolicy()) {
   exact(value, ['schemaVersion', 'kind', 'targetOrigin', 'updatedAt', 'entries']);
   assert.equal(value.schemaVersion, 1); assert.equal(value.kind, POINTER_KIND);
   assert.equal(value.targetOrigin, ORIGIN); assert.ok(utc(value.updatedAt) <= now);
@@ -264,7 +286,7 @@ export function validatePointer(value, now = Date.now()) {
     assert.match(entry.catalogId, CATALOG);
     assert.equal(entry.selectionKey, selectionKeyFor(entry.catalogId));
     for (const key of ['catalogSha256', 'selectionSha256', 'inputSha256']) assert.match(entry[key], SHA);
-    assert.equal(entry.sourceSha, readProductionPolicy().sourceSha);
+    assertSourcePin(entry.sourceSha, policy, true);
     const init = runTime(entry.runId);
     assert.equal(utc(entry.initializedAt), init); assert.ok(init < prior); prior = init;
     assert.ok(utc(entry.freshUntil) > init && utc(entry.freshUntil) <= init + 30 * 3_600_000);
@@ -272,10 +294,10 @@ export function validatePointer(value, now = Date.now()) {
   return value;
 }
 
-export function nextPointer(current, entry, now = Date.now()) {
+export function nextPointer(current, entry, now = Date.now(), policy = readProductionPolicy()) {
   assert.ok(utc(entry.freshUntil) > now + 6 * 3_600_000, 'candidate lacks activation lease');
   if (current) {
-    validatePointer(current, now);
+    validatePointer(current, now, policy);
     assert.ok(entry.runId >= current.entries[0].runId, 'model run regressed');
     assert.ok(now > utc(current.updatedAt), 'pointer timestamp must advance');
   }
@@ -284,7 +306,7 @@ export function nextPointer(current, entry, now = Date.now()) {
     .sort((a, b) => b.runId.localeCompare(a.runId)).slice(0, 2);
   const result = { schemaVersion: 1, kind: POINTER_KIND, targetOrigin: ORIGIN,
     updatedAt: new Date(now).toISOString(), entries };
-  return validatePointer(result, now);
+  return validatePointer(result, now, policy);
 }
 
 export const journalKeyFor = pointerSha256 => {
@@ -292,16 +314,16 @@ export const journalKeyFor = pointerSha256 => {
   return `${JOURNAL_PREFIX}${pointerSha256}.json`;
 };
 
-export function makePointerJournal(operation, nextBody, priorBody = null) {
+export function makePointerJournal(operation, nextBody, priorBody = null, policy = readProductionPolicy()) {
   assert.ok(['activate', 'rollback'].includes(operation));
   assert.ok(Buffer.isBuffer(nextBody) && nextBody.length > 0 && nextBody.length <= MAX_POINTER);
   assert.ok(priorBody == null || (Buffer.isBuffer(priorBody) && priorBody.length > 0
     && priorBody.length <= MAX_POINTER));
   const parsedNext = JSON.parse(nextBody);
-  const next = validatePointer(parsedNext, Date.parse(parsedNext.updatedAt));
-  const prior = priorBody ? validatePointer(JSON.parse(priorBody), Date.parse(next.updatedAt)) : null;
+  const next = validatePointer(parsedNext, Date.parse(parsedNext.updatedAt), policy);
+  const prior = priorBody ? validatePointer(JSON.parse(priorBody), Date.parse(next.updatedAt), policy) : null;
   if (operation === 'activate') {
-    assert.deepEqual(next, nextPointer(prior, next.entries[0], Date.parse(next.updatedAt)));
+    assert.deepEqual(next, nextPointer(prior, next.entries[0], Date.parse(next.updatedAt), policy));
   } else {
     assert.ok(prior && prior.entries.length === 2);
     assert.ok(utc(prior.entries[1].freshUntil) > Date.parse(next.updatedAt) + 6 * 3_600_000);
@@ -314,23 +336,22 @@ export function makePointerJournal(operation, nextBody, priorBody = null) {
     createdAt: next.updatedAt };
 }
 
-export function validatePointerJournal(journal, currentBody, now = Date.now()) {
+export function validatePointerJournal(journal, currentBody, now = Date.now(), policy = readProductionPolicy()) {
   exact(journal, ['schemaVersion', 'kind', 'operation', 'currentPointerSha256',
     'previousPointerSha256', 'previousPointerBodyBase64', 'createdAt']);
   assert.equal(journal.schemaVersion, 1); assert.equal(journal.kind, JOURNAL_KIND);
   assert.ok(Buffer.isBuffer(currentBody)); assert.equal(journal.currentPointerSha256, hash(currentBody));
-  const current = validatePointer(JSON.parse(currentBody), now);
+  const current = validatePointer(JSON.parse(currentBody), now, policy);
   assert.equal(journal.createdAt, current.updatedAt);
   const previousBody = journal.previousPointerBodyBase64 == null ? null
     : Buffer.from(journal.previousPointerBodyBase64, 'base64');
   assert.equal(journal.previousPointerSha256, previousBody ? hash(previousBody) : null);
-  assert.deepEqual(journal, makePointerJournal(journal.operation, currentBody, previousBody));
+  assert.deepEqual(journal, makePointerJournal(journal.operation, currentBody, previousBody, policy));
   return { current, previousBody, previous: previousBody ? JSON.parse(previousBody) : null };
 }
 
 export async function publishCandidate({ request, qualification, componentReceipt, io,
-  now = Date.now, catalogValidator }) {
-  const policy = readProductionPolicy();
+  now = Date.now, catalogValidator, policy = readProductionPolicy() }) {
   const q = validateQualification(qualification, request, now(), policy);
   assert.equal(typeof catalogValidator, 'function', 'exact Atmos catalog validator required');
   const catalogId = catalogIdFor(request.invocation);
@@ -356,14 +377,15 @@ export async function publishCandidate({ request, qualification, componentReceip
     createdAt: new Date(now()).toISOString(), publicationMode: policy.publicationMode,
     isolatedProductionCandidate: true, sharedReadPinChanged: false,
     productionWritten: true, activated: false };
-  validateSelection(selection, now());
+  validateSelection(selection, now(), policy);
   const selectionBody = Buffer.from(`${JSON.stringify(selection)}\n`);
   await io.immutable(DATA, selectionKeyFor(catalogId), selectionBody, { sha256: hash(selectionBody) });
   return selection;
 }
 
-async function verifySelected(selection, sha, io, catalogValidator, now) {
-  const entry = pointerEntry(selection, sha, now);
+async function verifySelected(selection, sha, io, catalogValidator, now,
+  { policy = readProductionPolicy(), allowPrevious = false } = {}) {
+  const entry = pointerEntry(selection, sha, now, { policy, allowPrevious });
   const selected = await io.get(DATA, entry.selectionKey, MAX_JSON);
   assert.ok(selected && hash(selected.body) === sha);
   assert.deepEqual(JSON.parse(selected.body), selection);
@@ -378,17 +400,18 @@ async function verifySelected(selection, sha, io, catalogValidator, now) {
 }
 
 export async function activateCandidate({ selection, selectionSha256, io, now = Date.now,
-  catalogValidator }) {
+  catalogValidator, policy = readProductionPolicy() }) {
   assert.equal(typeof catalogValidator, 'function');
-  const entry = await verifySelected(selection, selectionSha256, io, catalogValidator, now());
+  const entry = await verifySelected(selection, selectionSha256, io, catalogValidator, now(), { policy });
+  assert.equal(entry.sourceSha, policy.sourceSha, 'a new Wind100 activation must carry the current pin');
   assert.ok(utc(entry.freshUntil) > now() + 6 * 3_600_000);
   for (let attempt = 0; attempt < 4; attempt++) {
     const priorObject = await io.get(DATA, POINTER_KEY, MAX_POINTER);
-    const prior = priorObject ? validatePointer(JSON.parse(priorObject.body), now()) : null;
+    const prior = priorObject ? validatePointer(JSON.parse(priorObject.body), now(), policy) : null;
     if (prior?.entries.some(row => JSON.stringify(row) === JSON.stringify(entry))) return prior;
-    const next = nextPointer(prior, entry, now());
+    const next = nextPointer(prior, entry, now(), policy);
     const body = Buffer.from(`${JSON.stringify(next)}\n`);
-    const journal = makePointerJournal('activate', body, priorObject?.body ?? null);
+    const journal = makePointerJournal('activate', body, priorObject?.body ?? null, policy);
     const journalBody = Buffer.from(`${JSON.stringify(journal)}\n`);
     await io.immutable(DATA, journalKeyFor(journal.currentPointerSha256), journalBody,
       { sha256: hash(journalBody) });
@@ -400,26 +423,29 @@ export async function activateCandidate({ selection, selectionSha256, io, now = 
   throw Error('production Wind100 pointer changed during all bounded CAS attempts');
 }
 
-export async function findQualifiedInput({ runId, inputSha256, io, catalogValidator, now = Date.now }) {
+export async function findQualifiedInput({ runId, inputSha256, io, catalogValidator, now = Date.now,
+  policy = readProductionPolicy() }) {
   runTime(runId); assert.match(inputSha256 ?? '', SHA);
   const saved = await io.get(DATA, POINTER_KEY, MAX_POINTER);
   if (!saved) return { status: 'new-input', runId, inputSha256 };
-  const pointer = validatePointer(JSON.parse(saved.body), now());
-  const entry = pointer.entries.find(row => row.runId === runId && row.inputSha256 === inputSha256);
+  const pointer = validatePointer(JSON.parse(saved.body), now(), policy);
+  // An input selected under an earlier pin is republished under the current one.
+  const entry = pointer.entries.find(row => row.runId === runId && row.inputSha256 === inputSha256
+    && row.sourceSha === policy.sourceSha);
   if (!entry) return { status: 'new-input', runId, inputSha256 };
   const selected = await io.get(DATA, entry.selectionKey, MAX_JSON);
   assert.ok(selected && hash(selected.body) === entry.selectionSha256);
   const selection = JSON.parse(selected.body);
-  assert.deepEqual(pointerEntry(selection, entry.selectionSha256, now()), entry);
-  await verifySelected(selection, entry.selectionSha256, io, catalogValidator, now());
+  assert.deepEqual(pointerEntry(selection, entry.selectionSha256, now(), { policy }), entry);
+  await verifySelected(selection, entry.selectionSha256, io, catalogValidator, now(), { policy });
   return { status: 'unchanged', runId, inputSha256, catalogId: entry.catalogId,
     selectionSha256: entry.selectionSha256, freshUntil: entry.freshUntil };
 }
 
-export async function rollbackToPrior({ io, now = Date.now, catalogValidator }) {
+export async function rollbackToPrior({ io, now = Date.now, catalogValidator, policy = readProductionPolicy() }) {
   const observed = await io.get(DATA, POINTER_KEY, MAX_POINTER);
   assert.ok(observed, 'no production Wind100 pointer to roll back');
-  const pointer = validatePointer(JSON.parse(observed.body), now());
+  const pointer = validatePointer(JSON.parse(observed.body), now(), policy);
   assert.ok(now() > Date.parse(pointer.updatedAt), 'rollback pointer timestamp must advance');
   assert.equal(pointer.entries.length, 2, 'no prior selection to restore');
   const prior = pointer.entries[1];
@@ -427,11 +453,14 @@ export async function rollbackToPrior({ io, now = Date.now, catalogValidator }) 
     'prior selection lacks safe rollback lease');
   const selected = await io.get(DATA, prior.selectionKey, MAX_JSON);
   assert.ok(selected && hash(selected.body) === prior.selectionSha256);
-  await verifySelected(JSON.parse(selected.body), prior.selectionSha256, io, catalogValidator, now());
+  // Restoring a prior entry is not a new selection, so an allowlisted earlier pin may return.
+  await verifySelected(JSON.parse(selected.body), prior.selectionSha256, io, catalogValidator, now(),
+    { policy, allowPrevious: true });
   // One entry preserves newest-first order and cannot resurrect an expired run later.
-  const next = validatePointer({ ...pointer, updatedAt: new Date(now()).toISOString(), entries: [prior] }, now());
+  const next = validatePointer({ ...pointer, updatedAt: new Date(now()).toISOString(), entries: [prior] },
+    now(), policy);
   const body = Buffer.from(`${JSON.stringify(next)}\n`);
-  const journal = makePointerJournal('rollback', body, observed.body);
+  const journal = makePointerJournal('rollback', body, observed.body, policy);
   const journalBody = Buffer.from(`${JSON.stringify(journal)}\n`);
   await io.immutable(DATA, journalKeyFor(journal.currentPointerSha256), journalBody,
     { sha256: hash(journalBody) });
@@ -443,11 +472,27 @@ export async function rollbackToPrior({ io, now = Date.now, catalogValidator }) 
 
 export { sealedPointInputSha, verifySource };
 
-export function recurringPrefixCapacity(existingCount, qualification) {
-  assert.ok(Number.isSafeInteger(existingCount) && existingCount >= 0 && existingCount <= 50_000);
-  const planned = validateQualification(qualification, { invocation: qualification.invocation }).pointPacks.objectCount + 1;
-  assert.ok(existingCount + planned <= 50_000, 'production Wind100 component prefix lacks capacity');
-  return { existingObjects: existingCount, plannedObjects: planned, maximumObjects: 50_000 };
+export function recurringPrefixCapacity(existingCount, qualification, now = Date.now(),
+  policy = readProductionPolicy()) {
+  const maximum = policy.maximumComponentPrefixObjects;
+  assert.ok(Number.isSafeInteger(existingCount) && existingCount >= 0 && existingCount <= maximum,
+    `production Wind100 component prefix count ${existingCount} is outside 0..${maximum}`);
+  const planned = validateQualification(qualification, { invocation: qualification.invocation }, now, policy)
+    .pointPacks.objectCount + 1;
+  assert.ok(existingCount + planned <= maximum,
+    `production Wind100 component prefix lacks capacity: existing ${existingCount} + planned ${planned}`
+    + ` = ${existingCount + planned} > maximum ${maximum}`);
+  // Publications of this size that still fit, counting this one.
+  const headroomPublications = Math.floor((maximum - existingCount) / planned);
+  return { existingObjects: existingCount, plannedObjects: planned, maximumObjects: maximum,
+    headroomPublications };
+}
+
+export function capacityWarning(capacity, label = 'production Wind100 component prefix') {
+  if (capacity.headroomPublications >= HEADROOM_WARNING_PUBLICATIONS) return null;
+  return `${label} headroom is ${capacity.headroomPublications} publication(s) including this one`
+    + ` (existing ${capacity.existingObjects}, planned ${capacity.plannedObjects},`
+    + ` maximum ${capacity.maximumObjects}); retired prefixes are not being reclaimed fast enough`;
 }
 
 export async function createStorage(env, invocation, injectedClient, injectedSdk) {
@@ -569,7 +614,14 @@ async function withCatalogValidator(sourceRoot, callback) {
   finally { validator.close(); }
 }
 
-export async function main(command, env = process.env, argv = process.argv.slice(3)) {
+export function reportReclaim(result, notices, env = process.env, log = console.log) {
+  const { warnings, summary } = notices(result);
+  for (const warning of warnings) log(`::warning title=Production Wind100 reclaim::${warning}`);
+  if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${summary}\n`);
+  return { warnings, summary };
+}
+
+export async function main(command, env = process.env, argv = process.argv.slice(3), log = console.log) {
   if (command === 'digest') return { sha256: controllerDigest() };
   const policy = readProductionPolicy();
   if (command === 'gate') return gate(env, 'none', policy);
@@ -593,6 +645,19 @@ export async function main(command, env = process.env, argv = process.argv.slice
     saveQualification(env, result);
     return result;
   }
+  if (command === 'reclaim') {
+    // Journal-proven retired prefixes past grace only. Never-activated uploads are not
+    // journal-proven and no path collects them today (tracked follow-up).
+    gate(env, 'metadata', policy);
+    const { createReclaimIo, reclaimRetired, retentionNotices } = await import('./production-wind100-retention.mjs');
+    const io = await createReclaimIo(env);
+    try {
+      const result = await withCatalogValidator(argv[0], validator => reclaimRetired({ io,
+        deleteForPrefix: io.deleteForPrefix, catalogValidator: validator, policy }));
+      reportReclaim(result, retentionNotices, env, log);
+      return result;
+    } finally { io.close(); }
+  }
   if (command === 'preflight' || command === 'retention-gate'
     || command === 'publish' || command === 'activate') {
     const request = gate(env, command === 'retention-gate' ? 'component' : 'metadata', policy);
@@ -601,8 +666,13 @@ export async function main(command, env = process.env, argv = process.argv.slice
       if (command === 'preflight') return withCatalogValidator(argv[0], validator =>
         findQualifiedInput({ runId: env.WIND100_RUN_ID, inputSha256: env.WIND100_INPUT_SHA256,
           io, catalogValidator: validator }));
-      if (command === 'retention-gate') return recurringPrefixCapacity(await io.prefixCount(),
-        privateJson(env, argv[0]));
+      if (command === 'retention-gate') {
+        const capacity = recurringPrefixCapacity(await io.prefixCount(), privateJson(env, argv[0]),
+          Date.now(), policy);
+        const warning = capacityWarning(capacity);
+        if (warning) log(`::warning title=Production Wind100 capacity::${warning}`);
+        return capacity;
+      }
       if (command === 'publish') return withCatalogValidator(argv[2], validator => publishCandidate({
         request, qualification: privateJson(env, argv[0]), componentReceipt: privateJson(env, argv[1]),
         io, catalogValidator: validator }));
@@ -611,7 +681,7 @@ export async function main(command, env = process.env, argv = process.argv.slice
         io, catalogValidator: validator }));
     } finally { io.close(); }
   }
-  throw Error('usage: production-wind100.mjs digest | gate | source SOURCE | preflight SOURCE | qualify SOURCE SOURCE_EVIDENCE STAGE POINT PROOF AUGMENTATION HANDOFF MANIFEST | component-gate | metadata-gate | retention-gate QUALIFICATION | publish QUALIFICATION COMPONENT_RECEIPT SOURCE | activate SELECTION SOURCE');
+  throw Error('usage: production-wind100.mjs digest | gate | source SOURCE | preflight SOURCE | reclaim SOURCE | qualify SOURCE SOURCE_EVIDENCE STAGE POINT PROOF AUGMENTATION HANDOFF MANIFEST | component-gate | metadata-gate | retention-gate QUALIFICATION | publish QUALIFICATION COMPONENT_RECEIPT SOURCE | activate SELECTION SOURCE');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

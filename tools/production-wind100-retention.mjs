@@ -1,11 +1,13 @@
 #!/usr/bin/env node
-// Read-only planning precedes every separately approved production Wind100 deletion.
+// Read-only planning precedes every production Wind100 deletion. A human-approved plan hash
+// is required for the manual workflow; the recurring publisher may reclaim only journal-proven
+// retired prefixes past grace, through the same planner and per-delete pointer checks.
 import assert from 'node:assert/strict';
 import { createHmac, createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { COMPONENTS, COMPONENT_PREFIX, DATA, POINTER_KEY,
-  hash, journalKeyFor, pointerEntry, validatePointer, validatePointerJournal,
+  hash, journalKeyFor, pointerEntry, readProductionPolicy, validatePointer, validatePointerJournal,
   validateSelection } from './production-wind100.mjs';
 
 const ACCOUNT = 'a89f9a1af485021fbc60a68b163c7c6e';
@@ -15,7 +17,11 @@ const MAX_POINTER = 16 * 1024;
 const MAX_JOURNALS = 64;
 const MAX_CANDIDATES = 8;
 const MAX_OBJECTS = 10_000;
+// Hard per-run delete bound: two full recurring prefixes (2 x 4,141 objects) fit.
+export const MAX_DELETES = 10_000;
+export const DEFAULT_CANDIDATES = 2;
 const GRACE_MS = 18 * 3_600_000;
+const PLAN_KIND = 'weatherx-production-native-wind100-retention-plan';
 const endpoint = `https://${ACCOUNT}.r2.cloudflarestorage.com`;
 
 function exact(value, fields) {
@@ -36,12 +42,14 @@ function prefixFor(entry) {
   return `${COMPONENT_PREFIX}${invocation}/`;
 }
 
-export async function planRetention({ io, catalogValidator, now = Date.now, maximumCandidates = 1 }) {
+export async function planRetention({ io, catalogValidator, now = Date.now,
+  maximumCandidates = DEFAULT_CANDIDATES, maximumObjects = MAX_DELETES, policy = readProductionPolicy() }) {
   assert.equal(typeof catalogValidator, 'function');
   assert.ok(Number.isSafeInteger(maximumCandidates) && maximumCandidates > 0
     && maximumCandidates <= MAX_CANDIDATES);
+  assert.ok(Number.isSafeInteger(maximumObjects) && maximumObjects > 0 && maximumObjects <= MAX_DELETES);
   const currentObject = await io.get(DATA, POINTER_KEY, MAX_POINTER);
-  const current = validatePointer(parseObject(currentObject, MAX_POINTER), now());
+  const current = validatePointer(parseObject(currentObject, MAX_POINTER), now(), policy);
   const currentSha256 = hash(currentObject.body);
   const protectedIds = new Set(current.entries.map(row => row.catalogId));
   const retired = new Map(), visited = new Set();
@@ -51,7 +59,7 @@ export async function planRetention({ io, catalogValidator, now = Date.now, maxi
     assert.ok(!visited.has(digest), 'pointer journal ancestry cycle');
     visited.add(digest);
     const journal = parseObject(await io.get(DATA, journalKeyFor(digest), MAX_JSON), MAX_JSON);
-    const chain = validatePointerJournal(journal, body, now());
+    const chain = validatePointerJournal(journal, body, now(), policy);
     for (const entry of chain.previous?.entries ?? []) {
       if (!chain.current.entries.some(row => row.catalogId === entry.catalogId)
         && !protectedIds.has(entry.catalogId)) retired.set(entry.catalogId, entry);
@@ -61,60 +69,85 @@ export async function planRetention({ io, catalogValidator, now = Date.now, maxi
   }
   // A contiguous, bounded suffix proves its retired entries even when older history is retained.
   assert.ok(visited.size > 0);
-  const candidates = [];
-  for (const entry of retired.values()) {
-    if (Date.parse(entry.freshUntil) + GRACE_MS > now()) continue;
+  // The walk saw newest transitions first; reclaim the oldest retirement first so a prefix is
+  // collected before it leaves the bounded ancestry window. Pointer and journal integrity
+  // failures above abort the plan; a single retired entry that fails its own evidence below is
+  // refused (never deleted) and planning continues, so one bad entry cannot block every run.
+  const candidates = [], skippedEmptyCatalogIds = [], refusedCatalogIds = [], refusalReasons = {};
+  let totalObjects = 0;
+  for (const entry of [...retired.values()].reverse()) {
     if (candidates.length >= maximumCandidates) break;
-    const selectedObject = await io.get(DATA, selectionKey(entry), MAX_JSON);
-    const selected = parseObject(selectedObject, MAX_JSON);
-    assert.equal(hash(selectedObject.body), entry.selectionSha256);
-    validateSelection(selected, Date.parse(selected.createdAt));
-    assert.deepEqual(pointerEntry(selected, entry.selectionSha256,
-      Date.parse(selected.createdAt)), entry);
-    const catalogObject = await io.get(DATA, catalogKey(entry), MAX_JSON);
-    const catalog = parseObject(catalogObject, MAX_JSON);
-    assert.equal(hash(catalogObject.body), entry.catalogSha256);
-    assert.equal(catalogValidator(catalog), true);
-    assert.deepEqual(Object.keys(catalog.components), ['point-ecmwf']);
-    const component = catalog.components['point-ecmwf'];
+    if (Date.parse(entry.freshUntil) + GRACE_MS > now()) continue;
     const prefix = prefixFor(entry);
-    assert.equal(component.rootPrefix, prefix);
-    assert.equal(component.manifestKey, `${prefix}component.json`);
-    assert.equal(component.pointSeries?.descriptor?.runId, entry.runId);
-    assert.equal(component.pointSeries?.descriptor?.freshUntil, entry.freshUntil);
-    assert.ok(Number.isSafeInteger(component.objectCount) && component.objectCount > 0
-      && component.objectCount < MAX_OBJECTS);
-    const keys = await io.listPrefix(prefix, MAX_OBJECTS);
-    assert.ok(Array.isArray(keys) && keys.length <= component.objectCount + 1);
-    assert.equal(keys.length, new Set(keys).size);
-    for (const key of keys) {
-      assert.ok(key.startsWith(prefix) && key.length > prefix.length && key.length <= 512);
-      assert.match(key.slice(prefix.length), /^(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+$/);
-      assert.ok(!key.split('/').includes('..'));
+    let keys, stage = 'inventory-unavailable';
+    try {
+      keys = await io.listPrefix(prefix, MAX_OBJECTS);
+      assert.ok(Array.isArray(keys));
+      // An already emptied prefix (an earlier run finished it) is progress, not a candidate.
+      if (keys.length === 0) { skippedEmptyCatalogIds.push(entry.catalogId); continue; }
+      stage = 'selection-unavailable';
+      const selectedObject = await io.get(DATA, selectionKey(entry), MAX_JSON);
+      const selected = parseObject(selectedObject, MAX_JSON);
+      stage = 'selection-mismatch';
+      assert.equal(hash(selectedObject.body), entry.selectionSha256);
+      validateSelection(selected, Date.parse(selected.createdAt), policy, { allowPrevious: true });
+      assert.deepEqual(pointerEntry(selected, entry.selectionSha256,
+        Date.parse(selected.createdAt), { policy, allowPrevious: true }), entry);
+      stage = 'catalog-unavailable';
+      const catalogObject = await io.get(DATA, catalogKey(entry), MAX_JSON);
+      const catalog = parseObject(catalogObject, MAX_JSON);
+      stage = 'catalog-mismatch';
+      assert.equal(hash(catalogObject.body), entry.catalogSha256);
+      stage = 'catalog-rejected';
+      assert.equal(catalogValidator(catalog), true);
+      stage = 'component-mismatch';
+      assert.deepEqual(Object.keys(catalog.components), ['point-ecmwf']);
+      const component = catalog.components['point-ecmwf'];
+      assert.equal(component.rootPrefix, prefix);
+      assert.equal(component.manifestKey, `${prefix}component.json`);
+      assert.equal(component.pointSeries?.descriptor?.runId, entry.runId);
+      assert.equal(component.pointSeries?.descriptor?.freshUntil, entry.freshUntil);
+      assert.ok(Number.isSafeInteger(component.objectCount) && component.objectCount > 0
+        && component.objectCount < MAX_OBJECTS);
+      stage = 'inventory-mismatch';
+      assert.ok(keys.length <= component.objectCount + 1);
+      assert.equal(keys.length, new Set(keys).size);
+      for (const key of keys) {
+        assert.ok(key.startsWith(prefix) && key.length > prefix.length && key.length <= 512);
+        assert.match(key.slice(prefix.length), /^(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+$/);
+        assert.ok(!key.split('/').includes('..'));
+      }
+    } catch {
+      // The reason is a stable stage code, so a dry run and its recomputation hash identically.
+      refusedCatalogIds.push(entry.catalogId); refusalReasons[entry.catalogId] = stage;
+      continue;
     }
+    // A prefix that would overrun the run's delete budget waits for the next run.
+    if (totalObjects + keys.length > maximumObjects) break;
+    totalObjects += keys.length;
     candidates.push({ catalogId: entry.catalogId, runId: entry.runId,
       freshUntil: entry.freshUntil, prefix, keys: keys.sort() });
   }
-  const plan = { schemaVersion: 1, kind: 'weatherx-production-native-wind100-retention-plan',
+  const plan = { schemaVersion: 2, kind: PLAN_KIND,
     pointerSha256: currentSha256, protectedCatalogIds: [...protectedIds].sort(),
-    ancestryRecordsChecked: visited.size, reachedGenesis, candidates,
-    totalObjects: candidates.reduce((n, row) => n + row.keys.length, 0) };
-  assert.ok(plan.totalObjects <= MAX_OBJECTS);
+    ancestryRecordsChecked: visited.size, reachedGenesis, maximumCandidates, maximumObjects,
+    skippedEmptyCatalogIds, refusedCatalogIds, refusalReasons, candidates, totalObjects };
+  assert.ok(plan.totalObjects <= MAX_OBJECTS && plan.totalObjects <= maximumObjects);
+  assert.ok(candidates.every(row => !refusedCatalogIds.includes(row.catalogId)));
   return { ...plan, planSha256: hash(JSON.stringify(plan)) };
 }
 
-export async function executeRetention({ plan, io, deleteForPrefix, catalogValidator, approvedPlanSha256,
-  now = Date.now, maximumDeletes = 5_000 }) {
-  assert.ok(Number.isSafeInteger(maximumDeletes) && maximumDeletes > 0 && maximumDeletes <= 5_000);
-  assert.match(approvedPlanSha256 ?? '', SHA);
+// Shared by the approved manual execution and the recurring inline reclaim. The plan is
+// recomputed from live state and must match byte for byte; every deletion re-reads the pointer.
+async function executeVerifiedPlan({ plan, io, deleteForPrefix, catalogValidator, now, maximumDeletes, policy }) {
+  assert.ok(Number.isSafeInteger(maximumDeletes) && maximumDeletes > 0 && maximumDeletes <= MAX_DELETES);
   const { planSha256, ...content } = plan;
   assert.equal(planSha256, hash(JSON.stringify(content)));
-  assert.equal(planSha256, approvedPlanSha256, 'dry-run plan has not been approved');
+  assert.equal(plan.schemaVersion, 2);
+  assert.equal(plan.kind, PLAN_KIND);
   assert.deepEqual(plan, await planRetention({ io, catalogValidator, now,
-    maximumCandidates: Math.max(1, plan.candidates.length) }),
+    maximumCandidates: plan.maximumCandidates, maximumObjects: plan.maximumObjects, policy }),
   'production retention plan changed since approval');
-  assert.equal(plan.schemaVersion, 1);
-  assert.equal(plan.kind, 'weatherx-production-native-wind100-retention-plan');
   assert.match(plan.pointerSha256, SHA);
   assert.ok(Array.isArray(plan.candidates) && plan.candidates.length <= MAX_CANDIDATES);
   assert.ok(Array.isArray(plan.protectedCatalogIds) && plan.protectedCatalogIds.length <= 2);
@@ -132,7 +165,7 @@ export async function executeRetention({ plan, io, deleteForPrefix, catalogValid
           client = await deleteForPrefix(candidate.prefix);
         }
         const liveObject = await io.get(DATA, POINTER_KEY, MAX_POINTER);
-        const live = validatePointer(parseObject(liveObject, MAX_POINTER), now());
+        const live = validatePointer(parseObject(liveObject, MAX_POINTER), now(), policy);
         assert.equal(hash(liveObject.body), plan.pointerSha256,
           'production pointer changed after dry-run; replan before deletion');
         assert.ok(!live.entries.some(entry => entry.catalogId === candidate.catalogId),
@@ -145,8 +178,50 @@ export async function executeRetention({ plan, io, deleteForPrefix, catalogValid
       }
     } finally { client?.close?.(); }
   }
+  return deleted;
+}
+
+export async function executeRetention({ plan, io, deleteForPrefix, catalogValidator, approvedPlanSha256,
+  now = Date.now, maximumDeletes = MAX_DELETES, policy = readProductionPolicy() }) {
+  assert.ok(Number.isSafeInteger(maximumDeletes) && maximumDeletes > 0 && maximumDeletes <= MAX_DELETES);
+  assert.match(approvedPlanSha256 ?? '', SHA);
+  const { planSha256, ...content } = plan;
+  assert.equal(planSha256, hash(JSON.stringify(content)));
+  assert.equal(planSha256, approvedPlanSha256, 'dry-run plan has not been approved');
+  const deleted = await executeVerifiedPlan({ plan, io, deleteForPrefix, catalogValidator, now,
+    maximumDeletes, policy });
   return { status: 'deleted-retired-production-wind100-objects',
     pointerSha256: plan.pointerSha256, planSha256, deleted };
+}
+
+// Recurring-publisher reclaim: the planner only ever proposes journal-retired, unprotected
+// prefixes past grace, so this class needs no human plan hash. Never-activated uploads are not
+// journal-proven and are not collected by this or any other path.
+export async function reclaimRetired({ io, deleteForPrefix, catalogValidator, now = Date.now,
+  maximumCandidates = DEFAULT_CANDIDATES, maximumDeletes = MAX_DELETES, policy = readProductionPolicy() }) {
+  const plan = await planRetention({ io, catalogValidator, now, maximumCandidates,
+    maximumObjects: maximumDeletes, policy });
+  const summary = { pointerSha256: plan.pointerSha256, planSha256: plan.planSha256,
+    candidates: plan.candidates.map(row => row.catalogId),
+    skippedEmptyCatalogIds: plan.skippedEmptyCatalogIds, refusedCatalogIds: plan.refusedCatalogIds,
+    refusalReasons: plan.refusalReasons, plannedObjects: plan.totalObjects };
+  if (plan.candidates.length === 0) return { status: 'nothing-to-reclaim', ...summary, deleted: 0 };
+  const deleted = await executeVerifiedPlan({ plan, io, deleteForPrefix, catalogValidator, now,
+    maximumDeletes, policy });
+  return { status: 'reclaimed-retired-production-wind100-objects', ...summary, deleted };
+}
+
+// Operator-facing notices for a plan or reclaim result: a warning per refused retired entry
+// (it is kept, and blocks no other entry) and a one-line step summary.
+export function retentionNotices(result) {
+  const refused = result.refusedCatalogIds ?? [];
+  const warnings = refused.map(id => `retired ${id} was refused (${result.refusalReasons?.[id]}) `
+    + 'and kept; inspect its selection, catalog and prefix');
+  const candidates = (result.candidates ?? []).map(row => (typeof row === 'string' ? row : row.catalogId));
+  const summary = `Production Wind100 retention: ${result.status ?? 'plan'}; candidates ${candidates.join(', ') || 'none'};`
+    + ` deleted ${result.deleted ?? 0}; skipped empty ${(result.skippedEmptyCatalogIds ?? []).length};`
+    + ` refused ${refused.length ? refused.map(id => `${id} (${result.refusalReasons?.[id]})`).join(', ') : 'none'}`;
+  return { warnings, summary };
 }
 
 function base64url(value) { return Buffer.from(value).toString('base64url'); }
@@ -165,20 +240,8 @@ export function scopedDeleteCredentials(parent, prefix, nowSeconds = Math.floor(
     sessionToken: Buffer.from(`jwt/${jwt}`).toString('base64') };
 }
 
-export async function createRetentionIo(env, injectedSdk, injectedReadClient,
-  injectedDeleteClientFactory) {
-  assert.equal(env.PRODUCTION_WIND100_R2_ACCOUNT_ID, ACCOUNT);
-  assert.ok(env.PRODUCTION_WIND100_GC_READ_ACCESS_KEY_ID
-    && env.PRODUCTION_WIND100_GC_READ_SECRET_ACCESS_KEY);
-  for (const key of ['PRODUCTION_WIND100_R2_ACCESS_KEY_ID', 'PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY',
-    'R2_PRODUCTION_ACCESS_KEY_ID', 'R2_PRODUCTION_SECRET_ACCESS_KEY',
-    'STAGING_R2_WRITE_ACCESS_KEY_ID', 'STAGING_R2_WRITE_SECRET_ACCESS_KEY'])
-    assert.ok(!env[key], `retention refuses ${key}`);
-  const sdk = injectedSdk ?? await import('../staging-controller/node_modules/@aws-sdk/client-s3/dist-cjs/index.js');
-  const readClient = injectedReadClient ?? new sdk.S3Client({ region: 'auto', endpoint,
-    forcePathStyle: true, maxAttempts: 1,
-    credentials: { accessKeyId: env.PRODUCTION_WIND100_GC_READ_ACCESS_KEY_ID,
-      secretAccessKey: env.PRODUCTION_WIND100_GC_READ_SECRET_ACCESS_KEY } });
+// Read, list and per-prefix scoped delete over exactly the retention key space.
+function retentionIo({ sdk, readClient, deleteParent, deleteClientFactory }) {
   const send = command => readClient.send(command, { abortSignal: AbortSignal.timeout(120_000) });
   async function get(bucket, key, maximum = MAX_JSON) {
     assert.equal(bucket, DATA);
@@ -214,14 +277,8 @@ export async function createRetentionIo(env, injectedSdk, injectedReadClient,
     return keys;
   }
   async function deleteForPrefix(prefix) {
-    assert.ok(env.PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID
-      && env.PRODUCTION_WIND100_GC_DELETE_SECRET_ACCESS_KEY);
-    assert.notEqual(env.PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID,
-      env.PRODUCTION_WIND100_GC_READ_ACCESS_KEY_ID);
-    const credentials = scopedDeleteCredentials({
-      accessKeyId: env.PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID,
-      secretAccessKey: env.PRODUCTION_WIND100_GC_DELETE_SECRET_ACCESS_KEY }, prefix);
-    const client = injectedDeleteClientFactory?.(credentials) ?? new sdk.S3Client({ region: 'auto', endpoint,
+    const credentials = scopedDeleteCredentials(deleteParent(), prefix);
+    const client = deleteClientFactory?.(credentials) ?? new sdk.S3Client({ region: 'auto', endpoint,
       forcePathStyle: true, maxAttempts: 1, credentials });
     return { async delete(key) {
       assert.ok(key.startsWith(prefix) && key.length > prefix.length);
@@ -230,6 +287,53 @@ export async function createRetentionIo(env, injectedSdk, injectedReadClient,
     }, close: () => client.destroy?.() };
   }
   return { get, listPrefix, deleteForPrefix, close: () => readClient.destroy?.() };
+}
+
+const loadSdk = () => import('../staging-controller/node_modules/@aws-sdk/client-s3/dist-cjs/index.js');
+const BROAD = ['R2_PRODUCTION_ACCESS_KEY_ID', 'R2_PRODUCTION_SECRET_ACCESS_KEY',
+  'STAGING_R2_WRITE_ACCESS_KEY_ID', 'STAGING_R2_WRITE_SECRET_ACCESS_KEY'];
+
+export async function createRetentionIo(env, injectedSdk, injectedReadClient,
+  injectedDeleteClientFactory) {
+  assert.equal(env.PRODUCTION_WIND100_R2_ACCOUNT_ID, ACCOUNT);
+  assert.ok(env.PRODUCTION_WIND100_GC_READ_ACCESS_KEY_ID
+    && env.PRODUCTION_WIND100_GC_READ_SECRET_ACCESS_KEY);
+  for (const key of ['PRODUCTION_WIND100_R2_ACCESS_KEY_ID', 'PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY', ...BROAD])
+    assert.ok(!env[key], `retention refuses ${key}`);
+  const sdk = injectedSdk ?? await loadSdk();
+  const readClient = injectedReadClient ?? new sdk.S3Client({ region: 'auto', endpoint,
+    forcePathStyle: true, maxAttempts: 1,
+    credentials: { accessKeyId: env.PRODUCTION_WIND100_GC_READ_ACCESS_KEY_ID,
+      secretAccessKey: env.PRODUCTION_WIND100_GC_READ_SECRET_ACCESS_KEY } });
+  return retentionIo({ sdk, readClient, deleteClientFactory: injectedDeleteClientFactory,
+    deleteParent() {
+      assert.ok(env.PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID
+        && env.PRODUCTION_WIND100_GC_DELETE_SECRET_ACCESS_KEY);
+      assert.notEqual(env.PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID,
+        env.PRODUCTION_WIND100_GC_READ_ACCESS_KEY_ID);
+      return { accessKeyId: env.PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID,
+        secretAccessKey: env.PRODUCTION_WIND100_GC_DELETE_SECRET_ACCESS_KEY };
+    } });
+}
+
+// The recurring publisher's own dedicated Wind100 token reads the journal and lists retired
+// prefixes; each deletion still goes through a 15-minute DeleteObject-only credential minted
+// for one journal-proven prefix. Cleanup-environment and broad credentials are refused.
+export async function createReclaimIo(env, injectedSdk, injectedReadClient, injectedDeleteClientFactory) {
+  assert.equal(env.PRODUCTION_WIND100_R2_ACCOUNT_ID, ACCOUNT);
+  assert.ok(env.PRODUCTION_WIND100_R2_ACCESS_KEY_ID && env.PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY,
+    'dedicated production Wind100 writer credentials are required');
+  for (const key of ['PRODUCTION_WIND100_GC_READ_ACCESS_KEY_ID', 'PRODUCTION_WIND100_GC_READ_SECRET_ACCESS_KEY',
+    'PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID', 'PRODUCTION_WIND100_GC_DELETE_SECRET_ACCESS_KEY',
+    'PRODUCTION_WIND100_GC_APPROVED_PLAN_SHA256', ...BROAD])
+    assert.ok(!env[key], `inline reclaim refuses ${key}`);
+  const sdk = injectedSdk ?? await loadSdk();
+  const credentials = { accessKeyId: env.PRODUCTION_WIND100_R2_ACCESS_KEY_ID,
+    secretAccessKey: env.PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY };
+  const readClient = injectedReadClient ?? new sdk.S3Client({ region: 'auto', endpoint,
+    forcePathStyle: true, maxAttempts: 1, credentials });
+  return retentionIo({ sdk, readClient, deleteClientFactory: injectedDeleteClientFactory,
+    deleteParent: () => credentials });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

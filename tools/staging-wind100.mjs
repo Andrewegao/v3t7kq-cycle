@@ -1323,10 +1323,22 @@ export function recurringPrefixCapacity(existing, qualification, pointRoot, poli
   assert.equal(plannedFiles.length, qualification.pointPacks?.objectCount,
     'planned recurring component object count differs from qualification');
   const planned = plannedFiles.length + 1; // build-component-manifest adds component.json.
-  assert.ok(existing.length + planned <= policy.recurringStorage.maximumComponentPrefixObjects,
-    'recurring component prefix lacks capacity for this candidate');
-  return { existingObjects: existing.length, plannedObjects: planned,
-    maximumObjects: policy.recurringStorage.maximumComponentPrefixObjects };
+  const maximum = policy.recurringStorage.maximumComponentPrefixObjects;
+  assert.ok(existing.length + planned <= maximum,
+    `recurring component prefix lacks capacity for this candidate: existing ${existing.length}`
+    + ` + planned ${planned} = ${existing.length + planned} > maximum ${maximum}`);
+  // Publications of this size that still fit, counting this one.
+  return { existingObjects: existing.length, plannedObjects: planned, maximumObjects: maximum,
+    headroomPublications: Math.floor((maximum - existing.length) / planned) };
+}
+
+// Warn while fewer than this many publications of the planned size still fit.
+export const HEADROOM_WARNING_PUBLICATIONS = 3;
+export function capacityWarning(capacity, label = 'staging Wind100 component prefix') {
+  if (capacity.headroomPublications >= HEADROOM_WARNING_PUBLICATIONS) return null;
+  return `${label} headroom is ${capacity.headroomPublications} publication(s) including this one`
+    + ` (existing ${capacity.existingObjects}, planned ${capacity.plannedObjects},`
+    + ` maximum ${capacity.maximumObjects}); retired prefixes are not being reclaimed fast enough`;
 }
 
 export async function listRecurringPrefixS3(env, injectedClient, injectedSdk) {
@@ -1666,7 +1678,8 @@ function privateJson(tempRoot, relativePath, maximum = 8 * 1024 * 1024) {
   return JSON.parse(bytes);
 }
 
-export async function main(command, env = process.env, argv = process.argv.slice(3), trace = null) {
+export async function main(command, env = process.env, argv = process.argv.slice(3), trace = null,
+  log = console.log) {
   if (command === 'digest') return { sha256: controllerDigest() };
   const policy = readPolicy();
   if (command === 'gate') return gate(env, policy);
@@ -1677,7 +1690,10 @@ export async function main(command, env = process.env, argv = process.argv.slice
   if (command === 'recurring-retention-gate') {
     recurringGate(env, policy, controllerDigest(), 'components');
     const existing = await listRecurringPrefixS3(env);
-    return recurringPrefixCapacity(existing, privateJson(env.RUNNER_TEMP, argv[0]), argv[1], policy);
+    const capacity = recurringPrefixCapacity(existing, privateJson(env.RUNNER_TEMP, argv[0]), argv[1], policy);
+    const warning = capacityWarning(capacity);
+    if (warning) log(`::warning title=Staging Wind100 capacity::${warning}`);
+    return capacity;
   }
   if (command === 'source') return verifySource(argv[0], policy);
   if (command === 'preflight') {
