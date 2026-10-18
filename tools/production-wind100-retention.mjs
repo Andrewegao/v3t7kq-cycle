@@ -70,41 +70,57 @@ export async function planRetention({ io, catalogValidator, now = Date.now,
   // A contiguous, bounded suffix proves its retired entries even when older history is retained.
   assert.ok(visited.size > 0);
   // The walk saw newest transitions first; reclaim the oldest retirement first so a prefix is
-  // collected before it leaves the bounded ancestry window.
-  const candidates = [], skippedEmptyCatalogIds = [];
+  // collected before it leaves the bounded ancestry window. Pointer and journal integrity
+  // failures above abort the plan; a single retired entry that fails its own evidence below is
+  // refused (never deleted) and planning continues, so one bad entry cannot block every run.
+  const candidates = [], skippedEmptyCatalogIds = [], refusedCatalogIds = [], refusalReasons = {};
   let totalObjects = 0;
   for (const entry of [...retired.values()].reverse()) {
     if (candidates.length >= maximumCandidates) break;
     if (Date.parse(entry.freshUntil) + GRACE_MS > now()) continue;
     const prefix = prefixFor(entry);
-    const keys = await io.listPrefix(prefix, MAX_OBJECTS);
-    assert.ok(Array.isArray(keys));
-    // An already emptied prefix (an earlier run finished it) is progress, not a candidate.
-    if (keys.length === 0) { skippedEmptyCatalogIds.push(entry.catalogId); continue; }
-    const selectedObject = await io.get(DATA, selectionKey(entry), MAX_JSON);
-    const selected = parseObject(selectedObject, MAX_JSON);
-    assert.equal(hash(selectedObject.body), entry.selectionSha256);
-    validateSelection(selected, Date.parse(selected.createdAt), policy, { allowPrevious: true });
-    assert.deepEqual(pointerEntry(selected, entry.selectionSha256,
-      Date.parse(selected.createdAt), { policy, allowPrevious: true }), entry);
-    const catalogObject = await io.get(DATA, catalogKey(entry), MAX_JSON);
-    const catalog = parseObject(catalogObject, MAX_JSON);
-    assert.equal(hash(catalogObject.body), entry.catalogSha256);
-    assert.equal(catalogValidator(catalog), true);
-    assert.deepEqual(Object.keys(catalog.components), ['point-ecmwf']);
-    const component = catalog.components['point-ecmwf'];
-    assert.equal(component.rootPrefix, prefix);
-    assert.equal(component.manifestKey, `${prefix}component.json`);
-    assert.equal(component.pointSeries?.descriptor?.runId, entry.runId);
-    assert.equal(component.pointSeries?.descriptor?.freshUntil, entry.freshUntil);
-    assert.ok(Number.isSafeInteger(component.objectCount) && component.objectCount > 0
-      && component.objectCount < MAX_OBJECTS);
-    assert.ok(keys.length <= component.objectCount + 1);
-    assert.equal(keys.length, new Set(keys).size);
-    for (const key of keys) {
-      assert.ok(key.startsWith(prefix) && key.length > prefix.length && key.length <= 512);
-      assert.match(key.slice(prefix.length), /^(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+$/);
-      assert.ok(!key.split('/').includes('..'));
+    let keys, stage = 'inventory-unavailable';
+    try {
+      keys = await io.listPrefix(prefix, MAX_OBJECTS);
+      assert.ok(Array.isArray(keys));
+      // An already emptied prefix (an earlier run finished it) is progress, not a candidate.
+      if (keys.length === 0) { skippedEmptyCatalogIds.push(entry.catalogId); continue; }
+      stage = 'selection-unavailable';
+      const selectedObject = await io.get(DATA, selectionKey(entry), MAX_JSON);
+      const selected = parseObject(selectedObject, MAX_JSON);
+      stage = 'selection-mismatch';
+      assert.equal(hash(selectedObject.body), entry.selectionSha256);
+      validateSelection(selected, Date.parse(selected.createdAt), policy, { allowPrevious: true });
+      assert.deepEqual(pointerEntry(selected, entry.selectionSha256,
+        Date.parse(selected.createdAt), { policy, allowPrevious: true }), entry);
+      stage = 'catalog-unavailable';
+      const catalogObject = await io.get(DATA, catalogKey(entry), MAX_JSON);
+      const catalog = parseObject(catalogObject, MAX_JSON);
+      stage = 'catalog-mismatch';
+      assert.equal(hash(catalogObject.body), entry.catalogSha256);
+      stage = 'catalog-rejected';
+      assert.equal(catalogValidator(catalog), true);
+      stage = 'component-mismatch';
+      assert.deepEqual(Object.keys(catalog.components), ['point-ecmwf']);
+      const component = catalog.components['point-ecmwf'];
+      assert.equal(component.rootPrefix, prefix);
+      assert.equal(component.manifestKey, `${prefix}component.json`);
+      assert.equal(component.pointSeries?.descriptor?.runId, entry.runId);
+      assert.equal(component.pointSeries?.descriptor?.freshUntil, entry.freshUntil);
+      assert.ok(Number.isSafeInteger(component.objectCount) && component.objectCount > 0
+        && component.objectCount < MAX_OBJECTS);
+      stage = 'inventory-mismatch';
+      assert.ok(keys.length <= component.objectCount + 1);
+      assert.equal(keys.length, new Set(keys).size);
+      for (const key of keys) {
+        assert.ok(key.startsWith(prefix) && key.length > prefix.length && key.length <= 512);
+        assert.match(key.slice(prefix.length), /^(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+$/);
+        assert.ok(!key.split('/').includes('..'));
+      }
+    } catch {
+      // The reason is a stable stage code, so a dry run and its recomputation hash identically.
+      refusedCatalogIds.push(entry.catalogId); refusalReasons[entry.catalogId] = stage;
+      continue;
     }
     // A prefix that would overrun the run's delete budget waits for the next run.
     if (totalObjects + keys.length > maximumObjects) break;
@@ -115,8 +131,9 @@ export async function planRetention({ io, catalogValidator, now = Date.now,
   const plan = { schemaVersion: 2, kind: PLAN_KIND,
     pointerSha256: currentSha256, protectedCatalogIds: [...protectedIds].sort(),
     ancestryRecordsChecked: visited.size, reachedGenesis, maximumCandidates, maximumObjects,
-    skippedEmptyCatalogIds, candidates, totalObjects };
+    skippedEmptyCatalogIds, refusedCatalogIds, refusalReasons, candidates, totalObjects };
   assert.ok(plan.totalObjects <= MAX_OBJECTS && plan.totalObjects <= maximumObjects);
+  assert.ok(candidates.every(row => !refusedCatalogIds.includes(row.catalogId)));
   return { ...plan, planSha256: hash(JSON.stringify(plan)) };
 }
 
@@ -178,18 +195,33 @@ export async function executeRetention({ plan, io, deleteForPrefix, catalogValid
 }
 
 // Recurring-publisher reclaim: the planner only ever proposes journal-retired, unprotected
-// prefixes past grace, so this class needs no human plan hash. Orphans are never touched.
+// prefixes past grace, so this class needs no human plan hash. Never-activated uploads are not
+// journal-proven and are not collected by this or any other path.
 export async function reclaimRetired({ io, deleteForPrefix, catalogValidator, now = Date.now,
   maximumCandidates = DEFAULT_CANDIDATES, maximumDeletes = MAX_DELETES, policy = readProductionPolicy() }) {
   const plan = await planRetention({ io, catalogValidator, now, maximumCandidates,
     maximumObjects: maximumDeletes, policy });
   const summary = { pointerSha256: plan.pointerSha256, planSha256: plan.planSha256,
     candidates: plan.candidates.map(row => row.catalogId),
-    skippedEmptyCatalogIds: plan.skippedEmptyCatalogIds, plannedObjects: plan.totalObjects };
+    skippedEmptyCatalogIds: plan.skippedEmptyCatalogIds, refusedCatalogIds: plan.refusedCatalogIds,
+    refusalReasons: plan.refusalReasons, plannedObjects: plan.totalObjects };
   if (plan.candidates.length === 0) return { status: 'nothing-to-reclaim', ...summary, deleted: 0 };
   const deleted = await executeVerifiedPlan({ plan, io, deleteForPrefix, catalogValidator, now,
     maximumDeletes, policy });
   return { status: 'reclaimed-retired-production-wind100-objects', ...summary, deleted };
+}
+
+// Operator-facing notices for a plan or reclaim result: a warning per refused retired entry
+// (it is kept, and blocks no other entry) and a one-line step summary.
+export function retentionNotices(result) {
+  const refused = result.refusedCatalogIds ?? [];
+  const warnings = refused.map(id => `retired ${id} was refused (${result.refusalReasons?.[id]}) `
+    + 'and kept; inspect its selection, catalog and prefix');
+  const candidates = (result.candidates ?? []).map(row => (typeof row === 'string' ? row : row.catalogId));
+  const summary = `Production Wind100 retention: ${result.status ?? 'plan'}; candidates ${candidates.join(', ') || 'none'};`
+    + ` deleted ${result.deleted ?? 0}; skipped empty ${(result.skippedEmptyCatalogIds ?? []).length};`
+    + ` refused ${refused.length ? refused.map(id => `${id} (${result.refusalReasons?.[id]})`).join(', ') : 'none'}`;
+  return { warnings, summary };
 }
 
 function base64url(value) { return Buffer.from(value).toString('base64url'); }

@@ -2,7 +2,7 @@
 // Production-only native Wind100 control. This file never promotes catalogs/current.json.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadCatalogValidator, qualifyPointPacks, readPolicy as readIntegrityPolicy,
@@ -614,6 +614,13 @@ async function withCatalogValidator(sourceRoot, callback) {
   finally { validator.close(); }
 }
 
+export function reportReclaim(result, notices, env = process.env, log = console.log) {
+  const { warnings, summary } = notices(result);
+  for (const warning of warnings) log(`::warning title=Production Wind100 reclaim::${warning}`);
+  if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${summary}\n`);
+  return { warnings, summary };
+}
+
 export async function main(command, env = process.env, argv = process.argv.slice(3), log = console.log) {
   if (command === 'digest') return { sha256: controllerDigest() };
   const policy = readProductionPolicy();
@@ -639,14 +646,16 @@ export async function main(command, env = process.env, argv = process.argv.slice
     return result;
   }
   if (command === 'reclaim') {
-    // Journal-proven retired prefixes past grace only; orphan or manual deletion stays with the
-    // separately approved retention workflow.
+    // Journal-proven retired prefixes past grace only. Never-activated uploads are not
+    // journal-proven and no path collects them today (tracked follow-up).
     gate(env, 'metadata', policy);
-    const { createReclaimIo, reclaimRetired } = await import('./production-wind100-retention.mjs');
+    const { createReclaimIo, reclaimRetired, retentionNotices } = await import('./production-wind100-retention.mjs');
     const io = await createReclaimIo(env);
     try {
-      return await withCatalogValidator(argv[0], validator => reclaimRetired({ io,
+      const result = await withCatalogValidator(argv[0], validator => reclaimRetired({ io,
         deleteForPrefix: io.deleteForPrefix, catalogValidator: validator, policy }));
+      reportReclaim(result, retentionNotices, env, log);
+      return result;
     } finally { io.close(); }
   }
   if (command === 'preflight' || command === 'retention-gate'

@@ -1,16 +1,18 @@
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import {
   COMPONENTS, COMPONENT_PREFIX, DATA, ORIGIN, POINTER_KEY, POINTER_KIND, SELECTION_KIND,
   activateCandidate, bindPointIntegrityInvocation, capacityWarning, controllerDigest, createStorage,
-  findQualifiedInput, gate, hash, main,
+  findQualifiedInput, gate, hash, main, reportReclaim,
   nextPointer, pointerEntry, publishCandidate, readProductionPolicy, recurringPrefixCapacity,
   rollbackToPrior, validatePointer, validateQualification, validateSelection,
 } from '../tools/production-wind100.mjs';
 import { MAX_DELETES, createReclaimIo, createRetentionIo, executeRetention, planRetention, reclaimRetired,
-  scopedDeleteCredentials } from '../tools/production-wind100-retention.mjs';
+  retentionNotices, scopedDeleteCredentials } from '../tools/production-wind100-retention.mjs';
 
 const now = Date.parse('2026-09-23T18:00:00Z');
 const sha = char => char.repeat(64);
@@ -757,4 +759,84 @@ test('reclaim command runs behind the publisher gate and refuses cleanup or broa
     ['/nonexistent']));
   await assert.rejects(main('reclaim', { ...writer, PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID: 'cleanup' },
     ['/nonexistent']), /inline reclaim refuses PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID/);
+});
+
+test('a retired entry the pinned reader now rejects is refused and kept while younger ones are reclaimed', async () => {
+  const store = await backlog();
+  const at = cadence(12).at;
+  const oldest = prefixForInvocation(invocationFor(0));
+  // A stricter catalog validator, as after an Atmos reader re-pin, rejects only the oldest catalog.
+  const stricter = catalog => catalog.components['point-ecmwf'].rootPrefix !== oldest;
+  const plan = await planRetention({ io: store.io, now: () => at, catalogValidator: stricter });
+  const oldestId = `prod-wind100-recurring-${invocationFor(0)}`;
+  assert.deepEqual(plan.refusedCatalogIds, [oldestId]);
+  assert.deepEqual(plan.refusalReasons, { [oldestId]: 'catalog-rejected' });
+  assert.deepEqual(plan.candidates.map(row => row.prefix),
+    [prefixForInvocation(invocationFor(1)), prefixForInvocation(invocationFor(2))]);
+  // The dry-run hash is reproduced by the recomputation inside execution.
+  const replay = await planRetention({ io: store.io, now: () => at, catalogValidator: stricter });
+  assert.equal(replay.planSha256, plan.planSha256);
+  const executed = await executeRetention({ plan, io: store.io, deleteForPrefix: store.deleteForPrefix,
+    catalogValidator: stricter, approvedPlanSha256: plan.planSha256, now: () => at });
+  assert.equal(executed.deleted, 2 * (POINT_OBJECTS + 1));
+  // Inline reclaim keeps progressing past the refused entry on later runs.
+  const result = await reclaimRetired({ io: store.io, deleteForPrefix: store.deleteForPrefix,
+    catalogValidator: stricter, now: () => at });
+  assert.equal(result.status, 'reclaimed-retired-production-wind100-objects');
+  assert.deepEqual(result.refusedCatalogIds, [oldestId]);
+  assert.deepEqual(result.candidates, [3, 4].map(k => `prod-wind100-recurring-${invocationFor(k)}`));
+  assert.equal(store.components.get(oldest).size, POINT_OBJECTS + 1, 'a refused prefix is never deleted');
+  assertProtectedIntact(store);
+  const { warnings, summary } = retentionNotices(result);
+  assert.deepEqual(warnings, [`retired ${oldestId} was refused (catalog-rejected) and kept; inspect its selection, catalog and prefix`]);
+  assert.match(summary, new RegExp(`refused ${oldestId} \\(catalog-rejected\\)`));
+  assert.match(summary, /deleted 8282/);
+});
+
+test('missing or altered per-entry evidence is refused with a stable reason; chain damage still aborts', async () => {
+  const store = await backlog();
+  const at = cadence(12).at;
+  const id = k => `prod-wind100-recurring-${invocationFor(k)}`;
+  store.data.delete(`production-candidates/wind100/${id(0)}/selection.json`);
+  const catalogKey = `catalogs/snapshots/${id(1)}.json`;
+  store.data.set(catalogKey, Buffer.from(store.data.get(catalogKey).toString().replace('"sequence":1', '"sequence":2')));
+  store.components.get(prefixForInvocation(invocationFor(2))).set(
+    `${prefixForInvocation(invocationFor(2))}v2/extra.bin.gz`, Buffer.from('x'));
+  const plan = await planRetention({ io: store.io, now: () => at, catalogValidator: () => true });
+  assert.deepEqual(plan.refusalReasons, { [id(0)]: 'selection-unavailable', [id(1)]: 'catalog-mismatch',
+    [id(2)]: 'inventory-mismatch' });
+  assert.deepEqual(plan.candidates.map(row => row.catalogId), [id(3), id(4)]);
+  const throwingValidator = () => { throw Error('reader refused'); };
+  const rejected = await planRetention({ io: store.io, now: () => at, catalogValidator: throwingValidator });
+  assert.deepEqual(rejected.candidates, []);
+  assert.equal(rejected.refusalReasons[id(3)], 'catalog-rejected');
+  // Pointer or journal-chain integrity damage is not an entry refusal: the whole plan aborts.
+  const journalKey = [...store.data.keys()].filter(key => key.includes('/journal/'))[3];
+  store.data.set(journalKey, Buffer.from('{"schemaVersion":1}'));
+  await assert.rejects(planRetention({ io: store.io, now: () => at, catalogValidator: () => true }));
+});
+
+test('reclaim notices become workflow warnings and a step-summary line', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'wind100-summary-'));
+  try {
+    const summaryPath = join(directory, 'summary.md');
+    const lines = [];
+    const result = { status: 'reclaimed-retired-production-wind100-objects', candidates: ['prod-wind100-recurring-2-1'],
+      deleted: 4141, skippedEmptyCatalogIds: ['prod-wind100-recurring-1-1'],
+      refusedCatalogIds: ['prod-wind100-recurring-3-1'], refusalReasons: { 'prod-wind100-recurring-3-1': 'catalog-rejected' } };
+    reportReclaim(result, retentionNotices, { GITHUB_STEP_SUMMARY: summaryPath }, line => lines.push(line));
+    assert.deepEqual(lines, ['::warning title=Production Wind100 reclaim::retired prod-wind100-recurring-3-1 was refused'
+      + ' (catalog-rejected) and kept; inspect its selection, catalog and prefix']);
+    assert.equal(readFileSync(summaryPath, 'utf8'), 'Production Wind100 retention: reclaimed-retired-production-wind100-objects;'
+      + ' candidates prod-wind100-recurring-2-1; deleted 4141; skipped empty 1; refused prod-wind100-recurring-3-1 (catalog-rejected)\n');
+    const quiet = [];
+    reportReclaim({ ...result, refusedCatalogIds: [], refusalReasons: {} }, retentionNotices, {}, line => quiet.push(line));
+    assert.deepEqual(quiet, []);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+  const workflow = readFileSync(new URL('../.github/workflows/production-wind100-retention.yml', import.meta.url), 'utf8');
+  assert.match(workflow, /retentionNotices\(JSON\.parse\(readFileSync\(process\.argv\[1\]\)\)\)/);
+  assert.match(workflow, /::warning title=Production Wind100 retention::/);
+  assert.match(workflow, /GITHUB_STEP_SUMMARY/);
+  const code = readFileSync(new URL('../tools/production-wind100.mjs', import.meta.url), 'utf8');
+  assert.match(code, /reportReclaim\(result, retentionNotices, env, log\)/);
 });
