@@ -141,5 +141,7 @@ recurring jobs stay gated off until the owner updates them.
    with the writer token (the reclaim step reports
    `reclaimed-retired-production-wind100-objects` with `deleted` above zero and
    the upload step's capacity count drops accordingly). If the step instead
-   warns that inline reclaim failed, the writer token cannot delete; fall back
-   to the approved workflow and treat inline reclaim as not landed.
+   warns that inline reclaim failed, read its log before concluding anything:
+   a DeleteObject 403 means the writer token cannot delete, so fall back to the
+   approved workflow and treat inline reclaim as not landed; a pointer or plan
+   change between passes is transient and the next run retries.
