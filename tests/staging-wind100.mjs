@@ -1294,12 +1294,25 @@ test('recurring prefix capacity counts existing and planned immutable component 
   const inventory = count => Array.from({ length: count }, (_, index) =>
     `components/point-ecmwf/stage-wind100-recurring-point-ecmwf-${index + 1}-1/run/file-${index}.bin`);
   assert.deepEqual(recurringPrefixCapacity([], qualification, pointRoot, f.policy),
-    { existingObjects: 0, plannedObjects: 5, maximumObjects: 50_000 });
-  assert.equal(recurringPrefixCapacity(inventory(49_995), qualification, pointRoot, f.policy).existingObjects, 49_995);
+    { existingObjects: 0, plannedObjects: 5, maximumObjects: 50_000, headroomPublications: 10_000 });
+  const full = recurringPrefixCapacity(inventory(49_995), qualification, pointRoot, f.policy);
+  assert.equal(full.existingObjects, 49_995);
+  assert.equal(full.headroomPublications, 1);
   assert.throws(() => recurringPrefixCapacity(inventory(49_996), qualification, pointRoot, f.policy),
-    /lacks capacity/);
+    /lacks capacity for this candidate: existing 49996 \+ planned 5 = 50001 > maximum 50000/);
   assert.throws(() => recurringPrefixCapacity(['components/point-ecmwf/stage-wind100-point-ecmwf-1-1/file'],
     qualification, pointRoot, f.policy), /unexpected key/);
+});
+
+test('recurring prefix capacity warns with counts while fewer than three publications fit', () => {
+  const at = existing => ({ existingObjects: existing, plannedObjects: 4_141, maximumObjects: 50_000,
+    headroomPublications: Math.floor((50_000 - existing) / 4_141) });
+  assert.equal(windController.capacityWarning(at(37_577)), null);
+  const warning = windController.capacityWarning(at(37_578));
+  assert.match(warning, /headroom is 2 publication\(s\) including this one/);
+  assert.match(warning, /existing 37578, planned 4141, maximum 50000/);
+  const code = readFileSync(new URL('../tools/staging-wind100.mjs', import.meta.url), 'utf8');
+  assert.match(code, /if \(warning\) log\(`::warning title=Staging Wind100 capacity::\$\{warning\}`\)/);
 });
 
 test('recurring prefix inventory is exact, paginated, bounded and staging-only', async () => {

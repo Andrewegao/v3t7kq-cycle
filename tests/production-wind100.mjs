@@ -4,12 +4,13 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   COMPONENTS, COMPONENT_PREFIX, DATA, ORIGIN, POINTER_KEY, POINTER_KIND, SELECTION_KIND,
-  activateCandidate, bindPointIntegrityInvocation, controllerDigest, createStorage, findQualifiedInput, gate, hash,
+  activateCandidate, bindPointIntegrityInvocation, capacityWarning, controllerDigest, createStorage,
+  findQualifiedInput, gate, hash, main,
   nextPointer, pointerEntry, publishCandidate, readProductionPolicy, recurringPrefixCapacity,
   rollbackToPrior, validatePointer, validateQualification, validateSelection,
 } from '../tools/production-wind100.mjs';
-import { createRetentionIo, executeRetention, planRetention, scopedDeleteCredentials }
-  from '../tools/production-wind100-retention.mjs';
+import { MAX_DELETES, createReclaimIo, createRetentionIo, executeRetention, planRetention, reclaimRetired,
+  scopedDeleteCredentials } from '../tools/production-wind100-retention.mjs';
 
 const now = Date.parse('2026-09-23T18:00:00Z');
 const sha = char => char.repeat(64);
@@ -29,7 +30,8 @@ const env = () => ({ GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted'
 const request = { invocation: '35834279562-1', sourceSha: readProductionPolicy().sourceSha,
   publicationMode: 'point-only-recurring-v1' };
 
-function fixture(runId = '2026092300', invocation = request.invocation) {
+function fixture(runId = '2026092300', invocation = request.invocation,
+  { sourceSha = request.sourceSha, objectCount = 1 } = {}) {
   const initializedAt = `${runId.slice(0, 4)}-${runId.slice(4, 6)}-${runId.slice(6, 8)}T${runId.slice(8)}:00:00Z`;
   const freshUntil = new Date(Date.parse(initializedAt) + 30 * 3_600_000).toISOString();
   const descriptor = { runId, initializedAt, freshUntil,
@@ -39,16 +41,16 @@ function fixture(runId = '2026092300', invocation = request.invocation) {
   const rows = [{ path: `v2/ecmwf/${runId}/chunks/0/0.bin.gz`, bytes: 100, sha256: sha('a') }];
   const q = { schemaVersion: 2, kind: 'weatherx-staging-native-wind100-point-candidate',
     status: 'CREDENTIAL_FREE_POINT_PACK_INTEGRITY_QUALIFIED_NOT_PUBLISHED',
-    model: 'ecmwf', sourceSha: request.sourceSha, invocation, publicationMode: request.publicationMode,
+    model: 'ecmwf', sourceSha, invocation, publicationMode: request.publicationMode,
     inputSha256: sha('b'), runId, initializedAt, freshUntil,
-    pointPacks: { objectCount: 1, inventory: rows, descriptor, allFieldsExactlyMatchSourceStage: true },
+    pointPacks: { objectCount, inventory: rows, descriptor, allFieldsExactlyMatchSourceStage: true },
     native100m: { sourceFields: ['wind100_u', 'wind100_v'], valuesExactlyMatchSourceStage: true,
       valuesRepairedOrFilled: false, perLead: Array.from({ length: 81 }, () => ({ jointCoveragePermille: 1000 })) },
     credentialFreeIntegrityQualification: true, decodedProviderSemanticsVerified: true,
     dependencyClosureApproved: true, authenticatedCorePointInput: true,
     productionWritten: false, sharedReadCanaryActivated: false };
   const qualification = { schemaVersion: 1, kind: 'weatherx-production-native-wind100-qualification',
-    targetOrigin: ORIGIN, invocation, sourceSha: request.sourceSha,
+    targetOrigin: ORIGIN, invocation, sourceSha,
     coreSourceSha: readProductionPolicy().coreSourceSha, inputSha256: q.inputSha256, integrity: q };
   const artifactId = `prod-wind100-recurring-point-ecmwf-${invocation}`;
   const rootPrefix = `components/point-ecmwf/${artifactId}/`;
@@ -57,7 +59,7 @@ function fixture(runId = '2026092300', invocation = request.invocation) {
     componentId: 'point-ecmwf', generationTime: initializedAt,
     inventorySha256: hash(JSON.stringify(rows.map(row => ({
       path: row.path.slice('v2/ecmwf/'.length), size: row.bytes, sha256: row.sha256 })))),
-    mounts: ['point-series/v2/ecmwf/'], objectCount: 1,
+    mounts: ['point-series/v2/ecmwf/'], objectCount,
     quality: { status: 'passed', checks: ['manifest', 'inventory', 'remote_bytes', 'point_series'] },
     rootPrefix, pointSeries: { schemaVersion: 1, modelId: 'ecmwf', descriptor } };
   const manifestBody = encode(manifest);
@@ -241,7 +243,8 @@ test('writer adapter cannot address staging, active catalog, or another componen
     await assert.rejects(io.immutable(bucket, key, Buffer.from('x'), { sha256: hash('x') }));
   }
   assert.equal(calls.length, prior, 'refused keys must not reach S3');
-  assert.throws(() => recurringPrefixCapacity(50_000, fixture().qualification));
+  assert.throws(() => recurringPrefixCapacity(50_000, fixture().qualification, now),
+    /lacks capacity: existing 50000 \+ planned 2 = 50002 > maximum 50000/);
 });
 
 test('workflow stays disabled until two independent production approvals and has no active-catalog promotion', () => {
@@ -410,4 +413,348 @@ test('retention workflow defaults to reviewed dry-run and uses separate cleanup 
   assert.match(workflow, /PRODUCTION_WIND100_GC_READ_ACCESS_KEY_ID/);
   assert.match(workflow, /PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID/);
   assert.doesNotMatch(workflow, /R2_PRODUCTION_ACCESS_KEY_ID|STAGING_R2_WRITE_ACCESS_KEY_ID|catalogs\/current\.json/);
+});
+
+// ---- Capacity self-reclaim (inline retention), emptied-prefix progress and source re-pins ----
+
+const HOUR = 3_600_000;
+const POINT_OBJECTS = 4_140; // measured objects per recurring point component, plus component.json
+const runIdAt = time => new Date(time).toISOString().replace(/[-:T]/g, '').slice(0, 10);
+const invocationFor = k => `${35834279562 + k}-1`;
+const prefixForInvocation = invocation => `${COMPONENT_PREFIX}${invocation}/`;
+
+// Object store with per-prefix component keys so 100 publications of 4,141 objects stay fast.
+function storeIo() {
+  const data = new Map(), components = new Map(), stats = { deleted: 0, deletedKeys: new Set() };
+  let etag = 0;
+  const prefixOf = key => key.slice(0, key.indexOf('/', COMPONENT_PREFIX.length) + 1);
+  const io = {
+    async get(bucket, key) {
+      if (bucket === COMPONENTS) {
+        const body = components.get(prefixOf(key))?.get(key);
+        return body ? { body } : null;
+      }
+      const body = data.get(key);
+      return body ? { body, etag: key === POINTER_KEY ? `${etag}` : 'immutable' } : null;
+    },
+    async immutable(bucket, key, body) {
+      assert.equal(bucket, DATA);
+      if (data.has(key)) assert.ok(data.get(key).equals(body)); else data.set(key, body);
+    },
+    async putPointer(body, previous) {
+      if (previous !== (data.has(POINTER_KEY) ? `${etag}` : null)) return false;
+      data.set(POINTER_KEY, body); etag++; return true;
+    },
+    async listPrefix(prefix) { return [...(components.get(prefix)?.keys() ?? [])]; },
+    async prefixCount() { let count = 0; for (const keys of components.values()) count += keys.size; return count; },
+  };
+  const deleteForPrefix = async prefix => ({ async delete(key) {
+    assert.ok(key.startsWith(prefix));
+    assert.ok(components.get(prefix)?.delete(key));
+    stats.deleted++; stats.deletedKeys.add(key);
+  } });
+  const upload = f => {
+    const prefix = f.componentReceipt.manifestKey.slice(0, -'component.json'.length);
+    const keys = new Map([[f.componentReceipt.manifestKey, f.manifestBody]]);
+    const count = f.qualification.integrity.pointPacks.objectCount;
+    for (let index = 0; index < count; index++) keys.set(`${prefix}v2/chunk-${index}.bin.gz`, Buffer.from('x'));
+    components.set(prefix, keys);
+  };
+  const pointer = () => JSON.parse(data.get(POINTER_KEY));
+  return { io, data, components, stats, deleteForPrefix, upload, pointer };
+}
+
+// Mirrors the recurring job order: inline reclaim, capacity check, upload, publish, activate.
+async function publishRun(store, { k, at, init, policy = readProductionPolicy(), reclaim = true }) {
+  const invocation = invocationFor(k);
+  const f = fixture(runIdAt(init), invocation, { sourceSha: policy.sourceSha, objectCount: POINT_OBJECTS });
+  const reclaimed = reclaim && store.data.has(POINTER_KEY)
+    ? await reclaimRetired({ io: store.io, deleteForPrefix: store.deleteForPrefix,
+      catalogValidator: () => true, now: () => at, policy }) : null;
+  const capacity = recurringPrefixCapacity(await store.io.prefixCount(), f.qualification, at, policy);
+  store.upload(f);
+  const selection = await publishCandidate({ request: { ...request, invocation, sourceSha: policy.sourceSha },
+    qualification: f.qualification, componentReceipt: f.componentReceipt, io: store.io,
+    now: () => at, catalogValidator: () => true, policy });
+  await activateCandidate({ selection, selectionSha256: hash(encode(selection)), io: store.io,
+    now: () => at, catalogValidator: () => true, policy });
+  return { selection, capacity, reclaimed, f };
+}
+
+const BASE = Date.parse('2026-10-01T00:00:00Z');
+const cadence = k => ({ k, init: BASE + k * 6 * HOUR, at: BASE + k * 6 * HOUR + 9 * HOUR });
+
+// Twelve 4,141-object publications fill 49,692 of 50,000 objects, as production did on 10-13.
+async function backlog() {
+  const store = storeIo();
+  for (let k = 0; k < 12; k++) await publishRun(store, { ...cadence(k), reclaim: false });
+  assert.equal(await store.io.prefixCount(), 49_692);
+  return store;
+}
+
+function assertProtectedIntact(store) {
+  for (const entry of store.pointer().entries) {
+    const prefix = prefixForInvocation(entry.catalogId.slice('prod-wind100-recurring-'.length));
+    assert.equal(store.components.get(prefix)?.size, POINT_OBJECTS + 1, `${entry.catalogId} lost objects`);
+  }
+}
+
+test('capacity refusal and headroom warning print existing, planned and maximum counts', async () => {
+  const store = await backlog();
+  const next = fixture(runIdAt(cadence(12).init), invocationFor(12), { objectCount: POINT_OBJECTS });
+  assert.throws(() => recurringPrefixCapacity(49_692, next.qualification, cadence(12).at),
+    /lacks capacity: existing 49692 \+ planned 4141 = 53833 > maximum 50000/);
+  const roomy = recurringPrefixCapacity(37_577, next.qualification, cadence(12).at);
+  assert.deepEqual(roomy, { existingObjects: 37_577, plannedObjects: 4_141, maximumObjects: 50_000,
+    headroomPublications: 3 });
+  assert.equal(capacityWarning(roomy), null);
+  const tight = recurringPrefixCapacity(37_578, next.qualification, cadence(12).at);
+  assert.equal(tight.headroomPublications, 2);
+  assert.match(capacityWarning(tight),
+    /headroom is 2 publication\(s\) including this one \(existing 37578, planned 4141, maximum 50000\)/);
+  const code = readFileSync(new URL('../tools/production-wind100.mjs', import.meta.url), 'utf8');
+  assert.match(code, /if \(warning\) log\(`::warning title=Production Wind100 capacity::\$\{warning\}`\)/);
+  assert.equal(store.stats.deleted, 0);
+});
+
+test('an emptied retired prefix is skipped so planning progresses to older retired prefixes', async () => {
+  const store = await backlog();
+  const at = cadence(12).at;
+  // An earlier run (the 10-10 manual cleanup) emptied the oldest retired prefix.
+  const emptied = prefixForInvocation(invocationFor(0));
+  store.components.set(emptied, new Map());
+  const plan = await planRetention({ io: store.io, now: () => at, catalogValidator: () => true });
+  assert.deepEqual(plan.skippedEmptyCatalogIds, [`prod-wind100-recurring-${invocationFor(0)}`]);
+  assert.deepEqual(plan.candidates.map(row => row.prefix),
+    [prefixForInvocation(invocationFor(1)), prefixForInvocation(invocationFor(2))]);
+  assert.ok(plan.candidates.every(row => row.keys.length === POINT_OBJECTS + 1));
+  await executeRetention({ plan, io: store.io, deleteForPrefix: store.deleteForPrefix,
+    catalogValidator: () => true, approvedPlanSha256: plan.planSha256, now: () => at });
+  // The next dry run moves on instead of re-selecting the prefixes it already emptied.
+  const replan = await planRetention({ io: store.io, now: () => at, catalogValidator: () => true });
+  assert.deepEqual(replan.skippedEmptyCatalogIds, [0, 1, 2].map(k => `prod-wind100-recurring-${invocationFor(k)}`));
+  assert.deepEqual(replan.candidates.map(row => row.prefix),
+    [prefixForInvocation(invocationFor(3)), prefixForInvocation(invocationFor(4))]);
+  // Once every eligible retired prefix (runs 0-5 here) is empty the plan is empty, not stuck on
+  // an empty candidate.
+  for (const k of [3, 4, 5]) store.components.set(prefixForInvocation(invocationFor(k)), new Map());
+  const drained = await planRetention({ io: store.io, now: () => at, catalogValidator: () => true });
+  assert.deepEqual(drained.candidates, []);
+  assert.equal(drained.totalObjects, 0);
+  assert.equal(drained.skippedEmptyCatalogIds.length, 6);
+  assert.equal((await reclaimRetired({ io: store.io, deleteForPrefix: store.deleteForPrefix,
+    catalogValidator: () => true, now: () => at })).status, 'nothing-to-reclaim');
+});
+
+test('one plan carries several candidates inside a hard delete bound that fits two full prefixes', async () => {
+  const store = await backlog();
+  const at = cadence(12).at;
+  const plan = await planRetention({ io: store.io, now: () => at, catalogValidator: () => true });
+  assert.equal(plan.maximumCandidates, 2);
+  assert.equal(plan.maximumObjects, MAX_DELETES);
+  assert.equal(plan.candidates.length, 2);
+  assert.equal(plan.totalObjects, 2 * (POINT_OBJECTS + 1));
+  assert.ok(MAX_DELETES >= 2 * (POINT_OBJECTS + 1) && MAX_DELETES <= 10_000);
+  // Asking for more candidates still stops at the delete budget rather than exceeding it.
+  const wide = await planRetention({ io: store.io, now: () => at + 4 * 24 * HOUR,
+    catalogValidator: () => true, maximumCandidates: 8 });
+  assert.equal(wide.candidates.length, 2);
+  assert.ok(wide.totalObjects <= MAX_DELETES);
+  await assert.rejects(planRetention({ io: store.io, now: () => at, catalogValidator: () => true,
+    maximumObjects: MAX_DELETES + 1 }));
+  await assert.rejects(executeRetention({ plan, io: store.io, deleteForPrefix: store.deleteForPrefix,
+    catalogValidator: () => true, approvedPlanSha256: plan.planSha256, now: () => at,
+    maximumDeletes: MAX_DELETES + 1 }));
+  await assert.rejects(executeRetention({ plan, io: store.io, deleteForPrefix: store.deleteForPrefix,
+    catalogValidator: () => true, approvedPlanSha256: plan.planSha256, now: () => at,
+    maximumDeletes: POINT_OBJECTS }), /delete budget/);
+  assert.equal(store.stats.deleted, 0);
+  const result = await executeRetention({ plan, io: store.io, deleteForPrefix: store.deleteForPrefix,
+    catalogValidator: () => true, approvedPlanSha256: plan.planSha256, now: () => at });
+  assert.equal(result.deleted, 2 * (POINT_OBJECTS + 1));
+  assert.equal(await store.io.prefixCount(), 49_692 - 2 * (POINT_OBJECTS + 1));
+});
+
+test('protected current and rollback entries are never selected, even long past their grace', async () => {
+  const store = await backlog();
+  const later = cadence(12).at + 10 * 24 * HOUR; // stale pointer: both live entries expired long ago
+  const protectedIds = store.pointer().entries.map(row => row.catalogId).sort();
+  let rounds = 0;
+  for (;;) {
+    const result = await reclaimRetired({ io: store.io, deleteForPrefix: store.deleteForPrefix,
+      catalogValidator: () => true, now: () => later });
+    for (const id of result.candidates) assert.ok(!protectedIds.includes(id));
+    if (result.status === 'nothing-to-reclaim') break;
+    assert.ok(++rounds <= 10);
+  }
+  assertProtectedIntact(store);
+  assert.equal(await store.io.prefixCount(), 2 * (POINT_OBJECTS + 1));
+  for (const key of store.stats.deletedKeys)
+    assert.ok(!protectedIds.some(id => key.startsWith(prefixForInvocation(id.slice('prod-wind100-recurring-'.length)))));
+  // A tampered plan naming a protected entry is refused before any deletion.
+  const plan = await planRetention({ io: store.io, now: () => later, catalogValidator: () => true });
+  const protectedEntry = store.pointer().entries[0];
+  const prefix = prefixForInvocation(protectedEntry.catalogId.slice('prod-wind100-recurring-'.length));
+  const { planSha256: _, ...content } = plan;
+  const forged = { ...content, candidates: [{ catalogId: protectedEntry.catalogId, runId: protectedEntry.runId,
+    freshUntil: protectedEntry.freshUntil, prefix, keys: [...store.components.get(prefix).keys()].sort() }] };
+  forged.totalObjects = forged.candidates[0].keys.length;
+  const signed = { ...forged, planSha256: hash(JSON.stringify(forged)) };
+  const before = store.stats.deleted;
+  await assert.rejects(executeRetention({ plan: signed, io: store.io, deleteForPrefix: store.deleteForPrefix,
+    catalogValidator: () => true, approvedPlanSha256: signed.planSha256, now: () => later }), /plan changed/);
+  assert.equal(store.stats.deleted, before);
+  assertProtectedIntact(store);
+});
+
+test('inline reclaim keeps 100 successive publications under the cap, including missed reclaims', async () => {
+  const store = storeIo();
+  let peak = 0, warnings = 0, reclaimedRuns = 0;
+  for (let k = 0; k < 100; k++) {
+    // Every ninth reclaim fails (transport or credential fault); the next run catches up.
+    const run = await publishRun(store, { ...cadence(k), reclaim: k % 9 !== 4 });
+    peak = Math.max(peak, run.capacity.existingObjects + run.capacity.plannedObjects);
+    if (capacityWarning(run.capacity)) warnings++;
+    if (run.reclaimed?.deleted) reclaimedRuns++;
+    assertProtectedIntact(store);
+  }
+  assert.ok(peak <= 50_000, `peak ${peak}`);
+  assert.ok(peak <= 8 * (POINT_OBJECTS + 1), `steady state should stay well under the cap, peak ${peak}`);
+  assert.equal(warnings, 0);
+  assert.ok(reclaimedRuns >= 80);
+});
+
+test('inline reclaim recovers the at-cap backlog on the first publication after deployment', async () => {
+  const store = await backlog();
+  // Without reclaim the 13th publication is refused (production since 10-14).
+  const blocked = fixture(runIdAt(cadence(12).init), invocationFor(12), { objectCount: POINT_OBJECTS });
+  assert.throws(() => recurringPrefixCapacity(49_692, blocked.qualification, cadence(12).at), /lacks capacity/);
+  store.components.set(prefixForInvocation(invocationFor(0)), new Map()); // the 10-10 manual deletion
+  // Four days later the pointer is stale; the first publication reclaims and succeeds.
+  const late = { k: 30, init: cadence(30).init, at: cadence(30).at };
+  const run = await publishRun(store, late);
+  assert.equal(run.reclaimed.status, 'reclaimed-retired-production-wind100-objects');
+  assert.equal(run.reclaimed.candidates.length, 2);
+  assert.ok(run.capacity.existingObjects + run.capacity.plannedObjects <= 50_000);
+  assert.equal(store.pointer().entries[0].catalogId, run.selection.catalogId);
+  for (let k = 31; k < 40; k++) {
+    const next = await publishRun(store, cadence(k));
+    assert.ok(next.capacity.existingObjects + next.capacity.plannedObjects <= 50_000);
+  }
+  assertProtectedIntact(store);
+});
+
+test('a Wind100 source re-pin keeps activation, rollback and retention working on prior entries', async () => {
+  const oldPolicy = readProductionPolicy();
+  const newPin = 'e'.repeat(40);
+  const newPolicy = { ...oldPolicy, sourceSha: newPin, previousSourceShas: [oldPolicy.sourceSha] };
+  const strictPolicy = { ...newPolicy, previousSourceShas: [] };
+  const store = storeIo();
+  for (let k = 0; k < 4; k++) await publishRun(store, { ...cadence(k), policy: oldPolicy });
+  const oldPointer = store.pointer();
+  // Without the allowlist the next pin cannot even read the live pointer (the pre-fix failure).
+  assert.throws(() => validatePointer(oldPointer, cadence(4).at, strictPolicy), /allowlisted previous pin/);
+  assert.equal(validatePointer(oldPointer, cadence(4).at, newPolicy), oldPointer);
+  // The same model input selected under the old pin is republished under the new one.
+  const oldHead = oldPointer.entries[0];
+  assert.equal((await findQualifiedInput({ runId: oldHead.runId, inputSha256: oldHead.inputSha256,
+    io: store.io, now: () => cadence(4).at, catalogValidator: () => true, policy: newPolicy })).status, 'new-input');
+  // New entries must carry the current pin.
+  const stale = fixture(runIdAt(cadence(4).init), invocationFor(4), { sourceSha: oldPolicy.sourceSha });
+  await assert.rejects(publishCandidate({ request: { ...request, invocation: invocationFor(4) },
+    qualification: stale.qualification, componentReceipt: stale.componentReceipt, io: store.io,
+    now: () => cadence(4).at, catalogValidator: () => true, policy: newPolicy }));
+  const forgedSelection = { ...JSON.parse(store.data.get(oldHead.selectionKey)) };
+  await assert.rejects(activateCandidate({ selection: forgedSelection,
+    selectionSha256: oldHead.selectionSha256, io: store.io, now: () => cadence(4).at,
+    catalogValidator: () => true, policy: newPolicy }), /current pin/);
+  // Activation under the new pin keeps the old-pin prior entry as the rollback target.
+  const first = await publishRun(store, { ...cadence(4), policy: newPolicy });
+  assert.deepEqual(store.pointer().entries.map(row => row.sourceSha), [newPin, oldPolicy.sourceSha]);
+  assert.equal(first.selection.sourceSha, newPin);
+  // Rollback may restore the allowlisted prior entry; it is not a new selection.
+  const restored = await rollbackToPrior({ io: store.io, now: () => cadence(4).at + 60_000,
+    catalogValidator: () => true, policy: newPolicy });
+  assert.equal(restored.entries[0].sourceSha, oldPolicy.sourceSha);
+  // Publishing continues and retention walks journal records written under both pins.
+  for (let k = 5; k < 14; k++) await publishRun(store, { ...cadence(k), policy: newPolicy });
+  assertProtectedIntact(store);
+  const removedOld = [0, 1, 2, 3].filter(k => (store.components.get(prefixForInvocation(invocationFor(k)))?.size ?? 0) === 0);
+  assert.ok(removedOld.length >= 3, `old-pin prefixes reclaimed: ${removedOld}`);
+  const plan = await planRetention({ io: store.io, now: () => cadence(14).at, catalogValidator: () => true,
+    policy: newPolicy });
+  assert.ok(plan.ancestryRecordsChecked > 10);
+  await assert.rejects(planRetention({ io: store.io, now: () => cadence(14).at, catalogValidator: () => true,
+    policy: strictPolicy }));
+});
+
+test('inline reclaim adapter uses only the dedicated writer token and per-prefix DeleteObject credentials', async () => {
+  class GetObjectCommand { constructor(input) { this.input = input; } }
+  class ListObjectsV2Command { constructor(input) { this.input = input; } }
+  class DeleteObjectCommand { constructor(input) { this.input = input; } }
+  const sdk = { GetObjectCommand, ListObjectsV2Command, DeleteObjectCommand };
+  const readClient = { async send() { return { ContentLength: 2, Body: [Buffer.from('{}')], ETag: 'e',
+    Contents: [], IsTruncated: false }; }, destroy() {} };
+  const writer = { PRODUCTION_WIND100_R2_ACCOUNT_ID: env().PRODUCTION_WIND100_R2_ACCOUNT_ID,
+    PRODUCTION_WIND100_R2_ACCESS_KEY_ID: 'writerkeyid', PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY: 'w'.repeat(64) };
+  await assert.rejects(createReclaimIo({ ...writer, PRODUCTION_WIND100_R2_ACCESS_KEY_ID: '' }, sdk, readClient));
+  for (const extra of ['PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID', 'PRODUCTION_WIND100_GC_READ_ACCESS_KEY_ID',
+    'PRODUCTION_WIND100_GC_APPROVED_PLAN_SHA256', 'R2_PRODUCTION_ACCESS_KEY_ID', 'STAGING_R2_WRITE_ACCESS_KEY_ID'])
+    await assert.rejects(createReclaimIo({ ...writer, [extra]: 'x' }, sdk, readClient), new RegExp(extra));
+  // The manual cleanup adapter still refuses the writer token.
+  await assert.rejects(createRetentionIo({ ...writer, PRODUCTION_WIND100_GC_READ_ACCESS_KEY_ID: 'r',
+    PRODUCTION_WIND100_GC_READ_SECRET_ACCESS_KEY: 'r' }, sdk, readClient), /refuses PRODUCTION_WIND100_R2/);
+  const sessions = [], deletes = [];
+  const io = await createReclaimIo(writer, sdk, readClient, credentials => {
+    sessions.push(credentials);
+    return { async send(command) { deletes.push(command.input); }, destroy() {} };
+  });
+  await assert.rejects(io.get(DATA, 'catalogs/current.json'));
+  await assert.rejects(io.listPrefix('components/point-ecmwf/other/', 10));
+  const prefix = `${COMPONENT_PREFIX}35834279562-1/`;
+  const client = await io.deleteForPrefix(prefix);
+  await client.delete(`${prefix}component.json`);
+  await assert.rejects(client.delete('components/point-ecmwf/unrelated/component.json'));
+  assert.deepEqual(deletes, [{ Bucket: COMPONENTS, Key: `${prefix}component.json` }]);
+  const claims = JSON.parse(Buffer.from(Buffer.from(sessions[0].sessionToken, 'base64')
+    .toString().slice(4).split('.')[1], 'base64url'));
+  assert.equal(claims.iss, 'writerkeyid');
+  assert.deepEqual(claims.actions, ['DeleteObject']);
+  assert.deepEqual(claims.paths.prefixPaths, [prefix]);
+  assert.equal(claims.exp - claims.iat, 900);
+  assert.notEqual(sessions[0].secretAccessKey, writer.PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY);
+});
+
+test('recurring workflow reclaims before the capacity check with its existing writer credentials only', () => {
+  const workflow = readFileSync(new URL('../.github/workflows/production-wind100-recurring.yml', import.meta.url), 'utf8');
+  const steps = workflow.split(/\n      - /);
+  const reclaimIndex = steps.findIndex(step => step.startsWith('name: Reclaim journal-retired production point prefixes'));
+  const uploadIndex = steps.findIndex(step => step.startsWith('name: Upload one immutable production point component'));
+  assert.ok(reclaimIndex > 0 && uploadIndex === reclaimIndex + 1);
+  const reclaim = steps[reclaimIndex], upload = steps[uploadIndex];
+  assert.match(reclaim, /continue-on-error: true/);
+  assert.match(reclaim, /timeout-minutes: 30/);
+  assert.match(reclaim, /if: \$\{\{ steps\.preflight\.outputs\.status == 'new-input' \}\}/);
+  assert.match(reclaim, /node cycle\/tools\/production-wind100\.mjs reclaim "\$GITHUB_WORKSPACE\/atmos"/);
+  const secrets = name => [...name.matchAll(/secrets\.([A-Z0-9_]+)/g)].map(match => match[1]).sort();
+  assert.deepEqual(secrets(reclaim), ['PRODUCTION_WIND100_R2_ACCESS_KEY_ID', 'PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY']);
+  assert.ok(secrets(reclaim).every(name => secrets(upload).includes(name)));
+  assert.doesNotMatch(reclaim, /RCLONE_CONFIG|GC_|APPROVED_PLAN/);
+  assert.match(upload, /retention-gate production-wind100\/qualification\.json/);
+  assert.doesNotMatch(workflow, /PRODUCTION_WIND100_GC_(?:READ|DELETE)_|data-production-wind100-cleanup/);
+  assert.deepEqual([...workflow.matchAll(/^\s+name: (data-production[\w-]*)$/gm)].map(match => match[1]),
+    ['data-production-wind100']);
+  assert.deepEqual([...workflow.matchAll(/^\s{6}([A-Z0-9_]+):\n\s{8}required:/gm)].map(match => match[1]),
+    ['ATMOS_DEPLOY_KEY', 'PRODUCTION_WIND100_R2_ACCESS_KEY_ID', 'PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY']);
+});
+
+test('reclaim command runs behind the publisher gate and refuses cleanup or broad credentials before I/O', async () => {
+  await assert.rejects(main('reclaim', env(), ['/nonexistent']), /writer credentials are required/);
+  const writer = { ...env(), PRODUCTION_WIND100_R2_ACCESS_KEY_ID: 'writerkeyid',
+    PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY: 'w'.repeat(64) };
+  await assert.rejects(main('reclaim', { ...writer, GITHUB_JOB: 'retention' }, ['/nonexistent']));
+  await assert.rejects(main('reclaim', { ...writer, RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: 'writerkeyid' },
+    ['/nonexistent']));
+  await assert.rejects(main('reclaim', { ...writer, PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID: 'cleanup' },
+    ['/nonexistent']), /inline reclaim refuses PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID/);
 });

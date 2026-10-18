@@ -16,18 +16,58 @@ leaves an unreachable record; the cleanup planner starts at the live pointer
 hash and follows only its contiguous, verified journal chain. It rejects a
 missing, malformed, altered or cyclic link. It derives retired entries from
 those transitions, verifies each selection and catalog by their recorded
-hashes, and excludes both current pointer entries. It selects at most one
-expired candidate per plan, only after 18 hours beyond `freshUntil`.
+hashes, and excludes both current pointer entries. It considers the oldest
+retirement first, only after 18 hours beyond `freshUntil`. A retired prefix
+that already lists empty (an earlier run finished it) is recorded in
+`skippedEmptyCatalogIds` and skipped, so planning moves on to the next retired
+prefix instead of re-selecting the emptied one forever. One plan holds up to
+two candidates by default (at most eight) and never more than the 10,000-object
+delete bound, which fits two full 4,141-object prefixes; a prefix that would
+overrun the bound waits for the next run. The plan records its candidate and
+object limits, and execution recomputes the plan with exactly those limits.
 
 Run `.github/workflows/production-wind100-retention.yml` with its default
 `dry_run: true` to produce a reviewable artifact and `planSha256`. The
 separately approved execution recomputes the plan and requires that exact
 SHA-256. It re-reads the live pointer before **every** object deletion and
-stops if the pointer hash changed. It deletes at most 5,000 objects in one
+stops if the pointer hash changed. It deletes at most 10,000 objects in one
 run and never deletes catalog snapshots, selection receipts or the pointer.
 Partial deletion is replayable: a new dry run lists only remaining objects.
 An orphaned immutable component from a publication that never activated is
-not proved retired and is never collected automatically.
+not proved retired and is never collected automatically; it still needs the
+separately approved workflow.
+
+## Inline reclaim in the recurring publisher
+
+Each new-input production run reclaims journal-retired prefixes past grace
+before its capacity check (`production-wind100.mjs reclaim`, the step before
+"Upload one immutable production point component"). It uses the same planner
+and the same executor as the approved workflow: protected current and rollback
+entries are excluded, the plan is recomputed and must match, and the pointer
+is re-read and hash-checked before every deletion. Because the planner can only
+propose journal-proven retirements, this class needs no human plan hash. The
+step uses only the job's existing dedicated writer token; each deletion goes
+through a 15-minute `DeleteObject` credential minted from it for one prefix.
+It refuses cleanup-environment and broad credentials. The step is
+`continue-on-error` with a 30-minute bound: if reclaim fails, the capacity
+check in the upload step still decides and nothing is published past the cap.
+
+The capacity check prints existing, planned and maximum object counts when it
+refuses, and emits a `::warning::` when fewer than three publications of the
+planned size still fit (counting the current one). At four runs a day the
+steady state holds about six prefixes (about 25,000 objects); a missed reclaim
+is caught up by the next run's two-candidate budget.
+
+## Wind100 source re-pins
+
+New selections and activations must carry the current `sourceSha`. Prior
+pointer, journal and selection entries may carry the current pin or one listed
+in `previousSourceShas` of `tools/production-wind100-policy.json` (at most
+eight). When moving the Wind100 source pin, add the outgoing pin to
+`previousSourceShas` in the same change, otherwise activation and retention
+refuse the live pointer. Keep it there until no record inside the 64-record
+journal window references it (about 16 days at four runs a day). An input
+selected under an earlier pin is republished under the current one.
 
 The cleanup parent token must be dedicated to the
 `weatherx-components-production` bucket. The controller derives a 15-minute
