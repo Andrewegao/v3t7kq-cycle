@@ -4,10 +4,13 @@
 // recovery run is queued, pending, waiting or in progress. It first re-verifies that the triggering
 // run is this repository's own catalog-bake.yml on main. It can dispatch only observation-refresh.yml,
 // only in its scheduled mode (caller component-bake-chain); it never dispatches five-feed-recovery.yml.
+// While a lane or recovery run is active it first lets the shared stuck-lock reaper cancel a holder of
+// the observation lock orphaned at the environment gate (workflow-run-summary.mjs reapStuckHolders), and
+// then re-reads the active runs, so a freed lane is dispatched again by this same run.
 import {appendFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {CHAIN_CALLER, minutesSince} from './workflow-run-summary.mjs';
+import {CHAIN_CALLER, lockFreed, lockHolders, minutesSince, reapStuckHolders} from './workflow-run-summary.mjs';
 
 const API = 'https://api.github.com/repos/Andrewegao/v3t7kq-cycle';
 export const LANE = 'observation-refresh.yml';
@@ -35,7 +38,7 @@ export function chainDecision({enabled, lane, active, now}) {
     const minutes = minutesSince(started(run), now);
     const label = `run ${run.id} (${run.path?.split('/').pop()}) is ${run.status}`;
     if (minutes === null || minutes > STUCK_MINUTES)
-      return {dispatch: false, stuck: true, reason: `${label} since ${minutes ?? 'an unknown time'} min ago (more than ${STUCK_MINUTES}); the owner must inspect or cancel it`};
+      return {dispatch: false, stuck: true, reason: `${label} since ${minutes ?? 'an unknown time'} min ago (more than ${STUCK_MINUTES}) and was not cancelled automatically (only a job waiting at a reviewer-free environment gate for more than 30 min, with a known gate time and nothing started, is); the owner must inspect or cancel it`};
   }
   if (active.length) { const run = active[0]; return {dispatch: false, stuck: false, reason: `run ${run.id} (${run.path?.split('/').pop()}) is ${run.status}`}; }
   const newest = lane.find(run => run.event !== 'schedule');
@@ -55,15 +58,31 @@ async function github(method, path, token, fetcher, body) {
 
 const defaultSleep = ms => new Promise(done => setTimeout(done, ms));
 export async function main(env = process.env, now = Date.now(), fetcher = fetch, sleep = defaultSleep) {
-  const report = text => { console.log(text); if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${text}\n`); };
+  let reaped = [];
+  const report = body => {
+    const text = reaped.length ? `${body}\n\n### Stuck observation lock\n\n${reaped.join('\n')}` : body;
+    console.log(text); if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${text}\n`);
+  };
   if (!/^[1-9]\d{0,19}$/.test(env.GITHUB_RUN_ID ?? '') || !env.GH_TOKEN) throw new Error('run id and token required');
   if (env.ENABLED !== 'true') { report(`## Observation chain: not dispatched\n\n${chainDecision({enabled: env.ENABLED, lane: [], active: [], now}).reason}.`); return 0; }
   const get = path => github('GET', path, env.GH_TOKEN, fetcher);
   if (!/^[1-9]\d{0,19}$/.test(env.TRIGGER_RUN_ID ?? '') || !triggerAdmitted(await get(`/actions/runs/${env.TRIGGER_RUN_ID}`), env.GITHUB_REPOSITORY_ID))
     throw new Error(`refusing trigger run ${String(env.TRIGGER_RUN_ID ?? '').replace(/[^0-9]/g, '')}: not this repository's catalog-bake.yml on main (workflow_dispatch or schedule)`);
   const runs = async query => (await get(query))?.workflow_runs ?? [];
-  const active = [];
-  for (const workflow of [LANE, RECOVERY]) for (const status of ACTIVE) active.push(...await runs(`/actions/workflows/${workflow}/runs?status=${status}&per_page=10`));
+  const listActive = async () => {
+    const rows = [];
+    for (const workflow of [LANE, RECOVERY]) for (const status of ACTIVE) rows.push(...await runs(`/actions/workflows/${workflow}/runs?status=${status}&per_page=10`));
+    return rows;
+  };
+  let active = await listActive();
+  if (active.length) {
+    const holders = (await lockHolders({runId: env.GITHUB_RUN_ID, token: env.GH_TOKEN, fetcher, now, only: ['observations']})) ?? [];
+    if (holders.some(row => row.stuck)) {
+      const reap = await reapStuckHolders({holders, token: env.GH_TOKEN, fetcher, now, sleep});
+      reaped = reap.lines;
+      if (reap.results.some(lockFreed)) active = await listActive();
+    }
+  }
   const lane = await runs(`/actions/workflows/${LANE}/runs?per_page=30`);
   const decision = chainDecision({enabled: env.ENABLED, lane, active, now});
   if (decision.stuck) { report(`## Observation chain: BLOCKED\n\n${decision.reason}.`); return 1; }

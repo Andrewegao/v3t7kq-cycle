@@ -13,7 +13,7 @@ type EnergyFamily = 'glofas' | 'cams';
 type PlaceFamily = 'surf' | 'all';
 type Dedupe = 'clear' | 'unreadable';
 type DedupedLane = 'whole-bake' | 'fusion-issue' | 'staging-search' | 'place-renewal' | 'production-place-renewal' | 'energy-ingest';
-type DispatchResult =
+type DispatchResult = (
   | { kind: 'catalog'; model: ModelSelection; runId: number | null }
   | { kind: 'satellite-archive'; policy: 'hourly-tail-v1'; runId: number | null }
   | { kind: 'whole-bake'; model: 'all'; runId: number | null; dedupe: Dedupe }
@@ -22,7 +22,8 @@ type DispatchResult =
   | { kind: 'place-renewal'; family: PlaceFamily; runId: number | null; dedupe: Dedupe }
   | { kind: 'production-place-renewal'; family: 'tides'; runId: number | null; dedupe: Dedupe }
   | { kind: 'energy-ingest'; family: EnergyFamily; runId: number | null; dedupe: Dedupe }
-  | { kind: 'skipped'; lane: DedupedLane; workflow: string; activeRunId: number; activeStatus: string; activeEvent: string };
+  | { kind: 'skipped'; lane: DedupedLane; workflow: string; activeRunId: number; activeStatus: string; activeEvent: string }
+) & { reenabled?: true };
 type DispatchPlan =
   | { kind: 'catalog'; workflow: string; model: ModelSelection; inputs: { model: ModelSelection; target: 'staging' | 'production' } }
   | { kind: 'satellite-archive'; workflow: string; policy: 'hourly-tail-v1'; inputs: { policy: 'hourly-tail-v1' } }
@@ -161,6 +162,46 @@ export async function activeRunInSlot(
   }
 }
 
+// GitHub disables a repository's scheduled workflows after 60 days without repository activity, and a
+// dispatch to a disabled workflow is then refused with 422 ("Cannot trigger a 'workflow_dispatch' on a
+// disabled workflow"). The scheduler re-enables such a workflow once and retries the dispatch once, but
+// only when GitHub itself disabled it (state disabled_inactivity): a workflow an owner disabled
+// (disabled_manually) stays disabled and the dispatch fails as before. Both outcomes log one line.
+const DISABLED_WORKFLOW = /disabled workflow|workflow is disabled/i;
+export const REENABLE_SETTLE_MS = 1_000;
+
+type Reenable = { enabled: true; previousState: string } | { enabled: false; reason: string; previousState: string | null };
+
+async function reenableInactiveWorkflow(workflow: string, env: CloudflareBindings, fetcher: Fetcher): Promise<Reenable> {
+  let previousState: string | null = null;
+  try {
+    const response = await fetcher(workflowUrl(env, workflow), {
+      method: 'GET', headers: githubHeaders(env), signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      await response.body?.cancel();
+      return { enabled: false, reason: `workflow state unreadable (${response.status})`, previousState };
+    }
+    const value: unknown = JSON.parse(await boundedError(response));
+    if (value && typeof value === 'object' && 'state' in value && typeof value.state === 'string') previousState = value.state;
+  } catch (error) {
+    return { enabled: false, reason: `workflow state unreadable: ${String(error)}`, previousState };
+  }
+  if (previousState !== 'disabled_inactivity') {
+    return { enabled: false, reason: `workflow state is ${previousState ?? 'unknown'}; only disabled_inactivity is re-enabled`, previousState };
+  }
+  try {
+    const response = await fetcher(`${workflowUrl(env, workflow)}/enable`, {
+      method: 'PUT', headers: githubHeaders(env), signal: AbortSignal.timeout(10_000),
+    });
+    await response.body?.cancel();
+    if (response.status !== 204) return { enabled: false, reason: `enable refused (${response.status})`, previousState };
+  } catch (error) {
+    return { enabled: false, reason: `enable failed: ${String(error)}`, previousState };
+  }
+  return { enabled: true, previousState };
+}
+
 function retryable(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
@@ -196,8 +237,11 @@ export async function dispatchForCron(
   const workflow = encodeURIComponent(plan.workflow);
   const endpoint = `https://api.github.com/repos/${encodeURIComponent(env.GITHUB_OWNER)}/${encodeURIComponent(env.GITHUB_REPO)}/actions/workflows/${workflow}/dispatches`;
   const body = JSON.stringify({ ref: env.GITHUB_REF, inputs: plan.inputs });
+  // Re-enabling a workflow GitHub disabled for inactivity buys exactly one more dispatch attempt.
+  let reenabled = false;
+  const attempts = () => MAX_ATTEMPTS + (reenabled ? 1 : 0);
 
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < attempts(); attempt += 1) {
     let response: Response;
     try {
       response = await fetcher(endpoint, {
@@ -213,8 +257,8 @@ export async function dispatchForCron(
         signal: AbortSignal.timeout(15_000),
       });
     } catch (error) {
-      if (attempt === MAX_ATTEMPTS - 1) {
-        throw new Error(`GitHub workflow dispatch failed after ${MAX_ATTEMPTS} attempts: ${String(error)}`);
+      if (attempt === attempts() - 1) {
+        throw new Error(`GitHub workflow dispatch failed after ${attempts()} attempts: ${String(error)}`);
       }
       await sleep(250 * 2 ** attempt);
       continue;
@@ -232,20 +276,35 @@ export async function dispatchForCron(
           // The dispatch succeeded; an unrecognized optional response body does not invalidate it.
         }
       }
-      if (plan.kind === 'catalog') return { kind: 'catalog', model: plan.model, runId };
+      const marked = <T extends DispatchResult>(result: T): T => (reenabled ? { ...result, reenabled: true } : result);
+      if (plan.kind === 'catalog') return marked({ kind: 'catalog', model: plan.model, runId });
       if (plan.kind === 'satellite-archive') {
-        return { kind: 'satellite-archive', policy: plan.policy, runId };
+        return marked({ kind: 'satellite-archive', policy: plan.policy, runId });
       }
-      if (plan.kind === 'energy-ingest') return { kind: 'energy-ingest', family: plan.family, runId, dedupe };
-      if (plan.kind === 'whole-bake') return { kind: 'whole-bake', model: 'all', runId, dedupe };
-      if (plan.kind === 'fusion-issue') return { kind: 'fusion-issue', scope: 'full', runId, dedupe };
-      if (plan.kind === 'staging-search') return { kind: 'staging-search', action: 'renew', runId, dedupe };
-      if (plan.kind === 'production-place-renewal') return { kind: 'production-place-renewal', family: 'tides', runId, dedupe };
-      return { kind: 'place-renewal', family: plan.family, runId, dedupe };
+      if (plan.kind === 'energy-ingest') return marked({ kind: 'energy-ingest', family: plan.family, runId, dedupe });
+      if (plan.kind === 'whole-bake') return marked({ kind: 'whole-bake', model: 'all', runId, dedupe });
+      if (plan.kind === 'fusion-issue') return marked({ kind: 'fusion-issue', scope: 'full', runId, dedupe });
+      if (plan.kind === 'staging-search') return marked({ kind: 'staging-search', action: 'renew', runId, dedupe });
+      if (plan.kind === 'production-place-renewal') return marked({ kind: 'production-place-renewal', family: 'tides', runId, dedupe });
+      return marked({ kind: 'place-renewal', family: plan.family, runId, dedupe });
     }
 
     const error = await boundedError(response);
-    if (!retryable(response.status) || attempt === MAX_ATTEMPTS - 1) {
+    if (response.status === 422 && DISABLED_WORKFLOW.test(error) && !reenabled) {
+      const outcome = await reenableInactiveWorkflow(plan.workflow, env, fetcher);
+      console.log(JSON.stringify({
+        event: outcome.enabled ? 'github_workflow_reenabled' : 'github_workflow_disabled',
+        cron, workflow: plan.workflow, previousState: outcome.previousState,
+        ...(outcome.enabled ? {} : { reason: outcome.reason }),
+      }));
+      if (!outcome.enabled) {
+        throw new Error(`GitHub workflow dispatch failed (${response.status}): ${error}; not re-enabled: ${outcome.reason}`);
+      }
+      reenabled = true;
+      await sleep(REENABLE_SETTLE_MS);
+      continue;
+    }
+    if (!retryable(response.status) || attempt === attempts() - 1) {
       throw new Error(`GitHub workflow dispatch failed (${response.status}): ${error}`);
     }
     await sleep(250 * 2 ** attempt);

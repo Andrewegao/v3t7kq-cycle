@@ -79,6 +79,8 @@ jobs:
         run: |
           node --test tests/workflow-inventory.mjs tests/workflow-timing.mjs tests/platform-staging-transaction.mjs tests/production-account-audit.mjs
           node tools/workflow-inventory.mjs --check
+      - name: No new job holds a lock while naming a reviewer-free environment (shrinking allowlist)
+        run: node --test tests/lock-environment-invariant.mjs
       - name: Cron fallback stand-aside contracts
         run: node --test tests/fallback-stand-aside.mjs
       - name: Isolated staging forecast evidence policy
@@ -108,7 +110,7 @@ jobs:
       - name: Observation lane, five-feed collection, component stand-aside and atomic promotion contracts
         run: |
           node tools/atmos-source-pin.mjs --check
-          node --test tests/atmos-source-pin.mjs tests/five-feed-recovery.mjs tests/observation-summary.mjs tests/workflow-run-summary.mjs tests/component-bake-stand-aside.mjs tests/observation-chain.mjs
+          node --test tests/atmos-source-pin.mjs tests/five-feed-recovery.mjs tests/observation-summary.mjs tests/workflow-run-summary.mjs tests/stuck-lock-reaper.mjs tests/component-bake-stand-aside.mjs tests/observation-chain.mjs
           python3 -I tests/test_five_feed_collect.py
       - name: Staged UI artifact, manual promotion and privacy contracts
         run: node --test tests/ui-*.mjs

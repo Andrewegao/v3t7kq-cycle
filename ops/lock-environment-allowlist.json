@@ -1,0 +1,489 @@
+{
+  "note": "Jobs that hold a concurrency group (their own or their workflow's) while naming an environment without required reviewers. Such a job keeps the group for as long as it waits at the gate, and timeout-minutes does not tick during an environment wait (catalog-bake model and observation-refresh refresh held production locks for six days after the 2026-10-12 Actions incident). Seeded 2026-10-18 with every offender on main; tests/lock-environment-invariant.mjs fails on any job not listed here and on any entry that no longer matches, so the list only shrinks. Until it is empty the plan-job reaper (tools/workflow-run-summary.mjs reapStuckHolders) frees the component and observation locks. W6 moves the environments off the lock-holding jobs (after the owner moves the production environment secrets to repository level) and shrinks this list to zero.",
+  "environmentsWithRequiredReviewers": {
+    "source": "GET /repos/Andrewegao/v3t7kq-cycle/environments on 2026-10-18: the environments whose protection_rules include required_reviewers. A gate with reviewers is a person's bounded wait, not an orphan. Re-check this list when an environment's reviewers change.",
+    "names": [
+      "data-production-wind100-cleanup",
+      "production-account-audit",
+      "ui-production"
+    ]
+  },
+  "offenders": [
+    {
+      "workflow": "bake.yml",
+      "job": "bake",
+      "environment": "production",
+      "scope": "job",
+      "lock": "weatherx-data-maintenance"
+    },
+    {
+      "workflow": "cams-ingest.yml",
+      "job": "ingest",
+      "environment": "production",
+      "scope": "workflow",
+      "lock": "weatherx-energy-cams-production"
+    },
+    {
+      "workflow": "catalog-bake.yml",
+      "job": "model",
+      "environment": "production",
+      "scope": "job",
+      "lock": "weatherx-component-${{ github.event_name == 'workflow_dispatch' && inputs.target || vars.CATALOG_DEFAULT_TARGET || 'staging' }}-${{ matrix.model }}"
+    },
+    {
+      "workflow": "catalog-bootstrap.yml",
+      "job": "staging",
+      "environment": "staging",
+      "scope": "job",
+      "lock": "weatherx-catalog-bootstrap-staging"
+    },
+    {
+      "workflow": "catalog-production-bootstrap.yml",
+      "job": "bootstrap",
+      "environment": "production",
+      "scope": "workflow",
+      "lock": "weatherx-production-catalog-bootstrap"
+    },
+    {
+      "workflow": "catalog-production-safety-drill.yml",
+      "job": "drill",
+      "environment": "production",
+      "scope": "workflow",
+      "lock": "weatherx-production-catalog-safety-drill"
+    },
+    {
+      "workflow": "catalog-promote-existing.yml",
+      "job": "staging",
+      "environment": "staging",
+      "scope": "job",
+      "lock": "weatherx-component-${{ inputs.model }}"
+    },
+    {
+      "workflow": "catalog-safety-drill.yml",
+      "job": "staging",
+      "environment": "staging",
+      "scope": "job",
+      "lock": "weatherx-catalog-safety-drill-staging"
+    },
+    {
+      "workflow": "consumer-refresh.yml",
+      "job": "consumer-refresh",
+      "environment": "production",
+      "scope": "workflow",
+      "lock": "weatherx-production-data-edge"
+    },
+    {
+      "workflow": "data-edge-deploy.yml",
+      "job": "deploy",
+      "environment": "production",
+      "scope": "workflow",
+      "lock": "weatherx-production-data-edge"
+    },
+    {
+      "workflow": "data-reader-refresh.yml",
+      "job": "data-reader-refresh",
+      "environment": "production",
+      "scope": "workflow",
+      "lock": "weatherx-production-data-edge"
+    },
+    {
+      "workflow": "five-feed-recovery.yml",
+      "job": "recover",
+      "environment": "production",
+      "scope": "job",
+      "lock": "weatherx-observation-components-production"
+    },
+    {
+      "workflow": "fusion-evaluate.yml",
+      "job": "evaluate",
+      "environment": "production",
+      "scope": "workflow",
+      "lock": "weatherx-fusion-evaluation"
+    },
+    {
+      "workflow": "fusion-infra.yml",
+      "job": "deploy",
+      "environment": "${{ inputs.target }}",
+      "scope": "workflow",
+      "lock": "weatherx-fusion-infrastructure-${{ inputs.target }}"
+    },
+    {
+      "workflow": "fusion-issue.yml",
+      "job": "record",
+      "environment": "production",
+      "scope": "workflow",
+      "lock": "weatherx-fusion-issuance"
+    },
+    {
+      "workflow": "fusion-promote.yml",
+      "job": "promote",
+      "environment": "production",
+      "scope": "workflow",
+      "lock": "weatherx-fusion-promotion"
+    },
+    {
+      "workflow": "fusion-staging-evidence.yml",
+      "job": "record",
+      "environment": "staging",
+      "scope": "workflow",
+      "lock": "weatherx-fusion-staging-evidence"
+    },
+    {
+      "workflow": "gdacs-feed-release.yml",
+      "job": "repair",
+      "environment": "production",
+      "scope": "workflow",
+      "lock": "weatherx-ui-production"
+    },
+    {
+      "workflow": "gdacs-route-retire.yml",
+      "job": "retire",
+      "environment": "production",
+      "scope": "workflow",
+      "lock": "weatherx-production-data-edge"
+    },
+    {
+      "workflow": "glofas-ingest.yml",
+      "job": "ingest",
+      "environment": "production",
+      "scope": "workflow",
+      "lock": "weatherx-energy-glofas-production"
+    },
+    {
+      "workflow": "hydrology.yml",
+      "job": "prepare",
+      "environment": "staging",
+      "scope": "workflow",
+      "lock": "hydrology"
+    },
+    {
+      "workflow": "model-inputs.yml",
+      "job": "collect-independent",
+      "environment": "data-staging",
+      "scope": "workflow",
+      "lock": "weatherx-experimental-model-inputs"
+    },
+    {
+      "workflow": "model-inputs.yml",
+      "job": "collect",
+      "environment": "data-staging",
+      "scope": "workflow",
+      "lock": "weatherx-experimental-model-inputs"
+    },
+    {
+      "workflow": "nam-hi-diagnostic.yml",
+      "job": "diagnose",
+      "environment": "staging",
+      "scope": "workflow",
+      "lock": "weatherx-nam-hi-diagnostic"
+    },
+    {
+      "workflow": "observation-refresh.yml",
+      "job": "refresh",
+      "environment": "production",
+      "scope": "job",
+      "lock": "weatherx-observation-components-production"
+    },
+    {
+      "workflow": "platform-production-feed-routes.yml",
+      "job": "routes",
+      "environment": "production",
+      "scope": "workflow",
+      "lock": "weatherx-production-data-edge"
+    },
+    {
+      "workflow": "platform-staging-transaction.yml",
+      "job": "transact",
+      "environment": "platform-staging",
+      "scope": "workflow",
+      "lock": "weatherx-platform-staging-transaction"
+    },
+    {
+      "workflow": "platform-wind100-worker-release.yml",
+      "job": "release",
+      "environment": "production",
+      "scope": "workflow",
+      "lock": "weatherx-production-data-edge"
+    },
+    {
+      "workflow": "platform-worker-production-release.yml",
+      "job": "release",
+      "environment": "production",
+      "scope": "workflow",
+      "lock": "weatherx-production-data-edge"
+    },
+    {
+      "workflow": "point-route-activate.yml",
+      "job": "point-route",
+      "environment": "production",
+      "scope": "workflow",
+      "lock": "weatherx-production-data-edge"
+    },
+    {
+      "workflow": "production-components-retention.yml",
+      "job": "retention",
+      "environment": "data-production-components-cleanup",
+      "scope": "workflow",
+      "lock": "weatherx-production-components-retention"
+    },
+    {
+      "workflow": "production-place-renewal.yml",
+      "job": "renew",
+      "environment": "production",
+      "scope": "workflow",
+      "lock": "weatherx-places-production"
+    },
+    {
+      "workflow": "production-wind100-point-reader-release.yml",
+      "job": "release",
+      "environment": "production",
+      "scope": "workflow",
+      "lock": "weatherx-production-data-edge"
+    },
+    {
+      "workflow": "production-wind100-recurring.yml",
+      "job": "wind100",
+      "environment": "data-production-wind100",
+      "scope": "workflow",
+      "lock": "weatherx-production-native-wind100-recurring"
+    },
+    {
+      "workflow": "publish-current-model-production.yml",
+      "job": "publisher",
+      "environment": "production",
+      "scope": "job",
+      "lock": "weatherx-component-production-${{ inputs.model }}"
+    },
+    {
+      "workflow": "qualify-bake-throughput.yml",
+      "job": "qualify",
+      "environment": "atmos-source-read-ui",
+      "scope": "workflow",
+      "lock": "weatherx-bake-throughput-qualification"
+    },
+    {
+      "workflow": "road-production-release.yml",
+      "job": "build",
+      "environment": "atmos-source-read-ui",
+      "scope": "workflow",
+      "lock": "weatherx-road-production"
+    },
+    {
+      "workflow": "road-production-release.yml",
+      "job": "transfer",
+      "environment": "ui-staging",
+      "scope": "workflow",
+      "lock": "weatherx-road-production"
+    },
+    {
+      "workflow": "satellite-archive.yml",
+      "job": "backfill-plan",
+      "environment": "satellite-archive",
+      "scope": "workflow",
+      "lock": "satellite-archive"
+    },
+    {
+      "workflow": "satellite-archive.yml",
+      "job": "backfill",
+      "environment": "satellite-archive",
+      "scope": "workflow",
+      "lock": "satellite-archive"
+    },
+    {
+      "workflow": "satellite-archive.yml",
+      "job": "hourly",
+      "environment": "satellite-archive",
+      "scope": "workflow",
+      "lock": "satellite-archive"
+    },
+    {
+      "workflow": "scheduler-deploy.yml",
+      "job": "release",
+      "environment": "production",
+      "scope": "workflow",
+      "lock": "weatherx-model-scheduler-production"
+    },
+    {
+      "workflow": "source-checkout-probe.yml",
+      "job": "source-checkout",
+      "environment": "atmos-source-read-ui",
+      "scope": "workflow",
+      "lock": "weatherx-isolated-source-checkout-probe"
+    },
+    {
+      "workflow": "staging-consumer-refresh.yml",
+      "job": "refresh",
+      "environment": "data-staging",
+      "scope": "workflow",
+      "lock": "weatherx-staging-publication"
+    },
+    {
+      "workflow": "staging-current-selection.yml",
+      "job": "select",
+      "environment": "data-staging",
+      "scope": "workflow",
+      "lock": "weatherx-staging-current-selection"
+    },
+    {
+      "workflow": "staging-data-activate.yml",
+      "job": "activate",
+      "environment": "data-staging",
+      "scope": "workflow",
+      "lock": "weatherx-staging-publication"
+    },
+    {
+      "workflow": "staging-data.yml",
+      "job": "prepare",
+      "environment": "data-staging",
+      "scope": "workflow",
+      "lock": "weatherx-shared-staging-preparation"
+    },
+    {
+      "workflow": "staging-follow-master.yml",
+      "job": "follow",
+      "environment": "staging",
+      "scope": "workflow",
+      "lock": "weatherx-staging-follow-master"
+    },
+    {
+      "workflow": "staging-model-components.yml",
+      "job": "qualify",
+      "environment": "data-staging",
+      "scope": "workflow",
+      "lock": "weatherx-staging-model-components-${{ inputs.model }}"
+    },
+    {
+      "workflow": "staging-model-selection.yml",
+      "job": "assemble",
+      "environment": "data-staging",
+      "scope": "workflow",
+      "lock": "weatherx-staging-model-selection"
+    },
+    {
+      "workflow": "staging-place-renewal.yml",
+      "job": "renew",
+      "environment": "data-staging",
+      "scope": "workflow",
+      "lock": "weatherx-staging-publication"
+    },
+    {
+      "workflow": "staging-places.yml",
+      "job": "places",
+      "environment": "data-staging",
+      "scope": "workflow",
+      "lock": "weatherx-staging-publication"
+    },
+    {
+      "workflow": "staging-search-reader.yml",
+      "job": "reader",
+      "environment": "data-staging",
+      "scope": "workflow",
+      "lock": "weatherx-staging-publication"
+    },
+    {
+      "workflow": "staging-search.yml",
+      "job": "search",
+      "environment": "data-staging",
+      "scope": "workflow",
+      "lock": "weatherx-staging-search"
+    },
+    {
+      "workflow": "staging-shared-read-pin.yml",
+      "job": "pin",
+      "environment": "data-staging",
+      "scope": "workflow",
+      "lock": "weatherx-staging-shared-read-pin"
+    },
+    {
+      "workflow": "staging-shared-read-probe.yml",
+      "job": "probe",
+      "environment": "data-staging",
+      "scope": "workflow",
+      "lock": "weatherx-staging-shared-read-probe"
+    },
+    {
+      "workflow": "staging-tc-guidance.yml",
+      "job": "publish",
+      "environment": "data-staging",
+      "scope": "workflow",
+      "lock": "weatherx-staging-tc-guidance"
+    },
+    {
+      "workflow": "staging-wind100-recurring.yml",
+      "job": "wind100",
+      "environment": "data-staging",
+      "scope": "workflow",
+      "lock": "weatherx-staging-native-wind100-recurring"
+    },
+    {
+      "workflow": "staging-wind100.yml",
+      "job": "wind100",
+      "environment": "data-staging",
+      "scope": "workflow",
+      "lock": "weatherx-staging-native-wind100"
+    },
+    {
+      "workflow": "train3-baseline-preparation.yml",
+      "job": "prepare",
+      "environment": "data-staging",
+      "scope": "workflow",
+      "lock": "weatherx-train3-baseline-preparation"
+    },
+    {
+      "workflow": "ui-layer-diagnostics.yml",
+      "job": "diagnose",
+      "environment": "staging",
+      "scope": "workflow",
+      "lock": "weatherx-read-only-layer-diagnostics"
+    },
+    {
+      "workflow": "ui-staging-tc.yml",
+      "job": "build",
+      "environment": "atmos-source-read-ui",
+      "scope": "workflow",
+      "lock": "weatherx-ui-tc-build"
+    },
+    {
+      "workflow": "ui-staging.yml",
+      "job": "app-tests",
+      "environment": "atmos-source-read-ui",
+      "scope": "workflow",
+      "lock": "weatherx-ui-staging"
+    },
+    {
+      "workflow": "ui-staging.yml",
+      "job": "atmos-evidence",
+      "environment": "atmos-ci-evidence",
+      "scope": "workflow",
+      "lock": "weatherx-ui-staging"
+    },
+    {
+      "workflow": "ui-staging.yml",
+      "job": "build",
+      "environment": "atmos-source-read-ui",
+      "scope": "workflow",
+      "lock": "weatherx-ui-staging"
+    },
+    {
+      "workflow": "ui-staging.yml",
+      "job": "profile",
+      "environment": "ui-staging",
+      "scope": "workflow",
+      "lock": "weatherx-ui-staging"
+    },
+    {
+      "workflow": "ui-staging.yml",
+      "job": "qualify",
+      "environment": "ui-staging",
+      "scope": "workflow",
+      "lock": "weatherx-ui-staging"
+    },
+    {
+      "workflow": "verify-backfill.yml",
+      "job": "backfill",
+      "environment": "production",
+      "scope": "workflow",
+      "lock": "${{ inputs.half == 'full' && 'bake' || format('verify-backfill-{0}', inputs.half) }}"
+    }
+  ]
+}

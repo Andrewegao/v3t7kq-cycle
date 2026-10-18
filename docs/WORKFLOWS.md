@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `6950bc0440937efbfa2b715b0e69ef73fcbd30092ac98b7f5de4c42dfe5fa375`.
+Source digest (registry and workflow bytes): `77f946f6667c3258e49af9e93550625fc7e9644151cf7f0860213b85228fad6c`.
 
 71 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -207,26 +207,26 @@ Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: no
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [plan](../.github/workflows/catalog-bake.yml#L47) ← no needs | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
-| [model](../.github/workflows/catalog-bake.yml#L72) ← <code>plan</code> | <code>ubuntu-latest</code> | <code>production</code> | <code>210</code> | <code>{"group":"weatherx-component-${{ github.event_name == 'workflow_dispatch' &amp;&amp; inputs.target &#124;&#124; vars.CATALOG_DEFAULT_TARGET &#124;&#124; 'staging' }}-${{ matrix.model }}","cancel-in-progress":false}</code> | <code>{"fail-fast":false,"max-parallel":4,"matrix":{"model":"${{ fromJSON(needs.plan.outputs.models &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model == 'slow' &amp;&amp; '[\"ecmwf\",\"gfs\",\"aifs\"]' &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model != 'all' &amp;&amp; format('[\"{0}\"]', inputs.model) &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; '[\"ecmwf\",\"gfs\",\"hrrr\",\"aifs\"]' &#124;&#124; github.event.schedule == '8-59/10 * * * *' &amp;&amp; '[\"hrrr\"]' &#124;&#124; '[\"ecmwf\",\"gfs\",\"aifs\"]') }}"}}</code> | inherits workflow/default policy |
-| [summary](../.github/workflows/catalog-bake.yml#L306) ← <code>["plan","model"]</code> | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
+| [plan](../.github/workflows/catalog-bake.yml#L51) ← no needs | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"write"}</code> |
+| [model](../.github/workflows/catalog-bake.yml#L76) ← <code>plan</code> | <code>ubuntu-latest</code> | <code>production</code> | <code>210</code> | <code>{"group":"weatherx-component-${{ github.event_name == 'workflow_dispatch' &amp;&amp; inputs.target &#124;&#124; vars.CATALOG_DEFAULT_TARGET &#124;&#124; 'staging' }}-${{ matrix.model }}","cancel-in-progress":false}</code> | <code>{"fail-fast":false,"max-parallel":4,"matrix":{"model":"${{ fromJSON(needs.plan.outputs.models &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model == 'slow' &amp;&amp; '[\"ecmwf\",\"gfs\",\"aifs\"]' &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model != 'all' &amp;&amp; format('[\"{0}\"]', inputs.model) &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; '[\"ecmwf\",\"gfs\",\"hrrr\",\"aifs\"]' &#124;&#124; github.event.schedule == '8-59/10 * * * *' &amp;&amp; '[\"hrrr\"]' &#124;&#124; '[\"ecmwf\",\"gfs\",\"aifs\"]') }}"}}</code> | inherits workflow/default policy |
+| [summary](../.github/workflows/catalog-bake.yml#L310) ← <code>["plan","model"]</code> | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [plan](../.github/workflows/catalog-bake.yml#L47): <code>${{ github.event_name == 'workflow_dispatch' &#124;&#124; vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true' }}</code>
-- [model](../.github/workflows/catalog-bake.yml#L76): <code>${{ !cancelled() &amp;&amp; (github.event_name == 'workflow_dispatch' &#124;&#124; vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true') &amp;&amp; needs.plan.outputs.models != '[]' }}</code>
-- [summary](../.github/workflows/catalog-bake.yml#L307): <code>${{ always() &amp;&amp; (github.event_name == 'workflow_dispatch' &#124;&#124; vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true') }}</code>
+- [plan](../.github/workflows/catalog-bake.yml#L51): <code>${{ github.event_name == 'workflow_dispatch' &#124;&#124; vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true' }}</code>
+- [model](../.github/workflows/catalog-bake.yml#L80): <code>${{ !cancelled() &amp;&amp; (github.event_name == 'workflow_dispatch' &#124;&#124; vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true') &amp;&amp; needs.plan.outputs.models != '[]' }}</code>
+- [summary](../.github/workflows/catalog-bake.yml#L311): <code>${{ always() &amp;&amp; (github.event_name == 'workflow_dispatch' &#124;&#124; vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true') }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [plan / step 1](../.github/workflows/catalog-bake.yml#L57) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [model / Checkout WeatherX](../.github/workflows/catalog-bake.yml#L112) | <code>weatherx-hq/atmos</code> | <code>81e061dae0a03cc39e014dc08586bbd144823108</code> |
-| [model / Checkout the stand-aside check](../.github/workflows/catalog-bake.yml#L126) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [summary / step 1](../.github/workflows/catalog-bake.yml#L314) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [plan / step 1](../.github/workflows/catalog-bake.yml#L61) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [model / Checkout WeatherX](../.github/workflows/catalog-bake.yml#L116) | <code>weatherx-hq/atmos</code> | <code>81e061dae0a03cc39e014dc08586bbd144823108</code> |
+| [model / Checkout the stand-aside check](../.github/workflows/catalog-bake.yml#L130) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [summary / step 1](../.github/workflows/catalog-bake.yml#L318) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
-Variable references (declared names only; values and activation unknown): [CATALOG_DEFAULT_TARGET](../.github/workflows/catalog-bake.yml#L68), [CATALOG_GITHUB_FALLBACK_DISABLED](../.github/workflows/catalog-bake.yml#L47), [CURRENT_RUN_CATALOG_BAKE_ATMOS_SHA](../.github/workflows/catalog-bake.yml#L95), [CURRENT_RUN_POINT_REUSE_MODEL](../.github/workflows/catalog-bake.yml#L96).
+Variable references (declared names only; values and activation unknown): [CATALOG_DEFAULT_TARGET](../.github/workflows/catalog-bake.yml#L72), [CATALOG_GITHUB_FALLBACK_DISABLED](../.github/workflows/catalog-bake.yml#L51), [CURRENT_RUN_CATALOG_BAKE_ATMOS_SHA](../.github/workflows/catalog-bake.yml#L99), [CURRENT_RUN_POINT_REUSE_MODEL](../.github/workflows/catalog-bake.yml#L100).
 
 
 ## catalog-bootstrap
@@ -780,25 +780,25 @@ Variable references (declared names only; values and activation unknown): none d
 
 [.github/workflows/observation-chain.yml](../.github/workflows/observation-chain.yml#L1) · <code>Chain observation refresh to the component bake</code>
 
-Declared triggers: [workflow_run](../.github/workflows/observation-chain.yml#L15) <code>{"workflows":["WeatherX component bake"],"types":["requested"],"branches":["main"]}</code>.
+Declared triggers: [workflow_run](../.github/workflows/observation-chain.yml#L17) <code>{"workflows":["WeatherX component bake"],"types":["requested"],"branches":["main"]}</code>.
 
 Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: not declared.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [dispatch](../.github/workflows/observation-chain.yml#L23) ← no needs | <code>ubuntu-24.04</code> | not declared | <code>4</code> | <code>{"group":"weatherx-observation-chain","cancel-in-progress":false}</code> | not declared | <code>{"contents":"read","actions":"write"}</code> |
+| [dispatch](../.github/workflows/observation-chain.yml#L25) ← no needs | <code>ubuntu-24.04</code> | not declared | <code>4</code> | <code>{"group":"weatherx-observation-chain","cancel-in-progress":false}</code> | not declared | <code>{"contents":"read","actions":"write"}</code> |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [dispatch](../.github/workflows/observation-chain.yml#L23): <code>${{ vars.OBSERVATION_REFRESH_ENABLED == 'true' &amp;&amp; (github.event.workflow_run.event == 'workflow_dispatch' &#124;&#124; github.event.workflow_run.event == 'schedule') &amp;&amp; github.event.workflow_run.head_repository.full_name == github.repository &amp;&amp; github.event.workflow_run.head_branch == 'main' }}</code>
+- [dispatch](../.github/workflows/observation-chain.yml#L25): <code>${{ vars.OBSERVATION_REFRESH_ENABLED == 'true' &amp;&amp; (github.event.workflow_run.event == 'workflow_dispatch' &#124;&#124; github.event.workflow_run.event == 'schedule') &amp;&amp; github.event.workflow_run.head_repository.full_name == github.repository &amp;&amp; github.event.workflow_run.head_branch == 'main' }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [dispatch / step 1](../.github/workflows/observation-chain.yml#L38) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [dispatch / step 1](../.github/workflows/observation-chain.yml#L40) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
-Variable references (declared names only; values and activation unknown): [OBSERVATION_REFRESH_ENABLED](../.github/workflows/observation-chain.yml#L24).
+Variable references (declared names only; values and activation unknown): [OBSERVATION_REFRESH_ENABLED](../.github/workflows/observation-chain.yml#L26).
 
 
 ## observation-refresh
@@ -811,22 +811,22 @@ Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: no
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [plan](../.github/workflows/observation-refresh.yml#L40) ← no needs | <code>ubuntu-24.04</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
-| [refresh](../.github/workflows/observation-refresh.yml#L62) ← <code>plan</code> | <code>ubuntu-24.04</code> | <code>production</code> | <code>60</code> | <code>{"group":"weatherx-observation-components-production","cancel-in-progress":false}</code> | not declared | inherits workflow/default policy |
+| [plan](../.github/workflows/observation-refresh.yml#L42) ← no needs | <code>ubuntu-24.04</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"write"}</code> |
+| [refresh](../.github/workflows/observation-refresh.yml#L64) ← <code>plan</code> | <code>ubuntu-24.04</code> | <code>production</code> | <code>60</code> | <code>{"group":"weatherx-observation-components-production","cancel-in-progress":false}</code> | not declared | inherits workflow/default policy |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [refresh](../.github/workflows/observation-refresh.yml#L63): <code>${{ needs.plan.outputs.run == 'true' }}</code>
+- [refresh](../.github/workflows/observation-refresh.yml#L65): <code>${{ needs.plan.outputs.run == 'true' }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [plan / step 1](../.github/workflows/observation-refresh.yml#L48) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [refresh / Checkout exact recovery controller](../.github/workflows/observation-refresh.yml#L107) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
-| [refresh / Checkout unchanged qualified five-feed producers](../.github/workflows/observation-refresh.yml#L114) | <code>weatherx-hq/atmos</code> | <code>81e061dae0a03cc39e014dc08586bbd144823108</code> |
+| [plan / step 1](../.github/workflows/observation-refresh.yml#L50) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [refresh / Checkout exact recovery controller](../.github/workflows/observation-refresh.yml#L109) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
+| [refresh / Checkout unchanged qualified five-feed producers](../.github/workflows/observation-refresh.yml#L116) | <code>weatherx-hq/atmos</code> | <code>81e061dae0a03cc39e014dc08586bbd144823108</code> |
 
-Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/observation-refresh.yml#L77), [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/observation-refresh.yml#L84), [OBSERVATION_REFRESH_ENABLED](../.github/workflows/observation-refresh.yml#L58).
+Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/observation-refresh.yml#L79), [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/observation-refresh.yml#L86), [OBSERVATION_REFRESH_ENABLED](../.github/workflows/observation-refresh.yml#L60).
 
 
 ## platform-production-feed-routes

@@ -128,8 +128,11 @@ test('the chain link is a secret-free workflow that can only dispatch the lane; 
   assert.equal((tool.match(/\/dispatches/g) || []).length, 1);
   assert.match(tool, /`\/actions\/workflows\/\$\{LANE\}\/dispatches`/);
   assert.doesNotMatch(tool, /RECOVER FIVE OBSERVATION FEEDS|confirmation/);
-  // The component bake itself gains no dispatch capability.
-  assert.doesNotMatch(catalog, /actions: write|\/dispatches|observation/);
+  // The component bake itself gains no dispatch capability. Its plan job may cancel a stuck lock
+  // holder (actions: write, tests/ui-approval-boundary.mjs pins that job); no other job may write.
+  assert.doesNotMatch(catalog, /\/dispatches|observation/);
+  assert.equal((catalog.match(/actions: write/g) || []).length, 1);
+  assert.match(catalog.split('\n  plan:\n')[1].split('\n  model:\n')[0], /actions: write/);
   // The lane accepts the chain caller, names it as a claim in its run name, and keeps its cron as the fallback.
   assert.match(lane, /- cron: '14,44 \* \* \* \*'/);
   assert.match(lane, /caller:\n\s+description: Leave empty[^\n]*\n\s+type: string\n\s+required: false\n\s+chain_run_id:/);

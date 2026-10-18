@@ -89,8 +89,10 @@ test('observation lane owns its own lock, fixed source, scoped key, and stage th
   assert.match(workflow,/schedule:\n(?:\s+#.*\n)*\s+- cron: '14,44 \* \* \* \*'/);
   assert.doesNotMatch(workflow,/workflow_call:/);
   const plan=workflow.split('\n  plan:\n')[1].split('\n  refresh:\n')[0];
-  assert.doesNotMatch(plan,/environment:|concurrency:|secrets\.|: write/);
-  assert.match(plan,/OBSERVATION_REFRESH_ENABLED/);assert.match(plan,/actions: read/);
+  assert.doesNotMatch(plan,/environment:|concurrency:|secrets\.|contents: write|deployments: write|write-all|\/dispatches/);
+  // actions: write is for the stuck-lock reaper's cancel only (tests/stuck-lock-reaper.mjs).
+  assert.match(plan,/OBSERVATION_REFRESH_ENABLED/);assert.match(plan,/    permissions:\n      contents: read\n      actions: write\n    outputs:/);
+  assert.equal((plan.match(/: write/g) || []).length, 1);
   assert.match(plan,/run: node tools\/workflow-run-summary\.mjs observation-plan/);
   assert.match(workflow,/workflow_dispatch:\n    inputs:\n      confirmation:\n[\s\S]*?required: false/);
   const refresh=workflow.split('\n  refresh:\n')[1];
