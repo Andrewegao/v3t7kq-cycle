@@ -72,6 +72,46 @@ export function strayPins(root = ROOT, declaration = readDeclaration(root)) {
   }
   return problems;
 }
+// One pin value. strayPins lets an independently qualified Atmos commit sit in its own listed
+// files, so a producer lane could still be re-classified onto an old source (catalog-bake was,
+// 10-10..10-18). Here the producer side is pinned by meaning, not by count: every workflow gated
+// by a declared approval variable is a listed pin site whose *ATMOS_SHA literals equal the
+// declaration, every CORE_ATMOS_SHA literal equals it, both Wind100 policies' coreSourceSha equal
+// it, and every vars.CURRENT_RUN_*ATMOS_SHA a workflow reads is declared (so the variables to set
+// at merge are exactly approvalVariables).
+const ATMOS_LITERAL = /^\s*(?:-\s+)?((?:[A-Z][A-Z0-9_]*_)?ATMOS_SHA):\s*['"]?([a-f0-9]{40})(?![0-9a-f])/;
+export const WIND100_POLICIES = ['tools/production-wind100-policy.json', 'tools/staging-wind100-policy.json'];
+export function pinAgreement(root = ROOT, declaration = readDeclaration(root)) {
+  const problems = [], pinned = new Set(declaration.pins.map(pin => pin.path)), names = new Set();
+  const approvals = Object.entries(declaration.approvalVariables ?? {});
+  if (!approvals.length) problems.push('approvalVariables must name the protected variables that approve the declared source');
+  for (const [key, field] of approvals) {
+    const match = /^[a-z0-9-]+\/([A-Z][A-Z0-9_]*)$/.exec(key);
+    if (!match || field !== 'atmosSha') problems.push(`approval variable ${key} must map <environment>/<NAME> to "atmosSha"`);
+    else names.add(match[1]);
+  }
+  for (const path of scannedFiles(root).filter(name => name.startsWith('.github/workflows/'))) {
+    const lines = readFileSync(join(root, path), 'utf8').split('\n'), gated = new Set();
+    lines.forEach((line, index) => {
+      for (const [, name] of line.matchAll(/\bvars\.([A-Z][A-Z0-9_]*)/g)) {
+        if (names.has(name)) gated.add(name);
+        else if (/^CURRENT_RUN_[A-Z0-9_]*ATMOS_SHA$/.test(name)) problems.push(`${path}:${index + 1}: approval variable ${name} is not declared in approvalVariables`);
+      }
+    });
+    if (gated.size && !pinned.has(path)) problems.push(`${path}: approved by ${[...gated].join(', ')} but not a declared pin site`);
+    lines.forEach((line, index) => {
+      const [, name, sha] = ATMOS_LITERAL.exec(line) ?? [];
+      if (sha && (gated.size || name === 'CORE_ATMOS_SHA') && sha !== declaration.atmosSha)
+        problems.push(`${path}:${index + 1}: ${name} ${sha} is not the declared producer source ${declaration.atmosSha}`);
+    });
+  }
+  for (const path of WIND100_POLICIES) {
+    const core = JSON.parse(readFileSync(join(root, path), 'utf8')).coreSourceSha;
+    if (core !== declaration.atmosSha) problems.push(`${path}: coreSourceSha ${core} is not the declared producer source ${declaration.atmosSha}`);
+  }
+  return problems;
+}
+
 // With a local Atmos clone, prove the classification itself (read-only `git cat-file`).
 export function verifyClassification(atmosRepo, root = ROOT, declaration = readDeclaration(root)) {
   const commit = sha => spawnSync('git', ['-C', atmosRepo, 'cat-file', '-e', `${sha}^{commit}`], {stdio: 'ignore'}).status === 0;
@@ -101,7 +141,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const [operation, value] = process.argv.slice(2);
   try {
     const problems = operation === '--check'
-      ? [...checkPins(), ...strayPins(), ...(value === '--atmos-repo' ? verifyClassification(process.argv[4] ?? '') : [])]
+      ? [...checkPins(), ...strayPins(), ...pinAgreement(), ...(value === '--atmos-repo' ? verifyClassification(process.argv[4] ?? '') : [])]
       : operation === '--set' ? setPins(value) : null;
     if (!problems) throw new Error('usage: atmos-source-pin.mjs --check [--atmos-repo DIR] | --set <40-character Atmos SHA>');
     if (problems.length) throw new Error(problems.join('\n'));
