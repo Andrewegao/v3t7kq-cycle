@@ -133,6 +133,16 @@ export function holderJobName(name, workflow = '') {
   return model && MODELS.includes(model) ? model : null;
 }
 export const lockName = model => model === 'observations' ? OBSERVATION_LOCK : `weatherx-component-production-${model}`;
+// bake.yml's whole-maintenance `bake` job holds weatherx-data-maintenance at the same production gate
+// and reaches it together with the last publishers (run 39136712828: bake and publish-gfs both started
+// 15:08:47Z). It is not a component lock holder (nothing above lists or stands aside for it), but when a
+// whole bake is judged for cancel it is a member like a publisher, under exactly the same rules.
+export const MAINTENANCE_LOCK = 'weatherx-data-maintenance';
+export function runMember(name, workflow) {
+  const model = holderJobName(name, workflow);
+  if (model) return {model, lock: lockName(model)};
+  return workflow === 'bake.yml' && name === 'bake' ? {model: 'maintenance', lock: MAINTENANCE_LOCK} : null;
+}
 
 // A job that queued behind its lock reaches the environment gate only when the lock frees, so its
 // age at the gate is measured from that deployment's `waiting` status, never from job.started_at
@@ -157,7 +167,9 @@ export async function gateWaitingSince({run, job, token, fetcher, environment = 
   const query = new URLSearchParams({environment, task: 'deploy', sha: run.head_sha});
   if (/^[A-Za-z0-9._/-]{1,200}$/.test(run.head_branch ?? '')) query.set('ref', run.head_branch);
   const ownJob = row => [row.target_url, row.log_url].some(url => String(url ?? '').endsWith(`/job/${job.id}`));
-  const spend = () => { if (budget.calls <= 0) { budget.exhausted = true; return false; } budget.calls -= 1; return true; };
+  // lastExhausted tells the caller whether THIS lookup ran out (budget.exhausted stays set once spent).
+  budget.lastExhausted = false;
+  const spend = () => { if (budget.calls <= 0) { budget.exhausted = budget.lastExhausted = true; return false; } budget.calls -= 1; return true; };
   for (let page = 1; page <= pages; page += 1) {
     if (!spend()) return null;
     const body = await github(`/deployments?${query}&per_page=100&page=${page}`, token, fetcher);
@@ -193,7 +205,6 @@ export async function lockHolders({runId, token, fetcher = fetch, now, only = nu
         for (const job of jobs) {
           const model = holderJobName(job.name, workflow);
           if (!model || (only && !only.includes(model)) || !['waiting', 'in_progress'].includes(job.status)) continue;
-          const spentBefore = budget.exhausted;
           const gate = job.status === 'waiting' ? await gateWaitingSince({run, job, token, fetcher, pages: gatePages, budget}) : null;
           // A holder whose gate status is not found is reported from its own start (an upper bound), so a
           // waiting holder is never reported as not stuck merely because its deployment is unknown. That
@@ -202,7 +213,7 @@ export async function lockHolders({runId, token, fetcher = fetch, now, only = nu
           const since = job.status === 'waiting' ? gate?.since ?? job.started_at ?? job.created_at ?? run.run_started_at : job.started_at;
           const minutes = minutesSince(since, now);
           holders.push({model, lock: lockName(model), runId: run.id, workflow, job: job.name, jobId: job.id, status: job.status, minutes, gateUnknown,
-            gateLookup: job.status !== 'waiting' ? 'none' : gate ? 'found' : budget.exhausted && !spentBefore ? 'budget' : 'not-found',
+            gateLookup: job.status !== 'waiting' ? 'none' : gate ? 'found' : budget.lastExhausted ? 'budget' : 'not-found',
             gateSince: gate?.since ?? null, environment: gate?.environment ?? null,
             stuck: job.status === 'waiting' && minutes !== null && minutes > STUCK_WAITING_MINUTES});
         }
@@ -235,10 +246,11 @@ export const MAX_REAPS = 5;
 const STARTED_STEP = new Set(['in_progress', 'completed']);
 const CANCEL_ACCEPTED = new Set([202, 409]);
 
+const BUDGET_REASON = `its gate waiting time is unknown (gate lookup budget exhausted: this plan run's ${GATE_CALL_BUDGET} deployment reads were spent), and a job is never cancelled on its start time`;
 // (a) the time at the gate must be known from the deployment's own `waiting` status. Needs no API read.
 export function gateRefusal(holder, now) {
   if (holder.status !== 'waiting') return 'it is not waiting at an environment gate';
-  if (holder.gateLookup === 'budget') return 'its gate waiting time is unknown (the gate lookup budget for this run was spent), and a job is never cancelled on its start time';
+  if (holder.gateLookup === 'budget') return BUDGET_REASON;
   if (holder.gateUnknown || !holder.gateSince || !holder.environment)
     return 'its gate waiting time is unknown (no `waiting` deployment status found for the job), and a job is never cancelled on its start time';
   const minutes = minutesSince(holder.gateSince, now);
@@ -314,18 +326,21 @@ export async function reapStuckHolders({holders, token, fetcher = fetch, now, sl
     let reason = runRefusal(run, workflow);
     const rows = [];
     for (const job of reason ? [] : jobs.filter(item => item.status !== 'completed')) {
-      const model = holderJobName(job.name, workflow);
+      const member = runMember(job.name, workflow);
+      const model = member?.model;
       let holder = listed.find(row => String(row.jobId) === String(job.id));
       if (!holder && model && job.status === 'waiting') {
-        // A holder of a model the calling plan did not request: look up its own gate under the same budget.
-        const before = budget.exhausted;
+        // A member the calling plan did not list (another model's publisher, or the whole bake's
+        // maintenance job): look up its own gate under the same budget.
         const gate = await gateWaitingSince({run, job, token, fetcher, budget}).catch(() => null);
         const minutes = minutesSince(gate?.since, now);
-        holder = {model, lock: lockName(model), runId: run.id, workflow, job: job.name, jobId: job.id, status: job.status,
-          minutes, gateUnknown: !gate, gateLookup: !gate && budget.exhausted && !before ? 'budget' : gate ? 'found' : 'not-found',
+        holder = {model, lock: member.lock, runId: run.id, workflow, job: job.name, jobId: job.id, status: job.status,
+          minutes, gateUnknown: !gate, gateLookup: gate ? 'found' : budget.lastExhausted ? 'budget' : 'not-found',
           gateSince: gate?.since ?? null, environment: gate?.environment ?? null, stuck: minutes !== null && minutes > STUCK_WAITING_MINUTES};
       } else if (holder && !model) holder = null;
       reason = jobRefusal(job, holder, now, model);
+      // Name the other member whose own gate check failed (for example the maintenance job).
+      if (reason && /^it[s ]/.test(reason) && !stuck.some(row => String(row.jobId) === String(job.id))) reason = `job "${job.name}" of that run: ${reason}`;
       if (reason) break;
       reason = environmentRefusal(await readEnvironment(holder.environment), holder.environment);
       if (reason) break;
@@ -378,6 +393,11 @@ export async function reapStuckHolders({holders, token, fetcher = fetch, now, sl
     else if (row.outcome === 'refused') lines.push(`- NOT CANCELLED ${describe(holder)}: it ${waited}. The cancel request was not accepted (HTTP ${row.cancel || 'none: request failed'}), so it was not force-cancelled either. The next plan run checks again; if this repeats, the owner must cancel that run.`);
     else if (row.outcome === 'left') lines.push(`- NOT FORCE-CANCELLED ${describe(holder)}: it ${waited}. A normal cancel was accepted (HTTP ${row.cancel}), but after ${window} s the run had changed (a job started, or it could not be re-read), so it was not force-cancelled. The next plan run checks again.`);
     else lines.push(`- STILL LISTED ${describe(holder)}: it ${waited}. Cancel (HTTP ${row.cancel}) and force-cancel (HTTP ${row.force}) were requested, but the run was not completed after ${window} s each; it may still hold the lock. The next plan run checks again.`);
+  }
+  // A spent lookup budget changes nothing, but it is named so a run left waiting for that reason is visible.
+  for (const runId of [...new Set(refused.filter(row => row.reason.endsWith(BUDGET_REASON)).map(row => String(row.holder.runId)))]) {
+    const {holder} = refused.find(row => String(row.holder.runId) === runId);
+    lines.push(`- LOOKUP BUDGET EXHAUSTED: run ${runId} (${holder.workflow}) was not cancelled: the gate lookup budget of ${GATE_CALL_BUDGET} deployment reads for this plan run was spent before its gate time was known. Nothing was changed; the next plan run checks again.`);
   }
   for (const {holder, reason} of refused)
     lines.push(`- NOT CANCELLED ${describe(holder)}: it has been ${holder.status} at the environment gate since ${ago(holder.minutes)}${holder.gateUnknown ? ' (gate status not found; measured from job start)' : ''}, holding ${holder.lock}; not cancelled automatically because ${reason}. The owner must cancel that run.`);

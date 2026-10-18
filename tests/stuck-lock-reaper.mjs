@@ -266,19 +266,22 @@ test('reapStuckHolders never throws and cancels each holder run once', async () 
 // A whole bake (shape of run 39136712828: every `publish-<model> / publisher` gates on production)
 // with HRRR and ICON both stuck at the gate and every other job finished.
 const BAKE = '39136712828';
-function wholeBake({iconGate = '2026-10-18T16:30:01Z', iconStatus = 'waiting'} = {}) {
+function wholeBake({iconGate = '2026-10-18T16:30:01Z', iconStatus = 'waiting', bakeGate = null} = {}) {
   const job = (id, name, status, started) => ({id, run_id: Number(BAKE), name, status, conclusion: status === 'completed' ? 'success' : null,
     created_at: started, started_at: started, completed_at: status === 'completed' ? started : null, steps: status === 'completed' ? [{name: 'Set up job', status: 'completed'}] : []});
   const statuses = {
     8000000001: [{id: 1, state: 'waiting', created_at: '2026-10-18T16:00:01Z', environment: 'production', target_url: `https://github.com/Andrewegao/v3t7kq-cycle/actions/runs/${BAKE}/job/9001`}],
     8000000002: [{id: 2, state: 'waiting', created_at: iconGate, environment: 'production', target_url: `https://github.com/Andrewegao/v3t7kq-cycle/actions/runs/${BAKE}/job/9002`}],
+    // The maintenance `bake` job's own deployment, created when it started with the last publisher.
+    8000000005: bakeGate ? [{id: 5, state: 'waiting', created_at: bakeGate, environment: 'production', target_url: `https://github.com/Andrewegao/v3t7kq-cycle/actions/runs/${BAKE}/job/9000`}] : [],
   };
-  const pages = [[[8000000003, '2026-10-18T17:59:00Z'], [8000000002, '2026-10-18T16:30:00Z'], [8000000001, '2026-10-18T16:00:00Z']]];
+  const pages = [[[8000000003, '2026-10-18T17:59:00Z'], [8000000002, '2026-10-18T16:30:00Z'], [8000000001, '2026-10-18T16:00:00Z'],
+    [8000000005, '2026-10-18T15:08:47Z']]];
   return {pages, statuses, runs: [], edit: state => {
     state.runs[BAKE] = {id: Number(BAKE), path: '.github/workflows/bake.yml', status: 'waiting', conclusion: null, event: 'workflow_dispatch', head_branch: 'main',
       head_sha: RECORDED.sha, created_at: '2026-10-18T14:35:54Z', run_started_at: '2026-10-18T14:35:54Z', updated_at: '2026-10-18T16:30:01Z',
       display_title: 'bake: all models + whole-data maintenance', run_attempt: 1};
-    state.jobs[BAKE] = [job(9000, 'bake', 'completed', '2026-10-18T15:08:47Z'), job(9003, 'publish-ecmwf / publisher', 'completed', '2026-10-18T15:40:00Z'),
+    state.jobs[BAKE] = [job(9000, 'bake', bakeGate ? 'waiting' : 'completed', '2026-10-18T15:08:47Z'), job(9003, 'publish-ecmwf / publisher', 'completed', '2026-10-18T15:40:00Z'),
       job(9001, 'publish-hrrr / publisher', 'waiting', '2026-10-18T16:00:00Z'), job(9002, 'publish-icon / publisher', iconStatus, '2026-10-18T16:30:00Z')];
   }};
 }
@@ -296,7 +299,7 @@ test('a whole bake whose only unfinished jobs are two stuck publishers is cancel
 
 test('a whole bake is kept when any other unfinished job in it is not itself a reapable stuck holder', async () => {
   for (const [variant, reason] of [
-    [{iconGate: '2026-10-18T18:00:00Z'}, 'it has waited at the gate for 5 min, not more than 30'],
+    [{iconGate: '2026-10-18T18:00:00Z'}, 'job "publish-icon / publisher" of that run: it has waited at the gate for 5 min, not more than 30'],
     [{iconStatus: 'in_progress'}, 'job "publish-icon / publisher" of that run is in_progress'],
     [{iconStatus: 'queued'}, 'job "publish-icon / publisher" of that run is queued, not waiting at a gate'],
   ]) {
@@ -361,7 +364,11 @@ test('gate lookups share one budget per invocation; a spent budget is unknown an
   assert.equal(fixture.requests.filter(row => row.path === '/deployments' || row.path.endsWith('/statuses')).length, 5);
   const result = await reapStuckHolders({holders, token: 't', fetcher: fixture.fetcher, now: NOW, sleep: fixture.sleep, budget});
   assert.deepEqual(fixture.posts(), []);
-  assert.match(result.lines.join('\n'), /the gate lookup budget for this run was spent/);
+  assert.match(result.lines.join('\n'), /not cancelled automatically because its gate waiting time is unknown \(gate lookup budget exhausted: this plan run's 60 deployment reads were spent\)/);
+  assert.match(result.lines.join('\n'), /^- LOOKUP BUDGET EXHAUSTED: run 38263168806 \(catalog-bake\.yml\) was not cancelled: the gate lookup budget of 60 deployment reads for this plan run was spent before its gate time was known\. Nothing was changed; the next plan run checks again\.$/m);
+  // Once spent, a later lookup in the same run is also reported as budget, not as not-found.
+  const later = await lockHolders({runId: '1', token: 't', fetcher: fixture.fetcher, now: NOW, only: ['hrrr'], budget});
+  assert.deepEqual(later.map(row => row.gateLookup), ['budget']);
   // The whole plan stays within the default budget even for the six-day-old holder (12 pages).
   const plan = recorded({runs: [HRRR, OBS]});
   await componentPlan({env: componentEnv, token: 't', fetcher: plan.fetcher, now: NOW, sleep: plan.sleep});
@@ -377,4 +384,32 @@ test('the report-only component summary reads only the newest deployment page', 
   assert.equal(code, 1, 'still red on the stuck holder (measured from job start)');
   assert.deepEqual(fixture.requests.filter(row => row.path === '/deployments').map(row => row.query.page), ['1']);
   assert.deepEqual(fixture.posts(), []);
+});
+
+test('the whole bake\'s maintenance `bake` job waiting with two stuck publishers is judged like them, and the run is cancelled once', async () => {
+  // Same moment as the last publisher, then stranded at the gate with it (run 39136712828 shape).
+  const fixture = recorded(wholeBake({bakeGate: '2026-10-18T15:08:48Z'}));
+  const plan = await componentPlan({env: componentEnv, token: 't', fetcher: fixture.fetcher, now: NOW, sleep: fixture.sleep});
+  assert.deepEqual(fixture.posts(), [`/actions/runs/${BAKE}/cancel`]);
+  assert.match(plan.text, /- CANCELLED run 39136712828 \(bake\.yml\) job "bake": it has been waiting at the production environment gate since 2\.9 h ago \(deployment status `waiting` at 2026-10-18T15:08:48Z\), holding weatherx-data-maintenance;/);
+  assert.match(plan.text, /- CANCELLED run 39136712828 \(bake\.yml\) job "publish-hrrr \/ publisher"/);
+  assert.match(plan.text, /- CANCELLED run 39136712828 \(bake\.yml\) job "publish-icon \/ publisher"/);
+  assert.deepEqual(plan.models, ['hrrr']);
+  // The maintenance job is a run member only: it is never listed as a component lock holder.
+  assert.equal(holderJobName('bake', 'bake.yml'), null);
+});
+
+test('a maintenance `bake` job whose gate wait is under 30 minutes keeps the whole bake, and HRRR stays set aside', async () => {
+  const fixture = recorded(wholeBake({bakeGate: '2026-10-18T17:50:00Z'}));
+  const plan = await componentPlan({env: componentEnv, token: 't', fetcher: fixture.fetcher, now: NOW, sleep: fixture.sleep});
+  assert.deepEqual(fixture.posts(), []);
+  assert.match(plan.text, /- NOT CANCELLED run 39136712828 \(bake\.yml\) job "publish-hrrr \/ publisher": .*because job "bake" of that run: it has waited at the gate for 15 min, not more than 30\./);
+  assert.deepEqual(plan.models, []);
+  assert.deepEqual(plan.aside.map(row => row.model), ['hrrr'], 'stand-aside semantics are unchanged');
+  // Started steps and a reviewed environment refuse it exactly like a publisher.
+  const started = recorded({...wholeBake({bakeGate: '2026-10-18T15:08:48Z'}), edit: state => { wholeBake({bakeGate: '2026-10-18T15:08:48Z'}).edit(state);
+    state.jobs[BAKE].find(job => job.name === 'bake').steps = [{name: 'Set up job', status: 'in_progress'}]; }});
+  const text = (await componentPlan({env: componentEnv, token: 't', fetcher: started.fetcher, now: NOW, sleep: started.sleep})).text;
+  assert.deepEqual(started.posts(), []);
+  assert.match(text, /because job "bake" has a started step\./);
 });
