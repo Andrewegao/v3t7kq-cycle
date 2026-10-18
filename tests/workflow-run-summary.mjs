@@ -6,6 +6,8 @@ import {join} from 'node:path';
 import {bakeMarkdown, bakeRows, bakeMode, componentMarkdown, componentPlan, wholeBakeReasons, lockHolders, holderJobName, main, MODELS, observationPlan, OBSERVATION_LOCK, CHAIN_CALLER} from '../tools/workflow-run-summary.mjs';
 
 const NOW = Date.parse('2026-10-06T18:00:00Z');
+// gateWaitingSince pages the environment's deployments for the run's task, SHA and (when known) branch.
+const deploymentsPath = (sha, page = 1, ref = null) => `/deployments?environment=production&task=deploy&sha=${sha}${ref ? `&ref=${ref}` : ''}&per_page=100&page=${page}`;
 const at = minutes => new Date(NOW - minutes * 60000).toISOString();
 const skipped = {result: 'skipped', outputs: {}};
 function needs(overrides = {}) {
@@ -75,9 +77,9 @@ test('a component job waiting at the environment gate past the bound is named as
       {name: 'publish-gfs', status: 'completed', started_at: at(200)}]},
     '/actions/runs/36762426044/jobs?per_page=100': {jobs: [{id: 110048100350, name: 'model (hrrr)', status: 'waiting', started_at: '2026-09-30T18:58:51Z'}]},
     // Live shape: the ECMWF publisher queued 14:46:14 behind its lock and reached the gate at 14:59:52.
-    [`/deployments?environment=production&sha=${'a'.repeat(40)}&per_page=100`]: [{id: 6887118736, created_at: '2026-10-06T14:46:14Z'}, {id: 5, created_at: '2026-10-06T12:00:00Z'}],
+    [deploymentsPath('a'.repeat(40))]: [{id: 6887118736, created_at: '2026-10-06T14:46:14Z'}, {id: 5, created_at: '2026-10-06T12:00:00Z'}],
     '/deployments/6887118736/statuses?per_page=30': [{state: 'waiting', created_at: '2026-10-06T14:59:52Z', target_url: 'https://github.com/x/actions/runs/37478458131/job/112331348219'}],
-    [`/deployments?environment=production&sha=${'b'.repeat(40)}&per_page=100`]: [{id: 6767671012, created_at: '2026-09-30T18:58:51Z'}],
+    [deploymentsPath('b'.repeat(40))]: [{id: 6767671012, created_at: '2026-09-30T18:58:51Z'}],
     '/deployments/6767671012/statuses?per_page=30': [{state: 'waiting', created_at: '2026-09-30T18:58:52Z', target_url: 'https://github.com/x/actions/runs/36762426044/job/110048100350'}],
     '/actions/runs/99/jobs?per_page=100': {jobs: [{name: 'model (gfs)', status: 'in_progress', started_at: at(4)}]},
   };
@@ -96,7 +98,7 @@ test('a component job waiting at the environment gate past the bound is named as
   assert.match(text, /weatherx-component-production-hrrr: run 36762426044 \(catalog-bake\.yml\) job "model \(hrrr\)" is waiting at the environment gate since 143\.0 h ago — STUCK/);
   assert.equal(holders[0].minutes, 180, 'gate age is measured from the 14:59:52 waiting status, not the 14:46 queue start');
   assert.ok(!requested.includes('/deployments/5/statuses?per_page=30'), 'unrelated deployments are not read');
-  assert.match(text, /The owner must cancel that run/);
+  assert.match(text, /The next component plan cancels it when its gate time is known and the environment has no required reviewers \(see that plan job\); otherwise the owner must cancel that run/);
   const env = {GITHUB_RUN_ID: '500', GITHUB_RUN_ATTEMPT: '1', GH_TOKEN: 'fixture', CATALOG_TARGET: 'production', GITHUB_EVENT_NAME: 'workflow_dispatch'};
   responses['/actions/runs/500/attempts/1/jobs?per_page=100'] = {jobs: [{name: 'model (hrrr)', conclusion: 'cancelled'}, {name: 'summary'}]};
   assert.equal(await main(['component'], {...env, SUMMARY_JOB_NAME: 'summary'}, NOW, fetcher), 1);
@@ -132,7 +134,7 @@ test('gate age ignores time queued behind the lock, so a normal waiting moment i
     '/actions/runs?status=waiting&per_page=50': {workflow_runs: [run, {...run, id: 8, display_title: 'component bake: ecmwf to staging'}]},
     '/actions/runs?status=in_progress&per_page=50': {workflow_runs: []},
     '/actions/runs/7/jobs?per_page=100': {jobs: [{id: 70, name: 'model (ecmwf)', status: 'waiting', started_at: at(55)}]},
-    [`/deployments?environment=production&sha=${'c'.repeat(40)}&per_page=100`]: [{id: 700, created_at: at(55)}],
+    [deploymentsPath('c'.repeat(40))]: [{id: 700, created_at: at(55)}],
     '/deployments/700/statuses?per_page=30': [{state: 'waiting', created_at: new Date(NOW - 2000).toISOString(), target_url: 'https://github.com/x/runs/7/job/70'}],
   };
   const requested = [];
@@ -169,12 +171,13 @@ test('observation plan refuses unconfirmed dispatch, goes red on a stuck observa
   // A recover job stuck at the gate holding the observation lock turns the plan red, even when disabled.
   responses['/actions/runs?status=waiting&per_page=50'] = {workflow_runs: [{id: 50, path: '.github/workflows/five-feed-recovery.yml', head_sha: 'd'.repeat(40)}]};
   responses['/actions/runs/50/jobs?per_page=100'] = {jobs: [{id: 500, name: 'recover', status: 'waiting', started_at: at(200)}]};
-  responses[`/deployments?environment=production&sha=${'d'.repeat(40)}&per_page=100`] = [{id: 5000, created_at: at(200)}];
+  responses[deploymentsPath('d'.repeat(40))] = [{id: 5000, created_at: at(200)}];
   responses['/deployments/5000/statuses?per_page=30'] = [{state: 'waiting', created_at: at(190), target_url: 'https://github.com/x/job/500'}];
   for (const ENABLED of ['true', 'false']) {
     const blocked = await plan({GITHUB_EVENT_NAME: 'schedule', ENABLED});
     assert.equal(blocked.run, false);assert.equal(blocked.code, 1);
-    assert.match(blocked.text, new RegExp(`holding ${OBSERVATION_LOCK}\\. The owner must cancel that run`));
+    // The fixture cannot read run 50 or a complete job list, so the reaper refuses it and the plan stays red.
+    assert.match(blocked.text, new RegExp(`NOT CANCELLED run 50 \\(five-feed-recovery\\.yml\\) job "recover": it has been waiting at the environment gate since 3\\.2 h ago, holding ${OBSERVATION_LOCK}; not cancelled automatically because its run or its complete job list could not be read[^\n]*The owner must cancel that run`));
   }
   assert.equal(holderJobName('refresh', 'observation-refresh.yml'), 'observations');assert.equal(holderJobName('refresh', 'bake.yml'), null);
 });
@@ -186,16 +189,17 @@ test('a single-model recovery says whole-data maintenance is skipped', () => {
   assert.ok(bake.indexOf("recovery of {0} from run") < bake.indexOf("recovery of run {0} (all models"), 'the single-model case is decided first');
 });
 
-test('a holder whose deployment is older than the newest 100 is still stuck, and a stuck recovery is BLOCKED, not SKIPPED', async () => {
+test('a holder whose gate status is not found is still stuck (never reaped), and a stuck recovery is BLOCKED, not SKIPPED', async () => {
   // Live shape: catalog-bake run 36762426044 model (hrrr) waiting since 2026-09-30 18:58Z while its SHA
-  // has >200 production deployments; page 1 (newest 100) spans only 10-01 08:28Z to 16:29Z.
+  // has >200 production deployments; page 1 (newest 100) spans only 10-01 08:28Z to 16:29Z. This fixture
+  // serves no page 2, so the deployment stays unknown (tests/stuck-lock-reaper.mjs pages to the real one).
   const page1 = Array.from({length: 100}, (_, i) => ({id: 9000 + i,
     created_at: new Date(Date.parse('2026-10-01T16:29:00Z') - i * (Date.parse('2026-10-01T16:29:00Z') - Date.parse('2026-10-01T08:28:00Z')) / 99).toISOString()}));
   const responses = {
     '/actions/runs?status=waiting&per_page=50': {workflow_runs: [{id: 36762426044, path: '.github/workflows/catalog-bake.yml', head_sha: 'b'.repeat(40)}]},
     '/actions/runs?status=in_progress&per_page=50': {workflow_runs: []},
     '/actions/runs/36762426044/jobs?per_page=100': {jobs: [{id: 110048100350, name: 'model (hrrr)', status: 'waiting', started_at: '2026-09-30T18:58:51Z'}]},
-    [`/deployments?environment=production&sha=${'b'.repeat(40)}&per_page=100`]: page1,
+    [deploymentsPath('b'.repeat(40))]: page1,
   };
   const fetcher = async url => { const path = url.replace('https://api.github.com/repos/Andrewegao/v3t7kq-cycle', '');
     return responses[path] ? new Response(JSON.stringify(responses[path])) : new Response(JSON.stringify(path.includes('/statuses') ? [] : {workflow_runs: []})); };
@@ -207,12 +211,12 @@ test('a holder whose deployment is older than the newest 100 is still stuck, and
   // A recovery waiting at the gate past the bound with an unknown deployment: BLOCKED (red), never SKIPPED.
   responses['/actions/runs?status=waiting&per_page=50'] = {workflow_runs: [{id: 60, path: '.github/workflows/five-feed-recovery.yml', head_sha: 'e'.repeat(40), run_started_at: at(45)}]};
   responses['/actions/runs/60/jobs?per_page=100'] = {jobs: [{id: 600, name: 'recover', status: 'waiting', started_at: at(45)}]};
-  responses[`/deployments?environment=production&sha=${'e'.repeat(40)}&per_page=100`] = page1;
+  responses[deploymentsPath('e'.repeat(40))] = page1;
   responses['/actions/workflows/five-feed-recovery.yml/runs?status=waiting&per_page=10'] = {workflow_runs: [{id: 60}]};
   for (const ENABLED of ['true', 'false']) {
     const plan = await observationPlan({env: {GITHUB_RUN_ID: '1', GITHUB_EVENT_NAME: 'schedule', ENABLED}, event: {}, token: 'fixture', fetcher, now: NOW});
     assert.equal(plan.run, false);assert.equal(plan.code, 1);assert.match(plan.text, /BLOCKED/);assert.doesNotMatch(plan.text, /SKIPPED/);
-    assert.match(plan.text, /run 60 \(five-feed-recovery\.yml\) job "recover" has waited at the production environment gate for 45 min ago \(gate status not found/);
+    assert.match(plan.text, /NOT CANCELLED run 60 \(five-feed-recovery\.yml\) job "recover": it has been waiting at the environment gate since 45 min ago \(gate status not found; measured from job start\)[^\n]*because its gate waiting time is unknown/);
   }
   // Under the bound it is not stuck, and the schedule stands aside for the recovery (green SKIPPED).
   responses['/actions/runs/60/jobs?per_page=100'] = {jobs: [{id: 600, name: 'recover', status: 'waiting', started_at: at(10)}]};
@@ -405,8 +409,9 @@ test('the component bake plans before it queues, keeps the shared model locks, a
   const catalog = read('catalog-bake.yml'), publisher = read('publish-current-model-production.yml');
   const plan = catalog.split('\n  plan:\n')[1].split('\n  model:\n')[0];
   const model = catalog.split('\n  model:\n')[1].split('\n  summary:\n')[0];
-  assert.doesNotMatch(plan, /secrets\.|environment:|concurrency:|: write/);
-  assert.match(plan, /actions: read/);assert.match(plan, /run: node tools\/workflow-run-summary\.mjs component-plan/);
+  assert.doesNotMatch(plan, /secrets\.|environment:|concurrency:|contents: write|deployments: write|write-all/);
+  // actions: write only for the stuck-lock reaper's cancel (tests/stuck-lock-reaper.mjs).
+  assert.match(plan, /    permissions:\n      contents: read\n      actions: write\n    outputs:/);assert.match(plan, /run: node tools\/workflow-run-summary\.mjs component-plan/);
   assert.match(model, /^    needs: plan$/m);
   assert.match(model, /if: \$\{\{ !cancelled\(\) && \(github\.event_name == 'workflow_dispatch' \|\| vars\.CATALOG_GITHUB_FALLBACK_DISABLED != 'true'\) && needs\.plan\.outputs\.models != '\[\]' \}\}/);
   const requested = plan.match(/REQUESTED_MODELS: \$\{\{ (.+) \}\}$/m)[1];

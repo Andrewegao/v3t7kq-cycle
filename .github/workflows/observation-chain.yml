@@ -5,7 +5,9 @@
 # mode only when OBSERVATION_REFRESH_ENABLED is true, the lane's newest non-schedule run started
 # more than 25 minutes ago and no lane or recovery run is queued, pending, waiting or in progress
 # (red when one has been for over 60 minutes). The lane's own cron stays as the fallback and stands
-# aside for the chain. No environment and no secret: this run can only dispatch.
+# aside for the chain. No environment and no secret: this run can only dispatch the lane, and cancel
+# a run that holds the observation lock while orphaned at an environment gate (known gate time over
+# 30 min, nothing started, no required reviewers), after which it dispatches the lane again.
 name: Chain observation refresh to the component bake
 run-name: "observations: chain check after component bake run ${{ github.event.workflow_run.id }}"
 permissions:

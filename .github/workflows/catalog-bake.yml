@@ -44,12 +44,17 @@ jobs:
     # publishing if this job fails (tests/workflow-run-summary.mjs pins the two copies equal).
     # Fail open: native schedules remain a publisher unless an operator explicitly
     # disables the fallback after the Cloudflare trigger set is verified live.
+    # Before that, for production targets, it cancels a run that holds a requested model's lock while
+    # orphaned at an environment gate (known gate time over 30 min, nothing started, only a
+    # branch-policy environment, every unfinished job of that run such a wait; plain cancel, then
+    # force-cancel), so this run's model job can take the lock. That cancel is the only reason this
+    # job may write to Actions; the model and summary jobs cannot.
     if: ${{ github.event_name == 'workflow_dispatch' || vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 3
     permissions:
       contents: read
-      actions: read
+      actions: write
     outputs:
       models: ${{ steps.plan.outputs.models }}
       stood_aside: ${{ steps.plan.outputs.stood_aside }}

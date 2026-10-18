@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { activeRunInSlot, dispatchForCron } from '../src/index';
+import { activeRunInSlot, dispatchForCron, REENABLE_SETTLE_MS } from '../src/index';
 import { MAX_CRON_TRIGGERS, SCHEDULER_CRONS, UNDECLARED_CRONS } from '../src/schedules';
 
 const env = {
@@ -262,5 +262,93 @@ describe('Cloudflare scheduler dispatch bridge', () => {
     await expect(dispatchForCron('8-59/10 * * * *', env, fetcher, sleep)).resolves.toEqual({ kind: 'catalog', model: 'hrrr', runId: null });
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(sleep).toHaveBeenCalledWith(250);
+  });
+});
+
+// GitHub's refusal for a dispatch to a disabled workflow (REST "Create a workflow dispatch event").
+const disabledRefusal = () => new Response(JSON.stringify({
+  message: "Cannot trigger a 'workflow_dispatch' on a disabled workflow",
+  documentation_url: 'https://docs.github.com/rest/actions/workflows#create-a-workflow-dispatch-event',
+  status: '422',
+}), { status: 422, headers: { 'content-type': 'application/json' } });
+const workflowState = (state: string) => () => new Response(JSON.stringify({
+  id: 191234567, name: 'WeatherX component bake', path: '.github/workflows/catalog-bake.yml', state,
+}), { status: 200, headers: { 'content-type': 'application/json' } });
+// Routes POST dispatches, GET workflow and PUT enable; records every call as "METHOD path".
+function disabledGithub(dispatches: Array<() => Response>, state: () => Response, enable: () => Response = () => new Response(null, { status: 204 })) {
+  const calls: string[] = [];
+  const fetcher = vi.fn<typeof fetch>().mockImplementation(async (url, init) => {
+    const path = new URL(String(url)).pathname.replace('/repos/Andrewegao/v3t7kq-cycle/actions/workflows/', '');
+    calls.push(`${init?.method} ${path}`);
+    if (init?.method === 'PUT') return enable();
+    if (init?.method === 'GET') return state();
+    const next = dispatches.shift();
+    if (!next) throw new Error('unexpected dispatch');
+    return next();
+  });
+  return { fetcher, calls };
+}
+
+describe('dispatch to a workflow GitHub disabled for inactivity', () => {
+  it('re-enables the workflow once, retries the dispatch once, and logs one structured line', async () => {
+    const { fetcher, calls } = disabledGithub([disabledRefusal, () => new Response(null, { status: 204 })], workflowState('disabled_inactivity'));
+    const sleep = vi.fn<(delayMs: number) => Promise<void>>().mockResolvedValue();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await expect(dispatchForCron('8-59/10 * * * *', env, fetcher, sleep)).resolves.toEqual({
+        kind: 'catalog', model: 'hrrr', runId: null, reenabled: true,
+      });
+      expect(calls).toEqual(['POST catalog-bake.yml/dispatches', 'GET catalog-bake.yml', 'PUT catalog-bake.yml/enable', 'POST catalog-bake.yml/dispatches']);
+      expect(sleep.mock.calls).toEqual([[REENABLE_SETTLE_MS]]);
+      expect(log.mock.calls.map(([line]) => JSON.parse(String(line)))).toEqual([{
+        event: 'github_workflow_reenabled', cron: '8-59/10 * * * *', workflow: 'catalog-bake.yml', previousState: 'disabled_inactivity',
+      }]);
+      // The enable request carries the scheduler's own token and API headers.
+      const enable = fetcher.mock.calls.find(([, init]) => init?.method === 'PUT')!;
+      expect(String(enable[0])).toBe('https://api.github.com/repos/Andrewegao/v3t7kq-cycle/actions/workflows/catalog-bake.yml/enable');
+      expect(new Headers(enable[1]?.headers).get('authorization')).toBe('Bearer test-token');
+    } finally { log.mockRestore(); }
+  });
+
+  it('re-enables at most once: a second refusal after enabling fails the tick', async () => {
+    const { fetcher, calls } = disabledGithub([disabledRefusal, disabledRefusal], workflowState('disabled_inactivity'));
+    const sleep = vi.fn<(delayMs: number) => Promise<void>>().mockResolvedValue();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await expect(dispatchForCron('7 * * * *', env, fetcher, sleep)).rejects.toThrow(/failed \(422\): .*disabled workflow/);
+      expect(calls.filter((call) => call.startsWith('PUT'))).toHaveLength(1);
+      expect(calls.filter((call) => call.startsWith('POST'))).toHaveLength(2);
+    } finally { log.mockRestore(); }
+  });
+
+  it.each(['disabled_manually', 'active'])('never re-enables a workflow whose state is %s', async (state) => {
+    const { fetcher, calls } = disabledGithub([disabledRefusal], workflowState(state));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await expect(dispatchForCron('8-59/10 * * * *', env, fetcher)).rejects.toThrow(
+        new RegExp(`failed \\(422\\): .*not re-enabled: workflow state is ${state}; only disabled_inactivity is re-enabled`));
+      expect(calls).toEqual(['POST catalog-bake.yml/dispatches', 'GET catalog-bake.yml']);
+      expect(log.mock.calls.map(([line]) => JSON.parse(String(line)).event)).toContain('github_workflow_disabled');
+    } finally { log.mockRestore(); }
+  });
+
+  it('fails the tick when the state is unreadable or the enable is refused, without retrying the dispatch', async () => {
+    for (const [state, enable, reason] of [
+      [() => new Response('nope', { status: 403 }), undefined, 'workflow state unreadable \\(403\\)'],
+      [workflowState('disabled_inactivity'), () => new Response('forbidden', { status: 403 }), 'enable refused \\(403\\)'],
+    ] as const) {
+      const { fetcher, calls } = disabledGithub([disabledRefusal], state, enable);
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await expect(dispatchForCron('8-59/10 * * * *', env, fetcher)).rejects.toThrow(new RegExp(`not re-enabled: ${reason}`));
+        expect(calls.filter((call) => call.startsWith('POST'))).toHaveLength(1);
+      } finally { log.mockRestore(); }
+    }
+  });
+
+  it('leaves every other 422 a permanent failure with no state read', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ message: 'Unexpected inputs provided: ["x"]' }), { status: 422 }));
+    await expect(dispatchForCron('8-59/10 * * * *', env, fetcher)).rejects.toThrow('failed (422)');
+    expect(fetcher).toHaveBeenCalledOnce();
   });
 });

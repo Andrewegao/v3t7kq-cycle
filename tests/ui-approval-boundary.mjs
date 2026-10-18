@@ -42,6 +42,21 @@ function withoutFallbackGate(source) {
   return source.replace(blocks[0][0], '');
 }
 
+// The component bake's plan job is the one place a data bake holds actions: write: the stuck-lock
+// reaper (tools/workflow-run-summary.mjs reapStuckHolders) may cancel a run orphaned at an environment
+// gate. It has no secret, environment or lock, checks out only that tool, and runs only component-plan;
+// it is pinned here, then set aside for the data-only checks below.
+function withoutReaperPlan(source) {
+  const blocks = [...source.matchAll(/^  plan:\n[\s\S]*?(?=^  [a-z][a-z0-9-]*:|$(?![\s\S]))/gm)];
+  assert.equal(blocks.length, 1, 'one plan job is required');
+  const block = executable(blocks[0][0]);
+  assert.match(block, /^    permissions:\n      contents: read\n      actions: write\n    outputs:\n/m);
+  assert.doesNotMatch(block, /secrets|environment:|concurrency:|uses:\s*\.\/|\/dispatches|workflow\s+run|gh\s+api|contents:\s*write|deployments:\s*write|write-all/);
+  assert.match(block, /^          persist-credentials: false\n          sparse-checkout: tools\/workflow-run-summary\.mjs\n/m);
+  assert.deepEqual([...block.matchAll(/^        run: (.+)$/gm)].map(match => match[1]), ['node tools/workflow-run-summary.mjs component-plan']);
+  return source.replace(blocks[0][0], '');
+}
+
 function assertBakeDataOnly(source) {
   source = withoutFallbackGate(source);
   // Provider access is confined to this execution step; it is not a shared data credential.
@@ -77,7 +92,7 @@ function assertBakeDataOnly(source) {
 
 test('both data bakes and legacy backfill have no UI credential or dispatch capability', () => {
   assertBakeDataOnly(workflows['bake.yml']);
-  assertDataOnly(workflows['catalog-bake.yml'], componentKeys);
+  assertDataOnly(withoutReaperPlan(workflows['catalog-bake.yml']), componentKeys);
   assertDataOnly(workflows['verify-backfill.yml'], ['ATMOS_DEPLOY_KEY']);
   for (const name of ['collect-core-model.yml', 'collect-regional-model.yml'])
     assertDataOnly(workflows[name], ['ATMOS_DEPLOY_KEY']);
