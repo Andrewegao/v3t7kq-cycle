@@ -176,8 +176,8 @@ test('observation plan refuses unconfirmed dispatch, goes red on a stuck observa
   for (const ENABLED of ['true', 'false']) {
     const blocked = await plan({GITHUB_EVENT_NAME: 'schedule', ENABLED});
     assert.equal(blocked.run, false);assert.equal(blocked.code, 1);
-    // The fixture cannot re-read run 50, so the reaper refuses it and the plan stays red.
-    assert.match(blocked.text, new RegExp(`NOT CANCELLED run 50 \\(five-feed-recovery\\.yml\\) job "recover": it has been waiting at the environment gate since 3\\.2 h ago, holding ${OBSERVATION_LOCK}; not cancelled automatically because its run could not be re-read[^\n]*The owner must cancel that run`));
+    // The fixture cannot read run 50 or a complete job list, so the reaper refuses it and the plan stays red.
+    assert.match(blocked.text, new RegExp(`NOT CANCELLED run 50 \\(five-feed-recovery\\.yml\\) job "recover": it has been waiting at the environment gate since 3\\.2 h ago, holding ${OBSERVATION_LOCK}; not cancelled automatically because its run or its complete job list could not be read[^\n]*The owner must cancel that run`));
   }
   assert.equal(holderJobName('refresh', 'observation-refresh.yml'), 'observations');assert.equal(holderJobName('refresh', 'bake.yml'), null);
 });

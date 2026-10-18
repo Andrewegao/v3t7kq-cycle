@@ -4,8 +4,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {CANCEL_CHECKS, CANCEL_CHECK_MS, GATE_PAGES, STUCK_WAITING_MINUTES, componentPlan, gateRefusal, gateWaitingSince, lockHolders,
-  observationPlan, reapRefusal, reapStuckHolders} from '../tools/workflow-run-summary.mjs';
+import {CANCEL_CHECKS, CANCEL_CHECK_MS, GATE_CALL_BUDGET, GATE_PAGES, STUCK_WAITING_MINUTES, componentPlan, gateBudget, gateRefusal, gateWaitingSince,
+  holderJobName, lockHolders, main as summaryMain, observationPlan, reapRefusal, reapStuckHolders} from '../tools/workflow-run-summary.mjs';
 import {main as chainMain} from '../tools/observation-chain.mjs';
 
 const RECORDED = JSON.parse(readFileSync(new URL('./fixtures/stuck-lock-20261012.json', import.meta.url), 'utf8'));
@@ -19,8 +19,8 @@ const before = rows => rows.filter(row => Date.parse(row.created_at) <= NOW);
 // The recorded state rewound to NOW: the stuck runs and their gate jobs are waiting again, and the
 // cancel's `error` statuses and the summary job created by the cancel are not there yet.
 function recorded({runs = [HRRR, OBS], cancel = 'completes', force = 'completes', environment = RECORDED.environments.production,
-  edit = () => {}, pages = RECORDED.deploymentPages} = {}) {
-  const state = {runs: {}, jobs: {}, environment: clone(environment), pages};
+  edit = () => {}, pages = RECORDED.deploymentPages, statuses = RECORDED.statuses, onRequest = () => {}} = {}) {
+  const state = {runs: {}, jobs: {}, environment: clone(environment), pages, statuses, totalCount: {}};
   for (const id of runs) {
     state.runs[id] = {...clone(RECORDED.runs[id]), status: 'waiting', conclusion: null};
     state.jobs[id] = before(clone(RECORDED.jobs[id])).map(job => job.status === 'completed' && job.conclusion === 'cancelled'
@@ -34,15 +34,22 @@ function recorded({runs = [HRRR, OBS], cancel = 'completes', force = 'completes'
     const path = parsed.pathname.replace('/repos/Andrewegao/v3t7kq-cycle', '');
     const method = init.method ?? 'GET';
     requests.push({method, path, query: Object.fromEntries(parsed.searchParams)});
+    onRequest(state, method, path);
     let match;
     if (method === 'GET' && path === '/actions/runs') {
       const status = parsed.searchParams.get('status');
       return json({workflow_runs: Object.values(state.runs).filter(run => run.status === status)});
     }
-    if ((match = /^\/actions\/runs\/(\d+)\/jobs$/.exec(path))) return json({total_count: state.jobs[match[1]]?.length ?? 0, jobs: state.jobs[match[1]] ?? []});
+    if ((match = /^\/actions\/runs\/(\d+)\/jobs$/.exec(path)))
+      return json({total_count: state.totalCount[match[1]] ?? state.jobs[match[1]]?.length ?? 0, jobs: state.jobs[match[1]] ?? []});
+    if ((match = /^\/actions\/workflows\/([a-z0-9-]+\.yml)\/runs$/.exec(path)))
+      return json({workflow_runs: Object.values(state.runs).filter(run => run.path === `.github/workflows/${match[1]}`
+        && (!parsed.searchParams.get('status') || run.status === parsed.searchParams.get('status')))});
     if ((match = /^\/actions\/runs\/(\d+)$/.exec(path)) && method === 'GET') return state.runs[match[1]] ? json(state.runs[match[1]]) : json({message: 'Not Found'}, 404);
     if ((match = /^\/actions\/runs\/(\d+)\/(cancel|force-cancel)$/.exec(path)) && method === 'POST') {
       const behaviour = match[2] === 'cancel' ? cancel : force;
+      if (typeof behaviour === 'number') return new Response('{"message":"refused"}', {status: behaviour});
+      if (behaviour === 'network') throw new TypeError('fetch failed');
       if (behaviour === 'completes') {
         state.runs[match[1]] = {...state.runs[match[1]], status: 'completed', conclusion: 'cancelled'};
         for (const job of state.jobs[match[1]]) if (job.status !== 'completed') Object.assign(job, {status: 'completed', conclusion: 'cancelled'});
@@ -57,7 +64,7 @@ function recorded({runs = [HRRR, OBS], cancel = 'completes', force = 'completes'
       const rows = state.pages[Number(query.get('page')) - 1] ?? [];
       return json(rows.map(([id, created_at]) => ({id, created_at, environment: 'production', ref: 'main', task: 'deploy', sha: RECORDED.sha})));
     }
-    if ((match = /^\/deployments\/(\d+)\/statuses$/.exec(path))) return json(before(clone(RECORDED.statuses[match[1]] ?? [])));
+    if ((match = /^\/deployments\/(\d+)\/statuses$/.exec(path))) return json(before(clone(state.statuses[match[1]] ?? [])));
     if (path === '/environments/production') return state.environment ? json(state.environment) : json({message: 'Not Found'}, 404);
     return json({workflow_runs: []});
   };
@@ -109,7 +116,7 @@ test('known gate time over 30 min: the component plan cancels the recorded HRRR 
   assert.deepEqual(fixture.posts(), [`/actions/runs/${HRRR}/cancel`]);
   assert.deepEqual(plan.models, ['hrrr']);
   assert.match(plan.text, /### Stuck writer locks/);
-  assert.match(plan.text, /- CANCELLED run 38263168806 \(catalog-bake\.yml\) job "model \(hrrr\)": it has been waiting at the production environment gate since 147\.6 h ago \(deployment status `waiting` at 2026-10-12T14:28:46Z\), holding weatherx-component-production-hrrr; no required reviewers, no started step, nothing in its run in_progress\. A normal cancel completed; the lock is free\./);
+  assert.match(plan.text, /- CANCELLED run 38263168806 \(catalog-bake\.yml\) job "model \(hrrr\)": it has been waiting at the production environment gate since 147\.6 h ago \(deployment status `waiting` at 2026-10-12T14:28:46Z\), holding weatherx-component-production-hrrr; only a branch-policy environment, no started step, every unfinished job of its run an orphaned gate wait\. A normal cancel completed; the lock is free\./);
   assert.deepEqual(fixture.sleeps, [CANCEL_CHECK_MS]);
   // The environment is read before any write.
   const order = fixture.requests.map(row => `${row.method} ${row.path}`);
@@ -121,7 +128,7 @@ test('a normal cancel that leaves the run waiting (the incident shape) is follow
   const plan = await componentPlan({env: componentEnv, token: 't', fetcher: fixture.fetcher, now: NOW, sleep: fixture.sleep});
   assert.deepEqual(fixture.posts(), [`/actions/runs/${HRRR}/cancel`, `/actions/runs/${HRRR}/force-cancel`]);
   assert.deepEqual(fixture.sleeps, [...Array(CANCEL_CHECKS).fill(CANCEL_CHECK_MS), CANCEL_CHECK_MS]);
-  assert.match(plan.text, /- FORCE-CANCELLED run 38263168806 \(catalog-bake\.yml\) job "model \(hrrr\)": .* A normal cancel did not complete within 20 s, so the run was force-cancelled and completed; the lock is free\./);
+  assert.match(plan.text, /- FORCE-CANCELLED run 38263168806 \(catalog-bake\.yml\) job "model \(hrrr\)": .* A normal cancel was accepted but did not complete within 20 s, so the run was force-cancelled and completed; the lock is free\./);
 });
 
 test('force-cancel is withheld when the job started after the normal cancel, and an unfinished force-cancel is reported, not hidden', async () => {
@@ -160,7 +167,7 @@ test('in_progress: a run, a sibling job or a started step anywhere in the holder
   const cases = [
     ['its run is in_progress', state => { state.runs[HRRR].status = 'in_progress'; }],
     ['job "plan" of that run is in_progress', state => { state.jobs[HRRR][0].status = 'in_progress'; }],
-    ['the job has a started step', state => { state.jobs[HRRR].find(job => job.id === HRRR_JOB).steps = [{name: 'Set up job', status: 'in_progress'}]; }],
+    ['job "model (hrrr)" has a started step', state => { state.jobs[HRRR].find(job => job.id === HRRR_JOB).steps = [{name: 'Set up job', status: 'in_progress'}]; }],
   ];
   for (const [reason, edit] of cases) {
     const fixture = recorded({runs: [HRRR], edit});
@@ -175,7 +182,8 @@ test('reviewers: an environment with required reviewers, a wait timer, or an unr
   const reviewers = {...RECORDED.environments['ui-production'], name: 'production'};
   assert.ok(reviewers.protection_rules.some(rule => rule.type === 'required_reviewers'), 'recorded ui-production rules');
   for (const [environment, reason] of [[reviewers, 'environment production has required reviewers'],
-    [{name: 'production', protection_rules: [{type: 'wait_timer', wait_timer: 60}]}, 'environment production has a wait timer'],
+    [{name: 'production', protection_rules: [{type: 'wait_timer', wait_timer: 60}]}, 'environment production has a wait_timer protection rule (only branch_policy is reapable)'],
+    [{name: 'production', protection_rules: [{type: 'branch_policy'}, {type: 'custom_gate'}]}, 'environment production has a custom_gate protection rule (only branch_policy is reapable)'],
     [null, 'environment production could not be read']]) {
     const fixture = recorded({runs: [HRRR], environment});
     const text = (await componentPlan({env: componentEnv, token: 't', fetcher: fixture.fetcher, now: NOW, sleep: fixture.sleep})).text;
@@ -250,28 +258,123 @@ test('reapStuckHolders never throws and cancels each holder run once', async () 
   const twice = [...holders, ...holders];
   const result = await reapStuckHolders({holders: twice, token: 't', fetcher: fixture.fetcher, now: NOW, sleep: fixture.sleep});
   assert.deepEqual(fixture.posts(), [`/actions/runs/${HRRR}/cancel`]);
-  assert.deepEqual(result.results.map(row => [String(row.runId), row.outcome, row.holders.length]), [[HRRR, 'cancelled', 2]]);
+  assert.deepEqual(result.results.map(row => [String(row.runId), row.outcome, row.holders.length]), [[HRRR, 'cancelled', 1]]);
   const broken = await reapStuckHolders({holders, token: 't', fetcher: async () => { throw new Error('network'); }, now: NOW, sleep: fixture.sleep});
   assert.deepEqual(broken.results, []);assert.match(broken.lines.join('\n'), /could not be read \(Actions API\)/);
 });
 
-test('a run is not cancelled while another lock holder in it has just reached its gate (not cleared)', async () => {
-  const fixture = recorded({runs: [HRRR]});
-  const [hrrr] = await lockHolders({runId: '1', token: 't', fetcher: fixture.fetcher, now: NOW, only: ['hrrr']});
-  // Same run, another model's job waiting at the gate for one minute: not stuck, so not cleared.
-  const fresh = {...hrrr, model: 'ecmwf', lock: 'weatherx-component-production-ecmwf', job: 'model (ecmwf)', jobId: 1, minutes: 1,
-    gateSince: new Date(NOW - 60000).toISOString(), stuck: false};
-  const result = await reapStuckHolders({holders: [hrrr, fresh], token: 't', fetcher: fixture.fetcher, now: NOW, sleep: fixture.sleep});
-  assert.deepEqual(fixture.posts(), []);
-  assert.deepEqual(result.results, []);
-  assert.match(result.lines.join('\n'), /NOT CANCELLED run 38263168806 \(catalog-bake\.yml\) job "model \(hrrr\)": .*because job "model \(ecmwf\)" of the same run also holds a lock and is not cleared for cancel/);
+// A whole bake (shape of run 39136712828: every `publish-<model> / publisher` gates on production)
+// with HRRR and ICON both stuck at the gate and every other job finished.
+const BAKE = '39136712828';
+function wholeBake({iconGate = '2026-10-18T16:30:01Z', iconStatus = 'waiting'} = {}) {
+  const job = (id, name, status, started) => ({id, run_id: Number(BAKE), name, status, conclusion: status === 'completed' ? 'success' : null,
+    created_at: started, started_at: started, completed_at: status === 'completed' ? started : null, steps: status === 'completed' ? [{name: 'Set up job', status: 'completed'}] : []});
+  const statuses = {
+    8000000001: [{id: 1, state: 'waiting', created_at: '2026-10-18T16:00:01Z', environment: 'production', target_url: `https://github.com/Andrewegao/v3t7kq-cycle/actions/runs/${BAKE}/job/9001`}],
+    8000000002: [{id: 2, state: 'waiting', created_at: iconGate, environment: 'production', target_url: `https://github.com/Andrewegao/v3t7kq-cycle/actions/runs/${BAKE}/job/9002`}],
+  };
+  const pages = [[[8000000003, '2026-10-18T17:59:00Z'], [8000000002, '2026-10-18T16:30:00Z'], [8000000001, '2026-10-18T16:00:00Z']]];
+  return {pages, statuses, runs: [], edit: state => {
+    state.runs[BAKE] = {id: Number(BAKE), path: '.github/workflows/bake.yml', status: 'waiting', conclusion: null, event: 'workflow_dispatch', head_branch: 'main',
+      head_sha: RECORDED.sha, created_at: '2026-10-18T14:35:54Z', run_started_at: '2026-10-18T14:35:54Z', updated_at: '2026-10-18T16:30:01Z',
+      display_title: 'bake: all models + whole-data maintenance', run_attempt: 1};
+    state.jobs[BAKE] = [job(9000, 'bake', 'completed', '2026-10-18T15:08:47Z'), job(9003, 'publish-ecmwf / publisher', 'completed', '2026-10-18T15:40:00Z'),
+      job(9001, 'publish-hrrr / publisher', 'waiting', '2026-10-18T16:00:00Z'), job(9002, 'publish-icon / publisher', iconStatus, '2026-10-18T16:30:00Z')];
+  }};
+}
+
+test('a whole bake whose only unfinished jobs are two stuck publishers is cancelled as one run, and HRRR is no longer set aside', async () => {
+  const fixture = recorded(wholeBake());
+  // An HRRR-only plan sees the ICON publisher too: it is checked as a holder in its own right.
+  const plan = await componentPlan({env: componentEnv, token: 't', fetcher: fixture.fetcher, now: NOW, sleep: fixture.sleep});
+  assert.deepEqual(fixture.posts(), [`/actions/runs/${BAKE}/cancel`]);
+  assert.match(plan.text, /- CANCELLED run 39136712828 \(bake\.yml\) job "publish-hrrr \/ publisher": it has been waiting at the production environment gate since 2\.1 h ago/);
+  assert.match(plan.text, /- CANCELLED run 39136712828 \(bake\.yml\) job "publish-icon \/ publisher": it has been waiting at the production environment gate since 95 min ago[^\n]*holding weatherx-component-production-icon/);
+  assert.deepEqual(plan.models, ['hrrr'], 'the cancelled bake no longer queues HRRR, so this run publishes it');
+  assert.deepEqual(plan.aside, []);
 });
 
-test('a run is not cancelled while any other job in it is unfinished', async () => {
-  const fixture = recorded({runs: [HRRR], edit: state => {
-    state.jobs[HRRR].push({id: 2, name: 'summary', status: 'queued', conclusion: null, created_at: '2026-10-12T14:28:46Z', steps: []});
-  }});
+test('a whole bake is kept when any other unfinished job in it is not itself a reapable stuck holder', async () => {
+  for (const [variant, reason] of [
+    [{iconGate: '2026-10-18T18:00:00Z'}, 'it has waited at the gate for 5 min, not more than 30'],
+    [{iconStatus: 'in_progress'}, 'job "publish-icon / publisher" of that run is in_progress'],
+    [{iconStatus: 'queued'}, 'job "publish-icon / publisher" of that run is queued, not waiting at a gate'],
+  ]) {
+    const fixture = recorded(wholeBake(variant));
+    const plan = await componentPlan({env: componentEnv, token: 't', fetcher: fixture.fetcher, now: NOW, sleep: fixture.sleep});
+    assert.deepEqual(fixture.posts(), [], reason);
+    assert.ok(plan.text.includes(`job "publish-hrrr / publisher": `) && plan.text.includes(`because ${reason}.`), `${reason}\n${plan.text}`);
+  }
+  // A non-holder job (here the run summary) still unfinished keeps the run too.
+  const fixture = recorded({...wholeBake(), edit: state => { wholeBake().edit(state);
+    state.jobs[BAKE].push({id: 9009, name: 'run-summary', status: 'queued', steps: []}); }});
   const text = (await componentPlan({env: componentEnv, token: 't', fetcher: fixture.fetcher, now: NOW, sleep: fixture.sleep})).text;
   assert.deepEqual(fixture.posts(), []);
-  assert.match(text, /because job "summary" of the same run is queued, so the run is not only an orphaned gate wait\./);
+  assert.match(text, /because job "run-summary" of that run is queued and is not a writer-lock holder\./);
+});
+
+test('a resume-model-publication publisher is a lock holder like a whole-bake publisher', () => {
+  assert.equal(holderJobName('resume (hrrr) / publisher', 'resume-model-publication.yml'), 'hrrr');
+  assert.equal(holderJobName('resume (nam-hi) / publisher'), 'nam-hi');
+  assert.equal(holderJobName('resume (unknown) / publisher'), null);
+  assert.equal(holderJobName('resume (hrrr) / collector'), null);
+});
+
+test('force-cancel never follows a cancel that was not accepted (5xx or network failure)', async () => {
+  for (const cancel of [500, 'network']) {
+    const fixture = recorded({runs: [HRRR], cancel});
+    const plan = await componentPlan({env: componentEnv, token: 't', fetcher: fixture.fetcher, now: NOW, sleep: fixture.sleep});
+    assert.equal(fixture.requests.filter(row => row.method === 'POST' && row.path.endsWith('/force-cancel')).length, 0, String(cancel));
+    assert.match(plan.text, new RegExp(`The cancel request was not accepted \\(HTTP ${cancel === 500 ? '500' : 'none: request failed'}\\), so it was not force-cancelled either`));
+  }
+  // 409 (already cancelling) counts as accepted, so a still-waiting run is then force-cancelled.
+  const accepted = recorded({runs: [HRRR], cancel: 409});
+  await componentPlan({env: componentEnv, token: 't', fetcher: accepted.fetcher, now: NOW, sleep: accepted.sleep});
+  assert.deepEqual(accepted.posts(), [`/actions/runs/${HRRR}/cancel`, `/actions/runs/${HRRR}/force-cancel`]);
+});
+
+test('the run and its jobs are re-read just before the cancel; any change aborts it', async () => {
+  let checked = false;
+  const fixture = recorded({runs: [HRRR], onRequest: (state, method, path) => {
+    // The environment read is the last check; the run moves on right after it.
+    if (path === '/environments/production') checked = true;
+    else if (checked && path === `/actions/runs/${HRRR}`) state.runs[HRRR].updated_at = '2026-10-18T18:04:59Z';
+  }});
+  const plan = await componentPlan({env: componentEnv, token: 't', fetcher: fixture.fetcher, now: NOW, sleep: fixture.sleep});
+  assert.deepEqual(fixture.posts(), []);
+  assert.match(plan.text, /its run or jobs changed \(or could not be re-read\) between the checks and the cancel, so nothing was cancelled/);
+});
+
+test('a job list shorter than its total_count is unknown, so nothing is cancelled', async () => {
+  const fixture = recorded({runs: [HRRR], edit: state => { state.totalCount[HRRR] = 150; }});
+  const text = (await componentPlan({env: componentEnv, token: 't', fetcher: fixture.fetcher, now: NOW, sleep: fixture.sleep})).text;
+  assert.deepEqual(fixture.posts(), []);
+  assert.match(text, /because its run or its complete job list could not be read \(Actions API\)/);
+});
+
+test('gate lookups share one budget per invocation; a spent budget is unknown and never cancels', async () => {
+  assert.equal(GATE_CALL_BUDGET, 60);
+  const fixture = recorded({runs: [HRRR]});
+  const budget = gateBudget(5);
+  const holders = await lockHolders({runId: '1', token: 't', fetcher: fixture.fetcher, now: NOW, only: ['hrrr'], budget});
+  assert.deepEqual(holders.map(row => [row.gateUnknown, row.gateLookup, row.stuck]), [[true, 'budget', true]]);
+  assert.equal(fixture.requests.filter(row => row.path === '/deployments' || row.path.endsWith('/statuses')).length, 5);
+  const result = await reapStuckHolders({holders, token: 't', fetcher: fixture.fetcher, now: NOW, sleep: fixture.sleep, budget});
+  assert.deepEqual(fixture.posts(), []);
+  assert.match(result.lines.join('\n'), /the gate lookup budget for this run was spent/);
+  // The whole plan stays within the default budget even for the six-day-old holder (12 pages).
+  const plan = recorded({runs: [HRRR, OBS]});
+  await componentPlan({env: componentEnv, token: 't', fetcher: plan.fetcher, now: NOW, sleep: plan.sleep});
+  assert.ok(plan.requests.filter(row => row.path === '/deployments' || row.path.endsWith('/statuses')).length <= GATE_CALL_BUDGET);
+});
+
+test('the report-only component summary reads only the newest deployment page', async () => {
+  const fixture = recorded({runs: [HRRR]});
+  const log = console.log;console.log = () => {};
+  let code;
+  try { code = await summaryMain(['component'], {GITHUB_RUN_ID: '39152035615', GITHUB_RUN_ATTEMPT: '1', GH_TOKEN: 't', CATALOG_TARGET: 'production', GITHUB_EVENT_NAME: 'workflow_dispatch'},
+    NOW, fixture.fetcher, fixture.sleep); } finally { console.log = log; }
+  assert.equal(code, 1, 'still red on the stuck holder (measured from job start)');
+  assert.deepEqual(fixture.requests.filter(row => row.path === '/deployments').map(row => row.query.page), ['1']);
+  assert.deepEqual(fixture.posts(), []);
 });

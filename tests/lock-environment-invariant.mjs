@@ -10,6 +10,8 @@ import {readFileSync, readdirSync} from 'node:fs';
 import {parseWorkflow} from '../tools/workflow-inventory.mjs';
 
 const ALLOWLIST_PATH = 'ops/lock-environment-allowlist.json';
+// The 2026-10-18 seed. Lower it when W6 removes entries; raising it is an explicit, reviewed test edit.
+const ALLOWLIST_MAX = 68;
 const allowlist = JSON.parse(readFileSync(new URL(`../${ALLOWLIST_PATH}`, import.meta.url), 'utf8'));
 const directory = new URL('../.github/workflows/', import.meta.url);
 const sources = () => Object.fromEntries(readdirSync(directory).filter(name => /\.ya?ml$/.test(name)).sort()
@@ -47,6 +49,7 @@ test('every job that holds a lock while naming a reviewer-free environment is an
   assert.deepEqual(added, [], `new job(s) hold a concurrency group while naming an environment without required reviewers; move the environment off the lock-holding job (or the lock off the gated job) instead of adding to ${ALLOWLIST_PATH}`);
   assert.deepEqual(fixed, [], `these ${ALLOWLIST_PATH} entries no longer match a workflow; remove them (the list only shrinks)`);
   assert.equal(new Set(listed).size, listed.length, 'no duplicate entries');
+  assert.ok(listed.length <= ALLOWLIST_MAX, `${ALLOWLIST_PATH} has ${listed.length} entries, more than the pinned ${ALLOWLIST_MAX}; the list only shrinks`);
 });
 
 test('the invariant flags a new offender, including a lock held by a reusable-workflow caller and an expression environment', () => {

@@ -3,7 +3,7 @@
 // each refreshed part finished. It reads `needs` results and this repository's public Actions
 // metadata. It never publishes, dispatches or approves anything. Its only write is the stuck-lock
 // reaper below, run from the secret-free plan jobs: it cancels a writer-lock holder orphaned at an
-// environment gate under the narrow rules documented at reapRefusal.
+// environment gate under the narrow rules documented at reapStuckHolders.
 import {appendFileSync, readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -127,8 +127,10 @@ export function holderJobName(name, workflow = '') {
     return 'observations';
   const component = /^model \(([a-z-]+)\)$/.exec(name);
   if (component && MODELS.includes(component[1])) return component[1];
-  const publisher = /^publish-([a-z-]+) \/ publisher$/.exec(name);
-  return publisher && MODELS.includes(publisher[1]) ? publisher[1] : null;
+  // bake.yml `publish-<model> / publisher` and resume-model-publication.yml `resume (<model>) / publisher`.
+  const publisher = /^(?:publish-([a-z-]+)|resume \(([a-z-]+)\)) \/ publisher$/.exec(name);
+  const model = publisher?.[1] ?? publisher?.[2];
+  return model && MODELS.includes(model) ? model : null;
 }
 export const lockName = model => model === 'observations' ? OBSERVATION_LOCK : `weatherx-component-production-${model}`;
 
@@ -143,17 +145,25 @@ export const lockName = model => model === 'observations' ? OBSERVATION_LOCK : `
 // page 12 by 10-18). Returns {since, environment, deploymentId} only when the job's newest status is
 // `waiting`; otherwise null (unknown), and an unknown gate is never a reason to cancel.
 export const GATE_PAGES = 20;
+// Every deployment page or status read counts against one budget per plan invocation (one process),
+// so a burst of waiting holders cannot spend the GITHUB_TOKEN's 1,000 requests an hour on lookups.
+// A spent budget leaves the gate unknown, which never cancels anything.
+export const GATE_CALL_BUDGET = 60;
+export const gateBudget = (calls = GATE_CALL_BUDGET) => ({calls, exhausted: false});
 const GATE_MATCH_MS = 120000;
-export async function gateWaitingSince({run, job, token, fetcher, environment = 'production'}) {
+export async function gateWaitingSince({run, job, token, fetcher, environment = 'production', pages = GATE_PAGES, budget = gateBudget()}) {
   const started = Date.parse(job.started_at ?? '');
   if (!/^[a-f0-9]{40}$/.test(run.head_sha ?? '') || !Number.isFinite(started) || !/^[1-9]\d{0,19}$/.test(String(job.id ?? ''))) return null;
   const query = new URLSearchParams({environment, task: 'deploy', sha: run.head_sha});
   if (/^[A-Za-z0-9._/-]{1,200}$/.test(run.head_branch ?? '')) query.set('ref', run.head_branch);
   const ownJob = row => [row.target_url, row.log_url].some(url => String(url ?? '').endsWith(`/job/${job.id}`));
-  for (let page = 1; page <= GATE_PAGES; page += 1) {
+  const spend = () => { if (budget.calls <= 0) { budget.exhausted = true; return false; } budget.calls -= 1; return true; };
+  for (let page = 1; page <= pages; page += 1) {
+    if (!spend()) return null;
     const body = await github(`/deployments?${query}&per_page=100&page=${page}`, token, fetcher);
     const rows = Array.isArray(body) ? body : [];
     for (const deployment of rows.filter(row => Math.abs(Date.parse(row.created_at ?? '') - started) <= GATE_MATCH_MS)) {
+      if (!spend()) return null;
       const statuses = await github(`/deployments/${deployment.id}/statuses?per_page=30`, token, fetcher);
       const own = (Array.isArray(statuses) ? statuses : []).filter(ownJob)
         .sort((a, b) => String(b.created_at ?? '').localeCompare(String(a.created_at ?? '')));
@@ -169,7 +179,8 @@ export async function gateWaitingSince({run, job, token, fetcher, environment = 
 }
 
 // Jobs elsewhere in this repository that hold, or wait at the production gate holding, a writer lock.
-export async function lockHolders({runId, token, fetcher = fetch, now, only = null}) {
+// gatePages: how deep the gate lookup may page (the report-only summary uses 1); budget: shared with the reaper.
+export async function lockHolders({runId, token, fetcher = fetch, now, only = null, gatePages = GATE_PAGES, budget = gateBudget()}) {
   const holders = [];
   if (!token) return null;
   try {
@@ -182,7 +193,8 @@ export async function lockHolders({runId, token, fetcher = fetch, now, only = nu
         for (const job of jobs) {
           const model = holderJobName(job.name, workflow);
           if (!model || (only && !only.includes(model)) || !['waiting', 'in_progress'].includes(job.status)) continue;
-          const gate = job.status === 'waiting' ? await gateWaitingSince({run, job, token, fetcher}) : null;
+          const spentBefore = budget.exhausted;
+          const gate = job.status === 'waiting' ? await gateWaitingSince({run, job, token, fetcher, pages: gatePages, budget}) : null;
           // A holder whose gate status is not found is reported from its own start (an upper bound), so a
           // waiting holder is never reported as not stuck merely because its deployment is unknown. That
           // estimate is for reporting only: the reaper acts on a known gate time alone.
@@ -190,6 +202,7 @@ export async function lockHolders({runId, token, fetcher = fetch, now, only = nu
           const since = job.status === 'waiting' ? gate?.since ?? job.started_at ?? job.created_at ?? run.run_started_at : job.started_at;
           const minutes = minutesSince(since, now);
           holders.push({model, lock: lockName(model), runId: run.id, workflow, job: job.name, jobId: job.id, status: job.status, minutes, gateUnknown,
+            gateLookup: job.status !== 'waiting' ? 'none' : gate ? 'found' : budget.exhausted && !spentBefore ? 'budget' : 'not-found',
             gateSince: gate?.since ?? null, environment: gate?.environment ?? null,
             stuck: job.status === 'waiting' && minutes !== null && minutes > STUCK_WAITING_MINUTES});
         }
@@ -204,86 +217,123 @@ export async function lockHolders({runId, token, fetcher = fetch, now, only = nu
 // for as long as GitHub leaves it there: timeout-minutes does not tick during an environment wait, so
 // after the 2026-10-12 Actions incident catalog-bake run 38263168806 (HRRR) and observation-refresh
 // run 38283354381 held their locks for six days. The secret-free plan jobs (component-plan,
-// observation-plan, observation-chain) call this before they queue on the same lock. A holder run is
-// cancelled only when every rule in reapRefusal holds; plain cancel first, then force-cancel only if
-// the run is still listed and its job is still waiting after a bounded re-check. The caller's run then
-// takes the freed lock itself, or (observation chain) dispatches the lane again.
+// observation-plan, observation-chain) call this before they queue on the same lock.
+//
+// A run is cancelled only when it is nothing but orphaned gate waits: the run is not in_progress or
+// completed, its job list is complete, and EVERY unfinished job in it is a writer-lock holder that
+// passes every rule (waiting at the gate, gate time known and over 30 minutes, no started step, and an
+// environment whose protection rules are only a branch policy). That holds regardless of which models
+// the calling plan requested, so a whole bake with several stuck publishers is freed as one run, and
+// one unfinished job that fails any rule keeps the whole run. Just before the cancel the run and its
+// jobs are read again and the cancel is skipped if anything changed. Force-cancel follows only an
+// accepted plain cancel (202, or 409: already cancelling) whose run is still listed, with every job
+// still waiting, after a bounded re-check. The caller then takes the freed lock itself, or (observation
+// chain) dispatches the lane again.
 export const CANCEL_CHECKS = 4;
 export const CANCEL_CHECK_MS = 5000;
 export const MAX_REAPS = 5;
 const STARTED_STEP = new Set(['in_progress', 'completed']);
+const CANCEL_ACCEPTED = new Set([202, 409]);
 
 // (a) the time at the gate must be known from the deployment's own `waiting` status. Needs no API read.
 export function gateRefusal(holder, now) {
   if (holder.status !== 'waiting') return 'it is not waiting at an environment gate';
+  if (holder.gateLookup === 'budget') return 'its gate waiting time is unknown (the gate lookup budget for this run was spent), and a job is never cancelled on its start time';
   if (holder.gateUnknown || !holder.gateSince || !holder.environment)
     return 'its gate waiting time is unknown (no `waiting` deployment status found for the job), and a job is never cancelled on its start time';
   const minutes = minutesSince(holder.gateSince, now);
   if (minutes === null || minutes <= STUCK_WAITING_MINUTES) return `it has waited at the gate for ${minutes ?? 'an unknown number of'} min, not more than ${STUCK_WAITING_MINUTES}`;
   return null;
 }
-// Returns null when the holder may be cancelled, otherwise why not. `run`, `jobs` and `environment`
-// are fresh reads of the holder's run, its jobs and the gate's environment.
+// (c) only an environment whose every protection rule is a branch policy: required reviewers, a wait
+// timer or any rule type this code does not know is a bounded or deliberate wait, never an orphan.
+export function environmentRefusal(environment, name) {
+  if (!environment || environment.name !== name || !Array.isArray(environment.protection_rules)) return `environment ${name} could not be read`;
+  const other = environment.protection_rules.find(rule => rule?.type !== 'branch_policy');
+  if (other) return other.type === 'required_reviewers' ? `environment ${name} has required reviewers`
+    : `environment ${name} has a ${String(other?.type ?? 'unknown').replace(/[^a-z_]/g, '') || 'unknown'} protection rule (only branch_policy is reapable)`;
+  return null;
+}
+// (b) the run itself: this repository's writer workflow on main, neither completed nor in_progress.
+function runRefusal(run, workflow) {
+  if (!run || run.path !== `.github/workflows/${workflow}` || !HOLDER_WORKFLOWS.includes(run.path) || run.head_branch !== 'main')
+    return 'its run could not be re-read as this repository\'s writer workflow on main';
+  if (run.status === 'completed') return 'its run has already completed';
+  if (run.status === 'in_progress') return 'its run is in_progress';
+  return null;
+}
+// One job of a run that is a candidate for cancel. Returns null when it is a reapable orphaned gate wait.
+function jobRefusal(job, holder, now, model = holder?.model) {
+  if (!holder && job.status === 'in_progress') return `job "${job.name}" of that run is in_progress`;
+  if (!holder && !model) return `job "${job.name}" of that run is ${job.status} and is not a writer-lock holder`;
+  if (job.status === 'in_progress') return `job "${job.name}" of that run is in_progress`;
+  if (job.status !== 'waiting') return `job "${job.name}" of that run is ${job.status}, not waiting at a gate`;
+  if (!holder) return `job "${job.name}" of that run is waiting with no known gate`;
+  if ((job.steps ?? []).some(step => STARTED_STEP.has(step?.status))) return `job "${job.name}" has a started step`;
+  return gateRefusal(holder, now);
+}
+// For a single holder with fresh reads (used by tests and the per-run check below).
 export function reapRefusal({holder, run, jobs, environment, now}) {
   const gate = gateRefusal(holder, now);
   if (gate) return gate;
-  if (!run || run.path !== `.github/workflows/${holder.workflow}` || !HOLDER_WORKFLOWS.includes(run.path) || run.head_branch !== 'main')
-    return 'its run could not be re-read as this repository\'s writer workflow on main';
-  if (run.status === 'completed') return 'its run has already completed';
-  // (b) nothing in the run has started: the run is not in_progress, no job is, and the holder has no started step.
-  if (run.status === 'in_progress') return 'its run is in_progress';
+  const ran = runRefusal(run, holder.workflow);
+  if (ran) return ran;
   const own = (jobs ?? []).find(job => String(job.id) === String(holder.jobId));
   if (!own || own.status !== 'waiting') return 'the job is no longer waiting';
-  if ((own.steps ?? []).some(step => STARTED_STEP.has(step?.status))) return 'the job has a started step';
-  const running = (jobs ?? []).find(job => job.status === 'in_progress');
-  if (running) return `job "${running.name}" of that run is in_progress`;
-  // (c) a gate with required reviewers (or a wait timer) is a person's or a timer's wait, never an orphan.
-  if (!environment || environment.name !== holder.environment || !Array.isArray(environment.protection_rules))
-    return `environment ${holder.environment} could not be read`;
-  if (environment.protection_rules.some(rule => rule?.type === 'required_reviewers')) return `environment ${holder.environment} has required reviewers`;
-  if (environment.protection_rules.some(rule => rule?.type === 'wait_timer' && Number(rule.wait_timer) > 0)) return `environment ${holder.environment} has a wait timer`;
-  return null;
+  const job = jobRefusal(own, holder, now);
+  if (job) return job === `job "${own.name}" has a started step` ? 'the job has a started step' : job;
+  return environmentRefusal(environment, holder.environment);
 }
+const snapshot = (run, jobs) => JSON.stringify([run?.status, run?.run_attempt, run?.updated_at,
+  (jobs ?? []).map(job => [job.id, job.status, job.conclusion, (job.steps ?? []).map(step => step?.status)]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))]);
 
 const describe = holder => `run ${holder.runId} (${holder.workflow}) job "${holder.job}"`;
-// holders: every lockHolders row (stuck or not). Only stuck rows are evaluated, and a run is cancelled
-// only when every lock holder listed in it is cleared, so a job that just reached its gate in the same
-// run is never cancelled with an orphaned one. Returns {lines, results: [{runId, outcome, holders}],
-// refused: [{holder, reason}]}; outcome is cancelled, force-cancelled, left (not force-cancelled because
-// the run changed) or still-active. Never throws.
-export async function reapStuckHolders({holders, token, fetcher = fetch, now, sleep = defaultSleep}) {
+// holders: lockHolders rows (any subset of models). Each run with a stuck holder is evaluated as a whole;
+// holders of other models in that run are found and checked here. Returns {lines, results: [{runId,
+// outcome, holders}], refused: [{holder, reason}]}; outcome is cancelled, force-cancelled, left (run
+// changed or cancel not accepted, so no force-cancel) or still-active. Never throws.
+export async function reapStuckHolders({holders, token, fetcher = fetch, now, sleep = defaultSleep, budget = gateBudget()}) {
   const refused = [], candidates = [];
   const environments = new Map();
   const readEnvironment = async name => {
     if (!environments.has(name)) environments.set(name, await github(`/environments/${encodeURIComponent(name)}`, token, fetcher).catch(() => null));
     return environments.get(name);
   };
-  for (const holder of (holders ?? []).filter(row => row.stuck)) {
-    const joined = candidates.find(row => String(row.runId) === String(holder.runId));
-    let reason = gateRefusal(holder, now), jobs = null;
-    if (!reason) {
-      try {
-        const run = await github(`/actions/runs/${holder.runId}`, token, fetcher);
-        jobs = await allJobs(holder.runId, token, fetcher);
-        reason = reapRefusal({holder, run, jobs, environment: await readEnvironment(holder.environment), now});
-      } catch { reason = 'its run or jobs could not be read (Actions API)'; }
+  const listed = holders ?? [];
+  const runIds = [...new Set(listed.filter(row => row.stuck).map(row => String(row.runId)))];
+  for (const runId of runIds) {
+    const stuck = listed.filter(row => row.stuck && String(row.runId) === runId);
+    const refuse = (rows, reason) => { for (const holder of rows) refused.push({holder, reason}); };
+    const cheap = stuck.map(holder => gateRefusal(holder, now)).find(Boolean);
+    if (cheap) { refuse(stuck, cheap); continue; }
+    if (candidates.length >= MAX_REAPS) { refuse(stuck, `this run already cancels ${MAX_REAPS} runs; the next plan run takes the rest`); continue; }
+    let run, jobs;
+    try { run = await github(`/actions/runs/${runId}`, token, fetcher); jobs = await allJobs(runId, token, fetcher, {strict: true}); }
+    catch { refuse(stuck, 'its run or its complete job list could not be read (Actions API)'); continue; }
+    const workflow = stuck[0].workflow;
+    let reason = runRefusal(run, workflow);
+    const rows = [];
+    for (const job of reason ? [] : jobs.filter(item => item.status !== 'completed')) {
+      const model = holderJobName(job.name, workflow);
+      let holder = listed.find(row => String(row.jobId) === String(job.id));
+      if (!holder && model && job.status === 'waiting') {
+        // A holder of a model the calling plan did not request: look up its own gate under the same budget.
+        const before = budget.exhausted;
+        const gate = await gateWaitingSince({run, job, token, fetcher, budget}).catch(() => null);
+        const minutes = minutesSince(gate?.since, now);
+        holder = {model, lock: lockName(model), runId: run.id, workflow, job: job.name, jobId: job.id, status: job.status,
+          minutes, gateUnknown: !gate, gateLookup: !gate && budget.exhausted && !before ? 'budget' : gate ? 'found' : 'not-found',
+          gateSince: gate?.since ?? null, environment: gate?.environment ?? null, stuck: minutes !== null && minutes > STUCK_WAITING_MINUTES};
+      } else if (holder && !model) holder = null;
+      reason = jobRefusal(job, holder, now, model);
+      if (reason) break;
+      reason = environmentRefusal(await readEnvironment(holder.environment), holder.environment);
+      if (reason) break;
+      rows.push(holder);
     }
-    if (reason) refused.push({holder, reason});
-    else if (joined) { joined.holders.push(holder); joined.jobs = jobs; }
-    else if (candidates.length >= MAX_REAPS) refused.push({holder, reason: `this run already cancels ${MAX_REAPS} runs; the next plan run takes the rest`});
-    else candidates.push({runId: holder.runId, holders: [holder], jobs, outcome: 'still-active'});
-  }
-  // A run is cancelled only when its cleared holders are all of its unfinished work: no other listed
-  // lock holder (for example one that just reached its gate) and no other unfinished job.
-  for (const row of [...candidates]) {
-    const ids = row.holders.map(holder => String(holder.jobId));
-    const holder = (holders ?? []).find(item => String(item.runId) === String(row.runId) && !row.holders.includes(item));
-    const job = (row.jobs ?? []).find(item => item.status !== 'completed' && !ids.includes(String(item.id)));
-    if (!holder && !job) continue;
-    candidates.splice(candidates.indexOf(row), 1);
-    const why = holder ? `job "${holder.job}" of the same run also holds a lock and is not cleared for cancel`
-      : `job "${job.name}" of the same run is ${job.status}, so the run is not only an orphaned gate wait`;
-    for (const item of row.holders) refused.push({holder: item, reason: why});
+    if (!reason && !rows.length) reason = 'its run has no unfinished job left';
+    if (reason) { refuse(stuck, reason); continue; }
+    candidates.push({runId, holders: rows, outcome: 'still-active', seen: snapshot(run, jobs)});
   }
   const runState = async row => { try { return await github(`/actions/runs/${row.runId}`, token, fetcher); } catch { return null; } };
   const settle = async rows => {
@@ -293,18 +343,25 @@ export async function reapStuckHolders({holders, token, fetcher = fetch, now, sl
         if ((await runState(row))?.status === 'completed') row.outcome = row.forced ? 'force-cancelled' : 'cancelled';
     }
   };
-  for (const row of candidates) row.cancel = await githubPost(`/actions/runs/${row.runId}/cancel`, token, fetcher).catch(() => 0);
+  for (const row of candidates) {
+    // Re-read immediately before the write; anything changed since the checks means no cancel this time.
+    let fresh = null;
+    try { fresh = snapshot(await github(`/actions/runs/${row.runId}`, token, fetcher), await allJobs(row.runId, token, fetcher, {strict: true})); } catch { fresh = null; }
+    if (fresh !== row.seen) { row.outcome = 'changed'; continue; }
+    row.cancel = await githubPost(`/actions/runs/${row.runId}/cancel`, token, fetcher).catch(() => 0);
+    if (!CANCEL_ACCEPTED.has(row.cancel)) row.outcome = 'refused';
+  }
   await settle(candidates);
   for (const row of candidates.filter(item => item.outcome === 'still-active')) {
-    // (d) force-cancel only a run that is still listed with its job still waiting and nothing started.
+    // (d) force-cancel only after an accepted plain cancel, and only a run still listed with every one of
+    // its unfinished jobs still a waiting, unstarted holder from the checked set.
     let jobs = null;
-    try { jobs = await allJobs(row.runId, token, fetcher); } catch { jobs = null; }
+    try { jobs = await allJobs(row.runId, token, fetcher, {strict: true}); } catch { jobs = null; }
     const run = await runState(row);
-    const stillWaiting = run && run.status !== 'completed' && run.status !== 'in_progress' && jobs
-      && row.holders.every(holder => jobs.some(job => String(job.id) === String(holder.jobId) && job.status === 'waiting'
-        && !(job.steps ?? []).some(step => STARTED_STEP.has(step?.status))))
-      && !jobs.some(job => job.status === 'in_progress');
     if (run?.status === 'completed') { row.outcome = 'cancelled'; continue; }
+    const ids = row.holders.map(holder => String(holder.jobId));
+    const stillWaiting = run && run.status !== 'in_progress' && jobs && jobs.filter(job => job.status !== 'completed')
+      .every(job => ids.includes(String(job.id)) && job.status === 'waiting' && !(job.steps ?? []).some(step => STARTED_STEP.has(step?.status)));
     if (!stillWaiting) { row.outcome = 'left'; continue; }
     row.forced = true;
     row.force = await githubPost(`/actions/runs/${row.runId}/force-cancel`, token, fetcher).catch(() => 0);
@@ -314,9 +371,12 @@ export async function reapStuckHolders({holders, token, fetcher = fetch, now, sl
   const lines = [];
   for (const row of candidates) for (const holder of row.holders) {
     const waited = `has been waiting at the ${holder.environment} environment gate since ${ago(minutesSince(holder.gateSince, now))} (deployment status \`waiting\` at ${holder.gateSince}), holding ${holder.lock}`;
-    if (row.outcome === 'cancelled') lines.push(`- CANCELLED ${describe(holder)}: it ${waited}; no required reviewers, no started step, nothing in its run in_progress. A normal cancel completed; the lock is free.`);
-    else if (row.outcome === 'force-cancelled') lines.push(`- FORCE-CANCELLED ${describe(holder)}: it ${waited}; no required reviewers, no started step, nothing in its run in_progress. A normal cancel did not complete within ${window} s, so the run was force-cancelled and completed; the lock is free.`);
-    else if (row.outcome === 'left') lines.push(`- NOT FORCE-CANCELLED ${describe(holder)}: it ${waited}. A normal cancel was requested (HTTP ${row.cancel}), but after ${window} s the run had changed (a job started, or it could not be re-read), so it was not force-cancelled. The next plan run checks again.`);
+    const checked = 'only a branch-policy environment, no started step, every unfinished job of its run an orphaned gate wait';
+    if (row.outcome === 'cancelled') lines.push(`- CANCELLED ${describe(holder)}: it ${waited}; ${checked}. A normal cancel completed; the lock is free.`);
+    else if (row.outcome === 'force-cancelled') lines.push(`- FORCE-CANCELLED ${describe(holder)}: it ${waited}; ${checked}. A normal cancel was accepted but did not complete within ${window} s, so the run was force-cancelled and completed; the lock is free.`);
+    else if (row.outcome === 'changed') lines.push(`- NOT CANCELLED ${describe(holder)}: it ${waited}, but its run or jobs changed (or could not be re-read) between the checks and the cancel, so nothing was cancelled. The next plan run checks again.`);
+    else if (row.outcome === 'refused') lines.push(`- NOT CANCELLED ${describe(holder)}: it ${waited}. The cancel request was not accepted (HTTP ${row.cancel || 'none: request failed'}), so it was not force-cancelled either. The next plan run checks again; if this repeats, the owner must cancel that run.`);
+    else if (row.outcome === 'left') lines.push(`- NOT FORCE-CANCELLED ${describe(holder)}: it ${waited}. A normal cancel was accepted (HTTP ${row.cancel}), but after ${window} s the run had changed (a job started, or it could not be re-read), so it was not force-cancelled. The next plan run checks again.`);
     else lines.push(`- STILL LISTED ${describe(holder)}: it ${waited}. Cancel (HTTP ${row.cancel}) and force-cancel (HTTP ${row.force}) were requested, but the run was not completed after ${window} s each; it may still hold the lock. The next plan run checks again.`);
   }
   for (const {holder, reason} of refused)
@@ -366,10 +426,11 @@ export async function observationPlan({env, event, token, fetcher = fetch, now, 
       return {run: false, code: 1, text: `## Observation refresh: REFUSED\n\nThe \`${CHAIN_CALLER}\` caller must name an observation-chain.yml run on main from the last ${CHAIN_MAX_AGE_MINUTES} minutes. Nothing was refreshed.\n`};
   } else if (env.GITHUB_EVENT_NAME === 'workflow_dispatch' && event?.inputs?.confirmation !== CONFIRMATION)
     return {run: false, code: 1, text: `## Observation refresh: REFUSED\n\nA manual dispatch must enter \`${CONFIRMATION}\`. Nothing was refreshed.\n`};
-  const holders = await lockHolders({runId: env.GITHUB_RUN_ID, token, fetcher, now, only: ['observations']});
+  const budget = gateBudget();
+  const holders = await lockHolders({runId: env.GITHUB_RUN_ID, token, fetcher, now, only: ['observations'], budget});
   const stuck = (holders ?? []).filter(holder => holder.stuck);
   if (stuck.length) {
-    const reap = await reapStuckHolders({holders, token, fetcher, now, sleep});
+    const reap = await reapStuckHolders({holders, token, fetcher, now, sleep, budget});
     lines.push(...reap.lines);
     if (reap.refused.length || !reap.results.every(lockFreed))
       return {run: false, code: 1, text: ['## Observation refresh: BLOCKED (stuck writer lock)', '', ...lines, ''].join('\n')};
@@ -410,12 +471,17 @@ export async function observationPlan({env, event, token, fetcher = fetch, now, 
 export const WHOLE_BAKE_WORKFLOWS = Object.freeze(['.github/workflows/bake.yml', '.github/workflows/resume-model-publication.yml']);
 const QUEUED_JOB = ['queued', 'pending', 'waiting', 'requested'];
 const JOB_PAGES = 5;
-async function allJobs(runId, token, fetcher) {
+// strict (the reaper, which decides on the whole run): the list must declare total_count, and a list
+// shorter than it is unknown, never a complete run. The stand-aside listing keeps its old behaviour.
+async function allJobs(runId, token, fetcher, {strict = false} = {}) {
   const jobs = [];
   for (let page = 1; page <= JOB_PAGES; page += 1) {
     const body = await github(`/actions/runs/${runId}/jobs?per_page=100&page=${page}`, token, fetcher);
-    jobs.push(...(body.jobs ?? []));
-    if (!(body.total_count > jobs.length) || !(body.jobs ?? []).length) return jobs;
+    const rows = body.jobs ?? [];
+    jobs.push(...rows);
+    if (strict && !Number.isSafeInteger(body.total_count)) throw new Error('job list without total_count');
+    if (!(body.total_count > jobs.length)) return jobs;
+    if (!rows.length) { if (strict) throw new Error('job list shorter than its total_count'); return jobs; }
   }
   throw new Error('job list too long');
 }
@@ -447,8 +513,9 @@ export async function componentPlan({env, token, fetcher = fetch, now = Date.now
   // publishes that model in its place. Fails open: an unreadable API cancels nothing.
   let reapLines = [];
   if (token) {
-    const holders = await lockHolders({runId: env.GITHUB_RUN_ID, token, fetcher, now, only: requested});
-    if (holders?.some(holder => holder.stuck)) reapLines = (await reapStuckHolders({holders, token, fetcher, now, sleep})).lines;
+    const budget = gateBudget();
+    const holders = await lockHolders({runId: env.GITHUB_RUN_ID, token, fetcher, now, only: requested, budget});
+    if (holders?.some(holder => holder.stuck)) reapLines = (await reapStuckHolders({holders, token, fetcher, now, sleep, budget})).lines;
   }
   const reaped = text => reapLines.length ? `${text || '## Component bake plan\n'}\n### Stuck writer locks\n\n${reapLines.join('\n')}\n` : text;
   const aside = [];
@@ -526,9 +593,10 @@ export async function main(argv, env = process.env, now = Date.now(), fetcher = 
     return 0;
   }
   if (kind === 'component') {
-    // Staging-target bakes hold staging locks; production lock reporting does not apply to them.
+    // Staging-target bakes hold staging locks; production lock reporting does not apply to them. The
+    // summary only reports (the plan job reaps), so its gate lookup reads the newest deployment page only.
     const holders = env.CATALOG_TARGET === 'production'
-      ? await lockHolders({runId: env.GITHUB_RUN_ID, token: env.GH_TOKEN, fetcher, now}) : [];
+      ? await lockHolders({runId: env.GITHUB_RUN_ID, token: env.GH_TOKEN, fetcher, now, gatePages: 1}) : [];
     let stoodAside = [];
     try { stoodAside = JSON.parse(env.STOOD_ASIDE || '[]'); } catch { stoodAside = []; }
     const {text, stuck} = componentMarkdown({jobs: jobs?.filter(job => job.name !== env.SUMMARY_JOB_NAME && job.name !== 'plan'),

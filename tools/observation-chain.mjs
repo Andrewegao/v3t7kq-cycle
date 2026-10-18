@@ -10,7 +10,7 @@
 import {appendFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {CHAIN_CALLER, lockFreed, lockHolders, minutesSince, reapStuckHolders} from './workflow-run-summary.mjs';
+import {CHAIN_CALLER, gateBudget, lockFreed, lockHolders, minutesSince, reapStuckHolders} from './workflow-run-summary.mjs';
 
 const API = 'https://api.github.com/repos/Andrewegao/v3t7kq-cycle';
 export const LANE = 'observation-refresh.yml';
@@ -76,9 +76,10 @@ export async function main(env = process.env, now = Date.now(), fetcher = fetch,
   };
   let active = await listActive();
   if (active.length) {
-    const holders = (await lockHolders({runId: env.GITHUB_RUN_ID, token: env.GH_TOKEN, fetcher, now, only: ['observations']})) ?? [];
+    const budget = gateBudget();
+    const holders = (await lockHolders({runId: env.GITHUB_RUN_ID, token: env.GH_TOKEN, fetcher, now, only: ['observations'], budget})) ?? [];
     if (holders.some(row => row.stuck)) {
-      const reap = await reapStuckHolders({holders, token: env.GH_TOKEN, fetcher, now, sleep});
+      const reap = await reapStuckHolders({holders, token: env.GH_TOKEN, fetcher, now, sleep, budget});
       reaped = reap.lines;
       if (reap.results.some(lockFreed)) active = await listActive();
     }
