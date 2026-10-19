@@ -180,6 +180,24 @@ jobs:
             "$RUNNER_TEMP/weatherx-wind100-point-series" weatherx-wind100-point-proof.json \
             weatherx-wind100-augmentation.json \
             weatherx-wind100-handoff/handoff.json weatherx-wind100-handoff/packs/ecmwf/manifest.json
+      # Reclaims journal-retired prefixes past grace and never-activated uploads that are provably
+      # unreferenced and at least 48 hours old (never the current or rollback entry), re-reading the
+      # pointer before every batch of at most 250 scoped deletions and stopping cleanly at its own
+      # 20-minute budget, inside this step's 30-minute bound. A failure here never publishes: the
+      # capacity check in the next step still decides.
+      - name: Reclaim retired and never-activated staging point prefixes
+        if: ${{ steps.preflight.outputs.status == 'new-input' }}
+        continue-on-error: true
+        timeout-minutes: 30
+        env:
+          STAGING_R2_WRITE_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_WRITE_ACCESS_KEY_ID }}
+          STAGING_R2_WRITE_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_WRITE_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          if ! node cycle/tools/staging-wind100-retention.mjs reclaim "$GITHUB_WORKSPACE/atmos"; then
+            echo '::warning title=Staging Wind100 reclaim::inline reclaim failed; the capacity check decides'
+            exit 1
+          fi
       - name: Upload one immutable staging point component
         if: ${{ steps.preflight.outputs.status == 'new-input' }}
         working-directory: atmos

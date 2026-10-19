@@ -180,13 +180,16 @@ test('pointer activation verifies immutable selection/catalog and retries one CA
   const selectionBody = encode(selection), selectionSha256 = hash(selectionBody);
   assert.throws(() => pointerEntry({ ...selection, catalogId: 'stage-wind100-1234-1' }, selectionSha256));
   let pointerBody = null, conflicts = 1, writes = 0;
+  const journals = new Map();
   const io = {
     async get(key) {
+      if (key.startsWith('staging-candidates/wind100/journal/')) return journals.has(key) ? { body: journals.get(key) } : null;
       if (key.endsWith('/selection.json')) return { body: selectionBody };
       if (key.startsWith('catalogs/snapshots/')) return { body: catalogBody };
       return pointerBody == null ? null : { body: pointerBody, etag: 'etag-1' };
     },
     async put(body) { writes++; if (conflicts-- > 0) return false; pointerBody = body; return true; },
+    async immutable(key, body) { assert.ok(!journals.has(key) || journals.get(key).equals(body)); journals.set(key, body); },
   };
   const pointer = await activateCandidate({ selection, selectionSha256, io, now: () => Date.parse('2026-09-11T20:00:00Z'),
     catalogValidator: value => JSON.stringify(value) === JSON.stringify(catalog) });
@@ -268,7 +271,7 @@ test('recurring preflight never treats a legacy paired selection as unchanged', 
     : key === entry.selectionKey ? { body: selectionBody }
       : key === `staging-candidates/wind100/${candidate.catalogId}/selection.json` ? { body: candidateBody }
         : key === `catalogs/snapshots/${candidate.catalogId}.json` ? { body: catalogBody } : null,
-  put: async body => { current = body; return true; } };
+  put: async body => { current = body; return true; }, immutable: async () => {} };
   const migrated = await activateCandidate({ selection: candidate, selectionSha256: candidateSha, io: mutable,
     now: () => Date.parse(candidate.createdAt), catalogValidator: () => true });
   assert.equal(migrated.entries.length, 1);

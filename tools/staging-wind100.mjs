@@ -1,5 +1,6 @@
 // Qualify one ECMWF native-100 candidate, publish immutable staging components,
-// and prepare isolated metadata. This controller cannot mutate a serving pointer.
+// and prepare isolated metadata. Only `activate` mutates the bounded staging Wind100 selector,
+// and it writes an immutable journal record before every compare-and-swap.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -39,6 +40,13 @@ const MAX_RECURRING_PREFIX_OBJECTS = 50_000;
 export const POINTER_KEY = 'staging-candidates/wind100/current-v1.json';
 export const MAX_POINTER_BYTES = 16 * 1024;
 const POINTER_KIND = 'weatherx-staging-native-wind100-pointer';
+export const SELECTION_KIND = 'weatherx-staging-native-wind100-selection';
+export const JOURNAL_PREFIX = 'staging-candidates/wind100/journal/';
+export const JOURNAL_KIND = 'weatherx-staging-native-wind100-pointer-journal';
+const JOURNAL_KEY = /^staging-candidates\/wind100\/journal\/[a-f0-9]{64}\.json$/;
+// genesis: the first pointer; journaled: the previous pointer has its own record; pre-journal:
+// the previous pointer predates staging journals (only the first journaled transition).
+const JOURNAL_ANCESTRY = new Set(['genesis', 'journaled', 'pre-journal']);
 const TARGET_ORIGIN = 'https://staging.weatherx.org';
 const POINT_SOURCE = 'ECMWF IFS 0.25 degree direct open-data GRIB';
 // This is the reviewed ceiling used by the pinned map catalog/reference reader.
@@ -61,6 +69,9 @@ const CONTROLLER_FILES = [
   '.github/workflows/staging-wind100-recurring.yml',
   'tools/staging-wind100-policy.json',
   'tools/staging-wind100.mjs',
+  'tools/staging-wind100-retention.mjs',
+  'tools/wind100-retention.mjs',
+  'tools/wind100-bounded-step.mjs',
   'tools/staging-wind100-python.py',
   'tools/staging-wind100-requirements.txt',
   'tests/staging-wind100-core-flow.py',
@@ -184,6 +195,44 @@ export function nextWind100Pointer(current, entry, updatedAt) {
   const value = { schemaVersion: 1, kind: POINTER_KIND, targetOrigin: TARGET_ORIGIN, updatedAt, entries };
   validateWind100Pointer(value);
   return value;
+}
+
+export const journalKeyFor = pointerSha256 => {
+  assert.match(pointerSha256 ?? '', SHA);
+  return `${JOURNAL_PREFIX}${pointerSha256}.json`;
+};
+
+// The immutable record written before a pointer swap, named by the proposed pointer's SHA-256.
+// It carries the previous pointer body, so retention can prove which entries each transition
+// retired; a record left by a lost compare-and-swap is never reachable from the live pointer.
+export function makePointerJournal(nextBody, priorBody, ancestry) {
+  assert.ok(Buffer.isBuffer(nextBody) && nextBody.length > 0 && nextBody.length <= MAX_POINTER_BYTES);
+  assert.ok(priorBody == null || (Buffer.isBuffer(priorBody) && priorBody.length > 0
+    && priorBody.length <= MAX_POINTER_BYTES));
+  assert.ok(JOURNAL_ANCESTRY.has(ancestry), 'unknown Wind100 journal ancestry');
+  assert.equal(ancestry === 'genesis', priorBody == null, 'only the first pointer is a journal genesis');
+  const next = validateWind100Pointer(JSON.parse(nextBody));
+  const prior = priorBody ? validateWind100Pointer(JSON.parse(priorBody)) : null;
+  assert.deepEqual(next, nextWind100Pointer(prior, next.entries[0], next.updatedAt),
+    'journaled Wind100 pointer is not the activation of its previous pointer');
+  return { schemaVersion: 1, kind: JOURNAL_KIND, operation: 'activate', ancestry,
+    currentPointerSha256: hash(nextBody), previousPointerSha256: priorBody ? hash(priorBody) : null,
+    previousPointerBodyBase64: priorBody ? priorBody.toString('base64') : null, createdAt: next.updatedAt };
+}
+
+export function validatePointerJournal(journal, currentBody) {
+  exactKeys(journal, ['schemaVersion', 'kind', 'operation', 'ancestry', 'currentPointerSha256',
+    'previousPointerSha256', 'previousPointerBodyBase64', 'createdAt'], 'wind100 pointer journal');
+  assert.equal(journal.schemaVersion, 1); assert.equal(journal.kind, JOURNAL_KIND);
+  assert.ok(Buffer.isBuffer(currentBody)); assert.equal(journal.currentPointerSha256, hash(currentBody));
+  const current = validateWind100Pointer(JSON.parse(currentBody));
+  assert.equal(journal.createdAt, current.updatedAt);
+  const previousBody = journal.previousPointerBodyBase64 == null ? null
+    : Buffer.from(journal.previousPointerBodyBase64, 'base64');
+  assert.equal(journal.previousPointerSha256, previousBody ? hash(previousBody) : null);
+  assert.deepEqual(journal, makePointerJournal(currentBody, previousBody, journal.ancestry));
+  return { current, previousBody, previous: previousBody ? JSON.parse(previousBody) : null,
+    journalStart: journal.ancestry === 'pre-journal' };
 }
 
 export function createQualificationTrace() {
@@ -1446,7 +1495,7 @@ export async function prepareCandidate({ request, qualification, mapReceipt, poi
   return selection;
 }
 
-function validateSelectedCatalog(selection, catalog, catalogValidator) {
+export function validateSelectedCatalog(selection, catalog, catalogValidator) {
   assert.equal(catalogValidator(catalog), true, 'selected catalog is not reader-qualified');
   if (selection.publicationMode === RECURRING_PUBLICATION_MODE) {
     assert.deepEqual(Object.keys(catalog.components ?? {}), [`point-${MODEL}`],
@@ -1557,7 +1606,7 @@ export async function createPointerS3(env, injectedClient, injectedSdk) {
   function admitted(key, write = false) {
     safeKey(key);
     if (write) assert.equal(key, POINTER_KEY, 'only the Wind100 serving pointer is mutable');
-    else assert.ok(key === POINTER_KEY
+    else assert.ok(key === POINTER_KEY || JOURNAL_KEY.test(key)
       || /^catalogs\/snapshots\/stage-wind100(?:-recurring)?-[1-9]\d{0,19}-[1-9]\d{0,5}\.json$/.test(key)
       || /^staging-candidates\/wind100\/stage-wind100(?:-recurring)?-[1-9]\d{0,19}-[1-9]\d{0,5}\/selection\.json$/.test(key),
     'pointer controller read escaped its namespace');
@@ -1592,7 +1641,23 @@ export async function createPointerS3(env, injectedClient, injectedSdk) {
       throw pointerRefusal(error, 'staging pointer write failed');
     }
   }
-  return { get, put, close: () => client.destroy?.() };
+  // Immutable journal records only; an existing record must be byte-identical.
+  async function immutable(key, body) {
+    assert.ok(JOURNAL_KEY.test(safeKey(key)), 'only Wind100 journal records are immutable here');
+    assert.ok(Buffer.isBuffer(body) && body.length > 0 && body.length <= MAX_JSON_BYTES);
+    try {
+      await client.send(new sdk.PutObjectCommand({ Bucket: DATA, Key: key, Body: body, ContentLength: body.length,
+        IfNoneMatch: '*', Metadata: { sha256: hash(body) }, ContentType: 'application/json', CacheControl: CACHE }),
+      { abortSignal: AbortSignal.timeout(120_000) });
+    } catch (error) {
+      if (safeProperty(safeProperty(error, '$metadata'), 'httpStatusCode') !== 412) {
+        throw pointerRefusal(error, 'staging journal write failed');
+      }
+    }
+    const saved = await get(key, body.length);
+    assert.ok(saved && saved.body.equals(body), 'staging journal readback differs');
+  }
+  return { get, put, immutable, close: () => client.destroy?.() };
 }
 
 export async function activateCandidate({ selection, selectionSha256, io, now = Date.now, policy = readPolicy(),
@@ -1628,6 +1693,12 @@ export async function activateCandidate({ selection, selectionSha256, io, now = 
     const updatedAt = new Date(now()).toISOString();
     const next = nextWind100Pointer(current, entry, updatedAt);
     const body = Buffer.from(`${JSON.stringify(next)}\n`);
+    // The journal record precedes the swap, so every live pointer has one (W15 retention).
+    const ancestry = observed == null ? 'genesis'
+      : await io.get(journalKeyFor(hash(observed.body)), MAX_JSON_BYTES) ? 'journaled' : 'pre-journal';
+    const journal = makePointerJournal(body, observed?.body ?? null, ancestry);
+    const journalBody = Buffer.from(`${JSON.stringify(journal)}\n`);
+    await io.immutable(journalKeyFor(journal.currentPointerSha256), journalBody);
     if (!await io.put(body, observed?.etag ?? null)) continue;
     const readback = await io.get(POINTER_KEY, MAX_POINTER_BYTES);
     assert.ok(readback); assert.deepEqual(readback.body, body, 'Wind100 pointer readback differs');
