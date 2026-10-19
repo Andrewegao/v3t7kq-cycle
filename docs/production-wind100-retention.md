@@ -67,6 +67,16 @@ It refuses cleanup-environment and broad credentials. The step is
 `continue-on-error` with a 30-minute bound: if reclaim fails, the capacity
 check in the upload step still decides and nothing is published past the cap.
 
+Every awaited reclaim step (module load, IO setup, catalog validator, and each
+get, list, delete-credential mint and delete) must settle within 150 seconds,
+above the SDK's own 120-second request abort. Otherwise the command exits 1
+with `inline reclaim failed (stage …; completed gets …, lists …, delete
+credentials …, deletes …)` naming the call that hung; nothing is retried and
+no further deletion is attempted. The CLI entry uses no top-level await: the
+retention module imports `production-wind100.mjs`, and a top-level await there
+deadlocked the reclaim module import (bake run 39176755083 exited 13 after
+about 50 ms with no IO, so the cap was never relieved).
+
 The capacity check prints existing, planned and maximum object counts when it
 refuses, and emits a `::warning::` when fewer than three publications of the
 planned size still fit (counting the current one). At four runs a day the
