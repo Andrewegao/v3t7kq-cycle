@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Read-only planning precedes every production Wind100 deletion. A human-approved plan hash
 // is required for the manual workflow; the recurring publisher may reclaim only journal-proven
-// retired prefixes past grace, through the same planner and per-delete pointer checks.
+// retired prefixes past grace, through the same planner and executor with per-batch pointer checks.
 import assert from 'node:assert/strict';
 import { createHmac, createHash } from 'node:crypto';
 import { resolve } from 'node:path';
@@ -20,6 +20,15 @@ const MAX_OBJECTS = 10_000;
 // Hard per-run delete bound: two full recurring prefixes (2 x 4,141 objects) fit.
 export const MAX_DELETES = 10_000;
 export const DEFAULT_CANDIDATES = 2;
+// A scoped delete credential covers at most this many keys of one prefix.
+const CREDENTIAL_KEYS = 250;
+const MAX_CONCURRENCY = 16;
+// Inline reclaim re-verifies the live pointer once per credential window and runs that window's
+// deletes eight at a time. Two serial round trips per key (pointer re-read, then delete) took
+// about 0.3 s per object, so a two-prefix plan (8,282 keys) needed ~41 minutes and was killed
+// by the 30-minute step bound every run (bake run 39181515197). The approved manual lane keeps
+// the executor defaults: a pointer check before every key and one delete at a time.
+export const INLINE_RECLAIM = Object.freeze({ batchSize: CREDENTIAL_KEYS, concurrency: 8 });
 const GRACE_MS = 18 * 3_600_000;
 const PLAN_KIND = 'weatherx-production-native-wind100-retention-plan';
 const endpoint = `https://${ACCOUNT}.r2.cloudflarestorage.com`;
@@ -138,9 +147,19 @@ export async function planRetention({ io, catalogValidator, now = Date.now,
 }
 
 // Shared by the approved manual execution and the recurring inline reclaim. The plan is
-// recomputed from live state and must match byte for byte; every deletion re-reads the pointer.
-async function executeVerifiedPlan({ plan, io, deleteForPrefix, catalogValidator, now, maximumDeletes, policy }) {
+// recomputed from live state and must match byte for byte. Keys are deleted in batches inside
+// one credential window: before each batch the live pointer is re-read and must still hash to
+// the plan's pointer, exclude the candidate and leave it past grace. Within a batch at most
+// `concurrency` deletes are in flight; the first failure stops further dispatch, lets in-flight
+// deletes settle and is rethrown (no retries). Once `clock()` reaches `deadline` no further
+// delete is dispatched and the partial count is returned. `onProgress` gets one line per batch.
+async function executeVerifiedPlan({ plan, io, deleteForPrefix, catalogValidator, now, maximumDeletes, policy,
+  batchSize = 1, concurrency = 1, deadline = Infinity, clock = Date.now, onProgress = () => {} }) {
   assert.ok(Number.isSafeInteger(maximumDeletes) && maximumDeletes > 0 && maximumDeletes <= MAX_DELETES);
+  assert.ok(Number.isSafeInteger(batchSize) && batchSize > 0 && CREDENTIAL_KEYS % batchSize === 0);
+  assert.ok(Number.isSafeInteger(concurrency) && concurrency > 0 && concurrency <= MAX_CONCURRENCY);
+  assert.ok(typeof deadline === 'number' && !Number.isNaN(deadline));
+  assert.equal(typeof clock, 'function'); assert.equal(typeof onProgress, 'function');
   const { planSha256, ...content } = plan;
   assert.equal(planSha256, hash(JSON.stringify(content)));
   assert.equal(plan.schemaVersion, 2);
@@ -154,13 +173,22 @@ async function executeVerifiedPlan({ plan, io, deleteForPrefix, catalogValidator
   assert.equal(plan.totalObjects, plan.candidates.reduce((n, row) => n + row.keys.length, 0));
   assert.ok(plan.totalObjects <= maximumDeletes, 'retention delete budget exceeded');
   let deleted = 0;
+  const report = note => onProgress(`reclaim progress: deleted ${deleted} of ${plan.totalObjects}`
+    + (note ? `; ${note}` : ''));
+  const outOfTime = () => clock() >= deadline;
+  const budgetStop = () => {
+    report(`wall-clock budget reached; ${plan.totalObjects - deleted} left for the next run`);
+    return { deleted, complete: false };
+  };
+  report();
   for (const candidate of plan.candidates) {
     assert.ok(!plan.protectedCatalogIds.includes(candidate.catalogId));
     assert.match(candidate.prefix, /^components\/point-ecmwf\/prod-wind100-recurring-point-ecmwf-[1-9]\d{0,19}-[1-9]\d{0,5}\/$/);
     let client;
     try {
-      for (const [index, key] of candidate.keys.entries()) {
-        if (index % 250 === 0) {
+      for (let start = 0; start < candidate.keys.length; start += batchSize) {
+        if (outOfTime()) return budgetStop();
+        if (start % CREDENTIAL_KEYS === 0) {
           client?.close?.();
           client = await deleteForPrefix(candidate.prefix);
         }
@@ -172,13 +200,28 @@ async function executeVerifiedPlan({ plan, io, deleteForPrefix, catalogValidator
           'current or rollback candidate cannot be deleted');
         assert.ok(Date.parse(candidate.freshUntil) + GRACE_MS <= now(),
           'candidate lacks post-expiry grace');
-        assert.ok(key.startsWith(candidate.prefix) && key.length > candidate.prefix.length);
-        await client.delete(key);
-        deleted++;
+        const batch = candidate.keys.slice(start, start + batchSize);
+        for (const key of batch) assert.ok(key.startsWith(candidate.prefix) && key.length > candidate.prefix.length);
+        let next = 0, failed = false, failure;
+        const worker = async () => {
+          while (!failed && next < batch.length && !outOfTime()) {
+            const key = batch[next++];
+            try { await client.delete(key); deleted++; }
+            catch (error) { if (!failed) { failed = true; failure = error; } }
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(concurrency, batch.length) }, worker));
+        if (failed) {
+          report('stopped by a failed delete; no further deletion was attempted');
+          throw failure;
+        }
+        // Without a failure, an undispatched key means the deadline stopped this batch.
+        if (next < batch.length) return budgetStop();
+        report();
       }
     } finally { client?.close?.(); }
   }
-  return deleted;
+  return { deleted, complete: true };
 }
 
 export async function executeRetention({ plan, io, deleteForPrefix, catalogValidator, approvedPlanSha256,
@@ -188,7 +231,7 @@ export async function executeRetention({ plan, io, deleteForPrefix, catalogValid
   const { planSha256, ...content } = plan;
   assert.equal(planSha256, hash(JSON.stringify(content)));
   assert.equal(planSha256, approvedPlanSha256, 'dry-run plan has not been approved');
-  const deleted = await executeVerifiedPlan({ plan, io, deleteForPrefix, catalogValidator, now,
+  const { deleted } = await executeVerifiedPlan({ plan, io, deleteForPrefix, catalogValidator, now,
     maximumDeletes, policy });
   return { status: 'deleted-retired-production-wind100-objects',
     pointerSha256: plan.pointerSha256, planSha256, deleted };
@@ -196,19 +239,25 @@ export async function executeRetention({ plan, io, deleteForPrefix, catalogValid
 
 // Recurring-publisher reclaim: the planner only ever proposes journal-retired, unprotected
 // prefixes past grace, so this class needs no human plan hash. Never-activated uploads are not
-// journal-proven and are not collected by this or any other path.
+// journal-proven and are not collected by this or any other path. The CLI passes
+// INLINE_RECLAIM, a wall-clock deadline and a progress logger; a deadline stop is a clean
+// partial result (`reclaim-budget-exhausted`) so the capacity check still decides.
 export async function reclaimRetired({ io, deleteForPrefix, catalogValidator, now = Date.now,
-  maximumCandidates = DEFAULT_CANDIDATES, maximumDeletes = MAX_DELETES, policy = readProductionPolicy() }) {
+  maximumCandidates = DEFAULT_CANDIDATES, maximumDeletes = MAX_DELETES, policy = readProductionPolicy(),
+  batchSize, concurrency, deadline, clock, onProgress }) {
   const plan = await planRetention({ io, catalogValidator, now, maximumCandidates,
     maximumObjects: maximumDeletes, policy });
   const summary = { pointerSha256: plan.pointerSha256, planSha256: plan.planSha256,
     candidates: plan.candidates.map(row => row.catalogId),
     skippedEmptyCatalogIds: plan.skippedEmptyCatalogIds, refusedCatalogIds: plan.refusedCatalogIds,
     refusalReasons: plan.refusalReasons, plannedObjects: plan.totalObjects };
-  if (plan.candidates.length === 0) return { status: 'nothing-to-reclaim', ...summary, deleted: 0 };
-  const deleted = await executeVerifiedPlan({ plan, io, deleteForPrefix, catalogValidator, now,
-    maximumDeletes, policy });
-  return { status: 'reclaimed-retired-production-wind100-objects', ...summary, deleted };
+  if (plan.candidates.length === 0) {
+    return { status: 'nothing-to-reclaim', ...summary, deleted: 0, remainingObjects: 0 };
+  }
+  const { deleted, complete } = await executeVerifiedPlan({ plan, io, deleteForPrefix, catalogValidator,
+    now, maximumDeletes, policy, batchSize, concurrency, deadline, clock, onProgress });
+  return { status: complete ? 'reclaimed-retired-production-wind100-objects' : 'reclaim-budget-exhausted',
+    ...summary, deleted, remainingObjects: plan.totalObjects - deleted };
 }
 
 // Operator-facing notices for a plan or reclaim result: a warning per refused retired entry
@@ -217,6 +266,10 @@ export function retentionNotices(result) {
   const refused = result.refusedCatalogIds ?? [];
   const warnings = refused.map(id => `retired ${id} was refused (${result.refusalReasons?.[id]}) `
     + 'and kept; inspect its selection, catalog and prefix');
+  if (result.status === 'reclaim-budget-exhausted') {
+    warnings.push(`inline reclaim reached its wall-clock budget after deleting ${result.deleted} of`
+      + ` ${result.plannedObjects} planned objects; ${result.remainingObjects} remain for the next run`);
+  }
   const candidates = (result.candidates ?? []).map(row => (typeof row === 'string' ? row : row.catalogId));
   const summary = `Production Wind100 retention: ${result.status ?? 'plan'}; candidates ${candidates.join(', ') || 'none'};`
     + ` deleted ${result.deleted ?? 0}; skipped empty ${(result.skippedEmptyCatalogIds ?? []).length};`

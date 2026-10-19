@@ -58,8 +58,16 @@ Each new-input production run reclaims journal-retired prefixes past grace
 before its capacity check (`production-wind100.mjs reclaim`, the step before
 "Upload one immutable production point component"). It uses the same planner
 and the same executor as the approved workflow: protected current and rollback
-entries are excluded, the plan is recomputed and must match, and the pointer
-is re-read and hash-checked before every deletion. Because the planner can only
+entries are excluded and the plan is recomputed and must match. Inline reclaim
+deletes in batches of at most 250 keys, the same window as one scoped delete
+credential: before each batch the live pointer is re-read and must still hash
+to the plan's pointer, exclude the candidate and leave it past grace, and the
+batch's deletes then run eight at a time. (The approved workflow keeps a
+pointer check before every key and one delete at a time.) Two serial round
+trips per key took about 0.3 s per object, so a two-prefix plan of 8,282 keys
+needed about 41 minutes and bake run 39181515197 was killed at the step bound
+with no count; batched, the same plan takes about three minutes at that
+latency. Because the planner can only
 propose journal-proven retirements, this class needs no human plan hash. The
 step uses only the job's existing dedicated writer token; each deletion goes
 through a 15-minute `DeleteObject` credential minted from it for one prefix.
@@ -67,12 +75,22 @@ It refuses cleanup-environment and broad credentials. The step is
 `continue-on-error` with a 30-minute bound: if reclaim fails, the capacity
 check in the upload step still decides and nothing is published past the cap.
 
+Inline reclaim has its own 20-minute wall-clock budget from the start of the
+command. No delete is dispatched after it; in-flight deletes settle and the
+command exits 0 with status `reclaim-budget-exhausted`, `deleted`,
+`plannedObjects` and `remainingObjects`, plus a `::warning::`. The next run's
+plan picks up the remainder. The step prints `reclaim progress: deleted N of M`
+before the first batch and after every batch, so even a killed step leaves a
+count in its log.
+
 Every awaited reclaim step (module load, IO setup, catalog validator, and each
 get, list, delete-credential mint and delete) must settle within 150 seconds,
 above the SDK's own 120-second request abort. Otherwise the command exits 1
 with `inline reclaim failed (stage …; completed gets …, lists …, delete
-credentials …, deletes …)` naming the call that hung; nothing is retried and
-no further deletion is attempted. The CLI entry uses no top-level await: the
+credentials …, deletes …)` naming the call that hung; nothing is retried.
+A failed or hung delete stops dispatch at once: deletes already in flight in
+that batch settle, no later batch starts, and the last progress line gives the
+count. The CLI entry uses no top-level await: the
 retention module imports `production-wind100.mjs`, and a top-level await there
 deadlocked the reclaim module import (bake run 39176755083 exited 13 after
 about 50 ms with no IO, so the cap was never relieved).
@@ -150,7 +168,9 @@ recurring jobs stay gated off until the owner updates them.
 5. Validation: the first post-merge bake must show one real inline deletion
    with the writer token (the reclaim step reports
    `reclaimed-retired-production-wind100-objects` with `deleted` above zero and
-   the upload step's capacity count drops accordingly). If the step instead
+   the upload step's capacity count drops accordingly). A
+   `reclaim-budget-exhausted` result is a clean partial run: read its
+   `reclaim progress` lines and expect the next run to finish the remainder. If the step instead
    warns that inline reclaim failed, read its log before concluding anything:
    a DeleteObject 403 means the writer token cannot delete, so fall back to the
    approved workflow and treat inline reclaim as not landed; a pointer or plan
