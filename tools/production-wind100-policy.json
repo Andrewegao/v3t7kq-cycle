@@ -4,7 +4,7 @@
   "model": "ecmwf",
   "sourceSha": "9174329db6ca8527569e67f14ef70406dedefb69",
   "previousSourceShas": [],
-  "coreSourceSha": "81e061dae0a03cc39e014dc08586bbd144823108",
+  "coreSourceSha": "9f2943febfc3a6d0426003422efaea9a093a8f71",
   "dataBucket": "weatherx-data-production",
   "componentBucket": "weatherx-components-production",
   "pointerKey": "production-candidates/wind100/current-v1.json",

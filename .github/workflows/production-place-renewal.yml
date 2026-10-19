@@ -46,7 +46,7 @@ jobs:
       CALLER: ${{ inputs.caller }}
       RENEWAL_SCHEDULE: ${{ github.event.schedule }}
       ATMOS_SHA: ${{ vars.PRODUCTION_PLACES_RENEWAL_ATMOS_SHA }}
-      PUBLISHER_ATMOS_SHA: 81e061dae0a03cc39e014dc08586bbd144823108
+      PUBLISHER_ATMOS_SHA: 9f2943febfc3a6d0426003422efaea9a093a8f71
       APPROVED_PUBLISHER_SHA: ${{ vars.CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA }}
       PRODUCTION_PLACES_RENEWAL_ENABLED: ${{ vars.PRODUCTION_PLACES_RENEWAL_ENABLED }}
       PRODUCTION_PLACES_RENEWAL_CONTROLLER_SHA256: ${{ vars.PRODUCTION_PLACES_RENEWAL_CONTROLLER_SHA256 }}
@@ -86,7 +86,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: weatherx-hq/atmos
-          ref: 81e061dae0a03cc39e014dc08586bbd144823108
+          ref: 9f2943febfc3a6d0426003422efaea9a093a8f71
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: publisher
           persist-credentials: false
