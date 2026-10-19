@@ -124,7 +124,7 @@ test('both bakes and the observation lane declare a run name and a read-only fin
   for (const job of ['bake', 'staging-wind100', 'production-wind100', ...MODELS.map(m => `publish-${m}`)]) assert.ok(summary.includes(job), job);
   assert.doesNotMatch(summary, /secrets\.|environment:|concurrency:|: write/);
   const component = catalog.split('\n  summary:\n')[1];
-  assert.match(component, /needs: \[plan, model\]/);assert.match(component, /STOOD_ASIDE: \$\{\{ needs\.plan\.outputs\.stood_aside \}\}/);assert.match(component, /always\(\)/);
+  assert.match(component, /needs: \[plan, model, fallback-gate\]/);assert.match(component, /STOOD_ASIDE: \$\{\{ needs\.plan\.outputs\.stood_aside \}\}/);assert.match(component, /always\(\)/);
   assert.match(component, /actions: read/);assert.doesNotMatch(component, /secrets\.|environment:|concurrency:|: write/);
 });
 
@@ -412,8 +412,9 @@ test('the component bake plans before it queues, keeps the shared model locks, a
   assert.doesNotMatch(plan, /secrets\.|environment:|concurrency:|contents: write|deployments: write|write-all/);
   // actions: write only for the stuck-lock reaper's cancel (tests/stuck-lock-reaper.mjs).
   assert.match(plan, /    permissions:\n      contents: read\n      actions: write\n    outputs:/);assert.match(plan, /run: node tools\/workflow-run-summary\.mjs component-plan/);
-  assert.match(model, /^    needs: plan$/m);
-  assert.match(model, /if: \$\{\{ !cancelled\(\) && \(github\.event_name == 'workflow_dispatch' \|\| vars\.CATALOG_GITHUB_FALLBACK_DISABLED != 'true'\) && needs\.plan\.outputs\.models != '\[\]' \}\}/);
+  // fallback-gate (tests/fallback-stand-aside.mjs) only adds its stand-aside to this condition.
+  assert.match(model, /^    needs: \[plan, fallback-gate\]$/m);
+  assert.match(model, /if: \$\{\{ !cancelled\(\) && needs\.plan\.outputs\.models != '\[\]' && needs\.fallback-gate\.outputs\.run != 'false' \}\}/);
   const requested = plan.match(/REQUESTED_MODELS: \$\{\{ (.+) \}\}$/m)[1];
   assert.equal(model.match(/model: \$\{\{ fromJSON\(needs\.plan\.outputs\.models \|\| (.+)\) \}\}$/m)[1], requested, 'plan and fallback matrix must request the same models');
   assert.match(model, /group: weatherx-component-\$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.target \|\| vars\.CATALOG_DEFAULT_TARGET \|\| 'staging' \}\}-\$\{\{ matrix\.model \}\}\n      cancel-in-progress: false/);

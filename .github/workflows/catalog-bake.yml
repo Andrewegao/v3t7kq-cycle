@@ -42,14 +42,14 @@ jobs:
     # seconds). It keeps every model if the API is unreadable. The requested-model expression is
     # repeated in the model matrix on purpose: matrix cannot read env, and that copy keeps the lane
     # publishing if this job fails (tests/workflow-run-summary.mjs pins the two copies equal).
-    # Fail open: native schedules remain a publisher unless an operator explicitly
-    # disables the fallback after the Cloudflare trigger set is verified live.
     # Before that, for production targets, it cancels a run that holds a requested model's lock while
     # orphaned at an environment gate (known gate time over 30 min, nothing started, only a
     # branch-policy environment, every unfinished job of that run such a wait; plain cancel, then
     # force-cancel), so this run's model job can take the lock. That cancel is the only reason this
-    # job may write to Actions; the model and summary jobs cannot.
-    if: ${{ github.event_name == 'workflow_dispatch' || vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true' }}
+    # job may write to Actions; the model and summary jobs cannot. A GitHub schedule run gets here
+    # only when fallback-gate (the last job) found no recent scheduler dispatch of this lane.
+    needs: fallback-gate
+    if: ${{ !cancelled() && needs.fallback-gate.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 3
     permissions:
@@ -74,11 +74,11 @@ jobs:
           REQUESTED_MODELS: ${{ github.event_name == 'workflow_dispatch' && inputs.model == 'slow' && '["ecmwf","gfs","aifs"]' || github.event_name == 'workflow_dispatch' && inputs.model != 'all' && format('["{0}"]', inputs.model) || github.event_name == 'workflow_dispatch' && '["ecmwf","gfs","hrrr","aifs"]' || github.event.schedule == '8-59/10 * * * *' && '["hrrr"]' || '["ecmwf","gfs","aifs"]' }}
         run: node tools/workflow-run-summary.mjs component-plan
   model:
-    needs: plan
+    needs: [plan, fallback-gate]
     environment: production
-    # Runs even if the plan job itself failed (then with the full matrix below), never when the
-    # plan stood aside for every requested model.
-    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true') && needs.plan.outputs.models != '[]' }}
+    # Runs even if the plan job itself failed (then with the full matrix below), never when the plan
+    # stood aside for every requested model or fallback-gate stood a schedule run aside.
+    if: ${{ !cancelled() && needs.plan.outputs.models != '[]' && needs.fallback-gate.outputs.run != 'false' }}
     concurrency:
       group: weatherx-component-${{ github.event_name == 'workflow_dispatch' && inputs.target || vars.CATALOG_DEFAULT_TARGET || 'staging' }}-${{ matrix.model }}
       cancel-in-progress: false
@@ -308,8 +308,8 @@ jobs:
   # writer lock. A job left waiting at the environment gate keeps its concurrency group, and each
   # later queued job for that model is cancelled by the next dispatch; that state turns this red.
   summary:
-    needs: [plan, model]
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true') }}
+    needs: [plan, model, fallback-gate]
+    if: ${{ always() && needs.fallback-gate.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 3
     permissions:
@@ -330,3 +330,58 @@ jobs:
           SUMMARY_JOB_NAME: summary
           STOOD_ASIDE: ${{ needs.plan.outputs.stood_aside }}
         run: node tools/workflow-run-summary.mjs component
+  # Cron fallback stand-aside (scheduler/README.md): bake.yml's fallback-gate, the same script byte
+  # for byte (tests/fallback-stand-aside.mjs). Only a GitHub `schedule` run consults it; a dispatched
+  # run skips it and plan, model and summary run exactly as before. Read-only (workflow token with
+  # actions: read; no checkout, no secret, no lock, no environment) and fail-open: an unreadable run
+  # list, a timeout or a failure of this job leaves the fallback running. Here the window measures
+  # scheduler liveness, not one slot: the Worker dispatches HRRR every 10 min and the slow lane
+  # hourly, so a healthy scheduler always has a dispatch inside 30 / 90 min; once the newest
+  # successful or still active one is older than that, the next fallback tick runs the lane. As in
+  # bake.yml, a failed or cancelled dispatch does not count. Every writer still takes the per-model
+  # lock below. It is the last job so the lines above (and their inventory anchors) stay put.
+  fallback-gate:
+    name: fallback gate
+    if: ${{ github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: read
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - name: Stand aside when the scheduler already ran this lane
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # HRRR (Worker and fallback both `8-59/10`) 30 min; slow lane (both `7 * * * *`) 90 min.
+          WINDOW_MINUTES: ${{ github.event.schedule == '8-59/10 * * * *' && '30' || '90' }}
+          # Only the Worker's dispatch of this lane to the fallback's own target counts (its run title).
+          DISPATCH_TITLE: "${{ format('component bake: {0} to {1}', github.event.schedule == '8-59/10 * * * *' && 'hrrr' || 'slow', vars.CATALOG_DEFAULT_TARGET || 'staging') }}"
+        run: |
+          # Fail-open: the fallback runs unless a matching dispatched run is found.
+          run=true
+          workflow="${GITHUB_WORKFLOW_REF%@*}"
+          workflow="${workflow##*/}"
+          if since="$(jq -nr --argjson minutes "$WINDOW_MINUTES" '(now - $minutes * 60) | strftime("%Y-%m-%dT%H:%M:%SZ")')" &&
+            body="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs" \
+              -f event=workflow_dispatch -f branch=main -f "created=>=$since" -f per_page=100 -f exclude_pull_requests=true)" &&
+            found="$(jq -er --arg since "$since" --arg title "$DISPATCH_TITLE" --argjson self "$GITHUB_RUN_ID" '
+              .workflow_runs | if type == "array" then . else error("no run list") end
+              | map(select(.id != $self and .event == "workflow_dispatch" and .head_branch == "main"
+                  and (.created_at | type) == "string" and .created_at >= $since
+                  and ($title == "" or .display_title == $title)
+                  and (.conclusion == "success" or (.status | IN("queued", "in_progress", "waiting", "pending", "requested")))))
+              | first | if . == null then "none" else "\(.id) \(.status) \(.conclusion // "-") \(.created_at)" end' <<<"$body")"; then
+            if [ "$found" != none ]; then run=false; fi
+          else
+            found=unreadable
+            echo "::warning::Could not read this workflow's dispatched runs; the fallback runs."
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          if [ "$run" = false ]; then
+            echo "::notice::Stood aside: dispatched run ${found%% *} already covers this slot (last $WINDOW_MINUTES min)."
+            echo "Fallback schedule stood aside: dispatched run ${found%% *} (${found#* }) is inside the last $WINDOW_MINUTES min." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Fallback schedule runs: no successful or active dispatched run in the last $WINDOW_MINUTES min ($found)." >> "$GITHUB_STEP_SUMMARY"
+          fi

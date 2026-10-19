@@ -30,6 +30,7 @@ function assertDataOnly(source, allowedKeys) {
 // The schedule-only fallback gate (tests/fallback-stand-aside.mjs) is the one Actions API read a
 // data bake may hold: one GET of this workflow's own run list with the read-only workflow token. It
 // cannot dispatch, write or receive a secret; it is pinned here, then set aside for the checks below.
+// bake.yml carries it first, catalog-bake.yml last.
 function withoutFallbackGate(source) {
   const blocks = [...source.matchAll(/^  fallback-gate:\n[\s\S]*?(?=^  [a-z][a-z0-9-]*:|$(?![\s\S]))/gm)];
   assert.equal(blocks.length, 1, 'one fallback gate is required');
@@ -92,7 +93,7 @@ function assertBakeDataOnly(source) {
 
 test('both data bakes and legacy backfill have no UI credential or dispatch capability', () => {
   assertBakeDataOnly(workflows['bake.yml']);
-  assertDataOnly(withoutReaperPlan(workflows['catalog-bake.yml']), componentKeys);
+  assertDataOnly(withoutFallbackGate(withoutReaperPlan(workflows['catalog-bake.yml'])), componentKeys);
   assertDataOnly(workflows['verify-backfill.yml'], ['ATMOS_DEPLOY_KEY']);
   for (const name of ['collect-core-model.yml', 'collect-regional-model.yml'])
     assertDataOnly(workflows[name], ['ATMOS_DEPLOY_KEY']);
