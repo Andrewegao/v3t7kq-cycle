@@ -1,17 +1,19 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHmac } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
   COMPONENTS, COMPONENT_PREFIX, DATA, ORIGIN, POINTER_KEY, POINTER_KIND, SELECTION_KIND,
   activateCandidate, bindPointIntegrityInvocation, capacityWarning, controllerDigest, createStorage,
-  findQualifiedInput, gate, hash, main, reportReclaim,
+  findQualifiedInput, gate, hash, main, reclaimProgress, reportReclaim,
   nextPointer, pointerEntry, publishCandidate, readProductionPolicy, recurringPrefixCapacity,
   rollbackToPrior, validatePointer, validateQualification, validateSelection,
 } from '../tools/production-wind100.mjs';
-import { MAX_DELETES, createReclaimIo, createRetentionIo, executeRetention, planRetention, reclaimRetired,
+import { MAX_DELETES, boundedReclaimIo, createReclaimIo, createRetentionIo, executeRetention, planRetention, reclaimRetired,
   retentionNotices, scopedDeleteCredentials } from '../tools/production-wind100-retention.mjs';
 
 const now = Date.parse('2026-09-23T18:00:00Z');
@@ -839,4 +841,104 @@ test('reclaim notices become workflow warnings and a step-summary line', () => {
   assert.match(workflow, /GITHUB_STEP_SUMMARY/);
   const code = readFileSync(new URL('../tools/production-wind100.mjs', import.meta.url), 'utf8');
   assert.match(code, /reportReclaim\(result, retentionNotices, env, log\)/);
+});
+
+// ---- Real CLI entry: the reclaim command settles or fails loudly, never exit 13 ----
+// Bake run 39176755083 (2026-10-18): `production-wind100.mjs reclaim` exited 13 ("unsettled
+// top-level await") ~50 ms after start with no IO. The CLI's top-level await held this module's
+// evaluation open while main('reclaim') dynamically imported the retention module, which
+// statically imports this module back. In-process tests import both modules as dependencies,
+// so only a real CLI process reproduces it.
+
+const TOOL = fileURLToPath(new URL('../tools/production-wind100.mjs', import.meta.url));
+const writerEnv = () => ({ ...env(), PRODUCTION_WIND100_R2_ACCESS_KEY_ID: 'writerkeyid',
+  PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY: 'w'.repeat(64) });
+// Runs a fresh Node process with only the given environment (no inherited credentials).
+const node = (args, extraEnv = {}) => spawnSync(process.execPath, args,
+  { env: { PATH: process.env.PATH, ...extraEnv }, encoding: 'utf8', timeout: 60_000 });
+
+test('the reclaim CLI loads its retention module and fails with context instead of exiting 13', () => {
+  // A nonexistent source root and fake writer credentials: it must fail before any network IO.
+  const run = node([TOOL, 'reclaim', '/nonexistent'], writerEnv());
+  assert.doesNotMatch(run.stderr, /unsettled top-level await/);
+  assert.equal(run.status, 1, run.stderr);
+  // Past the module import: the failing stage is creating the IO (SDK absent) or loading the
+  // catalog validator from the nonexistent source root.
+  assert.match(run.stderr, /^Production Wind100 refused: inline reclaim failed \(stage (?:create-io|load-catalog-validator); completed gets 0, lists 0, delete credentials 0, deletes 0\): /);
+  // The import cycle remains, so the CLI entry must never use top-level await.
+  const retention = readFileSync(new URL('../tools/production-wind100-retention.mjs', import.meta.url), 'utf8');
+  assert.match(retention, /from '\.\/production-wind100\.mjs'/);
+  const code = readFileSync(TOOL, 'utf8');
+  const entry = code.slice(code.lastIndexOf('if (process.argv[1] && import.meta.url'));
+  assert.doesNotMatch(entry, /\bawait\b/);
+});
+
+const neverSettles = () => new Promise(() => {});
+const stubValidator = closed => async () => ({ validate: () => true, close: () => closed.push('validator') });
+
+test('main reclaim times out a never-settling IO call and reports the stage and counts', async () => {
+  const closed = [];
+  const io = { get: neverSettles, listPrefix: neverSettles, deleteForPrefix: neverSettles,
+    close: () => closed.push('io') };
+  const started = Date.now();
+  await assert.rejects(main('reclaim', writerEnv(), ['/source'], () => {}, {
+    createReclaimIo: async () => io, loadCatalogValidator: stubValidator(closed), ioTimeoutMs: 50 }),
+  /^Error: inline reclaim failed \(stage plan-and-delete; completed gets 0, lists 0, delete credentials 0, deletes 0\): get production-candidates\/wind100\/current-v1\.json did not settle within 50 ms; no further deletion was attempted$/);
+  assert.ok(Date.now() - started < 5_000);
+  assert.deepEqual(closed.sort(), ['io', 'validator']);
+  // Setup steps are bounded too.
+  await assert.rejects(main('reclaim', writerEnv(), ['/source'], () => {}, {
+    createReclaimIo: neverSettles, loadCatalogValidator: stubValidator([]), ioTimeoutMs: 50 }),
+  /stage create-io; .*\): create-io did not settle within 50 ms/);
+  await assert.rejects(main('reclaim', writerEnv(), ['/source'], () => {}, {
+    createReclaimIo: async () => io, loadCatalogValidator: neverSettles, ioTimeoutMs: 50 }),
+  /stage load-catalog-validator; .*\): load-catalog-validator did not settle within 50 ms/);
+});
+
+test('a never-settling IO call in the real CLI process exits 1 with a report, not 13', () => {
+  const driver = `
+    const { main, runCli } = await import(${JSON.stringify(new URL('../tools/production-wind100.mjs', import.meta.url).href)});
+    const never = () => new Promise(() => {});
+    const io = { get: never, listPrefix: never, deleteForPrefix: never, close() {} };
+    runCli('reclaim', () => main('reclaim', JSON.parse(process.env.WIND100_TEST_ENV), ['/source'], console.log, {
+      createReclaimIo: async () => io,
+      loadCatalogValidator: async () => ({ validate: () => true, close() {} }), ioTimeoutMs: 200 }));`;
+  const run = node(['--input-type=module', '-e', driver], { WIND100_TEST_ENV: JSON.stringify(writerEnv()) });
+  assert.doesNotMatch(run.stderr, /unsettled top-level await/);
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stderr, /Production Wind100 refused: inline reclaim failed \(stage plan-and-delete; completed gets 0, lists 0, delete credentials 0, deletes 0\): get production-candidates\/wind100\/current-v1\.json did not settle within 200 ms/);
+  assert.equal(run.stdout, '');
+});
+
+test('a command left pending with nothing to wait for is reported and exits 1, not 13', () => {
+  const driver = `
+    const { runCli } = await import(${JSON.stringify(new URL('../tools/production-wind100.mjs', import.meta.url).href)});
+    runCli('reclaim', () => new Promise(() => {}));`;
+  const run = node(['--input-type=module', '-e', driver]);
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stderr, /^Production Wind100 refused: reclaim never settled; the event loop drained with the command still pending\n$/);
+  // A settled command still prints its result and exits 0.
+  const ok = node(['--input-type=module', '-e', driver.replace('new Promise(() => {})', "({ status: 'ok' })")]);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(ok.stdout, '{"status":"ok"}\n');
+});
+
+test('a delete that never settles stops reclaim with its count and deletes nothing further', async () => {
+  const store = await backlog();
+  store.components.set(prefixForInvocation(invocationFor(0)), new Map());
+  const before = await store.io.prefixCount();
+  let started = 0;
+  const hanging = { ...store.io, deleteForPrefix: async prefix => {
+    const client = await store.deleteForPrefix(prefix);
+    return { delete: key => (++started === 3 ? neverSettles() : client.delete(key)) };
+  } };
+  const progress = reclaimProgress();
+  const io = boundedReclaimIo(hanging, progress, 50);
+  await assert.rejects(reclaimRetired({ io, deleteForPrefix: io.deleteForPrefix, catalogValidator: () => true,
+    now: () => cadence(30).at }), /^Error: delete components\/point-ecmwf\/prod-wind100-recurring-point-ecmwf-\d+-1\/\S+ did not settle within 50 ms; no further deletion was attempted$/);
+  assert.equal(progress.deletes, 2);
+  assert.equal(progress.deleteCredentials, 1);
+  assert.equal(started, 3);
+  assert.equal(await store.io.prefixCount(), before - 2);
+  assertProtectedIntact(store);
 });

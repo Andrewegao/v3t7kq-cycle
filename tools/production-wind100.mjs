@@ -614,6 +614,28 @@ async function withCatalogValidator(sourceRoot, callback) {
   finally { validator.close(); }
 }
 
+// Bounds one awaited step with a referenced timer: a step that never settles becomes an error
+// naming it instead of letting the event loop drain. Nothing is retried. The inline reclaim
+// bound sits above the SDK's own 120-second request abort so a transport error surfaces first.
+export const RECLAIM_IO_TIMEOUT_MS = 150_000;
+export async function settleWithin(label, promise, timeoutMs) {
+  assert.ok(Number.isSafeInteger(timeoutMs) && timeoutMs > 0);
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Error(`${label} did not settle within ${timeoutMs} ms;`
+      + ' no further deletion was attempted')), timeoutMs);
+  });
+  try { return await Promise.race([promise, deadline]); }
+  finally { clearTimeout(timer); }
+}
+export function reclaimProgress() {
+  return { stage: 'start', gets: 0, lists: 0, deleteCredentials: 0, deletes: 0 };
+}
+export function describeProgress(progress) {
+  return `stage ${progress.stage}; completed gets ${progress.gets}, lists ${progress.lists},`
+    + ` delete credentials ${progress.deleteCredentials}, deletes ${progress.deletes}`;
+}
+
 export function reportReclaim(result, notices, env = process.env, log = console.log) {
   const { warnings, summary } = notices(result);
   for (const warning of warnings) log(`::warning title=Production Wind100 reclaim::${warning}`);
@@ -621,7 +643,8 @@ export function reportReclaim(result, notices, env = process.env, log = console.
   return { warnings, summary };
 }
 
-export async function main(command, env = process.env, argv = process.argv.slice(3), log = console.log) {
+export async function main(command, env = process.env, argv = process.argv.slice(3), log = console.log,
+  deps = {}) {
   if (command === 'digest') return { sha256: controllerDigest() };
   const policy = readProductionPolicy();
   if (command === 'gate') return gate(env, 'none', policy);
@@ -649,14 +672,32 @@ export async function main(command, env = process.env, argv = process.argv.slice
     // Journal-proven retired prefixes past grace only. Never-activated uploads are not
     // journal-proven and no path collects them today (tracked follow-up).
     gate(env, 'metadata', policy);
-    const { createReclaimIo, reclaimRetired, retentionNotices } = await import('./production-wind100-retention.mjs');
-    const io = await createReclaimIo(env);
+    // Every awaited step is bounded and a failure names the stage and completed IO counts.
+    const progress = reclaimProgress();
+    const timeoutMs = deps.ioTimeoutMs ?? RECLAIM_IO_TIMEOUT_MS;
+    const step = (stage, start) => {
+      progress.stage = stage;
+      return settleWithin(stage, Promise.resolve().then(start), timeoutMs);
+    };
     try {
-      const result = await withCatalogValidator(argv[0], validator => reclaimRetired({ io,
-        deleteForPrefix: io.deleteForPrefix, catalogValidator: validator, policy }));
-      reportReclaim(result, retentionNotices, env, log);
-      return result;
-    } finally { io.close(); }
+      const { boundedReclaimIo, createReclaimIo, reclaimRetired, retentionNotices } = await step(
+        'load-retention-module', () => import('./production-wind100-retention.mjs'));
+      const io = boundedReclaimIo(await step('create-io', () => (deps.createReclaimIo ?? createReclaimIo)(env)),
+        progress, timeoutMs);
+      try {
+        const validator = await step('load-catalog-validator',
+          () => (deps.loadCatalogValidator ?? loadCatalogValidator)(argv[0]));
+        try {
+          progress.stage = 'plan-and-delete';
+          const result = await reclaimRetired({ io, deleteForPrefix: io.deleteForPrefix,
+            catalogValidator: validator.validate, policy });
+          reportReclaim(result, retentionNotices, env, log);
+          return result;
+        } finally { validator.close(); }
+      } finally { io.close(); }
+    } catch (error) {
+      throw Error(`inline reclaim failed (${describeProgress(progress)}): ${error.message}`, { cause: error });
+    }
   }
   if (command === 'preflight' || command === 'retention-gate'
     || command === 'publish' || command === 'activate') {
@@ -684,7 +725,28 @@ export async function main(command, env = process.env, argv = process.argv.slice
   throw Error('usage: production-wind100.mjs digest | gate | source SOURCE | preflight SOURCE | reclaim SOURCE | qualify SOURCE SOURCE_EVIDENCE STAGE POINT PROOF AUGMENTATION HANDOFF MANIFEST | component-gate | metadata-gate | retention-gate QUALIFICATION | publish QUALIFICATION COMPONENT_RECEIPT SOURCE | activate SELECTION SOURCE');
 }
 
+// The CLI entry must not use top-level await. production-wind100-retention.mjs statically
+// imports this module, so while this module's evaluation is suspended in a top-level await,
+// `main('reclaim')`'s dynamic import of the retention module waits for this module to finish
+// evaluating, which waits for that import: nothing is pending, the event loop drains and Node
+// exits 13 ("unsettled top-level await") having done no IO (bake run 39176755083, 2026-10-18).
+// A command that still leaves the loop with nothing to wait for is reported here, never exit 13.
+export function runCli(command, invoke = () => main(command)) {
+  let settled = false;
+  const unsettled = () => {
+    if (settled) return;
+    settled = true;
+    console.error(`Production Wind100 refused: ${command} never settled; the event loop drained`
+      + ' with the command still pending');
+    process.exitCode = 1;
+  };
+  process.once('beforeExit', unsettled);
+  return Promise.resolve().then(invoke).then(
+    result => { process.stdout.write(`${JSON.stringify(result)}\n`); },
+    error => { console.error(`Production Wind100 refused: ${error.message}`); process.exitCode = 1; },
+  ).finally(() => { settled = true; process.off('beforeExit', unsettled); });
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  try { process.stdout.write(`${JSON.stringify(await main(process.argv[2]))}\n`); }
-  catch (error) { console.error(`Production Wind100 refused: ${error.message}`); process.exitCode = 1; }
+  runCli(process.argv[2]);
 }

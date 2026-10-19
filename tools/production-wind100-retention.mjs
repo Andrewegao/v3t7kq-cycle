@@ -6,9 +6,9 @@ import assert from 'node:assert/strict';
 import { createHmac, createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { COMPONENTS, COMPONENT_PREFIX, DATA, POINTER_KEY,
-  hash, journalKeyFor, pointerEntry, readProductionPolicy, validatePointer, validatePointerJournal,
-  validateSelection } from './production-wind100.mjs';
+import { COMPONENTS, COMPONENT_PREFIX, DATA, POINTER_KEY, RECLAIM_IO_TIMEOUT_MS,
+  hash, journalKeyFor, pointerEntry, readProductionPolicy, settleWithin, validatePointer,
+  validatePointerJournal, validateSelection } from './production-wind100.mjs';
 
 const ACCOUNT = 'a89f9a1af485021fbc60a68b163c7c6e';
 const SHA = /^[a-f0-9]{64}$/;
@@ -287,6 +287,31 @@ function retentionIo({ sdk, readClient, deleteParent, deleteClientFactory }) {
     }, close: () => client.destroy?.() };
   }
   return { get, listPrefix, deleteForPrefix, close: () => readClient.destroy?.() };
+}
+
+// Inline reclaim wraps its IO so each get, list, credential mint and delete settles or times
+// out with a clear error; `progress` counts completed calls for the failure report. No retries.
+export function boundedReclaimIo(io, progress, timeoutMs = RECLAIM_IO_TIMEOUT_MS) {
+  return {
+    async get(bucket, key, maximum) {
+      const value = await settleWithin(`get ${key}`, io.get(bucket, key, maximum), timeoutMs);
+      progress.gets++; return value;
+    },
+    async listPrefix(prefix, maximum) {
+      const value = await settleWithin(`list ${prefix}`, io.listPrefix(prefix, maximum), timeoutMs);
+      progress.lists++; return value;
+    },
+    async deleteForPrefix(prefix) {
+      const client = await settleWithin(`delete credential for ${prefix}`,
+        Promise.resolve().then(() => io.deleteForPrefix(prefix)), timeoutMs);
+      progress.deleteCredentials++;
+      return { async delete(key) {
+        await settleWithin(`delete ${key}`, Promise.resolve().then(() => client.delete(key)), timeoutMs);
+        progress.deletes++;
+      }, close: () => client.close?.() };
+    },
+    close: () => io.close?.(),
+  };
 }
 
 const loadSdk = () => import('../staging-controller/node_modules/@aws-sdk/client-s3/dist-cjs/index.js');
