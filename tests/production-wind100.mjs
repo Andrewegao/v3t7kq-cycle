@@ -9,11 +9,11 @@ import test from 'node:test';
 import {
   COMPONENTS, COMPONENT_PREFIX, DATA, ORIGIN, POINTER_KEY, POINTER_KIND, SELECTION_KIND,
   activateCandidate, bindPointIntegrityInvocation, capacityWarning, controllerDigest, createStorage,
-  findQualifiedInput, gate, hash, main, reclaimProgress, reportReclaim,
+  RECLAIM_BUDGET_MS, findQualifiedInput, gate, hash, main, reclaimProgress, reportReclaim,
   nextPointer, pointerEntry, publishCandidate, readProductionPolicy, recurringPrefixCapacity,
   rollbackToPrior, validatePointer, validateQualification, validateSelection,
 } from '../tools/production-wind100.mjs';
-import { MAX_DELETES, boundedReclaimIo, createReclaimIo, createRetentionIo, executeRetention, planRetention, reclaimRetired,
+import { INLINE_RECLAIM, MAX_DELETES, boundedReclaimIo, createReclaimIo, createRetentionIo, executeRetention, planRetention, reclaimRetired,
   retentionNotices, scopedDeleteCredentials } from '../tools/production-wind100-retention.mjs';
 
 const now = Date.parse('2026-09-23T18:00:00Z');
@@ -941,4 +941,258 @@ test('a delete that never settles stops reclaim with its count and deletes nothi
   assert.equal(started, 3);
   assert.equal(await store.io.prefixCount(), before - 2);
   assertProtectedIntact(store);
+});
+
+// ---- Inline reclaim throughput, per-batch pointer checks and its wall-clock budget ----
+// Bake run 39181515197 (job 117840285830): the reclaim step was killed at its 30-minute bound
+// having printed nothing, after about 6,068 of 8,282 deletes (~0.3 s per object: a serial
+// pointer re-read plus a serial delete for every key). These tests run whole plans on a virtual
+// clock with per-call latency, so minutes of simulated R2 time cost about a second.
+
+const GET_MS = 150, LIST_PAGE_MS = 300, DELETE_MS = 150;
+const PLANNED = 2 * (POINT_OBJECTS + 1);
+
+// Timers resolve in virtual-time order once every microtask has drained; `clock` is virtual now.
+function virtualTime() {
+  let now = 0, sequence = 0;
+  const timers = [];
+  const sleep = ms => new Promise(resolve => timers.push({ at: now + ms, sequence: sequence++, resolve }));
+  async function run(promise) {
+    let done = false, value, error;
+    promise.then(result => { done = true; value = result; }, failure => { done = true; error = failure; });
+    for (;;) {
+      await new Promise(resolve => setImmediate(resolve));
+      if (done) break;
+      assert.ok(timers.length > 0, 'virtual time stalled with work still pending');
+      timers.sort((a, b) => a.at - b.at || a.sequence - b.sequence);
+      now = timers[0].at;
+      while (timers.length && timers[0].at === now) timers.shift().resolve();
+    }
+    if (error) throw error;
+    return value;
+  }
+  return { clock: () => now, sleep, run };
+}
+
+// The reclaim IO surface of `storeIo`, with R2-like latency per call and call counters.
+function slowIo(store, time) {
+  const calls = { pointerGets: 0, gets: 0, lists: 0, deletes: 0, credentials: 0 };
+  return { calls, io: {
+    async get(bucket, key, maximum) {
+      calls.gets++; if (key === POINTER_KEY) calls.pointerGets++;
+      await time.sleep(GET_MS);
+      return store.io.get(bucket, key, maximum);
+    },
+    async listPrefix(prefix, maximum) {
+      calls.lists++;
+      const keys = await store.io.listPrefix(prefix, maximum);
+      await time.sleep(LIST_PAGE_MS * Math.max(1, Math.ceil(keys.length / 1000)));
+      return keys;
+    },
+    async deleteForPrefix(prefix) {
+      calls.credentials++;
+      const client = await store.deleteForPrefix(prefix);
+      return { async delete(key) { await time.sleep(DELETE_MS); await client.delete(key); calls.deletes++; },
+        close() {} };
+    },
+    close() {},
+  } };
+}
+
+const reclaimDeps = (io, time, extra = {}) => ({ createReclaimIo: async () => io,
+  loadCatalogValidator: async () => ({ validate: () => true, close() {} }),
+  now: () => cadence(12).at, clock: time.clock, ...extra });
+const progressLines = lines => lines.filter(line => line.startsWith('reclaim progress: '));
+const progressCount = line => Number(/^reclaim progress: deleted (\d+) of /.exec(line)[1]);
+
+test('inline reclaim deletes a two-prefix 8,282-key plan well inside its budget at R2 latency', async () => {
+  const store = await backlog();
+  const time = virtualTime(), { io, calls } = slowIo(store, time), lines = [];
+  const result = await time.run(main('reclaim', writerEnv(), ['/source'], line => lines.push(line),
+    reclaimDeps(io, time)));
+  assert.equal(result.status, 'reclaimed-retired-production-wind100-objects');
+  assert.equal(result.plannedObjects, PLANNED);
+  assert.equal(result.deleted, PLANNED);
+  assert.equal(result.remainingObjects, 0);
+  assert.equal(await store.io.prefixCount(), 49_692 - PLANNED);
+  assert.equal(store.stats.deleted, PLANNED);
+  assertProtectedIntact(store);
+  // About three simulated minutes, against a 20-minute budget and a 30-minute step bound.
+  const elapsed = time.clock();
+  assert.ok(elapsed < RECLAIM_BUDGET_MS / 4, `inline reclaim took ${elapsed} ms of simulated time`);
+  assert.equal(RECLAIM_BUDGET_MS, 20 * 60_000);
+  // One pointer re-read per 250-key batch (17 per 4,141-key prefix) plus plan and recomputation.
+  const batches = 2 * Math.ceil((POINT_OBJECTS + 1) / INLINE_RECLAIM.batchSize);
+  assert.equal(batches, 34);
+  assert.equal(calls.pointerGets, 2 + batches);
+  assert.equal(calls.credentials, batches);
+  assert.equal(calls.deletes, PLANNED);
+  const progress = progressLines(lines);
+  assert.equal(progress.length, 1 + batches);
+  assert.equal(progress[0], `reclaim progress: deleted 0 of ${PLANNED}`);
+  assert.equal(progress.at(-1), `reclaim progress: deleted ${PLANNED} of ${PLANNED}`);
+  assert.equal(progress[1], `reclaim progress: deleted 250 of ${PLANNED}`);
+
+  // The same plan through the serial executor (the manual lane's defaults, and inline reclaim
+  // before this change) needs more than the 30-minute step bound at the same latency.
+  const serialStore = await backlog();
+  const serialTime = virtualTime(), serial = slowIo(serialStore, serialTime);
+  const serialResult = await serialTime.run(reclaimRetired({ io: serial.io,
+    deleteForPrefix: serial.io.deleteForPrefix, catalogValidator: () => true, now: () => cadence(12).at }));
+  assert.equal(serialResult.deleted, PLANNED);
+  assert.equal(serial.calls.pointerGets, 2 + PLANNED);
+  assert.ok(serialTime.clock() > 30 * 60_000, `serial reclaim took ${serialTime.clock()} ms`);
+});
+
+test('a pointer change between batches stops inline reclaim at the next batch boundary', async () => {
+  const store = await backlog();
+  const at = cadence(12).at;
+  const original = store.data.get(POINTER_KEY);
+  const before = await store.io.prefixCount();
+  let started = 0;
+  const changing = async prefix => {
+    const client = await store.deleteForPrefix(prefix);
+    return { async delete(key) {
+      // Mid-way through the second batch the live pointer changes (same JSON, different bytes).
+      if (++started === 300) store.data.set(POINTER_KEY, Buffer.concat([original, Buffer.from(' ')]));
+      await client.delete(key);
+    } };
+  };
+  const lines = [];
+  await assert.rejects(reclaimRetired({ io: store.io, deleteForPrefix: changing, catalogValidator: () => true,
+    now: () => at, ...INLINE_RECLAIM, onProgress: line => lines.push(line) }),
+  /production pointer changed after dry-run; replan before deletion/);
+  // The second batch was verified before the change and finishes; the third is refused.
+  assert.equal(started, 2 * INLINE_RECLAIM.batchSize);
+  assert.equal(store.stats.deleted, 500);
+  assert.equal(await store.io.prefixCount(), before - 500);
+  assert.deepEqual(lines, [0, 250, 500].map(n => `reclaim progress: deleted ${n} of ${PLANNED}`));
+  assertProtectedIntact(store);
+  // Once the pointer is back, a fresh plan resumes from the remaining keys.
+  store.data.set(POINTER_KEY, original);
+  const resumed = await reclaimRetired({ io: store.io, deleteForPrefix: store.deleteForPrefix,
+    catalogValidator: () => true, now: () => at, ...INLINE_RECLAIM });
+  assert.equal(resumed.status, 'reclaimed-retired-production-wind100-objects');
+  assert.equal(resumed.plannedObjects, PLANNED - 500);
+  assert.equal(resumed.deleted, PLANNED - 500);
+  assert.equal(await store.io.prefixCount(), before - PLANNED);
+});
+
+test('the wall-clock budget returns a partial result with exact counts and progress lines', async () => {
+  const store = await backlog();
+  const before = await store.io.prefixCount();
+  const time = virtualTime(), { io, calls } = slowIo(store, time), lines = [];
+  const budgetMs = 60_000;
+  const result = await time.run(main('reclaim', writerEnv(), ['/source'], line => lines.push(line),
+    reclaimDeps(io, time, { budgetMs })));
+  assert.equal(result.status, 'reclaim-budget-exhausted');
+  assert.equal(result.plannedObjects, PLANNED);
+  assert.ok(result.deleted > 0 && result.deleted < PLANNED);
+  assert.equal(result.deleted + result.remainingObjects, PLANNED);
+  assert.equal(result.deleted, before - await store.io.prefixCount());
+  assert.equal(result.deleted, calls.deletes);
+  // No delete is dispatched after the deadline; one in flight finishes within one call.
+  assert.ok(time.clock() >= budgetMs && time.clock() <= budgetMs + Math.max(GET_MS, DELETE_MS),
+    `returned at ${time.clock()} ms`);
+  const progress = progressLines(lines);
+  assert.equal(progress[0], `reclaim progress: deleted 0 of ${PLANNED}`);
+  assert.equal(progress.at(-1), `reclaim progress: deleted ${result.deleted} of ${PLANNED};`
+    + ` wall-clock budget reached; ${result.remainingObjects} left for the next run`);
+  const counts = progress.map(progressCount);
+  assert.ok(counts.every((n, index) => index === 0 || n >= counts[index - 1]));
+  assert.ok(progress.length > 2);
+  assert.ok(lines.includes('::warning title=Production Wind100 reclaim::inline reclaim reached its wall-clock'
+    + ` budget after deleting ${result.deleted} of ${PLANNED} planned objects;`
+    + ` ${result.remainingObjects} remain for the next run`));
+  assertProtectedIntact(store);
+  // The next run's plan picks up exactly the remainder.
+  const nextTime = virtualTime(), next = slowIo(store, nextTime);
+  const finished = await nextTime.run(main('reclaim', writerEnv(), ['/source'], () => {},
+    reclaimDeps(next.io, nextTime)));
+  assert.equal(finished.status, 'reclaimed-retired-production-wind100-objects');
+  assert.equal(finished.plannedObjects, result.remainingObjects);
+  assert.equal(finished.deleted, result.remainingObjects);
+  assert.equal(await store.io.prefixCount(), before - PLANNED);
+
+  // A deadline reached inside the final batch is still a partial result, not completion.
+  const tail = await backlog();
+  let started = 0;
+  const counted = async prefix => {
+    const client = await tail.deleteForPrefix(prefix);
+    return { delete: key => { started++; return client.delete(key); } };
+  };
+  const tailLines = [];
+  const stopped = await reclaimRetired({ io: tail.io, deleteForPrefix: counted, catalogValidator: () => true,
+    now: () => cadence(12).at, ...INLINE_RECLAIM, deadline: 1, clock: () => (started >= 8_200 ? 1 : 0),
+    onProgress: line => tailLines.push(line) });
+  assert.equal(stopped.status, 'reclaim-budget-exhausted');
+  assert.equal(stopped.deleted, 8_200);
+  assert.equal(stopped.remainingObjects, PLANNED - 8_200);
+  assert.equal(tail.stats.deleted, 8_200);
+  assert.equal(tailLines.at(-1), `reclaim progress: deleted 8200 of ${PLANNED};`
+    + ` wall-clock budget reached; ${PLANNED - 8_200} left for the next run`);
+});
+
+test('a failed delete inside a concurrent batch stops dispatch and no later batch starts', async () => {
+  for (const mode of ['hang', 'reject']) {
+    const store = await backlog();
+    store.components.set(prefixForInvocation(invocationFor(0)), new Map());
+    const before = await store.io.prefixCount();
+    let started = 0;
+    const failing = { ...store.io, deleteForPrefix: async prefix => {
+      const client = await store.deleteForPrefix(prefix);
+      return { delete: key => {
+        if (++started !== 3) return client.delete(key);
+        return mode === 'hang' ? neverSettles() : Promise.reject(Error('DeleteObject 403'));
+      } };
+    } };
+    const progress = reclaimProgress(), lines = [];
+    const io = boundedReclaimIo(failing, progress, 50);
+    await assert.rejects(reclaimRetired({ io, deleteForPrefix: io.deleteForPrefix, catalogValidator: () => true,
+      now: () => cadence(30).at, ...INLINE_RECLAIM, onProgress: line => lines.push(line) }),
+    mode === 'hang' ? /^Error: delete \S+ did not settle within 50 ms; no further deletion was attempted$/
+      : /^Error: DeleteObject 403$/);
+    assert.equal(progress.deleteCredentials, 1, `${mode}: no later batch may start`);
+    assert.equal(progress.deletes, before - await store.io.prefixCount());
+    assert.equal(lines.at(-1), `reclaim progress: deleted ${progress.deletes} of ${PLANNED};`
+      + ' stopped by a failed delete; no further deletion was attempted');
+    if (mode === 'hang') {
+      // The other workers finish the 250-key batch while the hung call runs out its bound.
+      assert.equal(started, INLINE_RECLAIM.batchSize);
+      assert.equal(progress.deletes, INLINE_RECLAIM.batchSize - 1);
+    } else {
+      // An immediate refusal stops dispatch while at most one more key per worker was in flight.
+      assert.ok(started <= 2 * INLINE_RECLAIM.concurrency, `${started} deletes started`);
+      assert.equal(progress.deletes, started - 1);
+    }
+    assertProtectedIntact(store);
+  }
+});
+
+test('manual retention keeps per-key pointer checks and serial deletes; only inline reclaim batches', async () => {
+  const store = await backlog();
+  const at = cadence(12).at;
+  const plan = await planRetention({ io: store.io, now: () => at, catalogValidator: () => true });
+  let pointerReads = 0, inFlight = 0, peak = 0;
+  const counting = { ...store.io, async get(bucket, key, maximum) {
+    if (key === POINTER_KEY) pointerReads++;
+    return store.io.get(bucket, key, maximum);
+  } };
+  const serialOnly = async prefix => {
+    const client = await store.deleteForPrefix(prefix);
+    return { async delete(key) {
+      peak = Math.max(peak, ++inFlight);
+      await new Promise(resolve => setImmediate(resolve));
+      await client.delete(key); inFlight--;
+    } };
+  };
+  const result = await executeRetention({ plan, io: counting, deleteForPrefix: serialOnly,
+    catalogValidator: () => true, approvedPlanSha256: plan.planSha256, now: () => at });
+  assert.deepEqual(Object.keys(result).sort(), ['deleted', 'planSha256', 'pointerSha256', 'status']);
+  assert.equal(result.deleted, PLANNED);
+  assert.equal(pointerReads, 1 + PLANNED);
+  assert.equal(peak, 1);
+  assert.deepEqual(INLINE_RECLAIM, { batchSize: 250, concurrency: 8 });
+  const code = readFileSync(new URL('../tools/production-wind100.mjs', import.meta.url), 'utf8');
+  assert.match(code, /\.\.\.INLINE_RECLAIM, deadline, clock, onProgress: log/);
 });

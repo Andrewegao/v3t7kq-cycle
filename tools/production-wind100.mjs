@@ -618,6 +618,10 @@ async function withCatalogValidator(sourceRoot, callback) {
 // naming it instead of letting the event loop drain. Nothing is retried. The inline reclaim
 // bound sits above the SDK's own 120-second request abort so a transport error surfaces first.
 export const RECLAIM_IO_TIMEOUT_MS = 150_000;
+// Inline reclaim's own wall-clock budget, measured from the start of the command. No delete is
+// dispatched after it; in-flight deletes settle within one IO bound, so the command returns a
+// partial count well inside the step's 30-minute timeout and the capacity check still decides.
+export const RECLAIM_BUDGET_MS = 20 * 60_000;
 export async function settleWithin(label, promise, timeoutMs) {
   assert.ok(Number.isSafeInteger(timeoutMs) && timeoutMs > 0);
   let timer;
@@ -672,6 +676,8 @@ export async function main(command, env = process.env, argv = process.argv.slice
     // Journal-proven retired prefixes past grace only. Never-activated uploads are not
     // journal-proven and no path collects them today (tracked follow-up).
     gate(env, 'metadata', policy);
+    const clock = deps.clock ?? Date.now;
+    const deadline = clock() + (deps.budgetMs ?? RECLAIM_BUDGET_MS);
     // Every awaited step is bounded and a failure names the stage and completed IO counts.
     const progress = reclaimProgress();
     const timeoutMs = deps.ioTimeoutMs ?? RECLAIM_IO_TIMEOUT_MS;
@@ -680,7 +686,7 @@ export async function main(command, env = process.env, argv = process.argv.slice
       return settleWithin(stage, Promise.resolve().then(start), timeoutMs);
     };
     try {
-      const { boundedReclaimIo, createReclaimIo, reclaimRetired, retentionNotices } = await step(
+      const { INLINE_RECLAIM, boundedReclaimIo, createReclaimIo, reclaimRetired, retentionNotices } = await step(
         'load-retention-module', () => import('./production-wind100-retention.mjs'));
       const io = boundedReclaimIo(await step('create-io', () => (deps.createReclaimIo ?? createReclaimIo)(env)),
         progress, timeoutMs);
@@ -689,8 +695,10 @@ export async function main(command, env = process.env, argv = process.argv.slice
           () => (deps.loadCatalogValidator ?? loadCatalogValidator)(argv[0]));
         try {
           progress.stage = 'plan-and-delete';
+          // One `reclaim progress` line per batch, so a killed step still leaves a count.
           const result = await reclaimRetired({ io, deleteForPrefix: io.deleteForPrefix,
-            catalogValidator: validator.validate, policy });
+            catalogValidator: validator.validate, policy, now: deps.now ?? Date.now,
+            ...INLINE_RECLAIM, deadline, clock, onProgress: log });
           reportReclaim(result, retentionNotices, env, log);
           return result;
         } finally { validator.close(); }
