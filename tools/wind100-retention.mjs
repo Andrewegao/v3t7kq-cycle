@@ -6,11 +6,14 @@
 // Two classes of component prefix can be deleted:
 // - retired: an entry that left the pointer in a verified journal transition, past 18 hours of
 //   grace after its freshUntil, with its selection, catalog and inventory verified;
-// - orphan (inline reclaim only, `orphans: true`): a never-activated upload. It is referenced by
+// - unreferenced past age ("orphan"; inline reclaim only, `orphans: true`): a prefix referenced by
 //   no entry of the live pointer or of any pointer body in the verified journal window, by no
-//   component of a catalog any such entry still inside its grace names, its newest object is at
-//   least 48 hours (30-hour forecast lease + 18 hours of grace) old, and any selection written for
-//   it is past its own freshUntil + grace. docs/production-wind100-retention.md gives the argument.
+//   component of a catalog any such entry still inside its grace names, whose newest object is at
+//   least 48 hours (30-hour forecast lease + 18 hours of grace) old, and whose selection, if any,
+//   is past its own freshUntil + grace. This is mostly uploads whose publication or activation
+//   failed, but also formerly live prefixes that have left the journal window; nothing here proves
+//   a prefix was never activated, and nothing needs to. docs/production-wind100-retention.md
+//   gives the argument.
 import assert from 'node:assert/strict';
 import { createHash, createHmac } from 'node:crypto';
 
@@ -72,9 +75,10 @@ function assertInventory(keys, prefix, maximum) {
   }
 }
 
-// A selection for an orphan prefix proves only that publication got that far. It is accepted as
-// expired evidence when it is the target's selection kind, names this prefix's catalog, was never
-// activated and its forecast left its lease and grace before `now`.
+// A selection for an unreferenced prefix proves only that publication got that far (selections
+// are immutable and always say `activated: false`, so that field proves nothing). It is accepted
+// when it is the target's selection kind, names this prefix's catalog and its forecast left its
+// lease and grace before `now`: such a forecast can never be activated again.
 function assertExpiredSelection(target, selected, catalogId, now) {
   assert.ok(selected && typeof selected === 'object' && !Array.isArray(selected));
   assert.equal(selected.kind, target.selectionKind);
@@ -207,7 +211,7 @@ export async function planRetention({ target, io, catalogValidator, now = Date.n
   return { ...plan, planSha256: hash(JSON.stringify(plan)) };
 }
 
-// Never-activated uploads. Any failure to prove the reference set or read the namespace skips
+// Unreferenced prefixes past age. Any failure to prove the reference set or read the namespace skips
 // the whole orphan pass with a stable code (retired reclaim is unaffected); a single prefix whose
 // selection or inventory cannot be proven is refused with a stable code and kept.
 async function planOrphans({ target, io, now, referenced, retired, maximumOrphans, remainingObjects }) {
@@ -394,8 +398,8 @@ export async function executeRetention({ target, plan, io, deleteForPrefix, cata
 }
 
 // Recurring-publisher reclaim: the planner only ever proposes journal-retired, unprotected
-// prefixes past grace and, with `orphans`, provably unreferenced never-activated uploads past
-// their minimum age, so this class needs no human plan hash. The CLI passes INLINE_RECLAIM, a
+// prefixes past grace and, with `orphans`, provably unreferenced prefixes past their minimum age,
+// so this class needs no human plan hash. The CLI passes INLINE_RECLAIM, a
 // wall-clock deadline and a progress logger; a deadline stop is a clean partial result
 // (`reclaim-budget-exhausted`) so the capacity check still decides.
 export async function reclaimRetired({ target, io, deleteForPrefix, catalogValidator, now = Date.now,
@@ -415,7 +419,10 @@ export async function reclaimRetired({ target, io, deleteForPrefix, catalogValid
   }
   const { deleted, complete } = await executeVerifiedPlan({ target, plan, io, deleteForPrefix, catalogValidator,
     now, maximumDeletes, policy, batchSize, concurrency, deadline, clock, onProgress });
-  return { status: complete ? target.status.reclaimed : 'reclaim-budget-exhausted',
+  // The status names what the plan held: retired, unreferenced, or both.
+  const classes = [...(plan.candidates.length ? ['retired'] : []),
+    ...(plan.orphanCandidates?.length ? ['unreferenced'] : [])].join('-and-');
+  return { status: complete ? `reclaimed-${classes}-${target.name}-wind100-objects` : 'reclaim-budget-exhausted',
     ...summary, deleted, remainingObjects: plan.totalObjects - deleted };
 }
 
@@ -427,10 +434,10 @@ export function retentionNotices(result, label) {
     + 'and kept; inspect its selection, catalog and prefix');
   const orphanRefusals = Object.entries(result.orphanRefusals ?? {});
   for (const [id, reason] of orphanRefusals) {
-    warnings.push(`never-activated ${id} was refused (${reason}) and kept; inspect its selection and prefix`);
+    warnings.push(`unreferenced ${id} was refused (${reason}) and kept; inspect its selection and prefix`);
   }
   if (result.orphanInventory && result.orphanInventory !== 'listed') {
-    warnings.push(`never-activated uploads were not considered (${result.orphanInventory}); retired reclaim was unaffected`);
+    warnings.push(`unreferenced prefixes were not considered (${result.orphanInventory}); retired reclaim was unaffected`);
   }
   if (result.status === 'reclaim-budget-exhausted') {
     warnings.push(`inline reclaim reached its wall-clock budget after deleting ${result.deleted} of`
@@ -442,7 +449,7 @@ export function retentionNotices(result, label) {
     + ` deleted ${result.deleted ?? 0}; skipped empty ${(result.skippedEmptyCatalogIds ?? []).length};`
     + ` refused ${refused.length ? refused.map(id => `${id} (${result.refusalReasons?.[id]})`).join(', ') : 'none'}`;
   if (Object.hasOwn(result, 'orphanCandidates')) {
-    summary += `; never-activated ${ids(result.orphanCandidates).join(', ') || 'none'}`
+    summary += `; unreferenced ${ids(result.orphanCandidates).join(', ') || 'none'}`
       + ` (inventory ${result.orphanInventory}; refused ${orphanRefusals.length
         ? orphanRefusals.map(([id, reason]) => `${id} (${reason})`).join(', ') : 'none'})`;
   }

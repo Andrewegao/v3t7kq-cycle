@@ -750,7 +750,7 @@ test('inline reclaim adapter uses only the dedicated writer token and per-prefix
 test('recurring workflow reclaims before the capacity check with its existing writer credentials only', () => {
   const workflow = readFileSync(new URL('../.github/workflows/production-wind100-recurring.yml', import.meta.url), 'utf8');
   const steps = workflow.split(/\n      - /);
-  const reclaimIndex = steps.findIndex(step => step.startsWith('name: Reclaim retired and never-activated production point prefixes'));
+  const reclaimIndex = steps.findIndex(step => step.startsWith('name: Reclaim retired and unreferenced production point prefixes'));
   const uploadIndex = steps.findIndex(step => step.startsWith('name: Upload one immutable production point component'));
   assert.ok(reclaimIndex > 0 && uploadIndex === reclaimIndex + 1);
   const reclaim = steps[reclaimIndex], upload = steps[uploadIndex];
@@ -1226,7 +1226,7 @@ test('manual retention keeps per-key pointer checks and serial deletes; only inl
   assert.match(code, /\.\.\.INLINE_RECLAIM, deadline, clock, onProgress: log/);
 });
 
-// ---- W15: one target-generic planner; never-activated uploads (orphans) ----
+// ---- W15: one target-generic planner; unreferenced prefixes past age (orphans) ----
 
 const catalogIdFor = k => `prod-wind100-recurring-${invocationFor(k)}`;
 const uploadedAt = k => cadence(k).at - 30 * 60_000; // publishRun's upload time for run k
@@ -1253,7 +1253,7 @@ test('the manual plan is byte for byte the #440 plan, so its approved planSha256
   await compare({ now: () => at + 4 * 24 * HOUR, catalogValidator: () => true, maximumCandidates: 8 }, 'wide');
   store.data.delete(`production-candidates/wind100/${catalogIdFor(2)}/selection.json`);
   await compare({ now: () => at, catalogValidator: () => true, maximumObjects: POINT_OBJECTS + 1 }, 'evidence');
-  // A never-activated upload in the bucket does not enter the manual plan.
+  // An unreferenced old upload in the bucket does not enter the manual plan.
   store.components.set(prefixForInvocation(invocationFor(3)), new Map());
   const orphan = fixture(runIdAt(cadence(12).init), invocationFor(12), { objectCount: POINT_OBJECTS });
   store.upload(orphan, uploadedAt(12) - 3 * 24 * HOUR);
@@ -1261,7 +1261,7 @@ test('the manual plan is byte for byte the #440 plan, so its approved planSha256
   assert.ok(!JSON.stringify(manual).includes(invocationFor(12)));
 });
 
-test('never-activated uploads are reclaimed only when unreferenced and at least 48 hours old', async () => {
+test('failed publications are reclaimed only when unreferenced and at least 48 hours old', async () => {
   const store = storeIo();
   for (let k = 0; k < 4; k++) await publishRun(store, cadence(k));
   // Upload succeeded, then: publication failed before any metadata; activation failed after the
@@ -1304,7 +1304,7 @@ test('never-activated uploads are reclaimed only when unreferenced and at least 
   assert.ok(store.data.has(`catalogs/snapshots/${catalogIdFor(5)}.json`));
 });
 
-test('a young, referenced or unprovable never-activated upload is never deleted', async () => {
+test('a young, referenced or unprovable unreferenced-class prefix is never deleted', async () => {
   const store = await backlog();
   // The capacity check keeps the namespace within 50,000 objects: two retired prefixes were
   // emptied before the uploads below (a namespace over the bound is not listed at all).
@@ -1341,9 +1341,9 @@ test('a young, referenced or unprovable never-activated upload is never deleted'
   assert.equal(before - await store.io.prefixCount(), reclaimed.deleted);
   for (const k of [12, 13]) assert.equal(store.components.get(prefixForInvocation(invocationFor(k))).size, POINT_OBJECTS + 1);
   const notices = retentionNotices(reclaimed);
-  assert.ok(notices.warnings.includes(`never-activated ${catalogIdFor(13)} was refused (orphan-selection-mismatch)`
+  assert.ok(notices.warnings.includes(`unreferenced ${catalogIdFor(13)} was refused (orphan-selection-mismatch)`
     + ' and kept; inspect its selection and prefix'));
-  assert.match(notices.summary, /; never-activated none \(inventory listed; refused prod-wind100-recurring-\d+-1 \(orphan-selection-mismatch\)\)$/);
+  assert.match(notices.summary, /; unreferenced none \(inventory listed; refused prod-wind100-recurring-\d+-1 \(orphan-selection-mismatch\)\)$/);
   // Whatever cannot be proven skips the whole orphan pass; retired reclaim is unaffected.
   const unlisted = { ...store.io, listNamespace: async () => { throw Error('ListObjectsV2 503'); } };
   const skipped = await planRetention({ io: unlisted, now: () => later, catalogValidator: () => true, orphans: true });
@@ -1374,7 +1374,7 @@ test('a referenced catalog that fails its hash check stops the whole orphan pass
   const store = await backlog();
   store.components.set(prefixForInvocation(invocationFor(0)), new Map());
   const at = cadence(12).at;
-  // An old never-activated upload, unreferenced by name.
+  // An old failed upload, unreferenced by name.
   const orphan = fixture(runIdAt(cadence(12).init), invocationFor(12), { objectCount: POINT_OBJECTS });
   store.upload(orphan, at - 72 * HOUR);
   const plan = await planRetention({ io: store.io, now: () => at, catalogValidator: () => true, orphans: true,
@@ -1424,7 +1424,7 @@ test('inline reclaim with orphans keeps 100 publications under the cap while pub
   })(), /lacks capacity/);
 });
 
-test('the inline reclaim command reports never-activated uploads in its result and summary', async () => {
+test('the inline reclaim command reports unreferenced prefixes in its result and summary', async () => {
   const store = await backlog();
   store.components.set(prefixForInvocation(invocationFor(0)), new Map());
   const orphan = fixture(runIdAt(cadence(12).init), invocationFor(12), { objectCount: POINT_OBJECTS });
@@ -1435,15 +1435,62 @@ test('the inline reclaim command reports never-activated uploads in its result a
     const summaryPath = join(directory, 'summary.md');
     const result = await time.run(main('reclaim', { ...writerEnv(), GITHUB_STEP_SUMMARY: summaryPath }, ['/source'],
       line => lines.push(line), reclaimDeps(io, time)));
-    assert.equal(result.status, 'reclaimed-retired-production-wind100-objects');
+    // The status names both classes the run deleted.
+    assert.equal(result.status, 'reclaimed-retired-and-unreferenced-production-wind100-objects');
     // Two retired prefixes (8,282 keys) leave room in the 10,000-object budget for the partial orphan.
     assert.deepEqual(result.orphanCandidates, [catalogIdFor(12)]);
     assert.equal(result.orphanInventory, 'listed');
     assert.equal(result.plannedObjects, PLANNED + 1_500);
     assert.equal(result.deleted, PLANNED + 1_500);
     assert.equal(store.components.get(prefixForInvocation(invocationFor(12))).size, 0);
-    assert.match(readFileSync(summaryPath, 'utf8'), new RegExp(`deleted ${PLANNED + 1_500}; .*; never-activated ${catalogIdFor(12)} \\(inventory listed; refused none\\)\\n$`));
+    assert.match(readFileSync(summaryPath, 'utf8'), new RegExp(`deleted ${PLANNED + 1_500}; .*; unreferenced ${catalogIdFor(12)} \\(inventory listed; refused none\\)\\n$`));
     assert.ok(time.clock() < RECLAIM_BUDGET_MS / 4, `took ${time.clock()} ms`);
   } finally { rmSync(directory, { recursive: true, force: true }); }
+  assertProtectedIntact(store);
+});
+
+test('an unreferenced prefix is as young as its newest object, whatever its older objects say (M10)', async () => {
+  const store = await backlog();
+  for (const k of [0, 1, 2]) store.components.set(prefixForInvocation(invocationFor(k)), new Map());
+  const at = cadence(12).at;
+  // A prefix written mostly 72 hours ago with one object 47 hours ago: only the newest object's
+  // age rules out a live writer, so it is not yet a candidate.
+  const mixed = fixture(runIdAt(cadence(12).init), invocationFor(12), { objectCount: POINT_OBJECTS });
+  store.upload(mixed, at - 72 * HOUR);
+  const prefix = prefixForInvocation(invocationFor(12));
+  const late = `${prefix}v2/chunk-7.bin.gz`;
+  const io = newest => ({ ...store.io, async listNamespace(maximum) {
+    return (await store.io.listNamespace(maximum)).map(row => (row.key === late
+      ? { ...row, lastModified: new Date(newest).toISOString() } : row));
+  } });
+  const plan = now => planRetention({ io: io(at - 47 * HOUR), now: () => now, catalogValidator: () => true,
+    orphans: true, maximumCandidates: 1 });
+  assert.deepEqual((await plan(at)).orphanCandidates, []);
+  // One hour later the newest object is 48 hours old and the prefix is a candidate.
+  const due = await plan(at + HOUR);
+  assert.deepEqual(due.orphanCandidates.map(row => [row.catalogId, row.newestObjectAt]),
+    [[catalogIdFor(12), new Date(at - 47 * HOUR).toISOString()]]);
+  // With every object 72 hours old the same prefix was due an hour earlier: the newest object,
+  // not the oldest, set its age.
+  assert.deepEqual((await planRetention({ io: store.io, now: () => at, catalogValidator: () => true, orphans: true,
+    maximumCandidates: 1 })).orphanCandidates.map(row => row.catalogId), [catalogIdFor(12)]);
+});
+
+test('a caller-supplied target is ignored: the production wrappers always plan production', async () => {
+  const { STAGING_TARGET } = await import('../tools/staging-wind100-retention.mjs');
+  const store = await backlog();
+  const at = cadence(12).at;
+  const plan = await planRetention({ target: STAGING_TARGET, io: store.io, now: () => at, catalogValidator: () => true });
+  assert.equal(plan.kind, 'weatherx-production-native-wind100-retention-plan');
+  assert.equal(plan.candidates.length, 2);
+  const executed = await executeRetention({ target: STAGING_TARGET, plan, io: store.io,
+    deleteForPrefix: store.deleteForPrefix, catalogValidator: () => true, approvedPlanSha256: plan.planSha256,
+    now: () => at });
+  assert.equal(executed.status, 'deleted-retired-production-wind100-objects');
+  assert.equal(executed.deleted, PLANNED);
+  const later = at + 2 * 24 * HOUR;
+  const result = await reclaimRetired({ target: STAGING_TARGET, io: store.io, deleteForPrefix: store.deleteForPrefix,
+    catalogValidator: () => true, now: () => later, ...INLINE_RECLAIM });
+  assert.equal(result.status, 'reclaimed-retired-production-wind100-objects');
   assertProtectedIntact(store);
 });

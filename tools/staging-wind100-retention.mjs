@@ -2,7 +2,7 @@
 // Inline retention for the recurring staging Wind100 publisher: the target-generic planner and
 // executor (tools/wind100-retention.mjs) over the staging pointer, its journal and the recurring
 // staging component namespace. It reclaims journal-retired prefixes past grace and provably
-// unreferenced never-activated uploads at least 48 hours old, before the capacity check.
+// unreferenced prefixes at least 48 hours old, before the capacity check.
 //
 // `node tools/staging-wind100-retention.mjs reclaim SOURCE` is its own CLI entry, so the staging
 // controller never imports this module and no import cycle exists. The entry uses no top-level
@@ -46,13 +46,13 @@ export const STAGING_TARGET = Object.freeze({
   // The reader verdict is the planner's own `catalog-rejected` stage; this adds the exact
   // point-only shape the staging activator requires.
   verifyCatalog: (selected, catalog) => validateSelectedCatalog(selected, catalog, () => true),
-  status: { reclaimed: 'reclaimed-retired-staging-wind100-objects',
-    executed: 'deleted-retired-staging-wind100-objects' },
+  status: { executed: 'deleted-retired-staging-wind100-objects' },
 });
 
 export const { INLINE_RECLAIM, MAX_DELETES } = generic;
-export function planRetention(options) { return generic.planRetention({ target: STAGING_TARGET, ...options }); }
-export function reclaimRetired(options) { return generic.reclaimRetired({ target: STAGING_TARGET, ...options }); }
+// The target always wins over anything a caller passes.
+export function planRetention(options) { return generic.planRetention({ ...options, target: STAGING_TARGET }); }
+export function reclaimRetired(options) { return generic.reclaimRetired({ ...options, target: STAGING_TARGET }); }
 export function retentionNotices(result) { return generic.retentionNotices(result, LABEL); }
 export function scopedDeleteCredentials(parent, prefix, nowSeconds) {
   return generic.scopedDeleteCredentials(STAGING_TARGET, parent, prefix, nowSeconds);

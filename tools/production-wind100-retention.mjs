@@ -2,7 +2,7 @@
 // Read-only planning precedes every production Wind100 deletion. A human-approved plan hash
 // is required for the manual workflow, which deletes only journal-retired prefixes; the recurring
 // publisher may reclaim journal-proven retired prefixes past grace and provably unreferenced
-// never-activated uploads past their minimum age, through the same target-generic planner and
+// provably unreferenced prefixes past their minimum age, through the same target-generic planner and
 // executor (tools/wind100-retention.mjs) with per-batch pointer checks.
 import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
@@ -40,13 +40,13 @@ export const PRODUCTION_TARGET = Object.freeze({
     assert.deepEqual(pointerEntry(selected, entry.selectionSha256,
       Date.parse(selected.createdAt), { policy, allowPrevious: true }), entry);
   },
-  status: { reclaimed: 'reclaimed-retired-production-wind100-objects',
-    executed: 'deleted-retired-production-wind100-objects' },
+  status: { executed: 'deleted-retired-production-wind100-objects' },
 });
 
-export function planRetention(options) { return generic.planRetention({ target: PRODUCTION_TARGET, ...options }); }
-export function executeRetention(options) { return generic.executeRetention({ target: PRODUCTION_TARGET, ...options }); }
-export function reclaimRetired(options) { return generic.reclaimRetired({ target: PRODUCTION_TARGET, ...options }); }
+// The target always wins over anything a caller passes.
+export function planRetention(options) { return generic.planRetention({ ...options, target: PRODUCTION_TARGET }); }
+export function executeRetention(options) { return generic.executeRetention({ ...options, target: PRODUCTION_TARGET }); }
+export function reclaimRetired(options) { return generic.reclaimRetired({ ...options, target: PRODUCTION_TARGET }); }
 export function retentionNotices(result) { return generic.retentionNotices(result, PRODUCTION_TARGET.label); }
 export function scopedDeleteCredentials(parent, prefix, nowSeconds) {
   return generic.scopedDeleteCredentials(PRODUCTION_TARGET, parent, prefix, nowSeconds);

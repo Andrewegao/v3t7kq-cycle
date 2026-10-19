@@ -1,4 +1,4 @@
-// W15: staging Wind100 journal, retention and never-activated (orphan) reclaim.
+// W15: staging Wind100 journal, retention and unreferenced-prefix (orphan) reclaim.
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -225,7 +225,7 @@ test('a 100-publication staging simulation never reaches the cap while publicati
   await assert.rejects((async () => {
     for (let k = 0; k < 100; k++) await run(unmanaged, k, { reclaim: false, fail: failure(k) });
   })(), /lacks capacity for this candidate/);
-  // Retired reclaim alone still fills up with never-activated uploads.
+  // Retired reclaim alone still fills up with failed publications' uploads.
   const retiredOnly = stagingStore();
   await assert.rejects((async () => {
     for (let k = 0; k < 100; k++) await run(retiredOnly, k, { orphans: false, fail: failure(k) });
@@ -294,7 +294,8 @@ test('a staging prefix already at its cap with no journal is relieved on the fir
   assert.equal(store.count(), 12 * (POINT_OBJECTS + 1));
   assert.throws(() => capacity(store), /lacks capacity for this candidate/);
   const first = await run(store, 12);
-  assert.equal(first.reclaimed.status, 'reclaimed-retired-staging-wind100-objects');
+  // Nothing is journal-proven yet: the status says only unreferenced prefixes were reclaimed.
+  assert.equal(first.reclaimed.status, 'reclaimed-unreferenced-staging-wind100-objects');
   assert.deepEqual(first.reclaimed.candidates, []);
   assert.equal(first.reclaimed.orphanCandidates.length, 2);
   assert.ok(first.room.existingObjects + first.room.plannedObjects <= 50_000);
@@ -310,7 +311,7 @@ test('a young or referenced staging orphan is never deleted, including one a liv
   const OLD = 90, YOUNG = 91; // invocations no run below reuses
   const store = stagingStore();
   for (let k = 0; k < 3; k++) await run(store, k);
-  // Run 4 activates a catalog whose point component names an old never-activated upload's prefix
+  // Run 4 activates a catalog whose point component names an old failed upload's prefix
   // (invocation OLD's), not its own; the staging activator does not bind the two.
   await run(store, 3);
   store.upload(OLD, cadence(3).at - 72 * HOUR);
@@ -425,7 +426,7 @@ test('the staging reclaim command runs behind the recurring gate with bounded IO
     assert.equal(result.status, 'reclaimed-retired-staging-wind100-objects');
     assert.equal(result.deleted, 2 * (POINT_OBJECTS + 1));
     assert.equal(lines.filter(line => line.startsWith('reclaim progress: ')).length, 1 + 2 * 17);
-    assert.match(readFileSync(summary, 'utf8'), /^Staging Wind100 retention: reclaimed-retired-staging-wind100-objects; .*never-activated none \(inventory listed; refused none\)\n$/);
+    assert.match(readFileSync(summary, 'utf8'), /^Staging Wind100 retention: reclaimed-retired-staging-wind100-objects; .*unreferenced none \(inventory listed; refused none\)\n$/);
   } finally { rmSync(directory, { recursive: true, force: true }); }
   assertLiveIntact(store);
 });
@@ -433,13 +434,13 @@ test('the staging reclaim command runs behind the recurring gate with bounded IO
 test('the recurring staging workflow reclaims before its capacity check with the writer token only', () => {
   const workflow = readFileSync(new URL('../.github/workflows/staging-wind100-recurring.yml', import.meta.url), 'utf8');
   const steps = workflow.split(/\n      - /);
-  const reclaimIndex = steps.findIndex(step => step.startsWith('name: Reclaim retired and never-activated staging point prefixes'));
+  const reclaimIndex = steps.findIndex(step => step.startsWith('name: Reclaim retired and unreferenced staging point prefixes'));
   const uploadIndex = steps.findIndex(step => step.startsWith('name: Upload one immutable staging point component'));
   assert.ok(reclaimIndex > 0 && uploadIndex === reclaimIndex + 1);
   const reclaim = steps[reclaimIndex], upload = steps[uploadIndex];
   // The same step shape as production: guarded, bounded, and never able to publish on failure.
   const production = readFileSync(new URL('../.github/workflows/production-wind100-recurring.yml', import.meta.url), 'utf8')
-    .split(/\n      - /).find(step => step.startsWith('name: Reclaim retired and never-activated production point prefixes'));
+    .split(/\n      - /).find(step => step.startsWith('name: Reclaim retired and unreferenced production point prefixes'));
   const shape = step => step.split('\n').filter(line => /^\s+(?:if|continue-on-error|timeout-minutes):/.test(line)).join('\n');
   assert.equal(shape(reclaim), shape(production));
   assert.match(reclaim, /continue-on-error: true/);
@@ -463,4 +464,81 @@ test('the staging controller digest covers its retention, generic planner and bo
   for (const path of ['tools/wind100-retention.mjs', 'tools/wind100-bounded-step.mjs']) assert.ok(production.includes(`'${path}'`), path);
   assert.equal(STAGING_TARGET.componentBucket, 'weatherx-components-staging');
   assert.equal(STAGING_TARGET.dataBucket, 'weatherx-data-staging');
+});
+
+test('the namespace listing follows every page and enforces its bound across pages (M13)', async () => {
+  class ListObjectsV2Command { constructor(input) { this.input = input; } }
+  const sdk = { ListObjectsV2Command, GetObjectCommand: class {}, DeleteObjectCommand: class {} };
+  const row = (k, n, day) => ({ Key: `${PREFIX}${k}-1/o${n}.bin`, LastModified: new Date(`2026-10-0${day}T00:00:00Z`) });
+  const pages = { first: { IsTruncated: true, NextContinuationToken: 'page-2', Contents: [row(1, 1, 1), row(1, 2, 2)] },
+    'page-2': { IsTruncated: false, Contents: [row(2, 1, 3), row(2, 2, 4)] } };
+  const requests = [];
+  const paging = { async send(command) { requests.push(command.input); return pages[command.input.ContinuationToken ?? 'first']; },
+    destroy() {} };
+  const writer = { STAGING_R2_ACCOUNT_ID: ACCOUNT, STAGING_R2_WRITE_ACCESS_KEY_ID: 'stagingwriterid',
+    STAGING_R2_WRITE_SECRET_ACCESS_KEY: 's'.repeat(64) };
+  const io = await createStagingReclaimIo(writer, sdk, paging);
+  const rows = await io.listNamespace(4);
+  assert.deepEqual(rows.map(entry => entry.key), [1, 2].flatMap(k => [1, 2].map(n => `${PREFIX}${k}-1/o${n}.bin`)));
+  assert.equal(rows[3].lastModified, '2026-10-04T00:00:00.000Z');
+  assert.deepEqual(requests, [{ Bucket: COMPONENTS, Prefix: PREFIX, MaxKeys: 1000 },
+    { Bucket: COMPONENTS, Prefix: PREFIX, MaxKeys: 1000, ContinuationToken: 'page-2' }]);
+  // The bound applies to the whole listing: three rows fit page 1 but page 2 overruns them.
+  await assert.rejects(io.listNamespace(3));
+  // A repeated continuation token or a truncated page without a token is refused.
+  const looping = await createStagingReclaimIo(writer, sdk, { async send(command) {
+    return { IsTruncated: true, NextContinuationToken: 'again', Contents: [row(1, command.input.ContinuationToken ? 2 : 1, 1)] };
+  }, destroy() {} });
+  await assert.rejects(looping.listNamespace(10));
+  const tokenless = await createStagingReclaimIo(writer, sdk, { async send() {
+    return { IsTruncated: true, Contents: [row(1, 1, 1)] };
+  }, destroy() {} });
+  await assert.rejects(tokenless.listNamespace(10));
+  // Through the planner, an overrun on a later page skips the whole unreferenced pass.
+  const store = stagingStore();
+  for (let k = 0; k < 3; k++) await run(store, k);
+  const overrun = { ...store.io, listNamespace: () => io.listNamespace(3) };
+  assert.equal((await planRetention({ io: overrun, now: () => cadence(2).at, catalogValidator: () => true, orphans: true }))
+    .orphanInventory, 'unavailable');
+});
+
+test('a catalog named by a retired entry still inside its grace keeps its prefix referenced (M8)', async () => {
+  const OLD = 92;
+  const store = stagingStore();
+  for (let k = 0; k < 4; k++) await run(store, k);
+  store.upload(OLD, cadence(3).at - 72 * HOUR);
+  // Run 4's activated catalog names the old upload's prefix; runs 5 and 6 then retire run 4, which
+  // is still inside its grace (a reader may hold a pointer naming it) but no longer live.
+  const named = publish(store, 4, { rootPrefix: prefixFor(OLD) });
+  store.upload(4, uploadedAt(4));
+  await activateCandidate({ selection: named, selectionSha256: hash(encode(named)), io: store.pointerIo,
+    now: () => cadence(4).at, catalogValidator: () => true });
+  await run(store, 5);
+  await run(store, 6);
+  const at = cadence(6).at;
+  assert.ok(!store.pointer().entries.some(entry => entry.catalogId === catalogIdFor(4)), 'run 4 left the pointer');
+  const plan = await planRetention({ io: store.io, now: () => at, catalogValidator: () => true, orphans: true,
+    maximumOrphans: 8 });
+  assert.ok(!plan.protectedCatalogIds.includes(catalogIdFor(4)));
+  assert.equal(plan.orphanInventory, 'listed');
+  assert.ok(!plan.orphanCandidates.some(row => row.catalogId === catalogIdFor(OLD)),
+    'a prefix named by an in-grace journal-window entry is referenced');
+  assert.ok(store.components.get(prefixFor(OLD)).size > 0);
+  // Once run 4 is past its grace the same prefix is unreferenced and old: a candidate.
+  const past = await planRetention({ io: store.io, now: () => Date.parse(named.freshUntil) + 18 * HOUR,
+    catalogValidator: () => true, orphans: true, maximumOrphans: 8, maximumCandidates: 1 });
+  assert.ok(past.orphanCandidates.some(row => row.catalogId === catalogIdFor(OLD)));
+});
+
+test('a caller-supplied target is ignored: the staging wrappers always plan staging', async () => {
+  const { PRODUCTION_TARGET } = await import('../tools/production-wind100-retention.mjs');
+  const store = stagingStore();
+  for (let k = 0; k < 12; k++) await run(store, k, { reclaim: false });
+  const at = cadence(12).at;
+  const plan = await planRetention({ target: PRODUCTION_TARGET, io: store.io, now: () => at, catalogValidator: () => true });
+  assert.equal(plan.kind, 'weatherx-staging-native-wind100-retention-plan');
+  const result = await reclaimRetired({ target: PRODUCTION_TARGET, io: store.io, deleteForPrefix: store.deleteForPrefix,
+    catalogValidator: () => true, now: () => at, ...INLINE_RECLAIM });
+  assert.equal(result.status, 'reclaimed-retired-staging-wind100-objects');
+  assert.equal(result.deleted, 2 * (POINT_OBJECTS + 1));
 });

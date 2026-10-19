@@ -49,8 +49,8 @@ approve its new hash.
 
 An immutable component uploaded by a publication that never activated is not
 journal-proven retired. The approved workflow never collects it (its execution
-refuses any plan that carries never-activated candidates); inline reclaim does,
-under the rules in "Never-activated uploads" below. The planner and executor
+refuses any plan that carries unreferenced-class candidates); inline reclaim
+does, under the rules in "Unreferenced prefixes past age" below. The planner and executor
 are target-generic (`tools/wind100-retention.mjs`) and shared with staging; the
 manual plan has exactly the fields and bytes it had in #440, so a plan approved
 before this change keeps its `planSha256` (the test suite compares the two
@@ -59,10 +59,12 @@ planners on the same bucket state).
 ## Inline reclaim in the recurring publisher
 
 Each new-input production run reclaims journal-retired prefixes past grace,
-then never-activated uploads, before its capacity check
+then unreferenced prefixes past age, before its capacity check
 (`production-wind100.mjs reclaim`, the step "Reclaim retired and
-never-activated production point prefixes" before "Upload one immutable
-production point component"). It uses the same planner
+unreferenced production point prefixes" before "Upload one immutable
+production point component"). Its status names what it deleted:
+`reclaimed-retired-…`, `reclaimed-unreferenced-…` or
+`reclaimed-retired-and-unreferenced-production-wind100-objects`. It uses the same planner
 and the same executor as the approved workflow: protected current and rollback
 entries are excluded and the plan is recomputed and must match. Inline reclaim
 deletes in batches of at most 250 keys, the same window as one scoped delete
@@ -107,12 +109,18 @@ planned size still fit (counting the current one). At four runs a day the
 steady state holds about six prefixes (about 25,000 objects); a missed reclaim
 is caught up by the next run's two-candidate budget.
 
-## Never-activated uploads (orphans)
+## Unreferenced prefixes past age (orphans)
 
 An upload whose publication or activation failed leaves a full (or, if the
 upload itself stopped, partial) component prefix that no pointer ever names.
 About eleven of them fill the 50,000-object prefix cap, and before W15 nothing
-collected them. Inline reclaim now plans them after the retired candidates,
+collected them. The class is defined by what is checked, not by history: a
+prefix no referenced pointer or in-grace catalog names, old enough that nothing
+can still write or activate it. Most members are failed publications, but a
+formerly live prefix that has left the 64-record journal window (or, on
+staging, was retired before journaling began) qualifies too; nothing here
+proves a prefix was never activated, and the argument below does not need it.
+Inline reclaim plans them after the retired candidates,
 oldest upload first, at most two per run and inside the same 10,000-object
 budget (retired prefixes go first, so a retired backlog delays orphans; the
 steady state of about one retired prefix per run leaves room for one).
@@ -142,10 +150,12 @@ repeats the pointer, protection and age checks before every batch:
    plus 18 hours of grace) before `now`.
 4. **Any selection for it is provably expired.** If
    `<candidates>/wind100/<catalogId>/selection.json` exists, it must be the
-   target's selection kind, name this catalog, say `activated: false`, have a
-   lease of at most 30 hours, and have `freshUntil` + 18 hours before `now`.
-   Otherwise the prefix is refused (`orphan-selection-mismatch`), kept and
-   warned about. An absent selection (publication failed first) is allowed.
+   target's selection kind, name this catalog, have a lease of at most 30
+   hours, and have `freshUntil` + 18 hours before `now`. (It must also say
+   `activated: false`, but selections are immutable and always say that, so
+   the field proves nothing about history.) Otherwise the prefix is refused
+   (`orphan-selection-mismatch`), kept and warned about. An absent selection
+   (publication failed first) is allowed.
 
 Why this cannot delete anything a reader or writer still needs:
 
@@ -163,8 +173,13 @@ Why this cannot delete anything a reader or writer still needs:
   object any selection for the prefix is past `freshUntil` + 18 hours and can
   never be activated, and rollback restores only the live pointer's second
   entry, which is protected. Rule 4 checks this directly instead of trusting
-  the arithmetic. Every batch re-reads the pointer and stops if its hash
-  changed, so no activation can race a deletion.
+  the arithmetic. This lease rule, not the pointer re-check, is what makes a
+  concurrent activation harmless: inline reclaim re-reads the pointer once per
+  batch of up to 250 keys and deletes eight at a time, so an activation can
+  land between the check and a delete in that batch. Such an activation can
+  only name its own job's fresh prefix, never an unreferenced prefix past age
+  or a retired prefix past grace; the next batch then sees the changed
+  pointer and stops.
 - *The in-flight upload.* Each prefix belongs to one invocation
   (`<run id>-<run attempt>`), which is never reused: a re-run gets a new
   attempt number and a new prefix. Only that invocation's job writes there,
@@ -190,7 +205,7 @@ Staging uses the same planner and executor through
 `tools/staging-wind100-retention.mjs` (its own CLI, so the staging controller
 never imports it and no import cycle exists). The recurring staging workflow
 runs `staging-wind100-retention.mjs reclaim` as "Reclaim retired and
-never-activated staging point prefixes", immediately before "Upload one
+unreferenced staging point prefixes", immediately before "Upload one
 immutable staging point component" and its capacity check, with production's
 step shape: `if` new input, `continue-on-error: true`, `timeout-minutes: 30`,
 the same 20-minute budget, 150-second IO bound, progress lines, warnings and
@@ -298,14 +313,15 @@ recurring jobs stay gated off until the owner updates them.
 6. Staging (W15): no new secret or variable is needed. Before relying on it,
    confirm the existing `STAGING_R2_WRITE_*` token can delete in
    `weatherx-components-staging` through a prefix-scoped temporary credential:
-   the first post-merge staging bake's reclaim step plans only
-   never-activated and pre-journal prefixes (`reachedJournalStart`, no record
-   yet) and should report `deleted` above zero if any are 48 hours old, with
-   no DeleteObject 403; that run's activation writes the first journal
-   record. Its
+   the first post-merge staging bake's reclaim step plans only unreferenced
+   prefixes past age, including those retired before journaling
+   (`reachedJournalStart`, no record yet), reports
+   `reclaimed-unreferenced-staging-wind100-objects` with `deleted` above zero
+   if any are 48 hours old, with no DeleteObject 403; that run's activation
+   writes the first journal record. Its
    step summary line starts `Staging Wind100 retention:`. If it warns that
    inline reclaim failed with a 403, the capacity check still decides and the
    token needs delete permission (an owner step).
-7. Never-activated uploads (W15): the first production and staging runs after
-   merge may delete existing orphan prefixes older than 48 hours. Each appears
-   in the step summary as `never-activated <catalog id>`; refusals warn.
+7. Unreferenced prefixes (W15): the first production and staging runs after
+   merge may delete existing unreferenced prefixes older than 48 hours. Each
+   appears in the step summary as `unreferenced <catalog id>`; refusals warn.

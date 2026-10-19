@@ -646,9 +646,9 @@ export async function main(command, env = process.env, argv = process.argv.slice
     return result;
   }
   if (command === 'reclaim') {
-    // Journal-proven retired prefixes past grace, and never-activated uploads that are provably
-    // unreferenced by the pointer, its journal window and their selections and at least 48 hours
-    // old (docs/production-wind100-retention.md). The approved manual lane deletes only the former.
+    // Journal-proven retired prefixes past grace, and prefixes provably unreferenced by the
+    // pointer, its journal window and in-grace catalogs, at least 48 hours old and with any
+    // selection expired (docs/production-wind100-retention.md). The manual lane deletes only the former.
     gate(env, 'metadata', policy);
     const clock = deps.clock ?? Date.now;
     const deadline = clock() + (deps.budgetMs ?? RECLAIM_BUDGET_MS);
