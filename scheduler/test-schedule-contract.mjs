@@ -106,9 +106,10 @@ for (const [family, text] of [['glofas', glofasWorkflow], ['cams', camsWorkflow]
   assert.match(text, /served=true/, `energy ${family} ingest must stand aside when its run is already served`);
 }
 assert.equal(expectedTarget, 'production', 'the reviewed scheduler release must publish guarded production components');
-assert.match(catalogWorkflow,
-  /github\.event_name == 'workflow_dispatch' \|\| vars\.CATALOG_GITHUB_FALLBACK_DISABLED != 'true'/,
-  'GitHub fallback must fail open unless an operator explicitly disables it');
+assert.doesNotMatch(catalogWorkflow, /CATALOG_GITHUB_FALLBACK_DISABLED/,
+  'no variable may switch the GitHub fallback off: a dead scheduler must leave the fallback publishing');
+assert.match(catalogWorkflow, /\n  fallback-gate:\n    name: fallback gate\n    if: \$\{\{ github\.event_name == 'schedule' \}\}\n/,
+  'GitHub fallback must fail open: it stands aside only while the scheduler is live (tests/fallback-stand-aside.mjs)');
 assert.doesNotMatch(catalogWorkflow, /CATALOG_SCHEDULER_ENABLED/,
   'legacy opt-in gating can silently leave the platform without a publisher');
 assert.match(catalogWorkflow, /options: \[staging, production\]/,

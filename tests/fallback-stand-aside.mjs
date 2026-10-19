@@ -7,6 +7,10 @@
 // or is still queued/running, so every other job skips. A dispatched run skips the gate, and the
 // appended condition is then true, so dispatched runs behave exactly as before. The gate is
 // fail-open: any API, parse or job failure leaves the fallback running.
+// catalog-bake.yml runs the same script as its last job with a liveness window instead of a slot
+// window: the Worker dispatches HRRR every 10 min and the slow lane hourly, so a live scheduler always
+// has a matching dispatch inside 30 / 90 min. It replaced the CATALOG_GITHUB_FALLBACK_DISABLED switch,
+// which left the component lanes without any publisher whenever the Worker stopped.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
@@ -21,7 +25,16 @@ const STATUS = /\b(?:always|cancelled|failure|success)\(\)/;
 
 // window: minutes looked back; title: the run title of an equivalent dispatched run ('' = any).
 // runName: the run-name fragment that yields that title for the Worker's dispatch inputs.
+// last: the gate is the workflow's last job; liveness: the window measures scheduler liveness (window
+// and title are expressions of the schedule and the target; see the catalog tests below).
+const HRRR_CRON = '8-59/10 * * * *', SLOW_CRON = '7 * * * *';
+const CATALOG = {
+  window: `\${{ github.event.schedule == '${HRRR_CRON}' && '30' || '90' }}`,
+  title: `\${{ format('component bake: {0} to {1}', github.event.schedule == '${HRRR_CRON}' && 'hrrr' || 'slow', vars.CATALOG_DEFAULT_TARGET || 'staging') }}`,
+  runName: "format('component bake: {0} to {1}', inputs.model, inputs.target)", last: true, liveness: true,
+};
 const LANES = {
+  'catalog-bake.yml': CATALOG,
   'bake.yml': { window: 330, title: 'bake: all models + whole-data maintenance',
     runName: "|| 'bake: all models + whole-data maintenance' }}" },
   'fusion-issue.yml': { window: 330, title: '' },
@@ -33,13 +46,6 @@ const LANES = {
 };
 // Worker-dispatched workflows with a GitHub schedule that deliberately carry no gate.
 const EXEMPT = {
-  // Its own switch already turns the fallback off (every job requires it), and the workflow is a
-  // component-bake definition path: editing it re-bakes served ECMWF/GFS components once.
-  'catalog-bake.yml': source => {
-    const { jobs } = parseWorkflow(source, 'catalog-bake.yml').data;
-    for (const job of Object.values(jobs)) assert.match(job.if, /vars\.CATALOG_GITHUB_FALLBACK_DISABLED != 'true'/);
-    assert.match(read('tools/component-bake-stand-aside.mjs'), /DEFINITION_PATHS = Object\.freeze\(\['\.github\/workflows\/catalog-bake\.yml'/);
-  },
   // Disabled lane (SATELLITE_ARCHIVE_ENABLED); revisit with the gate when it is re-enabled.
   'satellite-archive.yml': source => {
     assert.match(parseWorkflow(source, 'satellite-archive.yml').data.jobs.hourly.if, /vars\.SATELLITE_ARCHIVE_ENABLED == '1'/);
@@ -130,11 +136,11 @@ test('every Worker-dispatched workflow with a GitHub schedule is gated or exempt
   }
 });
 
-test('the gate is one read-only first job that runs only on the GitHub schedule', () => {
+test('the gate is one read-only first (or, in catalog-bake, last) job that runs only on the GitHub schedule', () => {
   const scripts = new Set();
   for (const [name, lane] of Object.entries(LANES)) {
     const { data } = workflows[name];
-    assert.equal(Object.keys(data.jobs)[0], 'fallback-gate', name);
+    assert.equal(Object.keys(data.jobs).at(lane.last ? -1 : 0), 'fallback-gate', name);
     const gate = data.jobs['fallback-gate'];
     assert.equal(gate.name, 'fallback gate');
     assert.equal(gate.if, "${{ github.event_name == 'schedule' }}", `${name}: a dispatched run never consults the gate`);
@@ -165,6 +171,7 @@ test('the gate is one read-only first job that runs only on the GitHub schedule'
 
 test('each window holds this slot\'s dispatch but never the previous slot\'s', () => {
   for (const [name, lane] of Object.entries(LANES)) {
+    if (lane.liveness) continue;
     const slots = [workflows[name].data.on.schedule].flat().flatMap(({ cron }) => slotMinutes(cron)).sort((a, b) => a - b);
     const gaps = slots.map((slot, i) => (i + 1 < slots.length ? slots[i + 1] : slots[0] + 1440) - slot);
     const shortest = Math.min(...gaps);
@@ -234,7 +241,7 @@ test('bake keeps its job names, model conditions and whole-maintenance join', ()
 });
 
 // Runs the shared gate script exactly as a GitHub `run:` step (bash -eo pipefail) against a fake gh.
-function runGate(t, { body, ghFails = false, title = 'bake: all models + whole-data maintenance', window = '330' }) {
+function runGate(t, { body, ghFails = false, title = 'bake: all models + whole-data maintenance', window = '330', workflow = 'bake.yml' }) {
   const dir = mkdtempSync(join(tmpdir(), 'fallback-gate-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const script = workflows['bake.yml'].data.jobs['fallback-gate'].steps[0].run;
@@ -245,7 +252,7 @@ function runGate(t, { body, ghFails = false, title = 'bake: all models + whole-d
   const env = {
     PATH: `${dir}:${process.env.PATH}`, FAKE_GH_ARGS: join(dir, 'args'), FAKE_GH_BODY: join(dir, 'body.json'),
     GITHUB_OUTPUT: join(dir, 'output'), GITHUB_STEP_SUMMARY: join(dir, 'summary'),
-    GITHUB_WORKFLOW_REF: 'Andrewegao/v3t7kq-cycle/.github/workflows/bake.yml@refs/heads/main',
+    GITHUB_WORKFLOW_REF: `Andrewegao/v3t7kq-cycle/.github/workflows/${workflow}@refs/heads/main`,
     GITHUB_REPOSITORY: 'Andrewegao/v3t7kq-cycle', GITHUB_RUN_ID: '999', GH_TOKEN: 'fixture',
     WINDOW_MINUTES: window, DISPATCH_TITLE: title,
   };
@@ -306,5 +313,131 @@ test('the gate fails open: an unreadable run list leaves the fallback running', 
     assert.equal(result.output, 'run=true\n', why);
     assert.match(result.stdout, /::warning::Could not read this workflow's dispatched runs; the fallback runs\./, why);
     assert.match(result.summary, /\(unreadable\)/, why);
+  }
+});
+
+// --- catalog-bake.yml: the component lanes ------------------------------------------------------
+// GitHub expressions used below are plain string comparisons, && and || (which return an operand, as
+// in JavaScript) and format(), so JavaScript evaluates them the way Actions does.
+const format = (pattern, ...args) => pattern.replace(/\{(\d+)\}/g, (_, i) => String(args[i]));
+function evaluate(expression, { github = {}, vars = {}, inputs = {}, needs = {}, cancelled = false } = {}) {
+  const body = String(expression).replace(/^\$\{\{ ([^]*) \}\}$/, '$1').replace(/needs\.([a-z0-9-]+)\./g, "needs['$1'].");
+  return Function('github', 'vars', 'inputs', 'needs', 'format', 'always', 'cancelled', `return (${body});`)(
+    github, vars, inputs, needs, format, () => true, () => cancelled);
+}
+const catalog = () => workflows['catalog-bake.yml'].data;
+const catalogEnv = cron => {
+  const { env } = catalog().jobs['fallback-gate'].steps[0];
+  const context = { github: { event_name: 'schedule', event: { schedule: cron } }, vars: { CATALOG_DEFAULT_TARGET: 'production' } };
+  return { window: evaluate(env.WINDOW_MINUTES, context), title: evaluate(env.DISPATCH_TITLE, context) };
+};
+
+test('catalog-bake: each fallback cron looks for the Worker\'s own dispatch of that lane, inside a liveness window', () => {
+  const crons = catalog().on.schedule.map(({ cron }) => cron);
+  assert.deepEqual(crons, [HRRR_CRON, SLOW_CRON]);
+  // The Worker fires both crons itself and dispatches {model: hrrr|slow, target: CATALOG_TARGET}.
+  const schedules = read('scheduler/src/schedules.ts');
+  assert.ok(schedules.includes(`export const HRRR_CRON = '${HRRR_CRON}';`) && schedules.includes(`export const SLOW_CRON = '${SLOW_CRON}';`));
+  assert.match(read('scheduler/src/index.ts'), /const model = cron === HRRR_CRON \? 'hrrr' : 'slow';\n\s+return \{ kind: 'catalog', workflow: env\.GITHUB_WORKFLOW, model, inputs: \{ model, target \} \};/);
+  const wrangler = read('scheduler/wrangler.jsonc');
+  for (const cron of crons) assert.ok(wrangler.includes(`"${cron}"`), `${cron} is one of the Worker's declared triggers`);
+  const target = /"CATALOG_TARGET": "([a-z]+)"/.exec(wrangler)[1];
+  const runName = catalog()['run-name'];
+  for (const [cron, model, window, period] of [[HRRR_CRON, 'hrrr', '30', 10], [SLOW_CRON, 'slow', '90', 60]]) {
+    const resolved = catalogEnv(cron);
+    assert.equal(resolved.window, window, cron);
+    assert.equal(resolved.title, `component bake: ${model} to production`, cron);
+    // The title is exactly the run title GitHub gives the Worker's dispatch of this lane.
+    assert.equal(evaluate(runName, { github: { event_name: 'workflow_dispatch' }, inputs: { model, target } }), resolved.title, cron);
+    // Liveness: more than one Worker period (a live scheduler's newest dispatch is always inside, even for
+    // an on-time fallback at the Worker's own minute) and at most three (a silent one hands over quickly).
+    assert.ok(Number(window) > period && Number(window) <= 3 * period, `${cron}: window ${window} vs Worker period ${period}`);
+  }
+  // Only the default target counts: unset, the fallback publishes to staging and looks for staging dispatches.
+  const unset = catalog().jobs['fallback-gate'].steps[0].env.DISPATCH_TITLE;
+  assert.equal(evaluate(unset, { github: { event: { schedule: HRRR_CRON } } }), 'component bake: hrrr to staging');
+  const targetExpression = "github.event_name == 'workflow_dispatch' && inputs.target || vars.CATALOG_DEFAULT_TARGET || 'staging'";
+  assert.ok(catalog().jobs.model.env.CATALOG_TARGET.includes(targetExpression), 'the gate and the model job resolve the same target');
+  assert.doesNotMatch(JSON.stringify(workflows), /CATALOG_GITHUB_FALLBACK_DISABLED/);
+});
+
+test('catalog-bake: a stood-aside schedule runs nothing; dispatches, an open gate and a failed gate run as before', () => {
+  const { jobs } = catalog();
+  assert.deepEqual(Object.keys(jobs), ['plan', 'model', 'summary', 'fallback-gate']);
+  // The gate holds no lock and names no environment; the model job keeps its lock and environment unchanged.
+  assert.equal(jobs['fallback-gate'].concurrency, undefined);
+  assert.equal(jobs['fallback-gate'].environment, undefined);
+  assert.equal(jobs.model.environment, 'production');
+  const runs = ({ event, gate, plan = { result: 'success', outputs: { models: '["hrrr"]' } } }) => {
+    const github = { event_name: event, event: event === 'schedule' ? { schedule: HRRR_CRON } : {} };
+    const fallbackGate = gate === undefined ? { result: 'skipped', outputs: {} } : gate === 'failed' ? { result: 'failure', outputs: {} } : { result: 'success', outputs: { run: gate } };
+    assert.equal(evaluate(jobs['fallback-gate'].if, { github }), event === 'schedule');
+    return ['plan', 'model', 'summary'].filter(id => evaluate(jobs[id].if, { github, needs: { 'fallback-gate': fallbackGate, plan } }));
+  };
+  assert.deepEqual(runs({ event: 'workflow_dispatch' }), ['plan', 'model', 'summary']);
+  assert.deepEqual(runs({ event: 'schedule', gate: 'false' }), []);
+  assert.deepEqual(runs({ event: 'schedule', gate: 'true' }), ['plan', 'model', 'summary']);
+  assert.deepEqual(runs({ event: 'schedule', gate: 'failed' }), ['plan', 'model', 'summary'], 'fail-open');
+  // Unchanged plan semantics: everything stood aside for whole-bake publishers, or a failed plan (full matrix).
+  assert.deepEqual(runs({ event: 'workflow_dispatch', plan: { result: 'success', outputs: { models: '[]' } } }), ['plan', 'summary']);
+  assert.deepEqual(runs({ event: 'schedule', gate: 'true', plan: { result: 'failure', outputs: {} } }), ['plan', 'model', 'summary']);
+});
+
+// Recorded catalog-bake.yml run lists (tests/fixtures/catalog-fallback-gate), replayed through the shared
+// gate script `minutes` after their recording: every timestamp moves by the same amount so the gate's
+// clock (jq now) sees the run list as it was then, aged by `minutes`.
+function recorded(file, minutes = 0) {
+  const { recorded: { at }, response } = JSON.parse(read(`tests/fixtures/catalog-fallback-gate/${file}`));
+  const shift = Date.now() - Date.parse(at) - minutes * 60_000;
+  const move = value => (typeof value === 'string' ? new Date(Date.parse(value) + shift).toISOString().replace(/\.\d{3}Z$/, 'Z') : value);
+  return { ...response, workflow_runs: response.workflow_runs.map(run =>
+    ({ ...run, created_at: move(run.created_at), run_started_at: move(run.run_started_at), updated_at: move(run.updated_at) })) };
+}
+const LIVE = 'dispatches-20261019T0349Z.json', RED = 'dispatches-20261015T1200Z.json';
+const catalogGate = (t, cron, body, title = catalogEnv(cron).title) =>
+  runGate(t, { body, workflow: 'catalog-bake.yml', window: catalogEnv(cron).window, title });
+
+test('catalog-bake HRRR fallback stands aside while the Worker dispatches it and runs once it falls silent', t => {
+  // As recorded: HRRR 39196437545 dispatched 03:48:39Z is still in progress.
+  const live = catalogGate(t, HRRR_CRON, recorded(LIVE));
+  assert.equal(live.output, 'run=false\n');
+  assert.match(live.summary, /stood aside: dispatched run 39196437545 \(in_progress - 2026-/);
+  assert.deepEqual(live.args.slice(0, 4), ['api', '--method', 'GET', 'repos/Andrewegao/v3t7kq-cycle/actions/workflows/catalog-bake.yml/runs']);
+  const since = live.args.find(arg => arg.startsWith('created=>='));
+  assert.ok(Math.abs(Date.parse(since.slice(10)) - (Date.now() - 30 * 60_000)) < 120_000, since);
+  // 27 min later with no new dispatch: the newest is still inside 30 min.
+  assert.equal(catalogGate(t, HRRR_CRON, recorded(LIVE, 27)).output, 'run=false\n');
+  // 31 min later: the scheduler has been silent for over 30 min, the fallback runs. The hourly slow
+  // dispatch 39193179095 inside the window never counts for HRRR.
+  const silent = catalogGate(t, HRRR_CRON, recorded(LIVE, 31));
+  assert.equal(silent.output, 'run=true\n');
+  assert.match(silent.summary, /Fallback schedule runs: no successful or active dispatched run in the last 30 min \(none\)/);
+  // A dispatch to another target never counts (CATALOG_DEFAULT_TARGET unset: the fallback targets staging).
+  assert.equal(catalogGate(t, HRRR_CRON, recorded(LIVE), 'component bake: hrrr to staging').output, 'run=true\n');
+});
+
+test('catalog-bake slow fallback stands aside while the Worker dispatches it and runs once it falls silent', t => {
+  // As recorded: slow 39193179095 dispatched 03:07:35Z is still in progress (02:07:35Z failed).
+  const live = catalogGate(t, SLOW_CRON, recorded(LIVE));
+  assert.equal(live.output, 'run=false\n');
+  assert.match(live.summary, /stood aside: dispatched run 39193179095 \(in_progress - 2026-/);
+  const since = live.args.find(arg => arg.startsWith('created=>='));
+  assert.ok(Math.abs(Date.parse(since.slice(10)) - (Date.now() - 90 * 60_000)) < 120_000, since);
+  assert.equal(catalogGate(t, SLOW_CRON, recorded(LIVE, 45)).output, 'run=false\n');
+  // 49 min later the slow dispatch is 91+ min old; the ten HRRR dispatches still inside 90 min never count.
+  const silent = catalogGate(t, SLOW_CRON, recorded(LIVE, 49));
+  assert.equal(silent.output, 'run=true\n');
+  assert.match(silent.summary, /no successful or active dispatched run in the last 90 min \(none\)/);
+  assert.equal(catalogGate(t, SLOW_CRON, recorded(LIVE), 'component bake: slow to staging').output, 'run=true\n');
+});
+
+test('catalog-bake fallback runs, as bake.yml\'s does, when every dispatch in the window ended red', t => {
+  // 2026-10-15 12:00Z: the Worker dispatched on time but every run was red (stuck locks flagged by the
+  // summary). A failed or cancelled dispatch is not evidence that the lane ran, so both lanes run; each
+  // model still takes its per-model lock, so the fallback never writes alongside another writer.
+  for (const cron of [HRRR_CRON, SLOW_CRON]) {
+    const result = catalogGate(t, cron, recorded(RED));
+    assert.equal(result.output, 'run=true\n', cron);
+    assert.match(result.summary, /Fallback schedule runs: .*\(none\)/, cron);
   }
 });

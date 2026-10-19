@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `6cc18d7131a2f7ce66005cfdaeec5080eb37c9020a552d080ff460216acf5dae`.
+Source digest (registry and workflow bytes): `574d34cd01cd5576b9faa07f36955dbcedb4399d986d886638f1e28c3b9226a3`.
 
 71 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -207,15 +207,17 @@ Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: no
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [plan](../.github/workflows/catalog-bake.yml#L52) ← no needs | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"write"}</code> |
-| [model](../.github/workflows/catalog-bake.yml#L77) ← <code>plan</code> | <code>ubuntu-latest</code> | <code>production</code> | <code>210</code> | <code>{"group":"weatherx-component-${{ github.event_name == 'workflow_dispatch' &amp;&amp; inputs.target &#124;&#124; vars.CATALOG_DEFAULT_TARGET &#124;&#124; 'staging' }}-${{ matrix.model }}","cancel-in-progress":false}</code> | <code>{"fail-fast":false,"max-parallel":4,"matrix":{"model":"${{ fromJSON(needs.plan.outputs.models &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model == 'slow' &amp;&amp; '[\"ecmwf\",\"gfs\",\"aifs\"]' &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model != 'all' &amp;&amp; format('[\"{0}\"]', inputs.model) &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; '[\"ecmwf\",\"gfs\",\"hrrr\",\"aifs\"]' &#124;&#124; github.event.schedule == '8-59/10 * * * *' &amp;&amp; '[\"hrrr\"]' &#124;&#124; '[\"ecmwf\",\"gfs\",\"aifs\"]') }}"}}</code> | inherits workflow/default policy |
-| [summary](../.github/workflows/catalog-bake.yml#L311) ← <code>["plan","model"]</code> | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
+| [plan](../.github/workflows/catalog-bake.yml#L51) ← <code>fallback-gate</code> | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"write"}</code> |
+| [model](../.github/workflows/catalog-bake.yml#L77) ← <code>["plan","fallback-gate"]</code> | <code>ubuntu-latest</code> | <code>production</code> | <code>210</code> | <code>{"group":"weatherx-component-${{ github.event_name == 'workflow_dispatch' &amp;&amp; inputs.target &#124;&#124; vars.CATALOG_DEFAULT_TARGET &#124;&#124; 'staging' }}-${{ matrix.model }}","cancel-in-progress":false}</code> | <code>{"fail-fast":false,"max-parallel":4,"matrix":{"model":"${{ fromJSON(needs.plan.outputs.models &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model == 'slow' &amp;&amp; '[\"ecmwf\",\"gfs\",\"aifs\"]' &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model != 'all' &amp;&amp; format('[\"{0}\"]', inputs.model) &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; '[\"ecmwf\",\"gfs\",\"hrrr\",\"aifs\"]' &#124;&#124; github.event.schedule == '8-59/10 * * * *' &amp;&amp; '[\"hrrr\"]' &#124;&#124; '[\"ecmwf\",\"gfs\",\"aifs\"]') }}"}}</code> | inherits workflow/default policy |
+| [summary](../.github/workflows/catalog-bake.yml#L311) ← <code>["plan","model","fallback-gate"]</code> | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
+| [fallback-gate](../.github/workflows/catalog-bake.yml#L344) ← no needs | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"actions":"read"}</code> |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [plan](../.github/workflows/catalog-bake.yml#L52): <code>${{ github.event_name == 'workflow_dispatch' &#124;&#124; vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true' }}</code>
-- [model](../.github/workflows/catalog-bake.yml#L81): <code>${{ !cancelled() &amp;&amp; (github.event_name == 'workflow_dispatch' &#124;&#124; vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true') &amp;&amp; needs.plan.outputs.models != '[]' }}</code>
-- [summary](../.github/workflows/catalog-bake.yml#L312): <code>${{ always() &amp;&amp; (github.event_name == 'workflow_dispatch' &#124;&#124; vars.CATALOG_GITHUB_FALLBACK_DISABLED != 'true') }}</code>
+- [plan](../.github/workflows/catalog-bake.yml#L52): <code>${{ !cancelled() &amp;&amp; needs.fallback-gate.outputs.run != 'false' }}</code>
+- [model](../.github/workflows/catalog-bake.yml#L81): <code>${{ !cancelled() &amp;&amp; needs.plan.outputs.models != '[]' &amp;&amp; needs.fallback-gate.outputs.run != 'false' }}</code>
+- [summary](../.github/workflows/catalog-bake.yml#L312): <code>${{ always() &amp;&amp; needs.fallback-gate.outputs.run != 'false' }}</code>
+- [fallback-gate](../.github/workflows/catalog-bake.yml#L345): <code>${{ github.event_name == 'schedule' }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
@@ -226,7 +228,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | [model / Checkout the stand-aside check](../.github/workflows/catalog-bake.yml#L131) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 | [summary / step 1](../.github/workflows/catalog-bake.yml#L319) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
-Variable references (declared names only; values and activation unknown): [CATALOG_DEFAULT_TARGET](../.github/workflows/catalog-bake.yml#L73), [CATALOG_GITHUB_FALLBACK_DISABLED](../.github/workflows/catalog-bake.yml#L52), [CURRENT_RUN_CATALOG_BAKE_ATMOS_SHA](../.github/workflows/catalog-bake.yml#L100), [CURRENT_RUN_POINT_REUSE_MODEL](../.github/workflows/catalog-bake.yml#L101).
+Variable references (declared names only; values and activation unknown): [CATALOG_DEFAULT_TARGET](../.github/workflows/catalog-bake.yml#L73), [CURRENT_RUN_CATALOG_BAKE_ATMOS_SHA](../.github/workflows/catalog-bake.yml#L100), [CURRENT_RUN_POINT_REUSE_MODEL](../.github/workflows/catalog-bake.yml#L101).
 
 
 ## catalog-bootstrap
