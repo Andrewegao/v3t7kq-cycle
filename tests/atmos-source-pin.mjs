@@ -16,7 +16,7 @@ function copy() {
 
 test('every ordinary production producer pin equals the one declared Atmos source', () => {
   assert.deepEqual(checkPins(), []);
-  assert.equal(declaration.atmosSha, '9f2943febfc3a6d0426003422efaea9a093a8f71', 'master merge of PR #579 (GFS optional SST/evapduct isolated from the core gate) is the declared producer source');
+  assert.equal(declaration.atmosSha, '30a211be7692868f36380b809cd9b2bb01011e6a', 'master merge of PR #589 (W19 GEOS-CF outage receipts, with W17 optional-layer receipts and W16 Fusion v2 absentLayers) is the declared producer source');
   const paths = declaration.pins.map(pin => pin.path);
   for (const path of ['.github/workflows/bake.yml', '.github/workflows/collect-core-model.yml', '.github/workflows/collect-regional-model.yml',
     '.github/workflows/publish-current-model-production.yml', '.github/workflows/observation-refresh.yml',
