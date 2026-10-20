@@ -2,11 +2,13 @@
 // Production-only native Wind100 control. This file never promotes catalogs/current.json.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadCatalogValidator, qualifyPointPacks, readPolicy as readIntegrityPolicy,
   sealedPointInputSha, verifySource } from './staging-wind100.mjs';
+import { RECLAIM_BUDGET_MS, RECLAIM_IO_TIMEOUT_MS, describeProgress, reclaimProgress, reportReclaim,
+  runBoundedCli, runInlineReclaim, settleWithin } from './wind100-bounded-step.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ACCOUNT = 'a89f9a1af485021fbc60a68b163c7c6e';
@@ -40,6 +42,7 @@ const CONTROL_FILES = [
   '.github/workflows/production-wind100-recurring.yml', 'tools/production-wind100-policy.json',
   'tools/production-wind100.mjs', 'tools/staging-wind100.mjs', 'tools/staging-wind100-policy.json',
   'tools/production-wind100-retention.mjs',
+  'tools/wind100-retention.mjs', 'tools/wind100-bounded-step.mjs',
   'tools/staging-wind100-python.py', 'tools/staging-wind100-requirements.txt',
 ];
 const FORBIDDEN = [
@@ -614,38 +617,8 @@ async function withCatalogValidator(sourceRoot, callback) {
   finally { validator.close(); }
 }
 
-// Bounds one awaited step with a referenced timer: a step that never settles becomes an error
-// naming it instead of letting the event loop drain. Nothing is retried. The inline reclaim
-// bound sits above the SDK's own 120-second request abort so a transport error surfaces first.
-export const RECLAIM_IO_TIMEOUT_MS = 150_000;
-// Inline reclaim's own wall-clock budget, measured from the start of the command. No delete is
-// dispatched after it; in-flight deletes settle within one IO bound, so the command returns a
-// partial count well inside the step's 30-minute timeout and the capacity check still decides.
-export const RECLAIM_BUDGET_MS = 20 * 60_000;
-export async function settleWithin(label, promise, timeoutMs) {
-  assert.ok(Number.isSafeInteger(timeoutMs) && timeoutMs > 0);
-  let timer;
-  const deadline = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(Error(`${label} did not settle within ${timeoutMs} ms;`
-      + ' no further deletion was attempted')), timeoutMs);
-  });
-  try { return await Promise.race([promise, deadline]); }
-  finally { clearTimeout(timer); }
-}
-export function reclaimProgress() {
-  return { stage: 'start', gets: 0, lists: 0, deleteCredentials: 0, deletes: 0 };
-}
-export function describeProgress(progress) {
-  return `stage ${progress.stage}; completed gets ${progress.gets}, lists ${progress.lists},`
-    + ` delete credentials ${progress.deleteCredentials}, deletes ${progress.deletes}`;
-}
-
-export function reportReclaim(result, notices, env = process.env, log = console.log) {
-  const { warnings, summary } = notices(result);
-  for (const warning of warnings) log(`::warning title=Production Wind100 reclaim::${warning}`);
-  if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${summary}\n`);
-  return { warnings, summary };
-}
+// The bounded-step helpers live in the shared leaf module; they are re-exported for callers.
+export { RECLAIM_BUDGET_MS, RECLAIM_IO_TIMEOUT_MS, describeProgress, reclaimProgress, reportReclaim, settleWithin };
 
 export async function main(command, env = process.env, argv = process.argv.slice(3), log = console.log,
   deps = {}) {
@@ -673,39 +646,25 @@ export async function main(command, env = process.env, argv = process.argv.slice
     return result;
   }
   if (command === 'reclaim') {
-    // Journal-proven retired prefixes past grace only. Never-activated uploads are not
-    // journal-proven and no path collects them today (tracked follow-up).
+    // Journal-proven retired prefixes past grace, and prefixes provably unreferenced by the
+    // pointer, its journal window and in-grace catalogs, at least 48 hours old and with any
+    // selection expired (docs/production-wind100-retention.md). The manual lane deletes only the former.
     gate(env, 'metadata', policy);
     const clock = deps.clock ?? Date.now;
     const deadline = clock() + (deps.budgetMs ?? RECLAIM_BUDGET_MS);
     // Every awaited step is bounded and a failure names the stage and completed IO counts.
-    const progress = reclaimProgress();
-    const timeoutMs = deps.ioTimeoutMs ?? RECLAIM_IO_TIMEOUT_MS;
-    const step = (stage, start) => {
-      progress.stage = stage;
-      return settleWithin(stage, Promise.resolve().then(start), timeoutMs);
-    };
-    try {
-      const { INLINE_RECLAIM, boundedReclaimIo, createReclaimIo, reclaimRetired, retentionNotices } = await step(
-        'load-retention-module', () => import('./production-wind100-retention.mjs'));
-      const io = boundedReclaimIo(await step('create-io', () => (deps.createReclaimIo ?? createReclaimIo)(env)),
-        progress, timeoutMs);
-      try {
-        const validator = await step('load-catalog-validator',
-          () => (deps.loadCatalogValidator ?? loadCatalogValidator)(argv[0]));
-        try {
-          progress.stage = 'plan-and-delete';
-          // One `reclaim progress` line per batch, so a killed step still leaves a count.
-          const result = await reclaimRetired({ io, deleteForPrefix: io.deleteForPrefix,
-            catalogValidator: validator.validate, policy, now: deps.now ?? Date.now,
-            ...INLINE_RECLAIM, deadline, clock, onProgress: log });
-          reportReclaim(result, retentionNotices, env, log);
-          return result;
-        } finally { validator.close(); }
-      } finally { io.close(); }
-    } catch (error) {
-      throw Error(`inline reclaim failed (${describeProgress(progress)}): ${error.message}`, { cause: error });
-    }
+    return runInlineReclaim({ timeoutMs: deps.ioTimeoutMs ?? RECLAIM_IO_TIMEOUT_MS,
+      loadModule: () => import('./production-wind100-retention.mjs'),
+      createIo: module => (deps.createReclaimIo ?? module.createReclaimIo)(env),
+      loadValidator: () => (deps.loadCatalogValidator ?? loadCatalogValidator)(argv[0]),
+      async reclaim({ module: { INLINE_RECLAIM, reclaimRetired, retentionNotices }, io, validator }) {
+        // One `reclaim progress` line per batch, so a killed step still leaves a count.
+        const result = await reclaimRetired({ io, deleteForPrefix: io.deleteForPrefix,
+          catalogValidator: validator.validate, policy, now: deps.now ?? Date.now, orphans: true,
+          ...INLINE_RECLAIM, deadline, clock, onProgress: log });
+        reportReclaim(result, retentionNotices, env, log);
+        return result;
+      } });
   }
   if (command === 'preflight' || command === 'retention-gate'
     || command === 'publish' || command === 'activate') {
@@ -740,19 +699,7 @@ export async function main(command, env = process.env, argv = process.argv.slice
 // exits 13 ("unsettled top-level await") having done no IO (bake run 39176755083, 2026-10-18).
 // A command that still leaves the loop with nothing to wait for is reported here, never exit 13.
 export function runCli(command, invoke = () => main(command)) {
-  let settled = false;
-  const unsettled = () => {
-    if (settled) return;
-    settled = true;
-    console.error(`Production Wind100 refused: ${command} never settled; the event loop drained`
-      + ' with the command still pending');
-    process.exitCode = 1;
-  };
-  process.once('beforeExit', unsettled);
-  return Promise.resolve().then(invoke).then(
-    result => { process.stdout.write(`${JSON.stringify(result)}\n`); },
-    error => { console.error(`Production Wind100 refused: ${error.message}`); process.exitCode = 1; },
-  ).finally(() => { settled = true; process.off('beforeExit', unsettled); });
+  return runBoundedCli('Production Wind100', command, invoke);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

@@ -180,11 +180,12 @@ jobs:
             "$RUNNER_TEMP/weatherx-wind100-point-series" weatherx-wind100-point-proof.json \
             weatherx-wind100-augmentation.json \
             weatherx-wind100-handoff/handoff.json weatherx-wind100-handoff/packs/ecmwf/manifest.json
-      # Reclaims only journal-retired prefixes past grace (never the current or rollback entry),
+      # Reclaims journal-retired prefixes past grace and prefixes that are provably
+      # unreferenced and at least 48 hours old (never the current or rollback entry),
       # re-reading the pointer before every batch of at most 250 scoped deletions and stopping
       # cleanly at its own 20-minute budget, inside this step's 30-minute bound. A failure here
       # never publishes: the capacity check in the next step still decides.
-      - name: Reclaim journal-retired production point prefixes past grace
+      - name: Reclaim retired and unreferenced production point prefixes
         if: ${{ steps.preflight.outputs.status == 'new-input' }}
         continue-on-error: true
         timeout-minutes: 30

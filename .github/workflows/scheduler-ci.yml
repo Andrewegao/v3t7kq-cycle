@@ -129,7 +129,7 @@ jobs:
       - name: Production place renewal controller, catalog component and workflow contracts
         run: node --test tests/production-place-renewal.mjs
       - name: Production Wind100 isolated publisher and selector contracts
-        run: node --test tests/production-wind100.mjs
+        run: node --test tests/production-wind100.mjs tests/wind100-cli-load.mjs
       - name: Production component retention planner, guard and workflow contracts
         run: node --test tests/production-components-retention.mjs
       - name: Consumer refresh workflow safety contract
