@@ -170,7 +170,7 @@ test('the upstream probe calls the pinned collector selectors with the bake\'s o
 });
 
 test('collector call strings still match the pinned bake script shape', () => {
-  // The pinned script (Atmos 9f2943feb) is not in this repository; these are the reviewed lines.
+  // The pinned script (Atmos 30a211be7) is not in this repository; these are the reviewed lines.
   assert.equal(COLLECTOR_CALLS.ecmwf, '"$PY" fetch_ecmwf.py --hours 336 --keep 2 ${ecmwf_run_args[@]+"${ecmwf_run_args[@]}"}');
   assert.equal(COLLECTOR_CALLS.gfs, '"$PY" fetch.py --hours 72 --point-hours 336 --keep 2 ');
   assert.deepEqual(DEFINITION_PATHS, ['.github/workflows/catalog-bake.yml', 'tools/component-bake-stand-aside.mjs', 'tools/component-upstream-probe.py']);
