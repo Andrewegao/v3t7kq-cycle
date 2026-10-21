@@ -57,7 +57,7 @@ export const PUBLIC_COMBINED_ONBOARDING_SOURCES = Object.freeze({
 });
 export const PUBLIC_COMBINED_SIDECAR = 'assets/weatherx-production-account-build-v1.json';
 // Reviewed merged master head (master head 04:03Z); new-source staging acceptance remains pending.
-export const PUBLIC_COMBINED_ATMOS_SHA = 'ee88dc06de41d05c4077534ed624fceef06d76ad';
+export const PUBLIC_COMBINED_ATMOS_SHA = 'd6548b9d1545d45b7fd7a3eb2353bd79e7988769';
 
 export function assertPublicCombinedReady() {
   assert.match(PUBLIC_COMBINED_ATMOS_SHA, /^[a-f0-9]{40}$/);
