@@ -555,6 +555,7 @@ jobs:
           RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
           RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
           RCLONE_CONFIG_WEATHERX_REGION: auto
+          RCLONE_S3_NO_HEAD: 'true'
         run: bash ops/bake-weatherx.sh
       - name: Report the whole bake's observation receipt when the pinned source writes one
         # Inert until the pin includes Atmos ops/report-refresh.py. These whole-release copies are
