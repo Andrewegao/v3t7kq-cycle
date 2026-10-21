@@ -33,7 +33,9 @@ control of the bucket, and nothing is planned or deleted until a bake rolls forw
 check refuses for the few minutes in which a bake has uploaded its manifest but not yet promoted
 (it is verifying the prefix); plan again after the promotion. Uploads still in flight have no
 manifest yet and do not count. A complete release that never gets promoted (a failed promotion)
-blocks retention until the owner decides what to do with it.
+blocks retention only until the next successful bake promotes a newer release; no owner action
+is needed. When the check fails, the planner reads the pointer once more and, if a promotion
+landed while it was listing, plans again from the start.
 
 A release id is never a candidate when any of these holds. Everything is evaluated as of the dry
 run's `plan_as_of`, so the execution recomputes the same answer.

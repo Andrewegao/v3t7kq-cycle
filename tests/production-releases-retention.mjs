@@ -233,6 +233,29 @@ test('a manual rollback in effect stops planning and execution: people are in co
   assert.equal(h.deletes.length, 0);
 });
 
+test('a promotion that lands while planning is picked up by one pointer re-read; a failed promotion clears with the next bake', async () => {
+  const h = history();
+  const io = await h.io();
+  const fresh = h.release(39900000000, -0.1);
+  let reads = 0;
+  const get = io.get;
+  io.get = async (bucket, key, maximum) => {
+    const got = await get(bucket, key, maximum);
+    if (key === 'releases/current.json' && ++reads === 1) h.promote(fresh, T0 + 10 * 60_000); // lands after the first read
+    return got;
+  };
+  const plan = await planRetention({ io, policy, now });
+  assert.equal(plan.baselineReleaseId, fresh);
+  assert.ok(reads >= 3, 'first read, the re-read, and the restarted plan');
+  // A complete upload that never got promoted blocks planning only until a newer release is promoted.
+  io.get = get;
+  const stuck = h.release(39950000000, -0.15);
+  await assert.rejects(planRetention({ io, policy, now }), new RegExp(`${stuck} is newer`));
+  const next = h.release(39960000000, -0.2);
+  h.promote(next, T0 + 20 * 60_000);
+  assert.equal((await planRetention({ io, policy, now })).baselineReleaseId, next);
+});
+
 test('a rollback target rolled forward again is protected only by keepReleaseIds, which the plan records', async () => {
   const h = history();
   h.promote(h.ids[1], T0 - 2 * HOUR); // rolled back two hours ago

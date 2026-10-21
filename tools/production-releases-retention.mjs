@@ -198,7 +198,7 @@ async function proveProtected({ io, policy, ids }) {
 // --- plan -------------------------------------------------------------------------------------
 const HELD_ORDER = ['current', 'live-current', 'staging-pin', 'owner-keep', 'newest', 'incomplete', 'inconsistent', 'recent'];
 
-export async function planRetention({ io, policy, now = Date.now, asOf = null, baselineReleaseId = null }) {
+export async function planRetention({ io, policy, now = Date.now, asOf = null, baselineReleaseId = null, retried = false }) {
   validatePolicy(policy);
   const startedAt = now();
   const liveObject = await io.get(policy.dataBucket, policy.releasePointerKey, MAX_POINTER);
@@ -258,6 +258,13 @@ export async function planRetention({ io, policy, now = Date.now, asOf = null, b
     `releases/current.json names ${live.releaseId}, which is not a complete releases/cycle-<digits>/ release: refusing`);
   const newerByCreated = manifested.filter(row => Date.parse(row.createdAt) > Date.parse(liveRow.createdAt)).map(row => row.releaseId);
   const newerByRun = manifested.filter(row => BigInt(row.runId) > BigInt(liveRow.runId)).map(row => row.releaseId);
+  if ((newerByCreated.length || newerByRun.length) && !retried) {
+    // A bake may have promoted its release between the pointer read and the listing: read the
+    // pointer once more and, if it moved, plan again from the start (once).
+    const again = await io.get(policy.dataBucket, policy.releasePointerKey, MAX_POINTER);
+    if (hash(again.body) !== hash(liveObject.body))
+      return planRetention({ io, policy, now, asOf, baselineReleaseId: asOf === null ? null : baselineReleaseId, retried: true });
+  }
   assert.ok(newerByCreated.length === 0 && newerByRun.length === 0,
     `releases/current.json names ${live.releaseId} but ${[...new Set([...newerByCreated, ...newerByRun])].sort().join(', ')} ` +
     'is newer: a manual rollback is in effect or a promotion is pending; refusing (roll forward or wait, then plan again)');
