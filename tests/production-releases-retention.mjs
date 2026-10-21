@@ -125,6 +125,9 @@ test('policy: reviewed defaults, floors that never shrink, and only releases/cyc
   assert.throws(() => validatePolicy({ ...base, keepNewestReleases: 1 }), /two last-good/);
   assert.throws(() => validatePolicy({ ...base, dataBucket: 'weatherx-components-production' }));
   assert.throws(() => validatePolicy({ ...base, releasePointerKey: 'catalogs/current.json' }));
+  assert.deepEqual(base.keepReleaseIds, []);
+  for (const keep of [undefined, 'cycle-1', ['cycle-1', 'cycle-1'], ['../x'], Array.from({ length: 65 }, (_, i) => `cycle-${i + 1}`)])
+    assert.throws(() => validatePolicy({ ...base, keepReleaseIds: keep }), /keepReleaseIds/, JSON.stringify(keep));
   assert.ok(scopedRelease('releases/cycle-39493311523/'));
   for (const prefix of ['releases/', 'releases/current.json', 'releases/cycle-39493311523', 'releases/cycle-0123/',
     'releases/cycle-abc/', 'releases/2026-09-01-abc123/', 'releases/cycle-1/data/', 'catalogs/cycle-1/', 'components/ecmwf/cycle-1/'])
@@ -188,23 +191,71 @@ test('when bakes stall the newest N complete releases stay, by createdAt and by 
   const w = world();
   const ids = [];
   for (let k = 0, hrs = 400; hrs >= 300; hrs -= 12, k++) ids.push(w.release(39100000000 + k * 1000, hrs));
-  // A higher run id whose manifest claims an older createdAt (a skewed clock): both orders are kept.
-  const skewed = w.release(39200000000, 380, { createdHoursAgo: 390 });
+  // A run id just below the current one whose manifest claims an old createdAt (a skewed clock):
+  // both orders are kept.
+  const skewed = w.release(39100007500, 380, { createdHoursAgo: 390 });
   w.promote(ids[ids.length - 1]);
   const io = await w.io();
   const plan = await planRetention({ io, policy, now });
   const kept = new Map(plan.report.kept.map(row => [row.releaseId, row.reasons]));
   assert.deepEqual(plan.report.order.newestByCreatedAt, ids.slice(-3).reverse());
-  assert.deepEqual(plan.report.order.newestByRunId, [skewed, ...ids.slice(-2).reverse()]);
+  assert.deepEqual(plan.report.order.newestByRunId, [ids[8], skewed, ids[7]]);
   assert.equal(plan.report.order.agree, false);
   for (const id of [...ids.slice(-3), skewed]) assert.ok(kept.get(id)?.includes('newest'), id);
   assert.equal(kept.size, 4);
   assert.match(planSummary(plan), /run id DISAGREE; both kept/);
-  // A rollback to an old release keeps it as current.
-  w.promote(ids[0]);
-  const rolledBack = await planRetention({ io, policy, now });
-  assert.deepEqual(new Map(rolledBack.report.kept.map(row => [row.releaseId, row.reasons])).get(ids[0]), ['current', 'live-current']);
-  assert.ok(!rolledBack.candidates.some(row => row.releaseId === ids[0]));
+});
+
+test('a manual rollback in effect stops planning and execution: people are in control', async () => {
+  const h = history();
+  const io = await h.io();
+  const plan = await planRetention({ io, policy, now });
+  // Rollback with activate-r2-release.sh onto a nine-day-old release.
+  h.promote(h.ids[1], T0 + 5 * 60_000);
+  await assert.rejects(planRetention({ io, policy, now }), /a manual rollback is in effect or a promotion is pending; refusing/);
+  await assert.rejects(execute(h, io, plan), /a manual rollback is in effect/);
+  // Rollback to the previous release: still not the newest by createdAt or run id.
+  h.promote(h.ids[h.ids.length - 2], T0 + 6 * 60_000);
+  await assert.rejects(planRetention({ io, policy, now }), new RegExp(`${h.ids[h.ids.length - 1]} is newer`));
+  // A complete upload newer than current that is not promoted yet (only by run id here) also refuses.
+  h.promote(h.ids[h.ids.length - 1], T0 + 7 * 60_000);
+  h.release(39950000000, 300);
+  await assert.rejects(planRetention({ io, policy, now }), /cycle-39950000000 is newer/);
+  // A pointer naming a release outside releases/cycle-<digits>/ is refused too.
+  const w = world();
+  w.release(39000000000, 300);
+  w.put(DATA, 'releases/production-bootstrap-1/manifest.json', JSON.stringify({ schemaVersion: 1, releaseId: 'production-bootstrap-1',
+    createdAt: iso(T0), objectCount: 1, objects: [{ path: 'data/a', bytes: 1 }] }));
+  w.put(DATA, 'releases/production-bootstrap-1/data/a', 'a');
+  w.put(DATA, 'releases/current.json', JSON.stringify({ schemaVersion: 1, releaseId: 'production-bootstrap-1', publishedAt: iso(T0),
+    objectCount: 1, manifestSha256: 'a'.repeat(64) }));
+  await assert.rejects(planRetention({ io: await w.io(), policy, now }), /not a complete releases\/cycle-<digits>\/ release/);
+  assert.equal(h.deletes.length, 0);
+});
+
+test('a rollback target rolled forward again is protected only by keepReleaseIds, which the plan records', async () => {
+  const h = history();
+  h.promote(h.ids[1], T0 - 2 * HOUR); // rolled back two hours ago
+  const fix = h.release(39950000000, -0.2);
+  h.promote(fix, T0 - HOUR); // and forward again by a fix bake
+  const io = await h.io();
+  const unprotected = await planRetention({ io, policy, now });
+  assert.ok(unprotected.candidates.some(row => row.releaseId === h.ids[1]), 'the pointer keeps no history: without keepReleaseIds it is eligible');
+  const kept = { ...policy, keepReleaseIds: [h.ids[1]] };
+  const plan = await planRetention({ io, policy: kept, now });
+  assert.deepEqual(plan.keepReleaseIds, [h.ids[1]]);
+  assert.notEqual(plan.planSha256, unprotected.planSha256);
+  assert.deepEqual(plan.report.kept.find(row => row.releaseId === h.ids[1]).reasons, ['owner-keep']);
+  assert.ok(!plan.candidates.some(row => row.releaseId === h.ids[1]));
+  assert.ok(plan.report.protected.some(row => row.releaseId === h.ids[1] && row.present && row.manifestCovered));
+  assert.match(planSummary(plan), new RegExp(`keepReleaseIds \\(${h.ids[1]}\\)`));
+  // An execution under a policy without the keep refuses the plan approved with it.
+  await assert.rejects(executeRetention({ io, policy, now, deleteForPrefix: io.deleteForPrefix, asOf: plan.asOf,
+    baselineReleaseId: plan.baselineReleaseId, approvedPlanSha256: plan.planSha256 }), /differs from the approved plan/);
+  const result = await executeRetention({ io, policy: kept, now, deleteForPrefix: io.deleteForPrefix, asOf: plan.asOf,
+    baselineReleaseId: plan.baselineReleaseId, approvedPlanSha256: plan.planSha256 });
+  assert.equal(result.releasesConfirmedEmpty, plan.candidates.length);
+  assert.ok(h.buckets[DATA].has(`releases/${h.ids[1]}/manifest.json`));
 });
 
 test('a release with any object newer than the minimum age is kept, whatever its manifest says', async () => {
@@ -247,7 +298,10 @@ test('execution recomputes the approved plan while bakes keep promoting and dele
   await assert.rejects(execute(h, io, plan, { asOf: '' }), /plan_as_of/);
   assert.equal(h.deletes.length, 0);
   const result = await execute(h, io, plan);
-  assert.equal(result.deleted, plan.totals.objects);
+  assert.equal(result.deleteRequestsByThisRun, plan.totals.objects);
+  assert.equal(result.releasesConfirmedEmpty, plan.candidates.length);
+  assert.equal(result.plannedObjects, 30);
+  assert.ok(!('deleted' in result), 'no "objects deleted" claim a concurrent run could double');
   assert.equal(h.deletes.length, 30);
   for (const candidate of plan.candidates) {
     const ours = h.deletes.filter(key => key.startsWith(candidate.prefix));
@@ -297,11 +351,32 @@ test('the guard re-reads the pointer and pin before every delete: a candidate po
   const h = history();
   const io = await h.io();
   const plan = await planRetention({ io, policy, now });
-  const fresh = h.release(39900000000, -0.1);
-  h.setOnDelete(count => { if (count === 3) h.promote(fresh, T0 + 40 * 60_000); });
+  h.setOnDelete(count => { if (count === 3) h.promote(h.release(39900000000, -0.1), T0 + 40 * 60_000); });
   const result = await execute(h, io, plan);
-  assert.equal(result.deleted, plan.totals.objects);
+  assert.equal(result.deleteRequestsByThisRun, plan.totals.objects);
   assert.equal(result.proof.pointerChangedByAPromotion, true);
+});
+
+test('two executions of one plan delete only planned keys, and each reports only its own requests', async () => {
+  const h = history();
+  const io = await h.io();
+  const plan = await planRetention({ io, policy, now });
+  const untouched = new Map([...h.buckets[DATA]].filter(([key]) => !plan.candidates.some(row => key.startsWith(row.prefix))));
+  const results = await Promise.allSettled([execute(h, io, plan), execute(h, io, plan)]);
+  for (const key of h.deletes) assert.ok(plan.candidates.some(row => key.startsWith(row.prefix)));
+  for (const [key, value] of untouched) assert.deepEqual(h.buckets[DATA].get(key), value);
+  const sent = results.filter(r => r.status === 'fulfilled').reduce((n, r) => n + r.value.deleteRequestsByThisRun, 0) +
+    results.filter(r => r.status === 'rejected').reduce((n, r) => n + (r.reason.deleted ?? 0), 0);
+  assert.equal(sent, h.deletes.length, 'the two reports add up to the requests actually sent');
+});
+
+test('a release written back into after its deletion (a re-run of its old bake) stops the run', async () => {
+  const h = history();
+  const io = await h.io();
+  const plan = await planRetention({ io, policy, now });
+  h.setOnDelete(count => { if (count === 6) h.put(DATA, `${plan.candidates[0].prefix}data/rerun.png`, 'rerun', T0); });
+  await assert.rejects(execute(h, io, plan), /still lists 1 objects after its deletion: something wrote into it/);
+  assert.equal(h.deletes.length, 6);
 });
 
 test('a candidate that grew is refused: before execution by the digest, during execution by the re-list', async () => {
@@ -374,6 +449,7 @@ test('delete credentials are DeleteObject-only, 15 minutes, one releases/cycle-<
 test('adapter refuses other credentials, reads only the pointer, manifests and pin, lists only releases/, deletes only through scoped sessions', async () => {
   const w = history();
   for (const broad of ['R2_PRODUCTION_ACCESS_KEY_ID', 'CATALOG_PROMOTION_KEY_PRODUCTION', 'CATALOG_PROMOTION_KEY', 'CLOUDFLARE_API_TOKEN',
+    'RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID', 'RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY', 'RCLONE_CONFIG_OTHER_ENDPOINT', 'AWS_ACCESS_KEY_ID', 'CATALOG_ENDPOINT',
     'PRODUCTION_COMPONENTS_GC_DELETE_ACCESS_KEY_ID', 'PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID', 'STAGING_R2_WRITE_ACCESS_KEY_ID'])
     await assert.rejects(createRetentionIo({ ...settings, [broad]: 'x' }, policy, sdk, w.readClient), new RegExp(broad));
   await assert.rejects(createRetentionIo({ ...settings, PRODUCTION_RELEASES_R2_ACCOUNT_ID: 'f'.repeat(32) }, policy, sdk, w.readClient));
@@ -437,13 +513,20 @@ test('CLI admission: cloud-only, its own workflow, environment and digest, and t
 test('workflow: dispatch-only, dry run by default, its own environment, digest and approval, no lock and no publisher credential', () => {
   const workflow = readFileSync(new URL('../.github/workflows/production-releases-retention.yml', import.meta.url), 'utf8');
   assert.match(workflow, /^on:\n {2}workflow_dispatch:\n/m);
-  assert.doesNotMatch(workflow, /schedule:|push:|pull_request|workflow_call|workflow_run/);
+  assert.doesNotMatch(workflow, /^\s*(?:schedule|push|pull_request|pull_request_target|workflow_call|workflow_run|repository_dispatch):/m);
   assert.match(workflow, /dry_run:\n\s+description:[^\n]+\n\s+type: boolean\n\s+required: true\n\s+default: true/);
   for (const input of ['plan_as_of', 'baseline_release_id'])
     assert.match(workflow, new RegExp(`${input}:\\n\\s+description:[^\\n]+\\n\\s+type: string\\n\\s+required: false\\n\\s+default: ''`));
   assert.match(workflow, /if: \$\{\{ github\.ref == 'refs\/heads\/main' && vars\.PRODUCTION_RELEASES_GC_CALL_ENABLED == 'true' \}\}/);
   assert.match(workflow, /environment:\n\s+name: production-releases-retention/);
   assert.doesNotMatch(workflow, /^\s*concurrency:/m, 'no lock held across the environment gate');
+  assert.match(workflow, /^permissions:\n {2}contents: read\n {2}actions: read\n(?! )/m);
+  const active = workflow.split('      - name: Refuse while a re-run of an old bake or a release bootstrap is queued or running\n')[1].split('\n      - ')[0];
+  assert.match(active, /if: \$\{\{ inputs\.dry_run == false \}\}/);
+  assert.match(active, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.match(active, /for workflow in bake\.yml catalog-production-bootstrap\.yml/);
+  assert.match(active, /minimumAgeHours/);
+  assert.ok(workflow.indexOf('Refuse while a re-run') < workflow.indexOf('Delete only an approved'), 'the active-run check precedes deletion');
   for (const name of ['PRODUCTION_RELEASES_GC_ENABLED', 'PRODUCTION_RELEASES_GC_EXECUTE_ENABLED', 'PRODUCTION_RELEASES_GC_CONTROLLER_SHA256',
     'PRODUCTION_RELEASES_GC_APPROVED_PLAN_SHA256', 'PRODUCTION_RELEASES_R2_ACCOUNT_ID'])
     assert.match(workflow, new RegExp(`${name}: \\$\\{\\{ vars\\.${name} \\}\\}`));

@@ -14,10 +14,15 @@
 //     GitHub run id (both orders are kept, so a skewed clock cannot shorten the rollback set);
 //   - any of its objects, or its manifest `createdAt`, is newer than `minimumAgeHours`;
 //   - it is the releaseId of the staging shared-read pin, expired or not;
+//   - the owner lists it in the policy's `keepReleaseIds` (every release activated by hand in the
+//     last seven days, since the pointer keeps no history of earlier current releases);
 //   - its manifest is missing, unparsable or names more objects than it lists (incomplete or
 //     inconsistent upload: reported, never deleted in v1);
 //   - its prefix is not `releases/cycle-<digits>/` (`releases/current.json` and every other key are
 //     out of scope).
+// Planning (dry run and execution) refuses outright while `releases/current.json` does not name
+// the newest release by createdAt and by run id: a manual rollback is in effect (or a promotion is
+// still pending) and people, not this controller, are in charge of the bucket.
 // Catalog snapshots never name a release id (Atmos platform/edge/src/catalog.ts DataCatalog has
 // only components), so no catalog is read.
 import assert from 'node:assert/strict';
@@ -49,7 +54,11 @@ const FORBIDDEN = ['R2_PRODUCTION_ACCESS_KEY_ID', 'R2_PRODUCTION_SECRET_ACCESS_K
   'PRODUCTION_WIND100_R2_ACCESS_KEY_ID', 'PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY',
   'PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID', 'PRODUCTION_WIND100_GC_DELETE_SECRET_ACCESS_KEY',
   'PRODUCTION_COMPONENTS_GC_DELETE_ACCESS_KEY_ID', 'PRODUCTION_COMPONENTS_GC_DELETE_SECRET_ACCESS_KEY',
-  'CATALOG_ENDPOINT_PRODUCTION', 'CATALOG_PROMOTION_KEY_PRODUCTION', 'CATALOG_PROMOTION_KEY', 'CLOUDFLARE_API_TOKEN'];
+  'CATALOG_ENDPOINT_PRODUCTION', 'CATALOG_PROMOTION_KEY_PRODUCTION', 'CATALOG_ENDPOINT', 'CATALOG_PROMOTION_KEY',
+  'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'];
+// The bake publisher's token reaches its job as rclone remote settings (bake.yml
+// RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID / _SECRET_ACCESS_KEY); any rclone remote setting is refused.
+const FORBIDDEN_PREFIXES = ['RCLONE_CONFIG_'];
 
 export const hash = value => createHash('sha256').update(value).digest('hex');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -71,6 +80,8 @@ export function validatePolicy(p) {
   assert.match(p.accountId, /^[a-f0-9]{32}$/);
   assert.ok(Number.isSafeInteger(p.keepNewestReleases) && p.keepNewestReleases >= 2 && p.keepNewestReleases <= 200,
     'keepNewestReleases never drops below the runbook\'s two last-good releases');
+  assert.ok(Array.isArray(p.keepReleaseIds) && p.keepReleaseIds.length <= 64 && p.keepReleaseIds.every(id => IDENTIFIER.test(id ?? '')) &&
+    new Set(p.keepReleaseIds).size === p.keepReleaseIds.length, 'keepReleaseIds is a list of at most 64 distinct release ids');
   assert.ok(Number.isSafeInteger(p.minimumAgeHours) && p.minimumAgeHours >= 72 && p.minimumAgeHours <= 24 * 90,
     'minimumAgeHours never drops below 72 hours');
   assert.ok(Number.isSafeInteger(p.maximumPlanAgeHours) && p.maximumPlanAgeHours > 0 && p.maximumPlanAgeHours <= 48);
@@ -185,7 +196,7 @@ async function proveProtected({ io, policy, ids }) {
 }
 
 // --- plan -------------------------------------------------------------------------------------
-const HELD_ORDER = ['current', 'live-current', 'staging-pin', 'newest', 'incomplete', 'inconsistent', 'recent'];
+const HELD_ORDER = ['current', 'live-current', 'staging-pin', 'owner-keep', 'newest', 'incomplete', 'inconsistent', 'recent'];
 
 export async function planRetention({ io, policy, now = Date.now, asOf = null, baselineReleaseId = null }) {
   validatePolicy(policy);
@@ -237,6 +248,19 @@ export async function planRetention({ io, policy, now = Date.now, asOf = null, b
     if (row.newest > asOfMs || (row.createdAt && Date.parse(row.createdAt) > asOfMs)) later.push(row); else rows.push(row);
   })));
   for (const list of [rows, later]) list.sort((a, b) => -byRunDesc(a, b));
+  // Humans are in control while the live pointer is not the newest release: a manual rollback is
+  // in effect, or a publisher has uploaded a complete release it has not promoted yet. Every
+  // release with a valid manifest counts, including ones uploaded after asOf. Uploads still in
+  // flight have no manifest yet and do not count.
+  const manifested = [...rows, ...later].filter(row => row.createdAt !== null);
+  const liveRow = manifested.find(row => row.releaseId === live.releaseId);
+  assert.ok(liveRow && liveRow.status === 'complete',
+    `releases/current.json names ${live.releaseId}, which is not a complete releases/cycle-<digits>/ release: refusing`);
+  const newerByCreated = manifested.filter(row => Date.parse(row.createdAt) > Date.parse(liveRow.createdAt)).map(row => row.releaseId);
+  const newerByRun = manifested.filter(row => BigInt(row.runId) > BigInt(liveRow.runId)).map(row => row.releaseId);
+  assert.ok(newerByCreated.length === 0 && newerByRun.length === 0,
+    `releases/current.json names ${live.releaseId} but ${[...new Set([...newerByCreated, ...newerByRun])].sort().join(', ')} ` +
+    'is newer: a manual rollback is in effect or a promotion is pending; refusing (roll forward or wait, then plan again)');
   outOfScope.sort((a, b) => (a.prefix < b.prefix ? -1 : 1));
 
   const complete = rows.filter(row => row.status === 'complete');
@@ -249,6 +273,7 @@ export async function planRetention({ io, policy, now = Date.now, asOf = null, b
     if (row.releaseId === baselineReleaseId) reasons.push('current');
     if (row.releaseId === live.releaseId) reasons.push('live-current');
     if (pin.releaseId !== null && row.releaseId === pin.releaseId) reasons.push('staging-pin');
+    if (policy.keepReleaseIds.includes(row.releaseId)) reasons.push('owner-keep');
     if (newest.has(row.releaseId)) reasons.push('newest');
     if (row.status === 'manifest-missing' || row.status === 'manifest-invalid') reasons.push('incomplete');
     if (row.status === 'surplus') reasons.push('inconsistent');
@@ -275,6 +300,7 @@ export async function planRetention({ io, policy, now = Date.now, asOf = null, b
   const plan = {
     schemaVersion: 1, kind: PLAN_KIND, policySha256: hash(JSON.stringify(policy)),
     asOf: isoOf(asOfMs), baselineReleaseId, minimumAgeCutoff: isoOf(cutoff), keepNewestReleases: policy.keepNewestReleases,
+    keepReleaseIds: [...policy.keepReleaseIds].sort(),
     stagingPin: pin,
     eligible: { releases: eligible.length, objects: sum(eligible, 'objects'), bytes: sum(eligible, 'bytes') },
     candidates,
@@ -283,7 +309,7 @@ export async function planRetention({ io, policy, now = Date.now, asOf = null, b
   const planSha256 = hash(JSON.stringify(plan));
 
   // Report only: live state moves with every bake, so none of it is inside the approved digest.
-  const protectedIds = [...new Set([baselineReleaseId, live.releaseId, pin.releaseId, ...newest].filter(Boolean))].sort();
+  const protectedIds = [...new Set([baselineReleaseId, live.releaseId, pin.releaseId, ...policy.keepReleaseIds, ...newest].filter(Boolean))].sort();
   const held = Object.fromEntries([...HELD_ORDER, 'later', 'outOfScope'].map(key => [key, { releases: 0, objects: 0, bytes: 0 }]));
   const hold = (key, row) => { held[key].releases += 1; held[key].objects += row.objects; held[key].bytes += row.bytes; };
   for (const row of rows) if (row.reasons.length) hold(HELD_ORDER.find(key => row.reasons.includes(key)), row);
@@ -333,6 +359,7 @@ export async function executeRetention({ io, policy, approvedPlanSha256, asOf, b
   assert.ok(!candidates.has(report.livePointer.releaseId), 'releases/current.json names a candidate; stopping');
   assert.ok(report.protected.every(row => !candidates.has(row.releaseId)));
   let aborted = null, deleted = 0;
+  const emptied = [];
   async function guard() {
     const [pointerObject, pin] = await Promise.all([
       io.get(policy.dataBucket, policy.releasePointerKey, MAX_POINTER), stagingPin(io, policy)]);
@@ -372,9 +399,13 @@ export async function executeRetention({ io, policy, approvedPlanSha256, asOf, b
             deleted += 1;
           } catch (error) { aborted ??= error; }
         })));
-        if (aborted) throw Object.assign(new Error(`${aborted.message} (deleted ${deleted} objects before stopping)`), { deleted });
+        if (aborted) throw Object.assign(new Error(`${aborted.message} (this run sent ${deleted} delete requests before stopping)`), { deleted });
       }
     } finally { for (const client of clients) (await client.catch(() => null))?.close?.(); }
+    // Nothing may have been written back meanwhile (for example a re-run of the old bake).
+    const left = await io.listRows(candidate.prefix, policy.maximumDeletesPerRun);
+    assert.equal(left.length, 0, `${candidate.prefix} still lists ${left.length} objects after its deletion: something wrote into it; stopping`);
+    emptied.push(candidate.releaseId);
   }
   // After: the pointer was never written by this run, and every protected release lists exactly
   // what it listed before the first delete, with every manifest path present.
@@ -384,7 +415,10 @@ export async function executeRetention({ io, policy, approvedPlanSha256, asOf, b
   const changed = proof.filter(row => !row.unchanged).map(row => row.releaseId);
   assert.deepEqual(changed, [], `protected release listing changed during cleanup: ${changed.join(', ')}`);
   return { status: 'deleted-unreferenced-production-releases', planSha256, asOf: content.asOf, baselineReleaseId: content.baselineReleaseId,
-    releases: content.candidates.length, deleted, bytes: content.totals.bytes,
+    // A concurrent execution of the same plan sends the same requests, and R2 answers 204 either
+    // way, so this run reports what it sent and what now lists empty, never a share of the bytes.
+    releases: content.candidates.length, deleteRequestsByThisRun: deleted, releasesConfirmedEmpty: emptied.length,
+    plannedObjects: content.totals.objects, plannedBytes: content.totals.bytes,
     proof: { pointerBeforeSha256: report.livePointer.sha256, pointerAfterSha256: pointerAfter,
       pointerChangedByAPromotion: pointerAfter !== report.livePointer.sha256, protected: proof } };
 }
@@ -411,6 +445,7 @@ export async function createRetentionIo(env, policy, injectedSdk, injectedReadCl
   assert.equal(env.PRODUCTION_RELEASES_R2_ACCOUNT_ID, policy.accountId);
   assert.ok(env.PRODUCTION_RELEASES_GC_READ_ACCESS_KEY_ID && env.PRODUCTION_RELEASES_GC_READ_SECRET_ACCESS_KEY);
   for (const key of FORBIDDEN) assert.ok(!env[key], `retention refuses ${key}`);
+  for (const key of Object.keys(env)) assert.ok(!FORBIDDEN_PREFIXES.some(prefix => key.startsWith(prefix)) || !env[key], `retention refuses ${key}`);
   const endpoint = `https://${policy.accountId}.r2.cloudflarestorage.com`;
   const sdk = injectedSdk ?? await import('../staging-controller/node_modules/@aws-sdk/client-s3/dist-cjs/index.js');
   const readClient = injectedReadClient ?? new sdk.S3Client({ region: 'auto', endpoint, forcePathStyle: true, maxAttempts: 3,
@@ -496,7 +531,7 @@ export function planSummary(plan) {
   const lines = [`## Production whole-release retention plan`, '',
     `planSha256 \`${plan.planSha256}\` · plan_as_of \`${plan.asOf}\` · baseline_release_id \`${plan.baselineReleaseId}\``, '',
     `- Releases under \`releases/\`: ${plan.report.releasesPrefix.prefixes} prefixes, ${n(plan.report.releasesPrefix.objects)} objects, ${gb(plan.report.releasesPrefix.bytes)}.`,
-    `- Kept: newest ${plan.keepNewestReleases} complete releases (by createdAt ${plan.report.order.agree ? 'and run id agree' : 'and run id DISAGREE; both kept'}), anything newer than ${plan.minimumAgeCutoff}, the current release and the staging pin (${plan.stagingPin.releaseId ?? 'none'}).`,
+    `- Kept: newest ${plan.keepNewestReleases} complete releases (by createdAt ${plan.report.order.agree ? 'and run id agree' : 'and run id DISAGREE; both kept'}), anything newer than ${plan.minimumAgeCutoff}, the current release, the staging pin (${plan.stagingPin.releaseId ?? 'none'}) and the owner's keepReleaseIds (${plan.keepReleaseIds.join(', ') || 'none'}).`,
     `- Held by first reason: ${held || 'nothing'}.`,
     `- Eligible: ${plan.eligible.releases} releases, ${n(plan.eligible.objects)} objects, ${gb(plan.eligible.bytes)}.`,
     `- This run deletes: ${plan.totals.releases} releases, ${n(plan.totals.objects)} objects, ${gb(plan.totals.bytes)}` +

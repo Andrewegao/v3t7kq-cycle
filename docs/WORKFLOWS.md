@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `a2fb340cd67a6fd68c925c9878d45e572162bed5f6c5820048af114ee295b491`.
+Source digest (registry and workflow bytes): `4e90b20df53a82144ce26dda657a571f9cf3d665cc7af502ecea3e1b23e9af74`.
 
 72 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -1046,23 +1046,23 @@ Variable references (declared names only; values and activation unknown): [CURRE
 
 Declared triggers: [workflow_dispatch](../.github/workflows/production-releases-retention.yml#L4); input names <code>["dry_run","plan_as_of","baseline_release_id"]</code>.
 
-Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: not declared.
+Workflow permissions: <code>{"contents":"read","actions":"read"}</code>. Workflow concurrency: not declared.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [retention](../.github/workflows/production-releases-retention.yml#L28) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"production-releases-retention","url":"https://weatherx.org"}</code> | <code>240</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [retention](../.github/workflows/production-releases-retention.yml#L29) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"production-releases-retention","url":"https://weatherx.org"}</code> | <code>240</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Declared job conditions (additional step/helper checks may apply):
 
-- [retention](../.github/workflows/production-releases-retention.yml#L28): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; vars.PRODUCTION_RELEASES_GC_CALL_ENABLED == 'true' }}</code>
+- [retention](../.github/workflows/production-releases-retention.yml#L29): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; vars.PRODUCTION_RELEASES_GC_CALL_ENABLED == 'true' }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [retention / step 1](../.github/workflows/production-releases-retention.yml#L42) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [retention / step 1](../.github/workflows/production-releases-retention.yml#L43) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
-Variable references (declared names only; values and activation unknown): [PRODUCTION_RELEASES_GC_APPROVED_PLAN_SHA256](../.github/workflows/production-releases-retention.yml#L39), [PRODUCTION_RELEASES_GC_CALL_ENABLED](../.github/workflows/production-releases-retention.yml#L28), [PRODUCTION_RELEASES_GC_CONTROLLER_SHA256](../.github/workflows/production-releases-retention.yml#L38), [PRODUCTION_RELEASES_GC_ENABLED](../.github/workflows/production-releases-retention.yml#L36), [PRODUCTION_RELEASES_GC_EXECUTE_ENABLED](../.github/workflows/production-releases-retention.yml#L37), [PRODUCTION_RELEASES_R2_ACCOUNT_ID](../.github/workflows/production-releases-retention.yml#L40).
+Variable references (declared names only; values and activation unknown): [PRODUCTION_RELEASES_GC_APPROVED_PLAN_SHA256](../.github/workflows/production-releases-retention.yml#L40), [PRODUCTION_RELEASES_GC_CALL_ENABLED](../.github/workflows/production-releases-retention.yml#L29), [PRODUCTION_RELEASES_GC_CONTROLLER_SHA256](../.github/workflows/production-releases-retention.yml#L39), [PRODUCTION_RELEASES_GC_ENABLED](../.github/workflows/production-releases-retention.yml#L37), [PRODUCTION_RELEASES_GC_EXECUTE_ENABLED](../.github/workflows/production-releases-retention.yml#L38), [PRODUCTION_RELEASES_R2_ACCOUNT_ID](../.github/workflows/production-releases-retention.yml#L41).
 
 
 ## production-wind100-point-reader-release

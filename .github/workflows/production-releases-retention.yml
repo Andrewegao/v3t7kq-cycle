@@ -19,6 +19,7 @@ on:
         default: ''
 permissions:
   contents: read
+  actions: read
 # No concurrency group: a job holding one while it waits at an environment gate is the failure
 # tests/lock-environment-invariant.mjs forbids. Two runs cannot widen a deletion: each deletes
 # only keys of the plan it recomputed and the approved digest names, and a run whose re-list sees
@@ -73,6 +74,32 @@ jobs:
           path: ${{ runner.temp }}/production-releases-retention-plan.json
           retention-days: 7
           if-no-files-found: error
+      - name: Refuse while a re-run of an old bake or a release bootstrap is queued or running
+        if: ${{ inputs.dry_run == false }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # A re-run keeps its original run id and created_at, so it writes into
+          # releases/cycle-<old run id>/, which may be a candidate. New bakes are harmless.
+          hours="$(jq -er '.minimumAgeHours' cycle/tools/production-releases-retention-policy.json)"
+          cutoff="$(date -u -d "-${hours} hours" +%s)"
+          active="$RUNNER_TEMP/active-runs.tsv"
+          : > "$active"
+          for workflow in bake.yml catalog-production-bootstrap.yml; do
+            for status in requested queued pending waiting in_progress; do
+              gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?status=$status&per_page=100" \
+                --jq ".workflow_runs[] | [\"$workflow\", .id, .run_attempt, .created_at] | @tsv" >> "$active"
+            done
+          done
+          refused=0
+          while IFS=$'\t' read -r workflow id attempt created; do
+            if [ "$workflow" = catalog-production-bootstrap.yml ] || [ "$(date -u -d "$created" +%s)" -lt "$cutoff" ]; then
+              echo "::error::$workflow run $id (attempt $attempt, created $created) is active; it can promote or write a release this plan may delete"
+              refused=1
+            fi
+          done < "$active"
+          test "$refused" = 0
       - name: Delete only an approved, still-unreferenced release plan with per-release temporary credentials
         if: ${{ inputs.dry_run == false }}
         env:
@@ -91,7 +118,7 @@ jobs:
             import { readFileSync, appendFileSync } from "node:fs";
             const r = JSON.parse(readFileSync(process.argv[1], "utf8"));
             const lines = [`## Production whole-release retention result`, ``,
-              `Deleted ${r.deleted} objects in ${r.releases} releases (${(r.bytes / 1e9).toFixed(1)} GB), plan \`${r.planSha256}\`.`,
+              `This run sent ${r.deleteRequestsByThisRun} delete requests; ${r.releasesConfirmedEmpty} of ${r.releases} planned releases (${r.plannedObjects} objects, ${(r.plannedBytes / 1e9).toFixed(1)} GB) now list empty. Plan \`${r.planSha256}\`.`,
               `releases/current.json: ${r.proof.pointerChangedByAPromotion ? "changed by a promotion during the run (this run never writes it)" : "byte-identical before and after"}.`,
               ...r.proof.protected.map(p => `- \`${p.releaseId}\`: ${p.present ? `${p.objects} objects, listing ${p.unchanged ? "unchanged" : "CHANGED"}, manifest ${p.manifestCovered ? "fully listed" : "NOT fully listed"}` : "absent before and after"}`), ``];
             appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n"));

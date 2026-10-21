@@ -25,6 +25,16 @@ its `controllerDigest` and invalidate the already-reviewed `PRODUCTION_COMPONENT
 
 ## What is kept
 
+**No plan while a rollback is in effect.** The dry run and the execution both refuse when
+`releases/current.json` does not name the newest release by manifest `createdAt` **and** by run
+id, that is, when any release with a valid manifest is newer than the current one. That is the
+signal of a manual rollback (`activate-r2-release.sh` onto an older release): people are in
+control of the bucket, and nothing is planned or deleted until a bake rolls forward. The same
+check refuses for the few minutes in which a bake has uploaded its manifest but not yet promoted
+(it is verifying the prefix); plan again after the promotion. Uploads still in flight have no
+manifest yet and do not count. A complete release that never gets promoted (a failed promotion)
+blocks retention until the owner decides what to do with it.
+
 A release id is never a candidate when any of these holds. Everything is evaluated as of the dry
 run's `plan_as_of`, so the execution recomputes the same answer.
 
@@ -32,6 +42,9 @@ run's `plan_as_of`, so the execution recomputes the same answer.
    (`baseline_release_id`), and the live pointer read again by the execution. The execution also
    re-reads the pointer **before every delete** and stops if it names a candidate (a rollback
    onto a candidate). A promotion to any other release, such as a new bake, does not stop it.
+   Up to `deleteConcurrency` (16) deletes may already be in flight when the pointer changes, so
+   this check bounds the damage of a rollback during an execution; it does not prevent it. The
+   operating rule below does.
 2. **It is among the newest `keepNewestReleases` (8) complete releases.** The pointer carries no
    history (Atmos `platform/edge/src/releasePromotion.ts` overwrites it with a conditional put),
    so promotion order is taken from each release's own `manifest.json` `createdAt`, and separately
@@ -44,14 +57,20 @@ run's `plan_as_of`, so the execution recomputes the same answer.
 3. **It is younger than `minimumAgeHours` (168 h, seven days).** A release with any object, or a
    manifest `createdAt`, newer than `plan_as_of − 168 h` is kept. This covers uploads in flight,
    open app sessions and the runbook minimum below. The policy refuses less than 72 h.
-4. **The staging shared-read pin names it.** If `weatherx-data-staging/shared-read/pin.json` has
+4. **The owner lists it in `keepReleaseIds`.** The pointer keeps no history, so a release that
+   was current a few hours ago (a manual rollback target, since rolled forward) is not protected
+   by any rule above once it is older than seven days and outside the newest 8. List every
+   release activated by hand in the last seven days in the policy's `keepReleaseIds`. The list
+   is part of the policy, so changing it is a reviewed pull request that changes the controller
+   digest; the plan records it.
+5. **The staging shared-read pin names it.** If `weatherx-data-staging/shared-read/pin.json` has
    a `releaseId`, that release is kept whether or not the pin has expired. Any change to the pin
    during an execution stops it.
-5. **Its upload is incomplete or inconsistent.** A missing, unparsable or oversized (over 16 MiB,
+6. **Its upload is incomplete or inconsistent.** A missing, unparsable or oversized (over 16 MiB,
    the data Worker's own manifest bound) `manifest.json`, a manifest naming another release, or a
    prefix that lists more objects than its manifest plus `manifest.json` is kept and listed under
    "Incomplete or inconsistent" in the summary. v1 never deletes these; inspect them by hand.
-6. **It is out of scope.** Only `releases/cycle-<digits>/` prefixes are candidates.
+7. **It is out of scope.** Only `releases/cycle-<digits>/` prefixes are candidates.
    `releases/current.json`, any other release id (for example a laptop-format id), and every key
    outside `releases/` are never listed for deletion; nothing outside `releases/` is listed at all.
 
@@ -66,9 +85,12 @@ manifest present, can only be the remainder of an interrupted deletion (the publ
 
 - **Data Worker.** `platform/edge/src/data.ts` serves `releases/<current>/<path>` for every path
   the catalog does not cover (`resolveRelease`, line 320) and `releases/<id>/<path>` for an
-  explicit `/data/_release/<id>/…` address (`dataAddress`, line 356). It has no fallback to an
-  older release: a stale cached pointer is kept only between 30-second refreshes
-  (`RELEASE_CACHE_TTL_MS`). Only the current id and ids that a client pinned are ever read.
+  explicit `/data/_release/<id>/…` address (`dataAddress`, line 356). It never falls back to an
+  arbitrary older release. It caches the pointer for 30 s (`RELEASE_CACHE_TTL_MS`), and while
+  pointer refreshes fail it keeps serving the last pointer it read, retrying every 5 s
+  (`staleReleasePointer`, lines 217-225, `POINTER_REFRESH_RETRY_MS`) with no upper bound. That
+  stale id is a previous current release, which the newest-8 and age rules keep. Only current,
+  previously current and client-pinned ids are ever read.
 - **App sessions.** `app/src/engine/manifest.ts:142-153` pins a session to the release named by
   the run index's `X-WeatherX-Release` header. The pin has no fixed lifetime: it lasts until
   `app/src/chrome/RunSelfRefresh.tsx` sees a newer model run (polling at most every 90 s once one
@@ -82,19 +104,26 @@ manifest present, can only be the remainder of an interrupted deletion (the publ
   nothing reads the path again later (the only other use is the contract's string check). It
   needs the release for minutes, inside one collection run.
 - **Staging shared-read.** `platform/edge/src/sharedRead.ts:131-145` lets the staging pin name a
-  production `releaseId` for at most seven days (`MAX_PIN_LIFETIME_MS`). Rule 4 keeps it
+  production `releaseId` for at most seven days (`MAX_PIN_LIFETIME_MS`). Rule 5 keeps it
   regardless of expiry.
 - **Catalogs.** A catalog snapshot (`platform/edge/src/catalog.ts` `DataCatalog`) names only
   components, never a release id, so no catalog is read.
 - **Rollback runbook.** `docs/platform/SECURITY_SCALE_RUNBOOK.md` §5: "Keep at least two
   last-good releases plus seven days of pointers/manifests. Delete old immutable releases only
-  with a separately reviewed retention job; never use a broad recursive target." The pointer has
-  no history object, and a release's manifest lives inside its prefix, so seven days of manifests
-  means seven days of releases. That is why `minimumAgeHours` defaults to 168, not 72. Lowering
-  it to 72 (about 12 releases, 90 GB) needs that runbook line changed first.
-- **Rollback.** `ops/platform/activate-r2-release.sh` promotes an existing release only after
-  downloading the whole prefix and verifying it against its manifest, so a partially deleted
-  release can never be rolled back to by the runbook path.
+  with a separately reviewed retention job; never use a broad recursive target." A release's
+  manifest lives inside its prefix, so seven days of manifests means seven days of releases by
+  creation time: that is why `minimumAgeHours` defaults to 168, not 72, and lowering it to 72
+  (about 12 releases, 90 GB) needs that runbook line changed first. The age rule alone does
+  **not** cover "seven days of pointers": the pointer has no history object, so a release that
+  was current inside the last seven days but was created earlier (a manual rollback target) is
+  kept only while the rollback is still in effect (the refusal above) or when the owner lists it
+  in `keepReleaseIds` (rule 4).
+- **Rollback.** `ops/platform/activate-r2-release.sh` verifies a release before promoting it. On
+  the rclone path it downloads the whole prefix and checks it against the manifest; on the REST
+  path (`r2-rest.mjs verify-manifest`) it lists the prefix, requires the exact object count and
+  sizes, and hashes every object. Either way a release that is already partially deleted is
+  refused. A deletion that starts after the verification but before the promotion is not caught
+  by it, which is why the operating rule below exists.
 
 ## Plan, approval and execution
 
@@ -104,10 +133,19 @@ manifest present, can only be the remainder of an interrupted deletion (the publ
    proven whole, and any incomplete, partial or out-of-scope prefix. The full plan is the
    `production-releases-retention-plan` artifact (7 days). The dry run holds no delete token and
    refuses to start if one is present.
-2. **Review and approve.** Set the protected variable `PRODUCTION_RELEASES_GC_APPROVED_PLAN_SHA256`
-   to that `planSha256`.
+2. **Review and approve.** Before approving:
+   - **list every release activated by hand in the last 7 days into `keepReleaseIds` before
+     approving** (a reviewed policy change, then a fresh dry run and controller digest);
+   - check that no candidate is a release anyone rolled back to, pinned or is investigating;
+   - then set the protected variable `PRODUCTION_RELEASES_GC_APPROVED_PLAN_SHA256` to that
+     `planSha256`.
 3. **Execute.** Dispatch with `dry_run: false`, `plan_as_of` and `baseline_release_id` set to
    the dry run's values, within `maximumPlanAgeHours` (24 h). The execution:
+   - refuses to start while a `bake.yml` run created before the minimum-age cutoff (a re-run of
+     an old bake, which keeps its run id and so writes into `releases/cycle-<old run id>/`) or
+     any `catalog-production-bootstrap.yml` run is queued or in progress (the workflow's
+     `actions: read` token; new bakes are allowed);
+   - refuses, like the dry run, while a rollback is in effect;
    - recomputes the whole plan at that `plan_as_of` and baseline and refuses unless its SHA-256
      equals the approved one. Releases uploaded after `plan_as_of` are kept and outside the plan,
      so ordinary bakes between the dry run and the execution do not invalidate it; a pin change,
@@ -117,12 +155,28 @@ manifest present, can only be the remainder of an interrupted deletion (the publ
      the staging pin (stop on any change);
    - deletes each release's `manifest.json` last, with a 15-minute `DeleteObject`-only credential
      minted per release (and again after 10 minutes) from the dedicated delete token, restricted
-     to that one `releases/cycle-<id>/` prefix;
+     to that one `releases/cycle-<id>/` prefix, then re-lists the prefix and stops unless it is
+     empty (nothing wrote back into it);
    - after the last delete, re-reads the pointer and re-lists every protected release (baseline,
-     live current, pinned, newest 8) and fails unless each lists exactly the same
+     live current, pinned, `keepReleaseIds`, newest 8) and fails unless each lists exactly the same
      `[key, size, etag]` rows as before the first delete with every manifest path present.
 
-   A stopped or partial run is replayable: a new dry run plans only what remains.
+   A stopped or partial run is replayable: a new dry run plans only what remains. The result
+   reports `deleteRequestsByThisRun` and `releasesConfirmedEmpty`, not "objects deleted": R2
+   answers a delete of a missing key the same way, so two executions of one plan would otherwise
+   both claim every object.
+
+### Operating rule while execution is enabled
+
+**Never run `activate-r2-release.sh`, and never re-run a whole bake (or any `bake.yml` attempt)
+older than the minimum age, while `PRODUCTION_RELEASES_GC_EXECUTE_ENABLED=true` or an execution
+is running.** Set the variable to `false` first and wait for any running execution to finish.
+Activation verifies a prefix and then promotes it; a deletion between the two would promote a
+damaged release. A re-run keeps `RELEASE_ID=cycle-<original run id>` (`bake.yml`) and its
+`rclone copy --immutable` writes into that existing prefix. The execution's own checks (the
+active-run refusal at start, the pointer check before every delete, the empty re-list after each
+release) narrow this window but cannot close it. No Cycle workflow runs `activate-r2-release.sh`;
+it is a manual runbook step, so this rule is the control for it.
 
 There is no concurrency group. A job that holds one while it waits at an environment gate is what
 `tests/lock-environment-invariant.mjs` forbids, and the group is not needed for safety: each run
@@ -159,10 +213,15 @@ sees objects another run already deleted refuses. Still, start one execution at 
   - `PRODUCTION_RELEASES_GC_APPROVED_PLAN_SHA256`, per approved plan.
 
 The controller refuses to start if the job environment carries any publisher, catalog-promotion,
-staging-write, Wind100, component-cleanup or Cloudflare API credential.
+staging-write, Wind100, component-cleanup or Cloudflare API credential, any `AWS_*` key, or any
+`RCLONE_CONFIG_*` setting (the bake publisher's token arrives as
+`RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID` and `RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY`). The only
+other credential the job uses is its own `GITHUB_TOKEN` with `contents: read` and `actions: read`.
 
 Before the first execution, prove that a derived credential denies an adjacent prefix and every
-non-delete action, as `production-wind100-scope-preflight.yml` does for Wind100.
+non-delete action, as `production-wind100-scope-preflight.yml` does for Wind100, and record the
+result here before setting `PRODUCTION_RELEASES_GC_EXECUTE_ENABLED`. Nothing enforces this; the
+adapter's own prefix checks are the barrier until it is done.
 
 ## Expected first dry run
 
@@ -194,7 +253,9 @@ every two days (eight new releases are about 400 k objects) to stay there.
 
 1. Review the dry-run summary and artifact: every candidate is older than `minimumAgeCutoff`,
    none is the baseline, the pin or a newest release, and the protected releases are all
-   "proven whole".
+   "proven whole". List every release activated by hand in the last 7 days into
+   `keepReleaseIds` before approving, and confirm none of them is a candidate. Set
+   `PRODUCTION_RELEASES_GC_EXECUTE_ENABLED=true` only after the operating rule above is agreed.
 2. Execute. Its summary must say `releases/current.json` is byte-identical before and after (or
    changed only by a promotion to a release that is not a candidate), and every protected
    release's listing is unchanged with its manifest fully listed. Listing returns each key's size
