@@ -1,0 +1,125 @@
+name: inspect or clean old whole production data releases
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Inspect an immutable plan without deleting objects
+        type: boolean
+        required: true
+        default: true
+      plan_as_of:
+        description: Execute only; the plan_as_of printed by the approved dry run
+        type: string
+        required: false
+        default: ''
+      baseline_release_id:
+        description: Execute only; the baseline_release_id printed by the approved dry run
+        type: string
+        required: false
+        default: ''
+permissions:
+  contents: read
+  actions: read
+# No concurrency group: a job holding one while it waits at an environment gate is the failure
+# tests/lock-environment-invariant.mjs forbids. Two runs cannot widen a deletion: each deletes
+# only keys of the plan it recomputed and the approved digest names, and a run whose re-list sees
+# objects the other already deleted refuses (docs/production-releases-retention.md).
+jobs:
+  retention:
+    if: ${{ github.ref == 'refs/heads/main' && vars.PRODUCTION_RELEASES_GC_CALL_ENABLED == 'true' }}
+    environment:
+      name: production-releases-retention
+      url: https://weatherx.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      RELEASES_GC_ENVIRONMENT: production-releases-retention
+      PRODUCTION_RELEASES_GC_ENABLED: ${{ vars.PRODUCTION_RELEASES_GC_ENABLED }}
+      PRODUCTION_RELEASES_GC_EXECUTE_ENABLED: ${{ vars.PRODUCTION_RELEASES_GC_EXECUTE_ENABLED }}
+      PRODUCTION_RELEASES_GC_CONTROLLER_SHA256: ${{ vars.PRODUCTION_RELEASES_GC_CONTROLLER_SHA256 }}
+      PRODUCTION_RELEASES_GC_APPROVED_PLAN_SHA256: ${{ vars.PRODUCTION_RELEASES_GC_APPROVED_PLAN_SHA256 }}
+      PRODUCTION_RELEASES_R2_ACCOUNT_ID: ${{ vars.PRODUCTION_RELEASES_R2_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { path: cycle, persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Verify the controller source and install its S3 client
+        run: |
+          set -euo pipefail
+          test "$(git -C cycle rev-parse HEAD)" = "$GITHUB_SHA"
+          git -C cycle diff --exit-code HEAD
+          npm ci --ignore-scripts --prefix cycle/staging-controller
+      - name: Produce dry-run release deletion plan for review
+        if: ${{ inputs.dry_run == true }}
+        env:
+          PRODUCTION_RELEASES_GC_READ_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_RELEASES_GC_READ_ACCESS_KEY_ID }}
+          PRODUCTION_RELEASES_GC_READ_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_RELEASES_GC_READ_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          plan="$RUNNER_TEMP/production-releases-retention-plan.json"
+          node cycle/tools/production-releases-retention.mjs dry-run > "$plan"
+          node --input-type=module -e '
+            import { readFileSync, appendFileSync } from "node:fs";
+            import { planSummary } from "./cycle/tools/production-releases-retention.mjs";
+            const plan = JSON.parse(readFileSync(process.argv[1], "utf8"));
+            const text = planSummary(plan);
+            console.log(text);
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, text);
+          ' "$plan"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ inputs.dry_run == true }}
+        with:
+          name: production-releases-retention-plan
+          path: ${{ runner.temp }}/production-releases-retention-plan.json
+          retention-days: 7
+          if-no-files-found: error
+      - name: Refuse while a re-run of an old bake or a release bootstrap is queued or running
+        if: ${{ inputs.dry_run == false }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # A re-run keeps its original run id and created_at, so it writes into
+          # releases/cycle-<old run id>/, which may be a candidate. New bakes are harmless.
+          hours="$(jq -er '.minimumAgeHours' cycle/tools/production-releases-retention-policy.json)"
+          cutoff="$(date -u -d "-${hours} hours" +%s)"
+          active="$RUNNER_TEMP/active-runs.tsv"
+          : > "$active"
+          for workflow in bake.yml catalog-production-bootstrap.yml; do
+            for status in requested queued pending waiting in_progress; do
+              gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?status=$status&per_page=100" \
+                --jq ".workflow_runs[] | [\"$workflow\", .id, .run_attempt, .created_at] | @tsv" >> "$active"
+            done
+          done
+          refused=0
+          while IFS=$'\t' read -r workflow id attempt created; do
+            if [ "$workflow" = catalog-production-bootstrap.yml ] || [ "$(date -u -d "$created" +%s)" -lt "$cutoff" ]; then
+              echo "::error::$workflow run $id (attempt $attempt, created $created) is active; it can promote or write a release this plan may delete"
+              refused=1
+            fi
+          done < "$active"
+          test "$refused" = 0
+      - name: Delete only an approved, still-unreferenced release plan with per-release temporary credentials
+        if: ${{ inputs.dry_run == false }}
+        env:
+          INPUT_PLAN_AS_OF: ${{ inputs.plan_as_of }}
+          INPUT_BASELINE_RELEASE_ID: ${{ inputs.baseline_release_id }}
+          PRODUCTION_RELEASES_GC_READ_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_RELEASES_GC_READ_ACCESS_KEY_ID }}
+          PRODUCTION_RELEASES_GC_READ_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_RELEASES_GC_READ_SECRET_ACCESS_KEY }}
+          PRODUCTION_RELEASES_GC_DELETE_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_RELEASES_GC_DELETE_ACCESS_KEY_ID }}
+          PRODUCTION_RELEASES_GC_DELETE_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_RELEASES_GC_DELETE_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          result="$RUNNER_TEMP/production-releases-retention-result.json"
+          node cycle/tools/production-releases-retention.mjs execute > "$result"
+          cat "$result"
+          node --input-type=module -e '
+            import { readFileSync, appendFileSync } from "node:fs";
+            const r = JSON.parse(readFileSync(process.argv[1], "utf8"));
+            const lines = [`## Production whole-release retention result`, ``,
+              `This run sent ${r.deleteRequestsByThisRun} delete requests; ${r.releasesConfirmedEmpty} of ${r.releases} planned releases (${r.plannedObjects} objects, ${(r.plannedBytes / 1e9).toFixed(1)} GB) now list empty. Plan \`${r.planSha256}\`.`,
+              `releases/current.json: ${r.proof.pointerChangedByAPromotion ? "changed by a promotion during the run (this run never writes it)" : "byte-identical before and after"}.`,
+              ...r.proof.protected.map(p => `- \`${p.releaseId}\`: ${p.present ? `${p.objects} objects, listing ${p.unchanged ? "unchanged" : "CHANGED"}, manifest ${p.manifestCovered ? "fully listed" : "NOT fully listed"}` : "absent before and after"}`), ``];
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n"));
+          ' "$result"

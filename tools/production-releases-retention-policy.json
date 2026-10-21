@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "retentionProfileStatus": "release-pointer-window-gc-v1",
+  "accountId": "a89f9a1af485021fbc60a68b163c7c6e",
+  "dataBucket": "weatherx-data-production",
+  "stagingControlBucket": "weatherx-data-staging",
+  "releasePointerKey": "releases/current.json",
+  "stagingPinKey": "shared-read/pin.json",
+  "keepNewestReleases": 8,
+  "keepReleaseIds": [],
+  "minimumAgeHours": 168,
+  "maximumPlanAgeHours": 24,
+  "maximumReleasePrefixes": 2000,
+  "maximumManifestBytes": 16777216,
+  "maximumDeletesPerRun": 500000,
+  "deleteConcurrency": 16
+}

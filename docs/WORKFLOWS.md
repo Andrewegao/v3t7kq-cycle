@@ -6,9 +6,9 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `17226b49e54393eb214d5f913d0828dad2d681451dc73761303fcd4117305ed2`.
+Source digest (registry and workflow bytes): `4e90b20df53a82144ce26dda657a571f9cf3d665cc7af502ecea3e1b23e9af74`.
 
-71 workflows. Ordering and output are deterministic; no API request or clock is used.
+72 workflows. Ordering and output are deterministic; no API request or clock is used.
 
 | Workflow | Family / subsystem | Lifecycle | Purpose | Runbook |
 | --- | --- | --- | --- | --- |
@@ -48,6 +48,7 @@ Source digest (registry and workflow bytes): `17226b49e54393eb214d5f913d0828dad2
 | [production-account-audit](#production-account-audit) | control-plane / Production account safety | diagnostic | Reconcile exhaustive live Stripe inventory against sanitized production account state without mutation. | [guide](../docs/production-account-audit.md) |
 | [production-components-retention](#production-components-retention) | maintenance / Component storage | manual-supported | Plan or approve bounded cleanup of model components no catalog in the last seven days references. | [guide](../docs/production-components-retention.md) |
 | [production-place-renewal](#production-place-renewal) | maintenance / Places | recurring | Renew production NOAA tide predictions daily as the places-tides catalog component, reusing the staging-qualified collector. | [guide](../docs/production-place-renewal.md) |
+| [production-releases-retention](#production-releases-retention) | maintenance / Release storage | manual-supported | Plan or approve bounded cleanup of whole data releases older than seven days that no pointer, pin or newest-eight rule keeps. | [guide](../docs/production-releases-retention.md) |
 | [production-wind100-point-reader-release](#production-wind100-point-reader-release) | releases / Production data reader | manual-supported | Release the exact production data Worker Wind100 point reader while preserving base forecasts and routes. | [guide](../docs/production-wind100-point-reader-release.md) |
 | [production-wind100-recurring](#production-wind100-recurring) | models / Native wind | recurring | Publish a guarded production-only native wind point candidate under dedicated approval. | [guide](../docs/production-wind100-retention.md) |
 | [production-wind100-retention](#production-wind100-retention) | maintenance / Native wind | manual-supported | Plan or approve bounded cleanup of journal-proven retired production wind components. | [guide](../docs/production-wind100-retention.md) |
@@ -1039,6 +1040,31 @@ Checkout declarations (not a claim of approval or checkout success):
 Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/production-place-renewal.yml#L50), [PRODUCTION_PLACES_RENEWAL_ATMOS_SHA](../.github/workflows/production-place-renewal.yml#L48), [PRODUCTION_PLACES_RENEWAL_CONTROLLER_SHA256](../.github/workflows/production-place-renewal.yml#L52), [PRODUCTION_PLACES_RENEWAL_ENABLED](../.github/workflows/production-place-renewal.yml#L37).
 
 
+## production-releases-retention
+
+[.github/workflows/production-releases-retention.yml](../.github/workflows/production-releases-retention.yml#L1) · <code>inspect or clean old whole production data releases</code>
+
+Declared triggers: [workflow_dispatch](../.github/workflows/production-releases-retention.yml#L4); input names <code>["dry_run","plan_as_of","baseline_release_id"]</code>.
+
+Workflow permissions: <code>{"contents":"read","actions":"read"}</code>. Workflow concurrency: not declared.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [retention](../.github/workflows/production-releases-retention.yml#L29) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"production-releases-retention","url":"https://weatherx.org"}</code> | <code>240</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+
+Declared job conditions (additional step/helper checks may apply):
+
+- [retention](../.github/workflows/production-releases-retention.yml#L29): <code>${{ github.ref == 'refs/heads/main' &amp;&amp; vars.PRODUCTION_RELEASES_GC_CALL_ENABLED == 'true' }}</code>
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [retention / step 1](../.github/workflows/production-releases-retention.yml#L43) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+
+Variable references (declared names only; values and activation unknown): [PRODUCTION_RELEASES_GC_APPROVED_PLAN_SHA256](../.github/workflows/production-releases-retention.yml#L40), [PRODUCTION_RELEASES_GC_CALL_ENABLED](../.github/workflows/production-releases-retention.yml#L29), [PRODUCTION_RELEASES_GC_CONTROLLER_SHA256](../.github/workflows/production-releases-retention.yml#L39), [PRODUCTION_RELEASES_GC_ENABLED](../.github/workflows/production-releases-retention.yml#L37), [PRODUCTION_RELEASES_GC_EXECUTE_ENABLED](../.github/workflows/production-releases-retention.yml#L38), [PRODUCTION_RELEASES_R2_ACCOUNT_ID](../.github/workflows/production-releases-retention.yml#L41).
+
+
 ## production-wind100-point-reader-release
 
 [.github/workflows/production-wind100-point-reader-release.yml](../.github/workflows/production-wind100-point-reader-release.yml#L1) · <code>WeatherX production Wind100 point reader release</code>
@@ -1280,19 +1306,19 @@ Variable references (declared names only; values and activation unknown): [R2_CO
 
 [.github/workflows/scheduler-ci.yml](../.github/workflows/scheduler-ci.yml#L1) · <code>WeatherX scheduler CI</code>
 
-Declared triggers: [pull_request](../.github/workflows/scheduler-ci.yml#L4); [push](../.github/workflows/scheduler-ci.yml#L6) <code>{"branches":["main"],"paths":[".github/workflows/**","ops/workflows.json","ops/lock-environment-allowlist.json","ops/atmos-production-source.json","ops/train3-validation-contract.json","docs/WORKFLOWS.md","docs/WORKFLOW_OPERATIONS.md","README.md",".github/workflows/bake.yml",".github/workflows/collect-core-model.yml",".github/workflows/collect-regional-model.yml",".github/workflows/publish-current-model-production.yml",".github/workflows/resume-model-publication.yml",".github/workflows/catalog-bake.yml",".github/workflows/scheduler-ci.yml",".github/workflows/source-checkout-probe.yml",".github/workflows/scheduler-deploy.yml",".github/workflows/satellite-archive.yml",".github/workflows/ui-release.yml",".github/workflows/ui-staging.yml",".github/workflows/ui-staging-tc.yml",".github/workflows/staging-follow-master.yml",".github/workflows/staging-data.yml",".github/workflows/staging-current-selection.yml",".github/workflows/model-inputs.yml",".github/workflows/nam-hi-diagnostic.yml",".github/workflows/staging-model-components.yml",".github/workflows/staging-model-selection.yml",".github/workflows/staging-consumer-refresh.yml",".github/workflows/staging-search.yml",".github/workflows/staging-tc-guidance.yml",".github/workflows/staging-place-renewal.yml",".github/workflows/production-place-renewal.yml",".github/workflows/staging-wind100.yml",".github/workflows/staging-wind100-recurring.yml",".github/workflows/production-wind100-recurring.yml",".github/workflows/production-wind100-retention.yml",".github/workflows/production-components-retention.yml",".github/workflows/staging-wind100-preflight.yml",".github/workflows/staging-search-reader.yml",".github/workflows/staging-data-activate.yml",".github/workflows/verify-backfill.yml",".github/workflows/consumer-refresh.yml",".github/workflows/data-reader-refresh.yml",".github/workflows/gdacs-feed-release.yml",".github/workflows/gdacs-route-retire.yml",".github/workflows/glofas-ingest.yml",".github/workflows/cams-ingest.yml",".github/workflows/fusion-*.yml","scheduler/**","tests/**","tools/**","staging-controller/**"]}</code>.
+Declared triggers: [pull_request](../.github/workflows/scheduler-ci.yml#L4); [push](../.github/workflows/scheduler-ci.yml#L6) <code>{"branches":["main"],"paths":[".github/workflows/**","ops/workflows.json","ops/lock-environment-allowlist.json","ops/atmos-production-source.json","ops/train3-validation-contract.json","docs/WORKFLOWS.md","docs/WORKFLOW_OPERATIONS.md","README.md",".github/workflows/bake.yml",".github/workflows/collect-core-model.yml",".github/workflows/collect-regional-model.yml",".github/workflows/publish-current-model-production.yml",".github/workflows/resume-model-publication.yml",".github/workflows/catalog-bake.yml",".github/workflows/scheduler-ci.yml",".github/workflows/source-checkout-probe.yml",".github/workflows/scheduler-deploy.yml",".github/workflows/satellite-archive.yml",".github/workflows/ui-release.yml",".github/workflows/ui-staging.yml",".github/workflows/ui-staging-tc.yml",".github/workflows/staging-follow-master.yml",".github/workflows/staging-data.yml",".github/workflows/staging-current-selection.yml",".github/workflows/model-inputs.yml",".github/workflows/nam-hi-diagnostic.yml",".github/workflows/staging-model-components.yml",".github/workflows/staging-model-selection.yml",".github/workflows/staging-consumer-refresh.yml",".github/workflows/staging-search.yml",".github/workflows/staging-tc-guidance.yml",".github/workflows/staging-place-renewal.yml",".github/workflows/production-place-renewal.yml",".github/workflows/staging-wind100.yml",".github/workflows/staging-wind100-recurring.yml",".github/workflows/production-wind100-recurring.yml",".github/workflows/production-wind100-retention.yml",".github/workflows/production-components-retention.yml",".github/workflows/production-releases-retention.yml",".github/workflows/staging-wind100-preflight.yml",".github/workflows/staging-search-reader.yml",".github/workflows/staging-data-activate.yml",".github/workflows/verify-backfill.yml",".github/workflows/consumer-refresh.yml",".github/workflows/data-reader-refresh.yml",".github/workflows/gdacs-feed-release.yml",".github/workflows/gdacs-route-retire.yml",".github/workflows/glofas-ingest.yml",".github/workflows/cams-ingest.yml",".github/workflows/fusion-*.yml","scheduler/**","tests/**","tools/**","staging-controller/**"]}</code>.
 
 Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: not declared.
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [scheduler](../.github/workflows/scheduler-ci.yml#L67) ← no needs | <code>ubuntu-latest</code> | not declared | <code>10</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [scheduler](../.github/workflows/scheduler-ci.yml#L68) ← no needs | <code>ubuntu-latest</code> | not declared | <code>10</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [scheduler / step 1](../.github/workflows/scheduler-ci.yml#L70) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [scheduler / step 1](../.github/workflows/scheduler-ci.yml#L71) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
 Variable references (declared names only; values and activation unknown): none detected.
 
