@@ -515,6 +515,15 @@
       "runbook": "docs/production-components-retention.md"
     },
     {
+      "id": "production-releases-retention",
+      "path": ".github/workflows/production-releases-retention.yml",
+      "family": "maintenance",
+      "purpose": "Plan or approve bounded cleanup of whole data releases older than seven days that no pointer, pin or newest-eight rule keeps.",
+      "subsystem": "Release storage",
+      "lifecycle": "manual-supported",
+      "runbook": "docs/production-releases-retention.md"
+    },
+    {
       "id": "production-wind100-retention",
       "path": ".github/workflows/production-wind100-retention.yml",
       "family": "maintenance",
