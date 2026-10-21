@@ -197,6 +197,7 @@ jobs:
           RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
           RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
           RCLONE_CONFIG_WEATHERX_REGION: auto
+          RCLONE_S3_NO_HEAD: 'true'
           CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
         run: node cycle/tools/energy-ingest.mjs publish cams "$RUNNER_TEMP/energy-cams" "$GITHUB_WORKSPACE/atmos"
       - name: Read the public pointer and dated file back
