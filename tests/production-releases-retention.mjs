@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, createHmac } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { controllerDigest, createRetentionIo, executeRetention, executionSummary, planRetention, planSummary, readPolicy,
   scopedDeleteCredentials, scopedRelease, summarizeManifest, validatePolicy } from '../tools/production-releases-retention.mjs';
@@ -630,4 +632,27 @@ test('workflow: dispatch-only, dry run by default, its own environment, digest a
     'PRODUCTION_RELEASES_GC_EXECUTE_ENABLED', 'PRODUCTION_RELEASES_GC_CONTROLLER_SHA256', 'PRODUCTION_RELEASES_GC_APPROVED_PLAN_SHA256',
     'PRODUCTION_RELEASES_R2_ACCOUNT_ID'])
     assert.ok(doc.includes(name), `the runbook names ${name}`);
+});
+
+test('execute workflow summary runs from the workspace root with its declared checkout path', () => {
+  const workflow = readFileSync(new URL('../.github/workflows/production-releases-retention.yml', import.meta.url), 'utf8');
+  const checkout = workflow.match(/with: \{ path: ([a-z-]+), persist-credentials: false \}/)[1];
+  const script = workflow.slice(workflow.indexOf('          cat "$result"')).match(/node --input-type=module -e '([\s\S]*?)' "\$result"/)[1];
+  const root = mkdtempSync(join(tmpdir(), 'weatherx-retention-workflow-'));
+  try {
+    symlinkSync(fileURLToPath(new URL('../', import.meta.url)), join(root, checkout), 'dir');
+    const result = { deleteRequestsByThisRun: 10, releasesConfirmedEmpty: 1, releases: 1, plannedObjects: 10, plannedBytes: 1000,
+      planSha256: 'a'.repeat(64), proof: { pointerChangedByAPromotion: true, protected: [
+        { releaseId: 'cycle-1', present: true, objects: 6, manifestCovered: true, unchanged: true },
+        { releaseId: 'cycle-2', present: true, objects: 6, manifestCovered: true, unchanged: null },
+      ] } };
+    const input = join(root, 'result.json'), summary = join(root, 'summary.md');
+    writeFileSync(input, JSON.stringify(result));
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', script, input], {
+      cwd: root, encoding: 'utf8', env: { PATH: process.env.PATH, GITHUB_STEP_SUMMARY: summary },
+    });
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(readFileSync(summary, 'utf8'), executionSummary(result));
+    assert.match(readFileSync(summary, 'utf8'), /new live release; no before-listing comparison/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

@@ -116,7 +116,7 @@ jobs:
           cat "$result"
           node --input-type=module -e '
             import { readFileSync, appendFileSync } from "node:fs";
-            import { executionSummary } from "./tools/production-releases-retention.mjs";
+            import { executionSummary } from "./cycle/tools/production-releases-retention.mjs";
             const r = JSON.parse(readFileSync(process.argv[1], "utf8"));
             appendFileSync(process.env.GITHUB_STEP_SUMMARY, executionSummary(r));
           ' "$result"
