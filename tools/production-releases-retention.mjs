@@ -87,7 +87,7 @@ export function validatePolicy(p) {
   assert.ok(Number.isSafeInteger(p.maximumPlanAgeHours) && p.maximumPlanAgeHours > 0 && p.maximumPlanAgeHours <= 48);
   assert.ok(Number.isSafeInteger(p.maximumReleasePrefixes) && p.maximumReleasePrefixes > 0 && p.maximumReleasePrefixes <= 10_000);
   assert.ok(Number.isSafeInteger(p.maximumManifestBytes) && p.maximumManifestBytes > 0 && p.maximumManifestBytes <= 64 * 1024 * 1024);
-  assert.ok(Number.isSafeInteger(p.maximumDeletesPerRun) && p.maximumDeletesPerRun > 0 && p.maximumDeletesPerRun <= 1_000_000);
+  assert.ok(Number.isSafeInteger(p.maximumDeletesPerRun) && p.maximumDeletesPerRun > 0 && p.maximumDeletesPerRun <= 500_000);
   assert.ok(Number.isSafeInteger(p.deleteConcurrency) && p.deleteConcurrency > 0 && p.deleteConcurrency <= 32);
   return p;
 }
@@ -193,6 +193,15 @@ async function proveProtected({ io, policy, ids }) {
     proofs.push({ releaseId, present: true, objects: rows.length, listingSha256: listingDigest(rows), manifestCovered });
   }
   return proofs;
+}
+
+function requireWholeProtected(proofs, absentOwnerKeeps, requiredIds) {
+  for (const row of proofs) {
+    assert.ok(row.present || (absentOwnerKeeps.has(row.releaseId) && !requiredIds.has(row.releaseId)),
+      `protected release ${row.releaseId} is absent; refusing cleanup`);
+    assert.ok(!row.present || row.manifestCovered === true,
+      `protected release ${row.releaseId} does not cover every manifest path; refusing cleanup`);
+  }
 }
 
 // --- plan -------------------------------------------------------------------------------------
@@ -365,6 +374,10 @@ export async function executeRetention({ io, policy, approvedPlanSha256, asOf, b
   const candidates = new Set(content.candidates.map(row => row.releaseId));
   assert.ok(!candidates.has(report.livePointer.releaseId), 'releases/current.json names a candidate; stopping');
   assert.ok(report.protected.every(row => !candidates.has(row.releaseId)));
+  const absentOwnerKeeps = new Set(policy.keepReleaseIds);
+  const requiredIds = new Set([baselineReleaseId, report.livePointer.releaseId, content.stagingPin.releaseId,
+    ...report.order.newestByCreatedAt, ...report.order.newestByRunId].filter(Boolean));
+  requireWholeProtected(report.protected, absentOwnerKeeps, requiredIds);
   let aborted = null, deleted = 0;
   const emptied = [];
   async function guard() {
@@ -373,6 +386,7 @@ export async function executeRetention({ io, policy, approvedPlanSha256, asOf, b
     assert.deepEqual(pin, content.stagingPin, 'staging shared-read pin changed after the dry run; replan');
     const pointer = parsePointer(pointerObject.body);
     assert.ok(!candidates.has(pointer.releaseId), `releases/current.json now names candidate ${pointer.releaseId}; stopping`);
+    return { pointerObject, pointer };
   }
   const limit = pool(policy.deleteConcurrency);
   for (const candidate of content.candidates) {
@@ -416,11 +430,21 @@ export async function executeRetention({ io, policy, approvedPlanSha256, asOf, b
   }
   // After: the pointer was never written by this run, and every protected release lists exactly
   // what it listed before the first delete, with every manifest path present.
-  const pointerAfter = hash((await io.get(policy.dataBucket, policy.releasePointerKey, MAX_POINTER)).body);
+  const { pointerObject, pointer } = await guard();
+  const pointerAfter = hash(pointerObject.body);
   const after = await proveProtected({ io, policy, ids: report.protected.map(row => row.releaseId) });
+  requiredIds.add(pointer.releaseId);
+  requireWholeProtected(after, absentOwnerKeeps, requiredIds);
   const proof = after.map((row, i) => ({ ...row, unchanged: JSON.stringify(row) === JSON.stringify(report.protected[i]) }));
   const changed = proof.filter(row => !row.unchanged).map(row => row.releaseId);
   assert.deepEqual(changed, [], `protected release listing changed during cleanup: ${changed.join(', ')}`);
+  // A normal bake can promote while cleanup runs. Prove that new live release too, even though
+  // it was outside the baseline proof set; it has no earlier listing to compare against.
+  if (!after.some(row => row.releaseId === pointer.releaseId)) {
+    const liveProof = await proveProtected({ io, policy, ids: [pointer.releaseId] });
+    requireWholeProtected(liveProof, absentOwnerKeeps, requiredIds);
+    proof.push({ ...liveProof[0], unchanged: null });
+  }
   return { status: 'deleted-unreferenced-production-releases', planSha256, asOf: content.asOf, baselineReleaseId: content.baselineReleaseId,
     // A concurrent execution of the same plan sends the same requests, and R2 answers 204 either
     // way, so this run reports what it sent and what now lists empty, never a share of the bytes.
@@ -552,6 +576,17 @@ export function planSummary(plan) {
   if (plan.report.partial.length) lines.push(`- Partially deleted by an earlier run: ${plan.report.partial.join(', ')}.`);
   if (plan.report.outOfScope.length) lines.push(`- Out of scope (not cycle-<digits>): ${plan.report.outOfScope.map(row => row.prefix).join(', ')}.`);
   return `${lines.join('\n')}\n`;
+}
+
+export function executionSummary(result) {
+  const r = result;
+  const lines = ['## Production whole-release retention result', '',
+    `This run sent ${r.deleteRequestsByThisRun} delete requests; ${r.releasesConfirmedEmpty} of ${r.releases} planned releases (${r.plannedObjects} objects, ${(r.plannedBytes / 1e9).toFixed(1)} GB) now list empty. Plan \`${r.planSha256}\`.`,
+    `releases/current.json: ${r.proof.pointerChangedByAPromotion ? 'changed by a promotion during the run (this run never writes it)' : 'byte-identical before and after'}.`,
+    ...r.proof.protected.map(p => `- \`${p.releaseId}\`: ${p.present
+      ? `${p.objects} objects, ${p.unchanged === null ? 'new live release; no before-listing comparison' : `listing ${p.unchanged ? 'unchanged' : 'CHANGED'}`}, manifest ${p.manifestCovered ? 'fully listed' : 'NOT fully listed'}`
+      : 'absent before and after'}`), ''];
+  return lines.join('\n');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

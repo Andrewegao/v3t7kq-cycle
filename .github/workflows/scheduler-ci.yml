@@ -134,7 +134,7 @@ jobs:
       - name: Production component retention planner, guard and workflow contracts
         run: node --test tests/production-components-retention.mjs
       - name: Production whole-release retention planner, guard and workflow contracts
-        run: node --test tests/production-releases-retention.mjs
+        run: node --test tests/production-releases-retention.mjs tests/production-retention-scope-preflight.mjs
       - name: Consumer refresh workflow safety contract
         run: |
           node tests/consumer-workflow.mjs

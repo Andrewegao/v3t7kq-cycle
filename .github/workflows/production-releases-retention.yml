@@ -116,10 +116,7 @@ jobs:
           cat "$result"
           node --input-type=module -e '
             import { readFileSync, appendFileSync } from "node:fs";
+            import { executionSummary } from "./cycle/tools/production-releases-retention.mjs";
             const r = JSON.parse(readFileSync(process.argv[1], "utf8"));
-            const lines = [`## Production whole-release retention result`, ``,
-              `This run sent ${r.deleteRequestsByThisRun} delete requests; ${r.releasesConfirmedEmpty} of ${r.releases} planned releases (${r.plannedObjects} objects, ${(r.plannedBytes / 1e9).toFixed(1)} GB) now list empty. Plan \`${r.planSha256}\`.`,
-              `releases/current.json: ${r.proof.pointerChangedByAPromotion ? "changed by a promotion during the run (this run never writes it)" : "byte-identical before and after"}.`,
-              ...r.proof.protected.map(p => `- \`${p.releaseId}\`: ${p.present ? `${p.objects} objects, listing ${p.unchanged ? "unchanged" : "CHANGED"}, manifest ${p.manifestCovered ? "fully listed" : "NOT fully listed"}` : "absent before and after"}`), ``];
-            appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n"));
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, executionSummary(r));
           ' "$result"

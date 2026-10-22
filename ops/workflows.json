@@ -648,6 +648,24 @@
       "subsystem": "Energy own ingest",
       "lifecycle": "recurring",
       "runbook": "docs/WORKFLOW_OPERATIONS.md"
+    },
+    {
+      "id": "production-releases-scope-preflight",
+      "path": ".github/workflows/production-releases-scope-preflight.yml",
+      "family": "maintenance",
+      "purpose": "Qualify dedicated production releases retention reader and per-prefix DeleteObject credentials using only disposable objects while execution is disabled.",
+      "subsystem": "Retention credential boundaries",
+      "lifecycle": "diagnostic",
+      "runbook": "docs/production-releases-retention.md"
+    },
+    {
+      "id": "production-components-scope-preflight",
+      "path": ".github/workflows/production-components-scope-preflight.yml",
+      "family": "maintenance",
+      "purpose": "Qualify dedicated production components retention reader and per-prefix DeleteObject credentials using only disposable objects while execution is disabled.",
+      "subsystem": "Retention credential boundaries",
+      "lifecycle": "diagnostic",
+      "runbook": "docs/production-components-retention.md"
     }
   ]
 }
