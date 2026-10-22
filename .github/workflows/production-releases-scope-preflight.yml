@@ -1,0 +1,45 @@
+# Manual, reviewer-protected qualification; never enables retention execution.
+# Configure the environment with required reviewers and main-only deployment branches.
+# No concurrency group is held while the environment waits for review.
+name: prove production releases cleanup credential scope
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  scope:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    environment:
+      name: production-releases-retention
+      url: https://weatherx.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RETENTION_SCOPE_ENVIRONMENT: production-releases-retention
+      PRODUCTION_RELEASES_R2_ACCOUNT_ID: ${{ vars.PRODUCTION_RELEASES_R2_ACCOUNT_ID }}
+      PRODUCTION_RELEASES_GC_CONTROLLER_SHA256: ${{ vars.PRODUCTION_RELEASES_GC_CONTROLLER_SHA256 }}
+      PRODUCTION_RELEASES_GC_EXECUTE_ENABLED: ${{ vars.PRODUCTION_RELEASES_GC_EXECUTE_ENABLED }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Install locked R2 client without lifecycle scripts
+        run: npm ci --ignore-scripts --prefix staging-controller
+      # Only random disposable keys are created and removed. No publisher credential or
+      # manifest, component.json, catalog or current pointer write is permitted.
+      - name: Prove reader and exact controller-derived delete credential scope
+        env:
+          PRODUCTION_RELEASES_GC_READ_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_RELEASES_GC_READ_ACCESS_KEY_ID }}
+          PRODUCTION_RELEASES_GC_READ_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_RELEASES_GC_READ_SECRET_ACCESS_KEY }}
+          PRODUCTION_RELEASES_GC_DELETE_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_RELEASES_GC_DELETE_ACCESS_KEY_ID }}
+          PRODUCTION_RELEASES_GC_DELETE_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_RELEASES_GC_DELETE_SECRET_ACCESS_KEY }}
+        shell: bash
+        run: node tools/production-retention-scope-preflight.mjs releases | tee "$RUNNER_TEMP/production-releases-scope-receipt.json"
+      - name: Retain sanitized qualification and disposable cleanup receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-releases-scope-receipt
+          path: ${{ runner.temp }}/production-releases-scope-receipt.json
+          if-no-files-found: ignore
+          retention-days: 7

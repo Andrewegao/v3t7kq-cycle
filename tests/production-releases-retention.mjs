@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { controllerDigest, createRetentionIo, executeRetention, planRetention, planSummary, readPolicy,
+import { controllerDigest, createRetentionIo, executeRetention, executionSummary, planRetention, planSummary, readPolicy,
   scopedDeleteCredentials, scopedRelease, summarizeManifest, validatePolicy } from '../tools/production-releases-retention.mjs';
 
 const sha = value => createHash('sha256').update(value).digest('hex');
@@ -121,6 +121,7 @@ test('policy: reviewed defaults, floors that never shrink, and only releases/cyc
   assert.equal(base.keepNewestReleases, 8);
   assert.equal(base.minimumAgeHours, 168, 'seven days, the Atmos runbook minimum for pointer/manifest history');
   assert.equal(base.maximumDeletesPerRun, 500000);
+  assert.throws(() => validatePolicy({ ...base, maximumDeletesPerRun: 500001 }));
   assert.throws(() => validatePolicy({ ...base, minimumAgeHours: 48 }), /72 hours/);
   assert.throws(() => validatePolicy({ ...base, keepNewestReleases: 1 }), /two last-good/);
   assert.throws(() => validatePolicy({ ...base, dataBucket: 'weatherx-components-production' }));
@@ -306,6 +307,56 @@ test('planning fails closed on an unreadable pointer or pin, a pointer that disa
   }
 });
 
+test('protected manifest coverage fails closed before any delete even when a stray object keeps its count complete', async () => {
+  for (const protectedKind of ['current', 'newest', 'pinned', 'owner-keep']) {
+    const h = history();
+    const id = protectedKind === 'current' ? h.ids.at(-1) : protectedKind === 'newest' ? h.ids.at(-2) : h.ids[2];
+    if (protectedKind === 'pinned') h.pin(id);
+    const kept = protectedKind === 'owner-keep' ? { ...policy, keepReleaseIds: [id] } : policy;
+    const key = `releases/${id}/${h.manifests.get(id).objects[0].path}`;
+    const row = h.buckets[DATA].get(key);
+    h.buckets[DATA].delete(key);
+    h.put(DATA, `releases/${id}/data/unexpected.png`, row.body, row.modified);
+    const io = await h.io();
+    const plan = await planRetention({ io, policy: kept, now });
+    assert.equal(plan.report.protected.find(row => row.releaseId === id).manifestCovered, false);
+    await assert.rejects(execute(h, io, plan, { policy: kept }), /does not cover every manifest path/);
+    assert.equal(h.deletes.length, 0, protectedKind);
+  }
+});
+
+test('only absent owner-only keep ids are permitted; an absent staging pin prevents deletion', async () => {
+  for (const pinned of [false, true]) {
+    const h = history(), id = 'cycle-123';
+    const kept = { ...policy, keepReleaseIds: [id] };
+    if (pinned) h.pin(id);
+    const io = await h.io();
+    const plan = await planRetention({ io, policy: kept, now });
+    if (pinned) {
+      await assert.rejects(execute(h, io, plan, { policy: kept }), /protected release cycle-123 is absent/);
+      assert.equal(h.deletes.length, 0);
+    } else {
+      const result = await execute(h, io, plan, { policy: kept });
+      assert.ok(result.proof.protected.some(row => row.releaseId === id && row.present === false && row.unchanged));
+    }
+  }
+});
+
+test('final verification rejects damaged protected releases, malformed pointers and incomplete new promotions', async () => {
+  for (const mutation of ['protected', 'pointer', 'new-current']) {
+    const h = history(), io = await h.io();
+    const plan = await planRetention({ io, policy, now });
+    h.setOnDelete(count => {
+      if (count !== plan.totals.objects) return;
+      if (mutation === 'pointer') { h.put(DATA, 'releases/current.json', 'invalid'); return; }
+      const id = mutation === 'new-current' ? h.release(39900000000, -0.1) : h.ids.at(-1);
+      if (mutation === 'new-current') h.promote(id);
+      h.buckets[DATA].delete(`releases/${id}/${h.manifests.get(id).objects[0].path}`);
+    });
+    await assert.rejects(execute(h, io, plan), mutation === 'pointer' ? /not a valid release pointer/ : /does not cover every manifest path/);
+  }
+});
+
 test('execution recomputes the approved plan while bakes keep promoting and deletes exactly it, manifest last, proving the kept set whole', async () => {
   const h = history();
   const io = await h.io();
@@ -378,6 +429,11 @@ test('the guard re-reads the pointer and pin before every delete: a candidate po
   const result = await execute(h, io, plan);
   assert.equal(result.deleteRequestsByThisRun, plan.totals.objects);
   assert.equal(result.proof.pointerChangedByAPromotion, true);
+  assert.ok(result.proof.protected.some(row => row.releaseId === 'cycle-39900000000' && row.present && row.manifestCovered && row.unchanged === null));
+  const summary = executionSummary(result);
+  assert.match(summary, /cycle-39900000000.*new live release; no before-listing comparison, manifest fully listed/);
+  assert.match(summary, /listing unchanged, manifest fully listed/);
+  assert.doesNotMatch(summary, /listing CHANGED/);
 });
 
 test('two executions of one plan delete only planned keys, and each reports only its own requests', async () => {

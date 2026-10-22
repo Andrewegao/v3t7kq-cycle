@@ -6,9 +6,9 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `cfea1945d2c1b7faeeda4d502915a2c30be1405d375cff9e6da4a3f4ded13dde`.
+Source digest (registry and workflow bytes): `afc29fe37e70ac3a3914f6221957dc9c4f918b31c72a2eb27a4e07f31372005f`.
 
-72 workflows. Ordering and output are deterministic; no API request or clock is used.
+74 workflows. Ordering and output are deterministic; no API request or clock is used.
 
 | Workflow | Family / subsystem | Lifecycle | Purpose | Runbook |
 | --- | --- | --- | --- | --- |
@@ -47,8 +47,10 @@ Source digest (registry and workflow bytes): `cfea1945d2c1b7faeeda4d502915a2c30b
 | [point-route-activate](#point-route-activate) | releases / Production point routes | manual-supported | Activate reviewed point routes with ownership-aware rollback. | [guide](../docs/point-route-activation.md) |
 | [production-account-audit](#production-account-audit) | control-plane / Production account safety | diagnostic | Reconcile exhaustive live Stripe inventory against sanitized production account state without mutation. | [guide](../docs/production-account-audit.md) |
 | [production-components-retention](#production-components-retention) | maintenance / Component storage | manual-supported | Plan or approve bounded cleanup of model components no catalog in the last seven days references. | [guide](../docs/production-components-retention.md) |
+| [production-components-scope-preflight](#production-components-scope-preflight) | maintenance / Retention credential boundaries | diagnostic | Qualify dedicated production components retention reader and per-prefix DeleteObject credentials using only disposable objects while execution is disabled. | [guide](../docs/production-components-retention.md) |
 | [production-place-renewal](#production-place-renewal) | maintenance / Places | recurring | Renew production NOAA tide predictions daily as the places-tides catalog component, reusing the staging-qualified collector. | [guide](../docs/production-place-renewal.md) |
 | [production-releases-retention](#production-releases-retention) | maintenance / Release storage | manual-supported | Plan or approve bounded cleanup of whole data releases older than seven days that no pointer, pin or newest-eight rule keeps. | [guide](../docs/production-releases-retention.md) |
+| [production-releases-scope-preflight](#production-releases-scope-preflight) | maintenance / Retention credential boundaries | diagnostic | Qualify dedicated production releases retention reader and per-prefix DeleteObject credentials using only disposable objects while execution is disabled. | [guide](../docs/production-releases-retention.md) |
 | [production-wind100-point-reader-release](#production-wind100-point-reader-release) | releases / Production data reader | manual-supported | Release the exact production data Worker Wind100 point reader while preserving base forecasts and routes. | [guide](../docs/production-wind100-point-reader-release.md) |
 | [production-wind100-recurring](#production-wind100-recurring) | models / Native wind | recurring | Publish a guarded production-only native wind point candidate under dedicated approval. | [guide](../docs/production-wind100-retention.md) |
 | [production-wind100-retention](#production-wind100-retention) | maintenance / Native wind | manual-supported | Plan or approve bounded cleanup of journal-proven retired production wind components. | [guide](../docs/production-wind100-retention.md) |
@@ -1013,6 +1015,31 @@ Checkout declarations (not a claim of approval or checkout success):
 Variable references (declared names only; values and activation unknown): [PRODUCTION_COMPONENTS_GC_APPROVED_PLAN_SHA256](../.github/workflows/production-components-retention.yml#L33), [PRODUCTION_COMPONENTS_GC_CALL_ENABLED](../.github/workflows/production-components-retention.yml#L22), [PRODUCTION_COMPONENTS_GC_CONTROLLER_SHA256](../.github/workflows/production-components-retention.yml#L32), [PRODUCTION_COMPONENTS_GC_ENABLED](../.github/workflows/production-components-retention.yml#L30), [PRODUCTION_COMPONENTS_GC_EXECUTE_ENABLED](../.github/workflows/production-components-retention.yml#L31), [PRODUCTION_COMPONENTS_R2_ACCOUNT_ID](../.github/workflows/production-components-retention.yml#L34).
 
 
+## production-components-scope-preflight
+
+[.github/workflows/production-components-scope-preflight.yml](../.github/workflows/production-components-scope-preflight.yml#L1) · <code>prove production components cleanup credential scope</code>
+
+Declared triggers: <code>workflow_dispatch</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: not declared.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [scope](../.github/workflows/production-components-scope-preflight.yml#L10) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"data-production-components-cleanup","url":"https://weatherx.org"}</code> | <code>10</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+
+Declared job conditions (additional step/helper checks may apply):
+
+- [scope](../.github/workflows/production-components-scope-preflight.yml#L10): <code>${{ github.ref == 'refs/heads/main' }}</code>
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [scope / step 1](../.github/workflows/production-components-scope-preflight.yml#L22) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+
+Variable references (declared names only; values and activation unknown): [PRODUCTION_COMPONENTS_GC_CONTROLLER_SHA256](../.github/workflows/production-components-scope-preflight.yml#L19), [PRODUCTION_COMPONENTS_GC_EXECUTE_ENABLED](../.github/workflows/production-components-scope-preflight.yml#L20), [PRODUCTION_COMPONENTS_R2_ACCOUNT_ID](../.github/workflows/production-components-scope-preflight.yml#L18).
+
+
 ## production-place-renewal
 
 [.github/workflows/production-place-renewal.yml](../.github/workflows/production-place-renewal.yml#L1) · <code>WeatherX production place renewal</code>
@@ -1063,6 +1090,31 @@ Checkout declarations (not a claim of approval or checkout success):
 | [retention / step 1](../.github/workflows/production-releases-retention.yml#L43) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
 Variable references (declared names only; values and activation unknown): [PRODUCTION_RELEASES_GC_APPROVED_PLAN_SHA256](../.github/workflows/production-releases-retention.yml#L40), [PRODUCTION_RELEASES_GC_CALL_ENABLED](../.github/workflows/production-releases-retention.yml#L29), [PRODUCTION_RELEASES_GC_CONTROLLER_SHA256](../.github/workflows/production-releases-retention.yml#L39), [PRODUCTION_RELEASES_GC_ENABLED](../.github/workflows/production-releases-retention.yml#L37), [PRODUCTION_RELEASES_GC_EXECUTE_ENABLED](../.github/workflows/production-releases-retention.yml#L38), [PRODUCTION_RELEASES_R2_ACCOUNT_ID](../.github/workflows/production-releases-retention.yml#L41).
+
+
+## production-releases-scope-preflight
+
+[.github/workflows/production-releases-scope-preflight.yml](../.github/workflows/production-releases-scope-preflight.yml#L1) · <code>prove production releases cleanup credential scope</code>
+
+Declared triggers: <code>workflow_dispatch</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: not declared.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [scope](../.github/workflows/production-releases-scope-preflight.yml#L10) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"production-releases-retention","url":"https://weatherx.org"}</code> | <code>10</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+
+Declared job conditions (additional step/helper checks may apply):
+
+- [scope](../.github/workflows/production-releases-scope-preflight.yml#L10): <code>${{ github.ref == 'refs/heads/main' }}</code>
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [scope / step 1](../.github/workflows/production-releases-scope-preflight.yml#L22) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+
+Variable references (declared names only; values and activation unknown): [PRODUCTION_RELEASES_GC_CONTROLLER_SHA256](../.github/workflows/production-releases-scope-preflight.yml#L19), [PRODUCTION_RELEASES_GC_EXECUTE_ENABLED](../.github/workflows/production-releases-scope-preflight.yml#L20), [PRODUCTION_RELEASES_R2_ACCOUNT_ID](../.github/workflows/production-releases-scope-preflight.yml#L18).
 
 
 ## production-wind100-point-reader-release

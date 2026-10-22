@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { createHash, createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -124,6 +125,7 @@ const now = () => T0 + 2 * HOUR;
 
 test('policy and scope: only canonical model roots, never the Wind100 or experiment roots', () => {
   assert.doesNotThrow(() => validatePolicy(readPolicy()));
+  assert.throws(() => validatePolicy({ ...readPolicy(), maximumDeletesPerRun: 500001 }));
   assert.throws(() => validatePolicy({ ...readPolicy(), windowHours: 24 }), /7 days/);
   assert.throws(() => validatePolicy({ ...readPolicy(), componentBucket: 'weatherx-data-production' }));
   assert.ok(canonicalArtifact('ecmwf', 'ecmwf-20261009T120000Z-1791611713'));
@@ -295,7 +297,8 @@ test('adapter refuses broad secrets, reads only pointers, snapshots, pins and mo
   const settings = { PRODUCTION_COMPONENTS_R2_ACCOUNT_ID: policy.accountId,
     PRODUCTION_COMPONENTS_GC_READ_ACCESS_KEY_ID: 'readkeyid', PRODUCTION_COMPONENTS_GC_READ_SECRET_ACCESS_KEY: 'r'.repeat(64),
     PRODUCTION_COMPONENTS_GC_DELETE_ACCESS_KEY_ID: 'deletekeyid', PRODUCTION_COMPONENTS_GC_DELETE_SECRET_ACCESS_KEY: 'd'.repeat(64) };
-  for (const broad of ['R2_PRODUCTION_ACCESS_KEY_ID', 'CATALOG_PROMOTION_KEY_PRODUCTION', 'PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID', 'STAGING_R2_WRITE_ACCESS_KEY_ID'])
+  for (const broad of ['R2_PRODUCTION_ACCESS_KEY_ID', 'CATALOG_PROMOTION_KEY_PRODUCTION', 'PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID', 'STAGING_R2_WRITE_ACCESS_KEY_ID', 'PRODUCTION_RELEASES_GC_DELETE_ACCESS_KEY_ID', 'CATALOG_ENDPOINT',
+    'RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID', 'RCLONE_CONFIG_OTHER_ENDPOINT', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'])
     await assert.rejects(createRetentionIo({ ...settings, [broad]: 'x' }, policy, sdk, readClient), broad);
   await assert.rejects(createRetentionIo({ ...settings, PRODUCTION_COMPONENTS_R2_ACCOUNT_ID: 'f'.repeat(32) }, policy, sdk, readClient));
   const sessions = [], deletes = [];
@@ -352,4 +355,17 @@ test('workflow defaults to a dry run, needs its own protected environment, diges
   const entry = registry.workflows.find(row => row.id === 'production-components-retention');
   assert.equal(entry.path, '.github/workflows/production-components-retention.yml');
   assert.equal(entry.runbook, 'docs/production-components-retention.md');
+});
+
+test('component CLI dry-run refuses either delete credential before loading the SDK', () => {
+  const script = new URL('../tools/production-components-retention.mjs', import.meta.url);
+  const admitted = { PATH: process.env.PATH, GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'Andrewegao/v3t7kq-cycle', GITHUB_REF: 'refs/heads/main',
+    GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_WORKFLOW_REF: 'Andrewegao/v3t7kq-cycle/.github/workflows/production-components-retention.yml@refs/heads/main',
+    GITHUB_JOB: 'retention', COMPONENTS_GC_ENVIRONMENT: 'data-production-components-cleanup', PRODUCTION_COMPONENTS_GC_ENABLED: 'true',
+    PRODUCTION_COMPONENTS_GC_CONTROLLER_SHA256: controllerDigest() };
+  for (const key of ['PRODUCTION_COMPONENTS_GC_DELETE_ACCESS_KEY_ID', 'PRODUCTION_COMPONENTS_GC_DELETE_SECRET_ACCESS_KEY']) {
+    const result = spawnSync(process.execPath, [script.pathname, 'dry-run'], { env: { ...admitted, [key]: 'must-not-be-present' }, encoding: 'utf8' });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /the dry run never holds the delete token/);
+  }
 });

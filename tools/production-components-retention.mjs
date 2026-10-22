@@ -45,7 +45,10 @@ const FORBIDDEN = ['R2_PRODUCTION_ACCESS_KEY_ID', 'R2_PRODUCTION_SECRET_ACCESS_K
   'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'STAGING_R2_WRITE_ACCESS_KEY_ID', 'STAGING_R2_WRITE_SECRET_ACCESS_KEY',
   'PRODUCTION_WIND100_R2_ACCESS_KEY_ID', 'PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY',
   'PRODUCTION_WIND100_GC_DELETE_ACCESS_KEY_ID', 'PRODUCTION_WIND100_GC_DELETE_SECRET_ACCESS_KEY',
-  'CATALOG_ENDPOINT_PRODUCTION', 'CATALOG_PROMOTION_KEY_PRODUCTION', 'CLOUDFLARE_API_TOKEN'];
+  'PRODUCTION_RELEASES_GC_DELETE_ACCESS_KEY_ID', 'PRODUCTION_RELEASES_GC_DELETE_SECRET_ACCESS_KEY',
+  'CATALOG_ENDPOINT_PRODUCTION', 'CATALOG_PROMOTION_KEY_PRODUCTION', 'CATALOG_ENDPOINT', 'CATALOG_PROMOTION_KEY',
+  'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'];
+const FORBIDDEN_PREFIXES = ['RCLONE_CONFIG_'];
 
 export const hash = value => createHash('sha256').update(value).digest('hex');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -69,7 +72,7 @@ export function validatePolicy(p) {
   assert.ok(Number.isSafeInteger(p.windowHours) && p.windowHours >= 168, 'the window never shrinks below 7 days');
   assert.ok(Number.isSafeInteger(p.maximumPlanAgeHours) && p.maximumPlanAgeHours > 0 && p.maximumPlanAgeHours <= 72);
   assert.ok(Number.isSafeInteger(p.maximumChainSnapshots) && p.maximumChainSnapshots > 0 && p.maximumChainSnapshots <= 20_000);
-  assert.ok(Number.isSafeInteger(p.maximumDeletesPerRun) && p.maximumDeletesPerRun > 0 && p.maximumDeletesPerRun <= 1_000_000);
+  assert.ok(Number.isSafeInteger(p.maximumDeletesPerRun) && p.maximumDeletesPerRun > 0 && p.maximumDeletesPerRun <= 500_000);
   assert.ok(Number.isSafeInteger(p.deleteConcurrency) && p.deleteConcurrency > 0 && p.deleteConcurrency <= 32);
   assert.ok(object(p.capacity) && Number.isSafeInteger(p.capacity.objects) && p.capacity.objects > 0 &&
     Number.isSafeInteger(p.capacity.bytes) && p.capacity.bytes > 0 && p.capacity.warnRatio > 0 && p.capacity.warnRatio < 1);
@@ -452,6 +455,7 @@ export async function createRetentionIo(env, policy, injectedSdk, injectedReadCl
   assert.equal(env.PRODUCTION_COMPONENTS_R2_ACCOUNT_ID, policy.accountId);
   assert.ok(env.PRODUCTION_COMPONENTS_GC_READ_ACCESS_KEY_ID && env.PRODUCTION_COMPONENTS_GC_READ_SECRET_ACCESS_KEY);
   for (const key of FORBIDDEN) assert.ok(!env[key], `retention refuses ${key}`);
+  for (const key of Object.keys(env)) assert.ok(!FORBIDDEN_PREFIXES.some(prefix => key.startsWith(prefix)) || !env[key], `retention refuses ${key}`);
   const endpoint = `https://${policy.accountId}.r2.cloudflarestorage.com`;
   const sdk = injectedSdk ?? await import('../staging-controller/node_modules/@aws-sdk/client-s3/dist-cjs/index.js');
   const readClient = injectedReadClient ?? new sdk.S3Client({ region: 'auto', endpoint, forcePathStyle: true, maxAttempts: 3,
@@ -561,6 +565,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     assert.equal(env.PRODUCTION_COMPONENTS_GC_ENABLED, 'true');
     assert.equal(env.PRODUCTION_COMPONENTS_GC_CONTROLLER_SHA256, controllerDigest());
     if (command === 'execute') assert.equal(env.PRODUCTION_COMPONENTS_GC_EXECUTE_ENABLED, 'true');
+    else assert.ok(!env.PRODUCTION_COMPONENTS_GC_DELETE_ACCESS_KEY_ID && !env.PRODUCTION_COMPONENTS_GC_DELETE_SECRET_ACCESS_KEY,
+      'the dry run never holds the delete token');
     const policy = readPolicy();
     const io = await createRetentionIo(env, policy);
     try {
