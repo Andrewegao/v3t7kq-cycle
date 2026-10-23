@@ -5,7 +5,8 @@ import {mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {COLLECTOR_CALLS, DEFINITION_PATHS, decide, eligibility, main, parsePrecondition, runFromTime, summaryText}
+import {COLLECTOR_CALLS, DEFINITION_PATHS, HRRR_MAX_SERVED_AGE_HOURS, HRRR_SAME_RUN_GUARDS, decide, eligibility, main, parsePrecondition,
+  runFromTime, summaryText}
   from '../tools/component-bake-stand-aside.mjs';
 import {componentMarkdown, PRODUCTION_BAKE_STEP, STAND_ASIDE_STEP, stoodAsideOnServedRun} from '../tools/workflow-run-summary.mjs';
 
@@ -29,11 +30,13 @@ function evidence({manifest = manifestFor(), map = {}, point = {}, ...rest} = {}
       ACTIVE_COMPONENT_GENERATION_TIME: '2026-10-10T00:00:00.000Z', ...point}, ...rest};
 }
 
-test('only production ECMWF/GFS without bootstrap, re-bake or short-run selection is eligible', () => {
+test('only production ECMWF/GFS/HRRR without bootstrap, re-bake or short-run selection is eligible', () => {
   const base = {model: 'ecmwf', target: 'production', bootstrapMissing: 'false', rebakeServedRun: 'false', shortRuns: ''};
   assert.equal(eligibility(base), null);
   assert.equal(eligibility({...base, model: 'gfs'}), null);
-  for (const [change, reason] of [[{model: 'hrrr'}, /not an ECMWF\/GFS/], [{model: 'aifs'}, /not an ECMWF\/GFS/],
+  assert.equal(eligibility({...base, model: 'hrrr'}), null);
+  for (const [change, reason] of [[{model: 'aifs'}, /not an ECMWF, GFS or HRRR/], [{model: 'hrrr-ak'}, /not an ECMWF, GFS or HRRR/],
+    [{model: 'hrrr', target: 'staging'}, /not production/], [{model: 'hrrr', rebakeServedRun: 'true'}, /rebake_served_run/],
     [{target: 'staging'}, /not production/], [{bootstrapMissing: 'true'}, /bootstrap_missing/],
     [{rebakeServedRun: 'true'}, /rebake_served_run/], [{shortRuns: '1'}, /ECMWF_SHORT_RUNS/]])
     assert.match(eligibility({...base, ...change}), reason, JSON.stringify(change));
@@ -136,7 +139,7 @@ test('every failure leaves the bake running and the step green', async () => {
     ['github unavailable', {commitDate: null}, {}, /check unavailable: github-api-502/],
     ['collector call changed', {collector: '"$PY" fetch_ecmwf.py --hours 360 --keep 2'}, {}, /collector invocation changed/],
     ['re-bake requested', {}, {REBAKE_SERVED_RUN: 'true'}, /rebake_served_run/],
-    ['hrrr', {}, {MODEL: 'hrrr'}, /not an ECMWF\/GFS/],
+    ['aifs', {}, {MODEL: 'aifs'}, /not an ECMWF, GFS or HRRR/],
   ]) {
     const f = fixture(options);
     const logs = [];const original = console.log;console.log = line => logs.push(line);
@@ -162,7 +165,7 @@ test('the upstream probe calls the pinned collector selectors with the bake\'s o
     assert.equal(run('ecmwf').stdout, '2026101000\n');
     assert.equal(run('gfs').stdout, '2026101006\n');
     assert.equal(readFileSync(record, 'utf8'), 'ecmwf 336 None\ngfs group:store-url 72 None\n');
-    assert.notEqual(run('hrrr').status, 0);
+    assert.notEqual(run('aifs').status, 0);
     writeFileSync(join(data, 'fetch_ecmwf.py'), 'def latest_run(last_step=0, start=None):\n    raise AssertionError("not reached")\n');
     const changed = run('ecmwf');
     assert.notEqual(changed.status, 0);assert.match(changed.stderr, /selector signature changed/);assert.equal(changed.stdout, '');
@@ -173,6 +176,7 @@ test('collector call strings still match the pinned bake script shape', () => {
   // The pinned script (Atmos 30a211be7) is not in this repository; these are the reviewed lines.
   assert.equal(COLLECTOR_CALLS.ecmwf, '"$PY" fetch_ecmwf.py --hours 336 --keep 2 ${ecmwf_run_args[@]+"${ecmwf_run_args[@]}"}');
   assert.equal(COLLECTOR_CALLS.gfs, '"$PY" fetch.py --hours 72 --point-hours 336 --keep 2 ');
+  assert.equal(COLLECTOR_CALLS.hrrr, '"$PY" fetch_hrrr.py --hours 48 --keep 2 --point-out "$ROOT/data/.hrrr-point" )');
   assert.deepEqual(DEFINITION_PATHS, ['.github/workflows/catalog-bake.yml', 'tools/component-bake-stand-aside.mjs', 'tools/component-upstream-probe.py']);
 });
 
@@ -191,7 +195,8 @@ test('workflow: the check runs before hydrate, fails open and guards only the pr
   assert.match(check, /^        id: live_run$/m);
   assert.match(check, /^        continue-on-error: true$/m);
   assert.match(check, /^        timeout-minutes: 8$/m);
-  assert.match(check, /if: \$\{\{ env\.CATALOG_TARGET == 'production' && \(matrix\.model == 'ecmwf' \|\| matrix\.model == 'gfs'\) && inputs\.bootstrap_missing != true && inputs\.rebake_served_run != true \}\}/);
+  assert.match(check, /if: \$\{\{ env\.CATALOG_TARGET == 'production' && \(matrix\.model == 'ecmwf' \|\| matrix\.model == 'gfs' \|\| matrix\.model == 'hrrr'\) && inputs\.bootstrap_missing != true && inputs\.rebake_served_run != true \}\}/);
+  assert.match(step('Checkout the stand-aside check'), /if: \$\{\{ env\.CATALOG_TARGET == 'production' && \(matrix\.model == 'ecmwf' \|\| matrix\.model == 'gfs' \|\| matrix\.model == 'hrrr'\) \}\}/);
   assert.match(check, /node "\$GITHUB_WORKSPACE\/cycle\/tools\/component-bake-stand-aside\.mjs" "\$GITHUB_WORKSPACE\/atmos"/);
   for (const key of [...check.matchAll(/secrets\.([A-Z0-9_]+)/g)].map(match => match[1]))
     assert.ok(['R2_PRODUCTION_ACCESS_KEY_ID', 'R2_PRODUCTION_SECRET_ACCESS_KEY'].includes(key), key);
@@ -222,4 +227,168 @@ test('summary reports a stand-aside as unchanged, never as a refresh', () => {
   assert.match(text, /\| aifs \| refreshed \| published 5 min ago \|/);
   // The step names the summary looks for are the workflow's own step names.
   assert.ok(catalog.includes(`      - name: ${STAND_ASIDE_STEP}\n`));assert.ok(catalog.includes(`      - name: ${PRODUCTION_BAKE_STEP}\n`));
+});
+
+// HRRR: the 10-minute lane. The pinned bake publishes HRRR only when the run id moves, so a served
+// pair at the newest upstream init is exactly the bake's "unchanged" outcome.
+const HRRR_PREFIX = 'components/hrrr/hrrr-20261010T060000Z-1791684000/';
+const HRRR_GENERATION = '2026-10-10T06:00:00.000Z';
+const HRRR_NOW = Date.parse('2026-10-10T09:40:00Z');
+const hrrrManifest = (changes = {}) => Buffer.from(`${JSON.stringify({schemaVersion: 1, componentId: 'hrrr',
+  artifactId: 'hrrr-20261010T060000Z-1791684000', generationTime: HRRR_GENERATION, completedAt: '2026-10-10T08:12:00.000Z',
+  rootPrefix: HRRR_PREFIX, mounts: ['data/hrrr/'], objectCount: 789, inventorySha256: 'a'.repeat(64),
+  quality: {status: 'passed', checks: ['manifest', 'inventory', 'remote_bytes', 'coverage', 'freshness', 'live_superset',
+    'horizon', 'cadence', 'grid', 'referenced_bytes']}, ...changes})}\n`);
+function hrrrEvidence({manifest = hrrrManifest(), map = {}, point = {}, ...rest} = {}) {
+  return {model: 'hrrr', upstreamRun: '2026101006', definitionChangedAt: '2026-10-10T07:00:00Z', manifestBytes: manifest, now: HRRR_NOW,
+    map: {EXPECTED_COMPONENT_MANIFEST_SHA256: sha256(manifest), EXPECTED_CATALOG_ROLLBACK_EPOCH: '3',
+      ACTIVE_COMPONENT_GENERATION_TIME: HRRR_GENERATION, ACTIVE_COMPONENT_MANIFEST_KEY: `${HRRR_PREFIX}component.json`,
+      ACTIVE_COMPONENT_ROOT_PREFIX: HRRR_PREFIX, ...map},
+    point: {EXPECTED_COMPONENT_MANIFEST_SHA256: 'b'.repeat(64), EXPECTED_CATALOG_ROLLBACK_EPOCH: '3',
+      ACTIVE_COMPONENT_GENERATION_TIME: HRRR_GENERATION, ...point}, ...rest};
+}
+// The reviewed lines of the pinned bake script (Atmos 30a211be7), in order, as the fixture script.
+const hrrrScript = (collector = COLLECTOR_CALLS.hrrr, guards = HRRR_SAME_RUN_GUARDS, extra = '') =>
+  `${guards[0]}  hrrr) ( cd "$ROOT/data" && ${collector} ;;\n${guards[1]}  NATIVE_JSON=x\n${guards[2]}${extra}${guards[3]}  fi\n`;
+
+test('hrrr: stands aside only for the served pair at the newest upstream init, fresh, without native bundles', () => {
+  const yes = decide(hrrrEvidence());
+  assert.equal(yes.standAside, true);assert.equal(yes.run, '2026101006');assert.equal(yes.rootPrefix, HRRR_PREFIX);
+  assert.match(summaryText('hrrr', yes), /hrrr stood aside[\s\S]*run 2026101006[\s\S]*Nothing was hydrated/);
+  const hour = 3600000;
+  for (const [name, input, reason] of [
+    ['new upstream init', hrrrEvidence({upstreamRun: '2026101012'}), /newest upstream run 2026101012 is not the served hrrr run 2026101006/],
+    ['upstream behind the served run', hrrrEvidence({upstreamRun: '2026101000'}), /2026101000 is not the served hrrr run/],
+    ['malformed probe output', hrrrEvidence({upstreamRun: '2026-10-10T06'}), /upstream run unavailable/],
+    ['probe printed nothing', hrrrEvidence({upstreamRun: undefined}), /upstream run unavailable/],
+    ['point behind', hrrrEvidence({point: {ACTIVE_COMPONENT_GENERATION_TIME: '2026-10-10T00:00:00.000Z'}}), /served point-hrrr run 2026101000/],
+    ['no point', hrrrEvidence({point: {ACTIVE_COMPONENT_GENERATION_TIME: ''}}), /no point-hrrr component/],
+    ['catalog moved', hrrrEvidence({point: {EXPECTED_CATALOG_ROLLBACK_EPOCH: '4'}}), /catalog changed/],
+    ['hash mismatch', hrrrEvidence({map: {EXPECTED_COMPONENT_MANIFEST_SHA256: 'd'.repeat(64)}}), /does not match the catalog hash/],
+    ['manifest not JSON', (() => { const bad = Buffer.from('{'); return hrrrEvidence({manifest: bad}); })(), /not JSON/],
+    ['ecmwf manifest under hrrr', hrrrEvidence({manifest: hrrrManifest({componentId: 'ecmwf'})}), /not the catalog's passed/],
+    ['failed quality', hrrrEvidence({manifest: hrrrManifest({quality: {status: 'failed', checks: []}})}), /not the catalog's passed/],
+    ['near the 12 h freshness gate', hrrrEvidence({now: Date.parse(HRRR_GENERATION) + (HRRR_MAX_SERVED_AGE_HOURS + 0.1) * hour}), /not within 10 h/],
+    ['future init', hrrrEvidence({now: Date.parse(HRRR_GENERATION) - 60000}), /not within 10 h/],
+    ['no clock', hrrrEvidence({now: NaN}), /not within 10 h/],
+    ['re-pinned since', hrrrEvidence({definitionChangedAt: '2026-10-10T09:00:00Z'}), /predates this lane's definition/],
+  ]) {
+    const result = decide(input);
+    assert.equal(result.standAside, false, name);assert.match(result.reason, reason, name);
+  }
+  assert.equal(decide(hrrrEvidence({now: Date.parse(HRRR_GENERATION) + HRRR_MAX_SERVED_AGE_HOURS * hour})).standAside, true);
+  assert.equal(HRRR_MAX_SERVED_AGE_HOURS, 10);
+});
+
+function hrrrFixture({probe = {stdout: '2026101006\n'}, script = hrrrScript(), commitDate = '2026-10-10T07:00:00Z'} = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'stand-aside-hrrr-'));
+  mkdirSync(join(root, 'ops/platform'), {recursive: true});mkdirSync(join(root, 'data'), {recursive: true});
+  writeFileSync(join(root, 'ops/bake-model-component.sh'), script);
+  const manifest = hrrrManifest();
+  const calls = [];
+  const exec = async (command, args, options) => {
+    calls.push({command, args, env: options.env});
+    if (command === 'bash') {
+      const id = options.env.COMPONENT_ID;
+      writeFileSync(options.env.GITHUB_ENV, id === 'hrrr'
+        ? `EXPECTED_COMPONENT_MANIFEST_SHA256=${sha256(manifest)}\nEXPECTED_CATALOG_ROLLBACK_EPOCH=3\nACTIVE_COMPONENT_GENERATION_TIME=${HRRR_GENERATION}\nACTIVE_COMPONENT_MANIFEST_KEY=${HRRR_PREFIX}component.json\nACTIVE_COMPONENT_ROOT_PREFIX=${HRRR_PREFIX}\n`
+        : `EXPECTED_COMPONENT_MANIFEST_SHA256=${'b'.repeat(64)}\nEXPECTED_CATALOG_ROLLBACK_EPOCH=3\nACTIVE_COMPONENT_GENERATION_TIME=${HRRR_GENERATION}\n`);
+      return {stdout: ''};
+    }
+    if (command === 'rclone') { writeFileSync(args[2], manifest); return {stdout: ''}; }
+    if (probe instanceof Error) throw probe;
+    return probe;
+  };
+  const fetcher = async () => commitDate ? new Response(JSON.stringify([{commit: {committer: {date: commitDate}}}])) : new Response('{}', {status: 502});
+  const output = join(root, 'out'), summary = join(root, 'summary');
+  const env = {MODEL: 'hrrr', CATALOG_TARGET: 'production', BOOTSTRAP_MISSING: 'false', REBAKE_SERVED_RUN: 'false',
+    GITHUB_SHA: SHA, GH_TOKEN: 'fixture', GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary, RUNNER_TEMP: root,
+    GITHUB_ENV: join(root, 'job-env'), COMPONENT_R2_REMOTE: 'weatherx:weatherx-components-production'};
+  return {calls, output, summary,
+    run: changes => main([root, join(root, 'probe.py')], {...env, ...changes}, {exec, fetcher, clock: () => HRRR_NOW}),
+    cleanup: () => rmSync(root, {recursive: true, force: true})};
+}
+
+test('hrrr: same run stands aside; reads only the precondition, the served manifest and the probe', async () => {
+  const f = hrrrFixture();
+  try {
+    assert.equal(await f.run(), 0);
+    assert.equal(readFileSync(f.output, 'utf8'), 'stand_aside=true\nserved_run=2026101006\n');
+    assert.match(readFileSync(f.summary, 'utf8'), /### Component bake: hrrr stood aside/);
+    assert.deepEqual(f.calls.filter(call => call.command === 'bash').map(call => call.env.COMPONENT_ID), ['hrrr', 'point-hrrr']);
+    for (const call of f.calls.filter(call => call.command === 'bash'))
+      assert.equal(call.env.PRECONDITION_ONLY, '1');
+    assert.deepEqual(f.calls.find(call => call.command === 'rclone').args.slice(0, 2),
+      ['copyto', `weatherx:weatherx-components-production/${HRRR_PREFIX}component.json`]);
+    assert.deepEqual(f.calls.find(call => call.command.endsWith('data/.venv/bin/python')).args.slice(3, 4), ['hrrr']);
+    assert.equal(f.calls.length, 4);
+  } finally { f.cleanup(); }
+});
+
+test('hrrr: a new run, any doubt or a changed pinned bake leaves the bake running', async () => {
+  const guards = [...HRRR_SAME_RUN_GUARDS];
+  for (const [name, options, reason] of [
+    ['new upstream init', {probe: {stdout: '2026101012\n'}}, /2026101012 is not the served hrrr run/],
+    ['probe failed', {probe: new Error('python failed: no init with complete data through +48h')}, /check unavailable: python failed/],
+    ['probe noise', {probe: {stdout: 'lead_time not hourly\n'}}, /upstream run unavailable/],
+    ['empty probe', {probe: {stdout: ''}}, /upstream run unavailable/],
+    ['github unavailable', {commitDate: null}, /check unavailable: github-api-502/],
+    ['collector changed', {script: hrrrScript('"$PY" fetch_hrrr.py --hours 36 --keep 2 --point-out "$ROOT/data/.hrrr-point" )')}, /collector invocation changed/],
+    ['native backfill reaches hrrr', {script: hrrrScript(undefined, [guards[0], 'NATIVE_CHANGED=0\nif true; then\n', guards[2], guards[3]])}, /same-run decision changed/],
+    ['extra same-run trigger', {script: hrrrScript(undefined, guards, '[ "$MODEL" != hrrr ] || NATIVE_CHANGED=1\n')}, /same-run decision changed/],
+    ['unchanged exit changed', {script: hrrrScript(undefined, [guards[0], guards[1], guards[2], '  if [ "$ACTIVE_MODEL_RUN" = "$RUN_ID" ]; then\n'])}, /same-run decision changed/],
+    ['point not paired', {script: hrrrScript(undefined, ['case "$MODEL" in ecmwf|gfs|aifs|icon) HAS_POINT=1 ;; *) HAS_POINT=0 ;; esac\n', guards[1], guards[2], guards[3]])}, /same-run decision changed/],
+  ]) {
+    const f = hrrrFixture(options);
+    const logs = [];const original = console.log;console.log = line => logs.push(line);
+    try {
+      assert.equal(await f.run(), 0, name);
+      assert.equal(readFileSync(f.output, 'utf8'), 'stand_aside=false\nserved_run=\n', name);
+      assert.match(logs.join('\n'), reason, name);
+      assert.match(readFileSync(f.summary, 'utf8'), /hrrr: the bake runs as before/, name);
+    } finally { console.log = original;f.cleanup(); }
+  }
+  for (const [name, changes, reason] of [['re-bake requested', {REBAKE_SERVED_RUN: 'true'}, /rebake_served_run/],
+    ['bootstrap', {BOOTSTRAP_MISSING: 'true'}, /bootstrap_missing/], ['staging', {CATALOG_TARGET: 'staging'}, /not production/]]) {
+    const f = hrrrFixture();
+    const logs = [];const original = console.log;console.log = line => logs.push(line);
+    try {
+      assert.equal(await f.run(changes), 0, name);
+      assert.equal(readFileSync(f.output, 'utf8'), 'stand_aside=false\nserved_run=\n', name);
+      assert.match(logs.join('\n'), reason, name);assert.equal(f.calls.length, 0, name);
+    } finally { console.log = original;f.cleanup(); }
+  }
+});
+
+test('hrrr: the probe asserts hourly leads and calls fetch_hrrr.pick_init(zarr, 48) like the bake', () => {
+  const root = mkdtempSync(join(tmpdir(), 'stand-aside-hrrr-probe-'));
+  const data = join(root, 'data');mkdirSync(data);
+  const record = join(root, 'calls');
+  // Minimal numpy/zarr stand-ins so the probe runs without the Atmos venv.
+  writeFileSync(join(data, 'numpy.py'), 'class A(list):\n    def __mul__(self, k):\n        return A(x * k for x in self)\n    def __eq__(self, other):\n        return B(len(self) == len(other) and all(a == b for a, b in zip(self, other)))\nclass B:\n    def __init__(self, v):\n        self.v = v\n    def all(self):\n        return self.v\ndef arange(n):\n    return A(range(n))\n');
+  writeFileSync(join(data, 'zarr.py'), `import os\ndef open_group(url, mode):\n    assert mode == 'r'\n    step = int(os.environ.get('LEAD_STEP', '3600'))\n    return {'url': url, 'lead_time': [h * step for h in range(49)]}\n`);
+  writeFileSync(join(data, 'fetch_hrrr.py'), `from datetime import datetime, timezone\nSTORE = 'hrrr-store'\ndef pick_init(g, hours, want=None):\n    open(${JSON.stringify(record)}, 'a').write(f"hrrr {g['url']} {hours} {want}\\n")\n    return 41, datetime(2026, 10, 10, 6, tzinfo=timezone.utc)\n`);
+  const probe = new URL('../tools/component-upstream-probe.py', import.meta.url).pathname;
+  const run = (env = {}) => spawnSync('python3', ['-I', '-B', probe, 'hrrr', root], {encoding: 'utf8', env: {...process.env, ...env}});
+  try {
+    const ok = run();
+    assert.equal(ok.stdout, '2026101006\n', ok.stderr);
+    assert.equal(readFileSync(record, 'utf8'), 'hrrr hrrr-store 48 None\n');
+    const lead = run({LEAD_STEP: '1800'});
+    assert.notEqual(lead.status, 0);assert.match(lead.stderr, /lead_time not hourly/);assert.equal(lead.stdout, '');
+    writeFileSync(join(data, 'fetch_hrrr.py'), "STORE = 'x'\ndef pick_init(g, hours, want=None, start=None):\n    raise AssertionError('not reached')\n");
+    const changed = run();
+    assert.notEqual(changed.status, 0);assert.match(changed.stderr, /selector signature changed/);assert.equal(changed.stdout, '');
+  } finally { rmSync(root, {recursive: true, force: true}); }
+});
+
+test('hrrr: the reviewed same-run lines are the pinned bake script\'s own', () => {
+  // The pinned script (Atmos 30a211be7) is not in this repository; these are the reviewed lines.
+  assert.deepEqual(HRRR_SAME_RUN_GUARDS, [
+    'case "$MODEL" in ecmwf|gfs|aifs|icon|hrrr) HAS_POINT=1 ;; *) HAS_POINT=0 ;; esac\n',
+    'NATIVE_CHANGED=0\nif [ "$MODEL" = ecmwf ] || [ "$MODEL" = gfs ]; then\n',
+    '  NATIVE_CHANGED="$(node -e \'process.stdout.write(JSON.parse(process.argv[1]).changed ? "1" : "0")\' "$NATIVE_JSON")"\nfi\n',
+    '  if [ "$ACTIVE_MODEL_RUN" = "$RUN_ID" ] && [ "$ACTIVE_POINT_RUN" = "$RUN_ID" ] && [ "$NATIVE_CHANGED" = 0 ]; then\n' +
+      '    echo "$MODEL and point-$MODEL unchanged ($RUN_ID) — no upload or pointer mutation"\n    exit 0\n']);
+  assert.match(catalog, /ATMOS_SHA: 30a211be7692868f36380b809cd9b2bb01011e6a/);
 });

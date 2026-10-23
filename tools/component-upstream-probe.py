@@ -9,6 +9,10 @@ the bake would collect:
                                             data.ecmwf.int), newest of the last 12 cycles
   gfs    data/fetch.py --hours 72           pick_init(zarr, 72): core fields readable at +72 h in
                                             the dynamical.org store and the NODD +72 h .idx present
+  hrrr   data/fetch_hrrr.py --hours 48      pick_init(zarr, 48): newest of the last 7 inits whose 2 m
+                                            temperature and 10 m u wind are readable at +48 h in the
+                                            dynamical.org 48-hour store, after the collector's own
+                                            hourly lead_time assertion
 
 It downloads no field data and writes nothing. Any change to the selector signatures or a failed
 probe exits non-zero, and the caller then lets the bake run.
@@ -20,6 +24,7 @@ from pathlib import Path
 
 ECMWF_HOURS = 336
 GFS_HOURS = 72
+HRRR_HOURS = 48
 
 
 def ecmwf_last_step(hours):
@@ -37,8 +42,8 @@ def require_parameters(function, names):
 
 
 def main(argv):
-    if len(argv) != 3 or argv[1] not in ("ecmwf", "gfs"):
-        raise SystemExit("usage: component-upstream-probe.py ecmwf|gfs ATMOS_ROOT")
+    if len(argv) != 3 or argv[1] not in ("ecmwf", "gfs", "hrrr"):
+        raise SystemExit("usage: component-upstream-probe.py ecmwf|gfs|hrrr ATMOS_ROOT")
     model, root = argv[1], Path(argv[2]).resolve()
     data = root / "data"
     os.chdir(data)
@@ -47,6 +52,17 @@ def main(argv):
         import fetch_ecmwf
         require_parameters(fetch_ecmwf.latest_run, ["last_step", "start", "short_last_step"])
         init = fetch_ecmwf.latest_run(ecmwf_last_step(ECMWF_HOURS))
+    elif model == "hrrr":
+        import fetch_hrrr
+        import numpy as np
+        import zarr
+        require_parameters(fetch_hrrr.pick_init, ["g", "hours", "want"])
+        g = zarr.open_group(fetch_hrrr.STORE, mode="r")
+        # fetch_hrrr.main() asserts this before pick_init; a store that fails it fails the bake too.
+        lead = g["lead_time"][: HRRR_HOURS + 1]
+        if not (lead == np.arange(HRRR_HOURS + 1) * 3600).all():
+            raise SystemExit("lead_time not hourly")
+        _, init = fetch_hrrr.pick_init(g, HRRR_HOURS)
     else:
         import fetch
         import zarr
