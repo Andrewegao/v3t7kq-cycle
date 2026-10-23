@@ -5,8 +5,8 @@ import {mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {COLLECTOR_CALLS, DEFINITION_PATHS, HRRR_MAX_SERVED_AGE_HOURS, HRRR_REVIEWED_ATMOS_SHA, HRRR_SAME_RUN_GUARDS, decide, eligibility, main, parsePrecondition,
-  runFromTime, summaryText}
+import {AIFS_MAX_SERVED_AGE_HOURS, AIFS_REVIEWED_ATMOS_SHA, COLLECTOR_CALLS, DEFINITION_PATHS, HRRR_MAX_SERVED_AGE_HOURS, HRRR_REVIEWED_ATMOS_SHA,
+  SAME_RUN_GUARDS, SAME_RUN_MODELS, STAND_ASIDE_MODELS, decide, eligibility, main, parsePrecondition, runFromTime, summaryText}
   from '../tools/component-bake-stand-aside.mjs';
 import {componentMarkdown, PRODUCTION_BAKE_STEP, STAND_ASIDE_STEP, stoodAsideOnServedRun} from '../tools/workflow-run-summary.mjs';
 
@@ -30,12 +30,16 @@ function evidence({manifest = manifestFor(), map = {}, point = {}, ...rest} = {}
       ACTIVE_COMPONENT_GENERATION_TIME: '2026-10-10T00:00:00.000Z', ...point}, ...rest};
 }
 
-test('only production ECMWF/GFS/HRRR without bootstrap, re-bake or short-run selection is eligible', () => {
+test('only production ECMWF/GFS/HRRR/AIFS without bootstrap, re-bake or short-run selection is eligible', () => {
   const base = {model: 'ecmwf', target: 'production', bootstrapMissing: 'false', rebakeServedRun: 'false', shortRuns: ''};
   assert.equal(eligibility(base), null);
   assert.equal(eligibility({...base, model: 'gfs'}), null);
   assert.equal(eligibility({...base, model: 'hrrr'}), null);
-  for (const [change, reason] of [[{model: 'aifs'}, /not an ECMWF, GFS or HRRR/], [{model: 'hrrr-ak'}, /not an ECMWF, GFS or HRRR/],
+  assert.equal(eligibility({...base, model: 'aifs'}), null);
+  assert.deepEqual(STAND_ASIDE_MODELS, ['ecmwf', 'gfs', 'hrrr', 'aifs']);assert.deepEqual(SAME_RUN_MODELS, ['hrrr', 'aifs']);
+  for (const [change, reason] of [[{model: 'icon'}, /not an ECMWF, GFS, HRRR or AIFS/], [{model: 'hrrr-ak'}, /not an ECMWF, GFS, HRRR or AIFS/],
+    [{model: 'aifs', target: 'staging'}, /not production/], [{model: 'aifs', rebakeServedRun: 'true'}, /rebake_served_run/],
+    [{model: 'aifs', bootstrapMissing: 'true'}, /bootstrap_missing/],
     [{model: 'hrrr', target: 'staging'}, /not production/], [{model: 'hrrr', rebakeServedRun: 'true'}, /rebake_served_run/],
     [{target: 'staging'}, /not production/], [{bootstrapMissing: 'true'}, /bootstrap_missing/],
     [{rebakeServedRun: 'true'}, /rebake_served_run/], [{shortRuns: '1'}, /ECMWF_SHORT_RUNS/]])
@@ -139,7 +143,7 @@ test('every failure leaves the bake running and the step green', async () => {
     ['github unavailable', {commitDate: null}, {}, /check unavailable: github-api-502/],
     ['collector call changed', {collector: '"$PY" fetch_ecmwf.py --hours 360 --keep 2'}, {}, /collector invocation changed/],
     ['re-bake requested', {}, {REBAKE_SERVED_RUN: 'true'}, /rebake_served_run/],
-    ['aifs', {}, {MODEL: 'aifs'}, /not an ECMWF, GFS or HRRR/],
+    ['icon', {}, {MODEL: 'icon'}, /not an ECMWF, GFS, HRRR or AIFS/],
   ]) {
     const f = fixture(options);
     const logs = [];const original = console.log;console.log = line => logs.push(line);
@@ -165,7 +169,7 @@ test('the upstream probe calls the pinned collector selectors with the bake\'s o
     assert.equal(run('ecmwf').stdout, '2026101000\n');
     assert.equal(run('gfs').stdout, '2026101006\n');
     assert.equal(readFileSync(record, 'utf8'), 'ecmwf 336 None\ngfs group:store-url 72 None\n');
-    assert.notEqual(run('aifs').status, 0);
+    assert.notEqual(run('icon').status, 0);
     writeFileSync(join(data, 'fetch_ecmwf.py'), 'def latest_run(last_step=0, start=None):\n    raise AssertionError("not reached")\n');
     const changed = run('ecmwf');
     assert.notEqual(changed.status, 0);assert.match(changed.stderr, /selector signature changed/);assert.equal(changed.stdout, '');
@@ -177,6 +181,7 @@ test('collector call strings still match the pinned bake script shape', () => {
   assert.equal(COLLECTOR_CALLS.ecmwf, '"$PY" fetch_ecmwf.py --hours 336 --keep 2 ${ecmwf_run_args[@]+"${ecmwf_run_args[@]}"}');
   assert.equal(COLLECTOR_CALLS.gfs, '"$PY" fetch.py --hours 72 --point-hours 336 --keep 2 ');
   assert.equal(COLLECTOR_CALLS.hrrr, '"$PY" fetch_hrrr.py --hours 48 --keep 2 --point-out "$ROOT/data/.hrrr-point" )');
+  assert.equal(COLLECTOR_CALLS.aifs, '"$PY" fetch_aifs.py --hours 360 --keep 1 --float-out "$ROOT/data/.aifs-float" --point-out "$ROOT/data/.aifs-point" )');
   assert.deepEqual(DEFINITION_PATHS, ['.github/workflows/catalog-bake.yml', 'tools/component-bake-stand-aside.mjs', 'tools/component-upstream-probe.py']);
 });
 
@@ -195,8 +200,8 @@ test('workflow: the check runs before hydrate, fails open and guards only the pr
   assert.match(check, /^        id: live_run$/m);
   assert.match(check, /^        continue-on-error: true$/m);
   assert.match(check, /^        timeout-minutes: 8$/m);
-  assert.match(check, /if: \$\{\{ env\.CATALOG_TARGET == 'production' && \(matrix\.model == 'ecmwf' \|\| matrix\.model == 'gfs' \|\| matrix\.model == 'hrrr'\) && inputs\.bootstrap_missing != true && inputs\.rebake_served_run != true \}\}/);
-  assert.match(step('Checkout the stand-aside check'), /if: \$\{\{ env\.CATALOG_TARGET == 'production' && \(matrix\.model == 'ecmwf' \|\| matrix\.model == 'gfs' \|\| matrix\.model == 'hrrr'\) \}\}/);
+  assert.match(check, /if: \$\{\{ env\.CATALOG_TARGET == 'production' && \(matrix\.model == 'ecmwf' \|\| matrix\.model == 'gfs' \|\| matrix\.model == 'hrrr' \|\| matrix\.model == 'aifs'\) && inputs\.bootstrap_missing != true && inputs\.rebake_served_run != true \}\}/);
+  assert.match(step('Checkout the stand-aside check'), /if: \$\{\{ env\.CATALOG_TARGET == 'production' && \(matrix\.model == 'ecmwf' \|\| matrix\.model == 'gfs' \|\| matrix\.model == 'hrrr' \|\| matrix\.model == 'aifs'\) \}\}/);
   assert.match(check, /node "\$GITHUB_WORKSPACE\/cycle\/tools\/component-bake-stand-aside\.mjs" "\$GITHUB_WORKSPACE\/atmos"/);
   for (const key of [...check.matchAll(/secrets\.([A-Z0-9_]+)/g)].map(match => match[1]))
     assert.ok(['R2_PRODUCTION_ACCESS_KEY_ID', 'R2_PRODUCTION_SECRET_ACCESS_KEY'].includes(key), key);
@@ -248,7 +253,7 @@ function hrrrEvidence({manifest = hrrrManifest(), map = {}, point = {}, ...rest}
       ACTIVE_COMPONENT_GENERATION_TIME: HRRR_GENERATION, ...point}, ...rest};
 }
 // The reviewed lines of the pinned bake script (Atmos 30a211be7), in order, as the fixture script.
-const hrrrScript = (collector = COLLECTOR_CALLS.hrrr, guards = HRRR_SAME_RUN_GUARDS, extra = '') =>
+const hrrrScript = (collector = COLLECTOR_CALLS.hrrr, guards = SAME_RUN_GUARDS, extra = '') =>
   `${guards[0]}  hrrr) ( cd "$ROOT/data" && ${collector} ;;\n${guards[1]}  NATIVE_JSON=x\n${guards[2]}${extra}${guards[3]}  fi\n`;
 
 test('hrrr: stands aside only for the served pair at the newest upstream init, fresh, without native bundles', () => {
@@ -329,7 +334,7 @@ test('hrrr: same run stands aside; reads only the precondition, the served manif
 });
 
 test('hrrr: a new run, any doubt or a changed pinned bake leaves the bake running', async () => {
-  const guards = [...HRRR_SAME_RUN_GUARDS];
+  const guards = [...SAME_RUN_GUARDS];
   for (const [name, options, reason] of [
     ['new upstream init', {probe: {stdout: '2026101012\n'}}, /2026101012 is not the served hrrr run/],
     ['atmos re-pinned', {head: {stdout: `${'e'.repeat(40)}\n`}}, new RegExp(`atmos checkout e{40} is not the reviewed HRRR pin ${HRRR_REVIEWED_ATMOS_SHA}`)],
@@ -391,7 +396,7 @@ test('hrrr: the probe asserts hourly leads and calls fetch_hrrr.pick_init(zarr, 
 
 test('hrrr: the reviewed same-run lines are the pinned bake script\'s own', () => {
   // The pinned script (Atmos 30a211be7) is not in this repository; these are the reviewed lines.
-  assert.deepEqual(HRRR_SAME_RUN_GUARDS, [
+  assert.deepEqual(SAME_RUN_GUARDS, [
     'case "$MODEL" in ecmwf|gfs|aifs|icon|hrrr) HAS_POINT=1 ;; *) HAS_POINT=0 ;; esac\n',
     'NATIVE_CHANGED=0\nif [ "$MODEL" = ecmwf ] || [ "$MODEL" = gfs ]; then\n',
     '  NATIVE_CHANGED="$(node -e \'process.stdout.write(JSON.parse(process.argv[1]).changed ? "1" : "0")\' "$NATIVE_JSON")"\nfi\n',
@@ -411,11 +416,200 @@ test('hrrr: a re-pinned atmos checkout reads nothing else and the bake runs', as
   } finally { console.log = original;f.cleanup(); }
 });
 
-test('ecmwf/gfs do not consult the HRRR reviewed pin', async () => {
+test('ecmwf/gfs do not consult the HRRR or AIFS reviewed pin', async () => {
   const f = fixture();
   try {
     assert.equal(await f.run(), 0);
     assert.equal(readFileSync(f.output, 'utf8'), 'stand_aside=true\nserved_run=2026101000\n');
     assert.ok(!f.calls.some(call => call.command === 'git'));
   } finally { f.cleanup(); }
+});
+
+// AIFS: the hourly slow lane. fetch_aifs.py --keep 1 leaves one run, RUN_ID is that run, and the pinned
+// bake publishes AIFS only when the run id moves (no native backfill, no enrichment), so a served pair
+// at the init fetch_aifs.latest_run(360) returns is exactly the bake's "unchanged" outcome.
+const AIFS_PREFIX = 'components/aifs/aifs-20261020T000000Z-1792477278/';
+const AIFS_GENERATION = '2026-10-20T00:00:00.000Z';
+const AIFS_NOW = Date.parse('2026-10-20T09:08:00Z');
+const aifsManifest = (changes = {}) => Buffer.from(`${JSON.stringify({schemaVersion: 1, componentId: 'aifs',
+  artifactId: 'aifs-20261020T000000Z-1792477278', generationTime: AIFS_GENERATION, completedAt: '2026-10-20T06:21:34.000Z',
+  rootPrefix: AIFS_PREFIX, mounts: ['data/aifs/'], objectCount: 369, inventorySha256: 'a'.repeat(64),
+  quality: {status: 'passed', checks: ['manifest', 'inventory', 'remote_bytes', 'coverage', 'freshness', 'live_superset',
+    'horizon', 'cadence', 'grid', 'referenced_bytes']}, ...changes})}\n`);
+function aifsEvidence({manifest = aifsManifest(), map = {}, point = {}, ...rest} = {}) {
+  return {model: 'aifs', upstreamRun: '2026102000', definitionChangedAt: '2026-10-20T05:00:00Z', manifestBytes: manifest, now: AIFS_NOW,
+    map: {EXPECTED_COMPONENT_MANIFEST_SHA256: sha256(manifest), EXPECTED_CATALOG_ROLLBACK_EPOCH: '7',
+      ACTIVE_COMPONENT_GENERATION_TIME: AIFS_GENERATION, ACTIVE_COMPONENT_MANIFEST_KEY: `${AIFS_PREFIX}component.json`,
+      ACTIVE_COMPONENT_ROOT_PREFIX: AIFS_PREFIX, ...map},
+    point: {EXPECTED_COMPONENT_MANIFEST_SHA256: 'b'.repeat(64), EXPECTED_CATALOG_ROLLBACK_EPOCH: '7',
+      ACTIVE_COMPONENT_GENERATION_TIME: AIFS_GENERATION, ...point}, ...rest};
+}
+const aifsScript = (collector = COLLECTOR_CALLS.aifs, guards = SAME_RUN_GUARDS, extra = '') =>
+  `${guards[0]}  aifs) ( cd "$ROOT/data" && ${collector} ;;\n${guards[1]}  NATIVE_JSON=x\n${guards[2]}${extra}${guards[3]}  fi\n`;
+
+test('aifs: stands aside only for the served pair at the newest upstream init, at most 16 h old, without native bundles', () => {
+  const yes = decide(aifsEvidence());
+  assert.equal(yes.standAside, true);assert.equal(yes.run, '2026102000');assert.equal(yes.rootPrefix, AIFS_PREFIX);
+  assert.match(summaryText('aifs', yes), /aifs stood aside[\s\S]*run 2026102000[\s\S]*Nothing was hydrated[\s\S]*rebake_served_run: true/);
+  const hour = 3600000;
+  for (const [name, input, reason] of [
+    ['new upstream cycle', aifsEvidence({upstreamRun: '2026102006'}), /newest upstream run 2026102006 is not the served aifs run 2026102000/],
+    ['upstream walked back below the served run', aifsEvidence({upstreamRun: '2026101918'}), /2026101918 is not the served aifs run/],
+    ['probe failed', aifsEvidence({upstreamRun: ''}), /upstream run unavailable/],
+    ['partial-run noise as last line', aifsEvidence({upstreamRun: 'run 2026102006 step 360h still partial'}), /upstream run unavailable/],
+    ['no map', aifsEvidence({map: {ACTIVE_COMPONENT_GENERATION_TIME: ''}}), /no aifs component/],
+    ['point behind', aifsEvidence({point: {ACTIVE_COMPONENT_GENERATION_TIME: '2026-10-19T18:00:00.000Z'}}), /served point-aifs run 2026101918/],
+    ['no point', aifsEvidence({point: {ACTIVE_COMPONENT_GENERATION_TIME: ''}}), /no point-aifs component/],
+    ['catalog moved', aifsEvidence({point: {EXPECTED_CATALOG_ROLLBACK_EPOCH: '8'}}), /catalog changed/],
+    ['hash mismatch', aifsEvidence({map: {EXPECTED_COMPONENT_MANIFEST_SHA256: 'd'.repeat(64)}}), /does not match the catalog hash/],
+    ['missing manifest', {...aifsEvidence(), manifestBytes: null}, /does not match the catalog hash/],
+    ['hrrr manifest under aifs', aifsEvidence({manifest: aifsManifest({componentId: 'hrrr'})}), /not the catalog's passed/],
+    ['other root', aifsEvidence({manifest: aifsManifest({rootPrefix: 'components/ecmwf/x/'})}), /not the catalog's passed/],
+    ['other run in manifest', aifsEvidence({manifest: aifsManifest({generationTime: '2026-10-19T18:00:00.000Z'})}), /not the catalog's passed/],
+    ['failed quality', aifsEvidence({manifest: aifsManifest({quality: {status: 'failed', checks: []}})}), /not the catalog's passed/],
+    ['near the 18 h freshness gate', aifsEvidence({now: Date.parse(AIFS_GENERATION) + (AIFS_MAX_SERVED_AGE_HOURS + 0.1) * hour}), /served aifs run 2026102000 is not within 16 h/],
+    ['future init', aifsEvidence({now: Date.parse(AIFS_GENERATION) - 60000}), /not within 16 h/],
+    ['no clock', aifsEvidence({now: NaN}), /not within 16 h/],
+    ['no completion', aifsEvidence({manifest: aifsManifest({completedAt: undefined})}), /no completion time/],
+    ['re-pinned since', aifsEvidence({definitionChangedAt: '2026-10-20T07:00:00Z'}), /predates this lane's definition/],
+  ]) {
+    const result = decide(input);
+    assert.equal(result.standAside, false, name);assert.match(result.reason, reason, name);
+  }
+  assert.equal(decide(aifsEvidence({now: Date.parse(AIFS_GENERATION) + AIFS_MAX_SERVED_AGE_HOURS * hour})).standAside, true);
+  // Below the bake's gate (validate-model-component.py MAX_AGE_HOURS.aifs = 18), above the 14.2 h a served run reached at a tick (10-17..10-23).
+  assert.equal(AIFS_MAX_SERVED_AGE_HOURS, 16);assert.equal(HRRR_MAX_SERVED_AGE_HOURS, 10);
+  // ECMWF/GFS still need native bundles; AIFS and HRRR never do.
+  assert.match(decide(evidence({manifest: manifestFor({quality: {status: 'passed', checks: ['manifest']}})})).reason, /native viewport/);
+});
+
+function aifsFixture({probe = {stdout: 'AIFS origin failover -> x\n2026102000\n'}, script = aifsScript(), commitDate = '2026-10-20T05:00:00Z',
+  head = {stdout: `${AIFS_REVIEWED_ATMOS_SHA}\n`}} = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'stand-aside-aifs-'));
+  mkdirSync(join(root, 'ops/platform'), {recursive: true});mkdirSync(join(root, 'data'), {recursive: true});
+  writeFileSync(join(root, 'ops/bake-model-component.sh'), script);
+  const manifest = aifsManifest();
+  const calls = [];
+  const exec = async (command, args, options) => {
+    calls.push({command, args, env: options.env, cwd: options.cwd});
+    if (command === 'git') { if (head instanceof Error) throw head; return head; }
+    if (command === 'bash') {
+      const id = options.env.COMPONENT_ID;
+      writeFileSync(options.env.GITHUB_ENV, id === 'aifs'
+        ? `EXPECTED_COMPONENT_MANIFEST_SHA256=${sha256(manifest)}\nEXPECTED_CATALOG_ROLLBACK_EPOCH=7\nACTIVE_COMPONENT_GENERATION_TIME=${AIFS_GENERATION}\nACTIVE_COMPONENT_MANIFEST_KEY=${AIFS_PREFIX}component.json\nACTIVE_COMPONENT_ROOT_PREFIX=${AIFS_PREFIX}\n`
+        : `EXPECTED_COMPONENT_MANIFEST_SHA256=${'b'.repeat(64)}\nEXPECTED_CATALOG_ROLLBACK_EPOCH=7\nACTIVE_COMPONENT_GENERATION_TIME=${AIFS_GENERATION}\n`);
+      return {stdout: ''};
+    }
+    if (command === 'rclone') { writeFileSync(args[2], manifest); return {stdout: ''}; }
+    if (probe instanceof Error) throw probe;
+    return probe;
+  };
+  const fetcher = async () => commitDate ? new Response(JSON.stringify([{commit: {committer: {date: commitDate}}}])) : new Response('{}', {status: 502});
+  const output = join(root, 'out'), summary = join(root, 'summary');
+  const env = {MODEL: 'aifs', CATALOG_TARGET: 'production', BOOTSTRAP_MISSING: 'false', REBAKE_SERVED_RUN: 'false',
+    GITHUB_SHA: SHA, GH_TOKEN: 'fixture', GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary, RUNNER_TEMP: root,
+    GITHUB_ENV: join(root, 'job-env'), COMPONENT_R2_REMOTE: 'weatherx:weatherx-components-production'};
+  return {calls, output, summary, env,
+    run: changes => main([root, join(root, 'probe.py')], {...env, ...changes}, {exec, fetcher, clock: () => AIFS_NOW}),
+    cleanup: () => rmSync(root, {recursive: true, force: true})};
+}
+
+test('aifs: same run stands aside; reads only the pin, the precondition, the served manifest and the probe', async () => {
+  const f = aifsFixture();
+  try {
+    assert.equal(await f.run(), 0);
+    assert.equal(readFileSync(f.output, 'utf8'), 'stand_aside=true\nserved_run=2026102000\n');
+    assert.match(readFileSync(f.summary, 'utf8'), /### Component bake: aifs stood aside/);
+    assert.deepEqual(f.calls.map(call => call.command).slice(0, 4), ['git', 'bash', 'bash', 'rclone']);
+    assert.deepEqual(f.calls[0].args, ['rev-parse', 'HEAD']);
+    const hydrate = f.calls.filter(call => call.command === 'bash');
+    assert.deepEqual(hydrate.map(call => call.env.COMPONENT_ID), ['aifs', 'point-aifs']);
+    for (const call of hydrate) {
+      assert.equal(call.env.PRECONDITION_ONLY, '1');assert.equal(call.env.HYDRATE_MISSING_FROM_RELEASE, '0');
+      assert.notEqual(call.env.GITHUB_ENV, f.env.GITHUB_ENV, 'precondition values must not reach later steps');
+    }
+    assert.deepEqual(f.calls.find(call => call.command === 'rclone').args.slice(0, 2),
+      ['copyto', `weatherx:weatherx-components-production/${AIFS_PREFIX}component.json`]);
+    const probe = f.calls.find(call => call.command.endsWith('data/.venv/bin/python'));
+    assert.deepEqual(probe.args.slice(0, 2), ['-I', '-B']);assert.deepEqual(probe.args.slice(3, 4), ['aifs']);
+    assert.equal(f.calls.length, 5);
+  } finally { f.cleanup(); }
+});
+
+test('aifs: a new cycle, any doubt or a changed pinned bake leaves the bake running', async () => {
+  const guards = [...SAME_RUN_GUARDS];
+  for (const [name, options, reason] of [
+    ['new upstream cycle', {probe: {stdout: '2026102006\n'}}, /2026102006 is not the served aifs run/],
+    ['atmos re-pinned', {head: {stdout: `${'e'.repeat(40)}\n`}}, new RegExp(`atmos checkout e{40} is not the reviewed AIFS pin ${AIFS_REVIEWED_ATMOS_SHA}`)],
+    ['atmos head short sha', {head: {stdout: '30a211be7\n'}}, /atmos checkout unknown is not the reviewed AIFS pin/],
+    ['atmos head unreadable', {head: new Error('git failed: not a git repository')}, /check unavailable: git failed/],
+    ['no complete run upstream', {probe: new Error('python failed: no complete AIFS-single open-data run found in the last 2 days')}, /check unavailable: python failed/],
+    ['empty probe', {probe: {stdout: ''}}, /upstream run unavailable/],
+    ['github unavailable', {commitDate: null}, /check unavailable: github-api-502/],
+    ['keep changed', {script: aifsScript('"$PY" fetch_aifs.py --hours 360 --keep 2 --float-out "$ROOT/data/.aifs-float" --point-out "$ROOT/data/.aifs-point" )')}, /collector invocation changed/],
+    ['horizon changed', {script: aifsScript('"$PY" fetch_aifs.py --hours 240 --keep 1 --float-out "$ROOT/data/.aifs-float" --point-out "$ROOT/data/.aifs-point" )')}, /collector invocation changed/],
+    ['native backfill reaches aifs', {script: aifsScript(undefined, [guards[0], 'NATIVE_CHANGED=0\nif [ "$MODEL" != hrrr ]; then\n', guards[2], guards[3]])}, /AIFS check not reviewed/],
+    ['extra same-run trigger', {script: aifsScript(undefined, guards, '[ "$MODEL" != aifs ] || NATIVE_CHANGED=1\n')}, /same-run decision changed/],
+    ['unchanged exit changed', {script: aifsScript(undefined, [guards[0], guards[1], guards[2], '  if [ "$ACTIVE_MODEL_RUN" = "$RUN_ID" ]; then\n'])}, /same-run decision changed/],
+    ['point not paired', {script: aifsScript(undefined, ['case "$MODEL" in ecmwf|gfs|icon|hrrr) HAS_POINT=1 ;; *) HAS_POINT=0 ;; esac\n', guards[1], guards[2], guards[3]])}, /same-run decision changed/],
+  ]) {
+    const f = aifsFixture(options);
+    const logs = [];const original = console.log;console.log = line => logs.push(line);
+    try {
+      assert.equal(await f.run(), 0, name);
+      assert.equal(readFileSync(f.output, 'utf8'), 'stand_aside=false\nserved_run=\n', name);
+      assert.match(logs.join('\n'), reason, name);
+      assert.match(readFileSync(f.summary, 'utf8'), /aifs: the bake runs as before/, name);
+    } finally { console.log = original;f.cleanup(); }
+  }
+  for (const [name, changes, reason] of [['re-bake requested', {REBAKE_SERVED_RUN: 'true'}, /rebake_served_run/],
+    ['bootstrap', {BOOTSTRAP_MISSING: 'true'}, /bootstrap_missing/], ['staging', {CATALOG_TARGET: 'staging'}, /not production/]]) {
+    const f = aifsFixture();
+    const logs = [];const original = console.log;console.log = line => logs.push(line);
+    try {
+      assert.equal(await f.run(changes), 0, name);
+      assert.equal(readFileSync(f.output, 'utf8'), 'stand_aside=false\nserved_run=\n', name);
+      assert.match(logs.join('\n'), reason, name);assert.equal(f.calls.length, 0, name);
+    } finally { console.log = original;f.cleanup(); }
+  }
+});
+
+test('aifs: a re-pinned atmos checkout reads nothing else and the bake runs', async () => {
+  const f = aifsFixture({head: {stdout: `${'0'.repeat(40)}\n`}});
+  const original = console.log;console.log = () => {};
+  try {
+    assert.equal(await f.run(), 0);
+    assert.equal(readFileSync(f.output, 'utf8'), 'stand_aside=false\nserved_run=\n');
+    assert.deepEqual(f.calls.map(call => call.command), ['git'], 'no precondition, manifest or probe read after a pin mismatch');
+  } finally { console.log = original;f.cleanup(); }
+});
+
+test('aifs: the probe calls fetch_aifs.latest_run(360) like the bake and prints the init last', () => {
+  const root = mkdtempSync(join(tmpdir(), 'stand-aside-aifs-probe-'));
+  const data = join(root, 'data');mkdirSync(data);
+  const record = join(root, 'calls');
+  // latest_run prints its walk-back to stdout; the caller reads the probe's last line only.
+  writeFileSync(join(data, 'fetch_aifs.py'), `import os, sys\nfrom datetime import datetime, timezone\ndef latest_run(last_step=0, start=None):\n    open(${JSON.stringify(record)}, 'a').write(f'aifs {last_step} {start} {os.getcwd()}\\n')\n    if os.environ.get('NO_RUN'):\n        sys.exit('no complete AIFS-single open-data run found in the last 2 days')\n    print('  run 2026102006 step 360h still partial (1 < 2 bytes), falling back', flush=True)\n    return datetime(2026, 10, 20, 0, tzinfo=timezone.utc)\n`);
+  const probe = new URL('../tools/component-upstream-probe.py', import.meta.url).pathname;
+  const run = (env = {}) => spawnSync('python3', ['-I', '-B', probe, 'aifs', root], {encoding: 'utf8', env: {...process.env, ...env}});
+  try {
+    const ok = run();
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.equal(ok.stdout.trim().split('\n').slice(-1)[0], '2026102000');
+    assert.match(readFileSync(record, 'utf8'), /^aifs 360 None .*\/data\n$/);
+    const none = run({NO_RUN: '1'});
+    assert.notEqual(none.status, 0);assert.match(none.stderr, /no complete AIFS-single/);assert.equal(none.stdout, '');
+    writeFileSync(join(data, 'fetch_aifs.py'), "def latest_run(last_step=0, start=None, short_last_step=None):\n    raise AssertionError('not reached')\n");
+    const changed = run();
+    assert.notEqual(changed.status, 0);assert.match(changed.stderr, /selector signature changed/);assert.equal(changed.stdout, '');
+  } finally { rmSync(root, {recursive: true, force: true}); }
+});
+
+test('aifs: the reviewed pin, collector call and guard set are the ones reviewed at Atmos 30a211be7', () => {
+  assert.equal(AIFS_REVIEWED_ATMOS_SHA, '30a211be7692868f36380b809cd9b2bb01011e6a');
+  assert.match(catalog, /ATMOS_SHA: 30a211be7692868f36380b809cd9b2bb01011e6a/);
+  // HAS_POINT pairs aifs; NATIVE_CHANGED is reset and only set inside the ECMWF/GFS block.
+  assert.match(SAME_RUN_GUARDS[0], /ecmwf\|gfs\|aifs\|icon\|hrrr\) HAS_POINT=1/);
+  assert.match(SAME_RUN_GUARDS[1], /if \[ "\$MODEL" = ecmwf \] \|\| \[ "\$MODEL" = gfs \]; then/);
+  assert.match(COLLECTOR_CALLS.aifs, /--hours 360 --keep 1 /);
 });

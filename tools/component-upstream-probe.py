@@ -13,6 +13,10 @@ the bake would collect:
                                             temperature and 10 m u wind are readable at +48 h in the
                                             dynamical.org 48-hour store, after the collector's own
                                             hourly lead_time assertion
+  aifs   data/fetch_aifs.py --hours 360     latest_run(360): step 0 and step 360 .index both
+                                            published and both steps' grib2 at least as long as
+                                            their index says (HEAD on the official AWS mirror, then
+                                            data.ecmwf.int), newest of the last 8 cycles
 
 It downloads no field data and writes nothing. Any change to the selector signatures or a failed
 probe exits non-zero, and the caller then lets the bake run.
@@ -25,6 +29,7 @@ from pathlib import Path
 ECMWF_HOURS = 336
 GFS_HOURS = 72
 HRRR_HOURS = 48
+AIFS_HOURS = 360
 
 
 def ecmwf_last_step(hours):
@@ -35,6 +40,11 @@ def ecmwf_last_step(hours):
     return steps[-1]
 
 
+def aifs_last_step(hours):
+    # fetch_aifs.main(): a flat 6-hourly grid, capped at 360 h.
+    return list(range(0, min(hours, 360) + 1, 6))[-1]
+
+
 def require_parameters(function, names):
     actual = list(inspect.signature(function).parameters)
     if actual != names:
@@ -42,8 +52,8 @@ def require_parameters(function, names):
 
 
 def main(argv):
-    if len(argv) != 3 or argv[1] not in ("ecmwf", "gfs", "hrrr"):
-        raise SystemExit("usage: component-upstream-probe.py ecmwf|gfs|hrrr ATMOS_ROOT")
+    if len(argv) != 3 or argv[1] not in ("ecmwf", "gfs", "hrrr", "aifs"):
+        raise SystemExit("usage: component-upstream-probe.py ecmwf|gfs|hrrr|aifs ATMOS_ROOT")
     model, root = argv[1], Path(argv[2]).resolve()
     data = root / "data"
     os.chdir(data)
@@ -63,6 +73,10 @@ def main(argv):
         if not (lead == np.arange(HRRR_HOURS + 1) * 3600).all():
             raise SystemExit("lead_time not hourly")
         _, init = fetch_hrrr.pick_init(g, HRRR_HOURS)
+    elif model == "aifs":
+        import fetch_aifs
+        require_parameters(fetch_aifs.latest_run, ["last_step", "start"])
+        init = fetch_aifs.latest_run(aifs_last_step(AIFS_HOURS))
     else:
         import fetch
         import zarr
