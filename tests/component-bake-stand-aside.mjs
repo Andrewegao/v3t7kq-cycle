@@ -5,7 +5,7 @@ import {mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {COLLECTOR_CALLS, DEFINITION_PATHS, HRRR_MAX_SERVED_AGE_HOURS, HRRR_SAME_RUN_GUARDS, decide, eligibility, main, parsePrecondition,
+import {COLLECTOR_CALLS, DEFINITION_PATHS, HRRR_MAX_SERVED_AGE_HOURS, HRRR_REVIEWED_ATMOS_SHA, HRRR_SAME_RUN_GUARDS, decide, eligibility, main, parsePrecondition,
   runFromTime, summaryText}
   from '../tools/component-bake-stand-aside.mjs';
 import {componentMarkdown, PRODUCTION_BAKE_STEP, STAND_ASIDE_STEP, stoodAsideOnServedRun} from '../tools/workflow-run-summary.mjs';
@@ -280,14 +280,16 @@ test('hrrr: stands aside only for the served pair at the newest upstream init, f
   assert.equal(HRRR_MAX_SERVED_AGE_HOURS, 10);
 });
 
-function hrrrFixture({probe = {stdout: '2026101006\n'}, script = hrrrScript(), commitDate = '2026-10-10T07:00:00Z'} = {}) {
+function hrrrFixture({probe = {stdout: '2026101006\n'}, script = hrrrScript(), commitDate = '2026-10-10T07:00:00Z',
+  head = {stdout: `${HRRR_REVIEWED_ATMOS_SHA}\n`}} = {}) {
   const root = mkdtempSync(join(tmpdir(), 'stand-aside-hrrr-'));
   mkdirSync(join(root, 'ops/platform'), {recursive: true});mkdirSync(join(root, 'data'), {recursive: true});
   writeFileSync(join(root, 'ops/bake-model-component.sh'), script);
   const manifest = hrrrManifest();
   const calls = [];
   const exec = async (command, args, options) => {
-    calls.push({command, args, env: options.env});
+    calls.push({command, args, env: options.env, cwd: options.cwd});
+    if (command === 'git') { if (head instanceof Error) throw head; return head; }
     if (command === 'bash') {
       const id = options.env.COMPONENT_ID;
       writeFileSync(options.env.GITHUB_ENV, id === 'hrrr'
@@ -321,7 +323,8 @@ test('hrrr: same run stands aside; reads only the precondition, the served manif
     assert.deepEqual(f.calls.find(call => call.command === 'rclone').args.slice(0, 2),
       ['copyto', `weatherx:weatherx-components-production/${HRRR_PREFIX}component.json`]);
     assert.deepEqual(f.calls.find(call => call.command.endsWith('data/.venv/bin/python')).args.slice(3, 4), ['hrrr']);
-    assert.equal(f.calls.length, 4);
+    assert.deepEqual(f.calls[0].args, ['rev-parse', 'HEAD']);assert.equal(f.calls[0].command, 'git');
+    assert.equal(f.calls.length, 5);
   } finally { f.cleanup(); }
 });
 
@@ -329,6 +332,10 @@ test('hrrr: a new run, any doubt or a changed pinned bake leaves the bake runnin
   const guards = [...HRRR_SAME_RUN_GUARDS];
   for (const [name, options, reason] of [
     ['new upstream init', {probe: {stdout: '2026101012\n'}}, /2026101012 is not the served hrrr run/],
+    ['atmos re-pinned', {head: {stdout: `${'e'.repeat(40)}\n`}}, new RegExp(`atmos checkout e{40} is not the reviewed HRRR pin ${HRRR_REVIEWED_ATMOS_SHA}`)],
+    ['atmos head short sha', {head: {stdout: '30a211be7\n'}}, /atmos checkout unknown is not the reviewed HRRR pin/],
+    ['atmos head empty', {head: {stdout: ''}}, /atmos checkout unknown is not the reviewed HRRR pin/],
+    ['atmos head unreadable', {head: new Error('git failed: not a git repository')}, /check unavailable: git failed/],
     ['probe failed', {probe: new Error('python failed: no init with complete data through +48h')}, /check unavailable: python failed/],
     ['probe noise', {probe: {stdout: 'lead_time not hourly\n'}}, /upstream run unavailable/],
     ['empty probe', {probe: {stdout: ''}}, /upstream run unavailable/],
@@ -391,4 +398,24 @@ test('hrrr: the reviewed same-run lines are the pinned bake script\'s own', () =
     '  if [ "$ACTIVE_MODEL_RUN" = "$RUN_ID" ] && [ "$ACTIVE_POINT_RUN" = "$RUN_ID" ] && [ "$NATIVE_CHANGED" = 0 ]; then\n' +
       '    echo "$MODEL and point-$MODEL unchanged ($RUN_ID) — no upload or pointer mutation"\n    exit 0\n']);
   assert.match(catalog, /ATMOS_SHA: 30a211be7692868f36380b809cd9b2bb01011e6a/);
+  assert.equal(HRRR_REVIEWED_ATMOS_SHA, '30a211be7692868f36380b809cd9b2bb01011e6a');
+});
+
+test('hrrr: a re-pinned atmos checkout reads nothing else and the bake runs', async () => {
+  const f = hrrrFixture({head: {stdout: `${'0'.repeat(40)}\n`}});
+  const original = console.log;console.log = () => {};
+  try {
+    assert.equal(await f.run(), 0);
+    assert.equal(readFileSync(f.output, 'utf8'), 'stand_aside=false\nserved_run=\n');
+    assert.deepEqual(f.calls.map(call => call.command), ['git'], 'no precondition, manifest or probe read after a pin mismatch');
+  } finally { console.log = original;f.cleanup(); }
+});
+
+test('ecmwf/gfs do not consult the HRRR reviewed pin', async () => {
+  const f = fixture();
+  try {
+    assert.equal(await f.run(), 0);
+    assert.equal(readFileSync(f.output, 'utf8'), 'stand_aside=true\nserved_run=2026101000\n');
+    assert.ok(!f.calls.some(call => call.command === 'git'));
+  } finally { f.cleanup(); }
 });

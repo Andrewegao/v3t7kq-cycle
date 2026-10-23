@@ -45,6 +45,12 @@ export const HRRR_SAME_RUN_GUARDS = Object.freeze([
 // The bake's component gate (validate-model-component.py MAX_AGE_HOURS.hrrr = 12) fails a served
 // HRRR run older than 12 h. Bake well before that, so a stalled upstream still turns the job red.
 export const HRRR_MAX_SERVED_AGE_HOURS = 10;
+// The only Atmos commit whose HRRR run selection (fetch_hrrr.main/pick_init/update_index) and bake
+// publication path were reviewed for the HRRR stand-aside. The text guards above cannot prove that a
+// later pin keeps the run-id derivation or adds no other same-run publish, so any other checkout HEAD
+// turns the HRRR check off (the bake runs as before) until this constant is re-reviewed. ECMWF/GFS
+// keep their existing collector-call guard only.
+export const HRRR_REVIEWED_ATMOS_SHA = '30a211be7692868f36380b809cd9b2bb01011e6a';
 // Changing any of these files can change what the lane would publish, so a served component that
 // predates the newest of them is re-baked once.
 export const DEFINITION_PATHS = Object.freeze(['.github/workflows/catalog-bake.yml',
@@ -160,6 +166,11 @@ function defaultExec(command, args, options) {
 // Gathers the evidence for decide(). Runs inside the pinned Atmos checkout (working directory).
 export async function collect({env, atmosRoot, probePath, exec = defaultExec, fetcher = fetch, workDir, clock = Date.now}) {
   const model = env.MODEL;
+  if (model === 'hrrr') {
+    const head = String((await exec('git', ['rev-parse', 'HEAD'], {cwd: atmosRoot, timeout: 30000, env: process.env}))?.stdout ?? '').trim();
+    if (head !== HRRR_REVIEWED_ATMOS_SHA)
+      throw new Error(`atmos checkout ${/^[a-f0-9]{40}$/.test(head) ? head : 'unknown'} is not the reviewed HRRR pin ${HRRR_REVIEWED_ATMOS_SHA}`);
+  }
   const script = readFileSync(join(atmosRoot, 'ops/bake-model-component.sh'), 'utf8');
   if (!script.includes(COLLECTOR_CALLS[model])) throw new Error('pinned collector invocation changed; probe not reviewed for it');
   if (model === 'hrrr' && (!HRRR_SAME_RUN_GUARDS.every(line => script.includes(line)) ||
