@@ -23,7 +23,7 @@ on:
         required: false
         default: false
       rebake_served_run:
-        description: Re-bake ECMWF/GFS even when production already serves the newest upstream run
+        description: Re-bake ECMWF/GFS/HRRR even when production already serves the newest upstream run
         type: boolean
         required: false
         default: false
@@ -129,7 +129,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "30a211be7692868f36380b809cd9b2bb01011e6a"
           git diff --exit-code HEAD
       - name: Checkout the stand-aside check
-        if: ${{ env.CATALOG_TARGET == 'production' && (matrix.model == 'ecmwf' || matrix.model == 'gfs') }}
+        if: ${{ env.CATALOG_TARGET == 'production' && (matrix.model == 'ecmwf' || matrix.model == 'gfs' || matrix.model == 'hrrr') }}
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
@@ -192,14 +192,14 @@ jobs:
           RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
           RCLONE_CONFIG_WEATHERX_REGION: auto
         run: bash ops/platform/hydrate-r2-component.sh
-      # Hourly ECMWF/GFS: when production already serves the run the pinned collector would select
-      # now (map and point), and that component was completed after this lane's definition last
-      # changed, stand aside before hydrate: nothing is collected, uploaded or promoted. Fails open:
+      # Hourly ECMWF/GFS, 10-minute HRRR: when production already serves the run the pinned collector
+      # would select now (map and point; HRRR also <= 10 h old), completed after this lane's definition
+      # last changed, stand aside before hydrate: nothing is collected, uploaded or promoted. Fails open:
       # any error, timeout or missing evidence leaves stand_aside unset and every step below runs
       # exactly as before. It reads only; GITHUB_ENV and the Atmos checkout are left untouched.
       - name: Stand aside when production already serves the newest upstream run
         id: live_run
-        if: ${{ env.CATALOG_TARGET == 'production' && (matrix.model == 'ecmwf' || matrix.model == 'gfs') && inputs.bootstrap_missing != true && inputs.rebake_served_run != true }}
+        if: ${{ env.CATALOG_TARGET == 'production' && (matrix.model == 'ecmwf' || matrix.model == 'gfs' || matrix.model == 'hrrr') && inputs.bootstrap_missing != true && inputs.rebake_served_run != true }}
         continue-on-error: true
         timeout-minutes: 8
         working-directory: atmos

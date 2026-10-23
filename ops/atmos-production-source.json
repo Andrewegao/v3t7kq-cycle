@@ -100,6 +100,9 @@
         ".github/workflows/ui-staging.yml",
         "tools/ui-candidate.mjs"
       ],
+      "30a211be7692868f36380b809cd9b2bb01011e6a": [
+        "tools/component-bake-stand-aside.mjs"
+      ],
       "3f7479573b990337c64643077720c39b361b6841": [
         "tools/current-model-artifact.py"
       ],
