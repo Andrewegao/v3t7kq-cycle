@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// Stand-aside check for the production ECMWF/GFS (hourly) and HRRR (10-minute) component bakes
+// Stand-aside check for the production ECMWF/GFS/AIFS (hourly) and HRRR (10-minute) component bakes
 // (catalog-bake.yml).
 //
-// The slow lane runs every hour, but ECMWF publishes a new complete run twice a day and GFS four
-// times. The HRRR lane runs every ten minutes, but the 48-hour HRRR store gains a new init four
-// times a day, and the pinned bake publishes HRRR only when the run id moves (it never publishes a
-// same-run update for HRRR: no native backfill, no enrichment; see HRRR_SAME_RUN_GUARDS). Before collection, this check asks the pinned Atmos collector's own run selector which
+// The slow lane runs every hour, but ECMWF publishes a new complete run twice a day and GFS and
+// AIFS four times. The HRRR lane runs every ten minutes, but the 48-hour HRRR store gains a new init
+// four times a day. The pinned bake publishes HRRR and AIFS only when the run id moves (it never
+// publishes a same-run update for them: no native backfill, no enrichment; see SAME_RUN_GUARDS).
+// Before collection, this check asks the pinned Atmos collector's own run selector which
 // upstream run it would bake now, and reads the production catalog the publisher reads. When
 // production already serves that run for both the map and the point component, and the served
 // map component was completed after this lane's definition last changed (so a source re-pin still
@@ -22,35 +23,47 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
-export const STAND_ASIDE_MODELS = Object.freeze(['ecmwf', 'gfs', 'hrrr']);
+export const STAND_ASIDE_MODELS = Object.freeze(['ecmwf', 'gfs', 'hrrr', 'aifs']);
 // The exact collector invocations in the pinned ops/bake-model-component.sh that the probe mirrors.
-// A re-pin that changes either one turns the check off (the bake runs) until the probe is reviewed.
+// A re-pin that changes any one turns the check off (the bake runs) until the probe is reviewed.
 export const COLLECTOR_CALLS = Object.freeze({
   ecmwf: '"$PY" fetch_ecmwf.py --hours 336 --keep 2 ${ecmwf_run_args[@]+"${ecmwf_run_args[@]}"}',
   gfs: '"$PY" fetch.py --hours 72 --point-hours 336 --keep 2 ',
   hrrr: '"$PY" fetch_hrrr.py --hours 48 --keep 2 --point-out "$ROOT/data/.hrrr-point" )',
+  aifs: '"$PY" fetch_aifs.py --hours 360 --keep 1 --float-out "$ROOT/data/.aifs-float" --point-out "$ROOT/data/.aifs-point" )',
 });
-// HRRR has no viewport-native backfill, so the pinned bake's only publication decision for it is
-// "map run or point run differs from RUN_ID". These reviewed lines of the pinned
+// HRRR and AIFS have no viewport-native backfill, so the pinned bake's only publication decision for
+// them is "map run or point run differs from RUN_ID". These reviewed lines of the pinned
 // ops/bake-model-component.sh prove that: point is paired, NATIVE_CHANGED is assigned only in its
 // reset and inside the ECMWF/GFS block, and an equal pair exits without upload. A re-pin that changes
-// any of them turns the HRRR check off (the bake runs) until it is reviewed again.
-export const HRRR_SAME_RUN_GUARDS = Object.freeze([
+// any of them turns the HRRR and AIFS checks off (the bake runs) until they are reviewed again.
+export const SAME_RUN_GUARDS = Object.freeze([
   'case "$MODEL" in ecmwf|gfs|aifs|icon|hrrr) HAS_POINT=1 ;; *) HAS_POINT=0 ;; esac\n',
   'NATIVE_CHANGED=0\nif [ "$MODEL" = ecmwf ] || [ "$MODEL" = gfs ]; then\n',
   '  NATIVE_CHANGED="$(node -e \'process.stdout.write(JSON.parse(process.argv[1]).changed ? "1" : "0")\' "$NATIVE_JSON")"\nfi\n',
   '  if [ "$ACTIVE_MODEL_RUN" = "$RUN_ID" ] && [ "$ACTIVE_POINT_RUN" = "$RUN_ID" ] && [ "$NATIVE_CHANGED" = 0 ]; then\n' +
     '    echo "$MODEL and point-$MODEL unchanged ($RUN_ID) — no upload or pointer mutation"\n    exit 0\n',
 ]);
-// The bake's component gate (validate-model-component.py MAX_AGE_HOURS.hrrr = 12) fails a served
-// HRRR run older than 12 h. Bake well before that, so a stalled upstream still turns the job red.
+export const SAME_RUN_MODELS = Object.freeze(['hrrr', 'aifs']);
+// The bake's component gate (validate-model-component.py MAX_AGE_HOURS hrrr 12, aifs 18) fails a
+// served run older than that. Bake well before it, so a stalled upstream still turns the job red.
+// AIFS: from 10-17 to 10-23 each cycle reached the hourly lane 6.2 h (to 10-20) or 8.2 h (since)
+// after its init, so a served run was at most 14.2 h old at a tick when no cycle was missed; 16 h
+// keeps HRRR's 2 h margin below the gate.
 export const HRRR_MAX_SERVED_AGE_HOURS = 10;
+export const AIFS_MAX_SERVED_AGE_HOURS = 16;
+const MAX_SERVED_AGE_HOURS = Object.freeze({hrrr: HRRR_MAX_SERVED_AGE_HOURS, aifs: AIFS_MAX_SERVED_AGE_HOURS});
 // The only Atmos commit whose HRRR run selection (fetch_hrrr.main/pick_init/update_index) and bake
 // publication path were reviewed for the HRRR stand-aside. The text guards above cannot prove that a
 // later pin keeps the run-id derivation or adds no other same-run publish, so any other checkout HEAD
 // turns the HRRR check off (the bake runs as before) until this constant is re-reviewed. ECMWF/GFS
 // keep their existing collector-call guard only.
 export const HRRR_REVIEWED_ATMOS_SHA = '30a211be7692868f36380b809cd9b2bb01011e6a';
+// The same for AIFS: the only Atmos commit whose AIFS run selection (fetch_aifs.main/latest_run/
+// update_index with --keep 1) and bake publication path were reviewed for the AIFS stand-aside.
+// Re-reviewed on its own; a pin bump turns the AIFS check off until this constant moves.
+export const AIFS_REVIEWED_ATMOS_SHA = '30a211be7692868f36380b809cd9b2bb01011e6a';
+const REVIEWED_ATMOS_SHA = Object.freeze({hrrr: HRRR_REVIEWED_ATMOS_SHA, aifs: AIFS_REVIEWED_ATMOS_SHA});
 // Changing any of these files can change what the lane would publish, so a served component that
 // predates the newest of them is re-baked once.
 export const DEFINITION_PATHS = Object.freeze(['.github/workflows/catalog-bake.yml',
@@ -80,7 +93,7 @@ export function parsePrecondition(text) {
 
 export function eligibility({model, target, bootstrapMissing, rebakeServedRun, shortRuns}) {
   if (target !== 'production') return 'target is not production';
-  if (!STAND_ASIDE_MODELS.includes(model)) return `${model} is not an ECMWF, GFS or HRRR model`;
+  if (!STAND_ASIDE_MODELS.includes(model)) return `${model} is not an ECMWF, GFS, HRRR or AIFS model`;
   if (bootstrapMissing === 'true') return 'bootstrap_missing was requested';
   if (rebakeServedRun === 'true') return 'rebake_served_run was requested';
   if (shortRuns && shortRuns !== '0') return 'ECMWF_SHORT_RUNS changes the collector selection';
@@ -112,12 +125,13 @@ export function decide({model, upstreamRun, map, point, manifestBytes, definitio
       manifest.quality?.status !== 'passed')
     return run(`served ${model} component manifest is not the catalog's passed ${mapRun} component`);
   // bake-model-component.sh backfills viewport-native bundles into a current ECMWF/GFS run that lacks them.
-  if (model !== 'hrrr' && (!Array.isArray(manifest.quality.checks) || !manifest.quality.checks.includes('native_viewport')))
+  if (!SAME_RUN_MODELS.includes(model) && (!Array.isArray(manifest.quality.checks) || !manifest.quality.checks.includes('native_viewport')))
     return run(`served ${model} component lacks native viewport bundles (the bake would backfill them)`);
-  if (model === 'hrrr') {
+  const maxAgeHours = MAX_SERVED_AGE_HOURS[model];
+  if (maxAgeHours !== undefined) {
     const ageHours = (now - Date.parse(map.ACTIVE_COMPONENT_GENERATION_TIME)) / 3600000;
-    if (!Number.isFinite(ageHours) || ageHours < 0 || ageHours > HRRR_MAX_SERVED_AGE_HOURS)
-      return run(`served hrrr run ${mapRun} is not within ${HRRR_MAX_SERVED_AGE_HOURS} h of now (the bake's freshness gate decides)`);
+    if (!Number.isFinite(ageHours) || ageHours < 0 || ageHours > maxAgeHours)
+      return run(`served ${model} run ${mapRun} is not within ${maxAgeHours} h of now (the bake's freshness gate decides)`);
   }
   const completed = typeof manifest.completedAt === 'string' && ISO.test(manifest.completedAt) ? Date.parse(manifest.completedAt) : NaN;
   const changed = typeof definitionChangedAt === 'string' && ISO.test(definitionChangedAt) ? Date.parse(definitionChangedAt) : NaN;
@@ -166,16 +180,17 @@ function defaultExec(command, args, options) {
 // Gathers the evidence for decide(). Runs inside the pinned Atmos checkout (working directory).
 export async function collect({env, atmosRoot, probePath, exec = defaultExec, fetcher = fetch, workDir, clock = Date.now}) {
   const model = env.MODEL;
-  if (model === 'hrrr') {
+  const reviewed = REVIEWED_ATMOS_SHA[model];
+  if (reviewed) {
     const head = String((await exec('git', ['rev-parse', 'HEAD'], {cwd: atmosRoot, timeout: 30000, env: process.env}))?.stdout ?? '').trim();
-    if (head !== HRRR_REVIEWED_ATMOS_SHA)
-      throw new Error(`atmos checkout ${/^[a-f0-9]{40}$/.test(head) ? head : 'unknown'} is not the reviewed HRRR pin ${HRRR_REVIEWED_ATMOS_SHA}`);
+    if (head !== reviewed)
+      throw new Error(`atmos checkout ${/^[a-f0-9]{40}$/.test(head) ? head : 'unknown'} is not the reviewed ${model.toUpperCase()} pin ${reviewed}`);
   }
   const script = readFileSync(join(atmosRoot, 'ops/bake-model-component.sh'), 'utf8');
   if (!script.includes(COLLECTOR_CALLS[model])) throw new Error('pinned collector invocation changed; probe not reviewed for it');
-  if (model === 'hrrr' && (!HRRR_SAME_RUN_GUARDS.every(line => script.includes(line)) ||
+  if (SAME_RUN_MODELS.includes(model) && (!SAME_RUN_GUARDS.every(line => script.includes(line)) ||
       script.split('NATIVE_CHANGED=').length !== 3))
-    throw new Error('pinned bake same-run decision changed; HRRR check not reviewed for it');
+    throw new Error(`pinned bake same-run decision changed; ${model.toUpperCase()} check not reviewed for it`);
   const precondition = async componentId => {
     const file = join(workDir, `${componentId}.env`);
     await exec('bash', [join(atmosRoot, 'ops/platform/hydrate-r2-component.sh')], {cwd: atmosRoot, timeout: 120000,
