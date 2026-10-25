@@ -214,7 +214,14 @@ test('execution recomputes the approved plan as promotions continue and deletes 
   assert.equal(h.io.deletes.length, 0);
   const result = await executeRetention({ io: h.io, policy, now, deleteForPrefix: h.io.deleteForPrefix,
     baselineCatalogId: plan.baseline.catalogId, approvedPlanSha256: plan.planSha256 });
-  assert.equal(result.deleted, plan.totals.objects);
+  assert.equal(result.deleteRequestsByThisRun, plan.totals.objects);
+  assert.equal(result.rootsConfirmedEmpty, plan.candidates.length);
+  assert.equal(result.confirmedEmptyPlannedObjects, plan.totals.objects);
+  assert.equal(result.confirmedEmptyPlannedBytes, plan.totals.bytes);
+  assert.deepEqual(result.prefixReceipts, plan.candidates.map(row => ({ prefix: row.prefix,
+    deleteRequestsByThisRun: row.objectCount, plannedObjects: row.objectCount, plannedBytes: row.bytes,
+    remainingObjects: 0, confirmedEmpty: true })));
+  assert.ok(!('deleted' in result) && !('bytes' in result), 'planned sizes and request acknowledgements never claim unique removals');
   assert.equal(h.io.deletes.length, plan.totals.objects);
   for (const candidate of plan.candidates) {
     const ours = h.io.deletes.filter(key => key.startsWith(candidate.prefix));
@@ -229,6 +236,31 @@ test('execution recomputes the approved plan as promotions continue and deletes 
   const next = await planRetention({ io: h.io, policy, now });
   assert.notEqual(next.planSha256, plan.planSha256);
   assert.ok(next.candidates.every(row => !plan.candidates.some(done => done.prefix === row.prefix)));
+});
+
+test('an acknowledged delete that leaves or restores an object stops before the next root', async () => {
+  for (const mode of ['acknowledged-without-removal', 'rewritten-after-delete']) {
+    const h = history();
+    const plan = await planRetention({ io: h.io, policy, now });
+    assert.ok(plan.candidates.length >= 2);
+    const first = plan.candidates[0], next = plan.candidates[1];
+    const nextBefore = await h.io.listRows(next.prefix);
+    const leftoverKey = `${first.prefix}f0.png`, minted = [];
+    const deleteForPrefix = async prefix => {
+      minted.push(prefix);
+      return { async delete(key) {
+        h.io.deletes.push(key);
+        if (mode !== 'acknowledged-without-removal' || key !== leftoverKey) h.buckets[COMPONENTS].delete(key);
+        if (mode === 'rewritten-after-delete' && key === `${first.prefix}component.json`)
+          h.put(COMPONENTS, `${first.prefix}rewritten.png`, 'new writer', T0);
+      }, close() {} };
+    };
+    await assert.rejects(executeRetention({ io: h.io, policy, now, deleteForPrefix,
+      baselineCatalogId: plan.baseline.catalogId, approvedPlanSha256: plan.planSha256 }), /still lists 1 objects after its deletion.*stopping/, mode);
+    assert.equal(h.io.deletes.length, first.objectCount, 'only the first root received requests');
+    assert.deepEqual(minted, [first.prefix], 'no delete credential was minted for the next root');
+    assert.deepEqual(await h.io.listRows(next.prefix), nextBefore, 'the next root remains intact');
+  }
 });
 
 test('the guard re-reads pointers before every delete and stops on re-promotion, rollback or a pin change', async () => {

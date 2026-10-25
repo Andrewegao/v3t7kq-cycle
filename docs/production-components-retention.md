@@ -68,7 +68,14 @@ records its object count, bytes and the SHA-256 of its sorted `[key, size, etag]
      pointer is walked back to the last verified head; a rollback, a broken chain or a
      re-promoted candidate stops the run. A changed pin stops the run;
    - deletes each root's `component.json` last, with a 15-minute `DeleteObject`-only credential
-     minted per root from the dedicated delete token (the same construction as Wind100).
+     minted per root from the dedicated delete token (the same construction as Wind100);
+   - re-lists that exact root with the separate read credential and stops unless it is empty,
+     before starting the next root.
+
+   The JSON result in the workflow log reports `deleteRequestsByThisRun`, `rootsConfirmedEmpty`,
+   `confirmedEmptyPlannedObjects` and `confirmedEmptyPlannedBytes`, with a receipt per prefix in
+   `prefixReceipts`. These are the plan's objects and bytes in roots proven empty, not a claim
+   that this run uniquely removed them: deleting an absent key is acknowledged too.
 
    A stopped or partial run is replayable: a new dry run plans only what remains.
 

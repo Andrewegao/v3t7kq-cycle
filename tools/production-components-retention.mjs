@@ -395,7 +395,8 @@ export async function executeRetention({ io, policy, approvedPlanSha256, baselin
   verifiedHead = report.livePointer.catalogId;
   verifiedPointers.add(report.livePointer.sha256);
   const limit = pool(policy.deleteConcurrency);
-  let deleted = 0;
+  let deleteRequests = 0;
+  const prefixReceipts = [];
   for (const candidate of content.candidates) {
     const rows = (await io.listRows(candidate.prefix, policy.maximumDeletesPerRun)).sort((a, b) => a.key.localeCompare(b.key));
     assert.equal(keyDigest(rows), candidate.keysSha256, `${candidate.prefix} changed since the dry run; replan`);
@@ -405,6 +406,7 @@ export async function executeRetention({ io, policy, approvedPlanSha256, baselin
     const ordered = [...keys.filter(key => key !== manifest), ...keys.filter(key => key === manifest)];
     // Temporary credentials live 15 minutes: mint one per root and again after 10 minutes.
     const clients = [];
+    const requestsBefore = deleteRequests;
     let current = null, mintedAt = 0;
     const clientFor = () => {
       if (!current || now() - mintedAt > 600_000) {
@@ -422,15 +424,26 @@ export async function executeRetention({ io, policy, approvedPlanSha256, baselin
             await guard(candidate.prefix);
             if (aborted) return;
             await (await clientFor()).delete(key);
-            deleted += 1;
+            deleteRequests += 1;
           } catch (error) { aborted ??= error; }
         })));
-        if (aborted) throw Object.assign(new Error(`${aborted.message} (deleted ${deleted} objects before stopping)`), { deleted });
+        if (aborted) throw Object.assign(new Error(`${aborted.message} (this run sent ${deleteRequests} delete requests before stopping)`),
+          { deleteRequestsByThisRun: deleteRequests });
       }
     } finally { for (const client of clients) (await client.catch(() => null))?.close?.(); }
+    // A successful DeleteObject also acknowledges an absent key. Use the independent read
+    // credential to prove this exact approved prefix empty before starting another root.
+    const remaining = await io.listRows(candidate.prefix, policy.maximumDeletesPerRun);
+    assert.equal(remaining.length, 0,
+      `${candidate.prefix} still lists ${remaining.length} objects after its deletion; stopping`);
+    prefixReceipts.push({ prefix: candidate.prefix, deleteRequestsByThisRun: deleteRequests - requestsBefore,
+      plannedObjects: candidate.objectCount, plannedBytes: candidate.bytes, remainingObjects: 0, confirmedEmpty: true });
   }
   return { status: 'deleted-unreferenced-production-model-components', planSha256,
-    baselineCatalogId: content.baseline.catalogId, roots: content.candidates.length, deleted, bytes: content.totals.bytes };
+    baselineCatalogId: content.baseline.catalogId, roots: content.candidates.length,
+    deleteRequestsByThisRun: deleteRequests, rootsConfirmedEmpty: prefixReceipts.length,
+    confirmedEmptyPlannedObjects: prefixReceipts.reduce((sum, row) => sum + row.plannedObjects, 0),
+    confirmedEmptyPlannedBytes: prefixReceipts.reduce((sum, row) => sum + row.plannedBytes, 0), prefixReceipts };
 }
 
 // --- R2 adapter -------------------------------------------------------------------------------
