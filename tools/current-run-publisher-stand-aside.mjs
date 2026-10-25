@@ -1,27 +1,30 @@
 #!/usr/bin/env node
-// Stand-aside check for bake.yml's ECMWF and GFS production publishers
-// (publish-current-model-production.yml).
+// Stand-aside check for bake.yml's ECMWF production publisher (publish-current-model-production.yml).
 //
 // The bake.yml publisher queues on the same per-model lock as the catalog-bake slow lane and
 // usually runs minutes after the slow lane promoted the very run its collector fetched. Its sealed
 // collector input has no viewport-native sidecars, so the pinned ops/bake-model-component.sh
-// rebuilds them (NATIVE_CHANGED=1) and re-uploads the whole map component (about 10.5 k ECMWF or
-// 12.4 k GFS objects) for a run production already serves.
+// rebuilds them (NATIVE_CHANGED=1) and re-uploads the whole ECMWF map component (about 10.5 k
+// objects) for a run production already serves.
 //
 // Before hydrate, this check stands aside only when production already serves that run complete,
 // so a same-run publication could not change anything a reader uses:
 //   1. map and point components are both at the collected run (one catalog epoch), the served map
-//      component.json matches the catalog hash, passed, and declares native_viewport;
-//   2. the served run is complete: no absence receipt (retiredVariables), every optional layer the
-//      pinned bake can produce is present, and for GFS the RTOFS currents are this run's own
-//      snapshot (not carried), the ECMWF wave fill uses the newest cycle it may (the GFS init) and
-//      PM2.5/AQI saw every GEFS-Aerosols lead;
+//      component.json matches the catalog hash, passed, and declares native_viewport (the workflow
+//      runs the check only when the publisher would reuse the served point component);
+//   2. the served run is complete: no absence receipt (retiredVariables) and all six upper-air
+//      layers present (fetch_upperair.py merges them only when every frame baked);
 //   3. every viewport-native bundle the pinned bake builds is declared and present for every frame;
 //   4. every collected file of the run is byte-identical (size and MD5) to the served object, and
-//      the collected manifest and index entry are the served ones apart from enrichment, so the
-//      rebuilt natives (content-addressed from those frames) would be the served ones;
+//      the collected manifest and index entry are the served ones apart from generated_at and the
+//      native descriptors, so the rebuilt natives (content-addressed from those frames) would be
+//      the served ones;
 //   5. the Atmos checkout is the reviewed commit, the slow lane is pinned to it, and the served
 //      component completed after this lane's definition last changed.
+//
+// GFS is deliberately not covered: its enrichment rewrites collected frames in place (the ECMWF
+// wave fill on waves/wperiod/wpower/wdir), so condition 4 can never hold for it, and some of its
+// add-ons can degrade without a manifest trace.
 //
 // Fail open: any missing evidence, unexpected shape, API or R2 error or timeout leaves
 // `stand_aside=false`, and the job runs exactly the steps it ran before this check. It only reads
@@ -35,46 +38,36 @@ import {join, resolve, sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {parsePrecondition, runFromTime} from './component-bake-stand-aside.mjs';
 
-export const PUBLISHER_STAND_ASIDE_MODELS = Object.freeze(['ecmwf', 'gfs']);
-// The only Atmos commit whose publication path (ops/bake-model-component.sh, core_model_artifact.py
-// install-component, fetch_upperair.py, enrich_gfs.sh and its add-ons, carry_static_addons.py,
-// build_native_wind_bundles.py, data/optional_variables.json) was reviewed for this check. Any other
-// checkout HEAD turns the check off (the publisher runs as before) until this constant is re-reviewed.
+export const PUBLISHER_STAND_ASIDE_MODELS = Object.freeze(['ecmwf']);
+// The only Atmos commit whose ECMWF publication path (ops/bake-model-component.sh,
+// core_model_artifact.py install-component, fetch_upperair.py, build_native_wind_bundles.py,
+// data/optional_variables.json) was reviewed for this check. Any other checkout HEAD turns the check
+// off (the publisher runs as before) until this constant is re-reviewed.
 export const REVIEWED_ATMOS_SHA = '30a211be7692868f36380b809cd9b2bb01011e6a';
-// Optional layers the pinned bake can add to a run (data/optional_variables.json at the reviewed
-// commit, less GFS dfm10, uv and drought, which no pinned step produces). A served run missing any
-// of them could gain it from a same-run bake, so the publisher runs.
+// Optional layers the pinned bake can add to an ECMWF run (data/optional_variables.json at the
+// reviewed commit). A served run missing any of them could gain it from a same-run bake.
 export const REQUIRED_OPTIONAL = Object.freeze({
   ecmwf: Object.freeze(['gh500', 'gh850', 'gh925', 'wind500', 'wind850', 'wind925']),
-  gfs: Object.freeze(['aero', 'aqi', 'capei', 'cat', 'co', 'ctop', 'currents', 'currents_uv', 'dust', 'evapduct', 'fire',
-    'fog', 'frzalt', 'icing', 'no2', 'o3', 'o3surf', 'pm25', 'so2', 'soilf_r', 'soilf_s', 'soilm_r', 'soilm_s',
-    'soilt_d', 'soilt_s', 'sst', 'swell2', 'swell3', 'thermals']),
 });
 // build_native_wind_bundles.py WEATHER_LAB_SURFACE_VARIABLES and its row layout at the reviewed commit.
 export const NATIVE_PROFILE = Object.freeze({
   ecmwf: Object.freeze(['wind', 'temp', 'gust', 'mslp', 'precip', 'cloud', 'dewpoint']),
-  gfs: Object.freeze(['wind', 'temp', 'gust', 'mslp', 'cape', 'rh']),
 });
 export const NATIVE_REPRESENTATION = 'native-rgba128-halo-l2-t2-r3-b3-row-v1';
 export const NATIVE_ROWS = 6; // ceil(721 / 128)
-// add_ecmwf_wave_fill.py FILLED and DIRECTION_FIELD; carry_static_addons.py CURRENT_LAYERS; add_aq.py layers.
-export const WAVE_FILLED = Object.freeze(['waves', 'wperiod', 'wpower']);
-export const WAVE_DIRECTION = 'wdir';
-export const CURRENT_LAYERS = Object.freeze(['currents', 'currents_uv']);
-export const AEROSOL_LAYERS = Object.freeze(['pm25', 'aqi']);
-// Keys the pinned enrichment adds to a variable the collector already declared.
-const ENRICHMENT_KEYS = Object.freeze(['nativeViewport', 'supplement']);
+// The only key the pinned ECMWF enrichment adds to a variable the collector already declared.
+const ENRICHMENT_KEYS = Object.freeze(['nativeViewport']);
 // Top-level manifest keys a same-run bake rewrites (bake clock) or that completeness forbids.
 const MUTABLE_TOP_LEVEL = Object.freeze(['generated_at', 'variables', 'retiredVariables']);
-// Changing any of these can change what this publisher or the slow lane that produced the served
-// component would publish, so a served component that predates the newest of them is re-published once.
+// Changing any of these can change what this publisher, this check or the slow lane that produced
+// the served component would do, so a served component that predates the newest of them is
+// re-published once.
 export const DEFINITION_PATHS = Object.freeze(['.github/workflows/publish-current-model-production.yml',
   '.github/workflows/catalog-bake.yml', '.github/workflows/collect-core-model.yml',
-  'tools/current-run-publisher-stand-aside.mjs']);
+  'tools/current-run-publisher-stand-aside.mjs', 'tools/component-bake-stand-aside.mjs', 'tools/current-model-artifact.py']);
 const REPOSITORY = 'Andrewegao/v3t7kq-cycle';
 const RUN = /^\d{10}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
-const MD5 = /^[a-f0-9]{32}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 const MAX_COMPONENT_BYTES = 64 * 1024;
 const MAX_INDEX_BYTES = 64 * 1024;
@@ -96,11 +89,12 @@ const isObject = value => value !== null && typeof value === 'object' && !Array.
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const md5 = bytes => createHash('md5').update(bytes).digest('hex');
 
-export function eligibility({model, kind, handoffStatus, retainedRunId}) {
-  if (!PUBLISHER_STAND_ASIDE_MODELS.includes(model)) return `${model} is not ECMWF or GFS`;
+export function eligibility({model, kind, handoffStatus, retainedRunId, pointReuse}) {
+  if (!PUBLISHER_STAND_ASIDE_MODELS.includes(model)) return `${model} is not ECMWF`;
   if (kind !== 'core') return 'not a core model publication';
   if (handoffStatus !== 'ready') return 'no authenticated collector handoff';
   if (retainedRunId) return 'retained-run recovery publishes as before';
+  if (pointReuse !== '1') return 'point reuse is off, so the publisher would rebuild the point component';
   return null;
 }
 
@@ -141,26 +135,13 @@ function servedComponentReason({model, forecastRun, map, point, componentBytes})
   return {component};
 }
 
-// Condition 2: nothing a same-run bake could add or refresh is missing or carried in the served run.
+// Condition 2: nothing a same-run bake could add is missing from the served run.
 export function completenessReason(model, manifest) {
-  const variables = manifest.variables;
   const receipts = manifest.retiredVariables;
   if (receipts !== undefined && (!isObject(receipts) || Object.keys(receipts).length))
     return `served ${model} run carries absence receipts (${isObject(receipts) ? Object.keys(receipts).sort().join(', ') : 'invalid'})`;
-  const missing = REQUIRED_OPTIONAL[model].filter(name => !isObject(variables[name]));
+  const missing = REQUIRED_OPTIONAL[model].filter(name => !isObject(manifest.variables[name]));
   if (missing.length) return `served ${model} run lacks optional layers ${missing.join(', ')}`;
-  if (model !== 'gfs') return null;
-  for (const layer of CURRENT_LAYERS)
-    if (!sameTime(variables[layer].validTime, manifest.init_time))
-      return `served gfs ${layer} is not this run's own RTOFS snapshot (valid ${variables[layer].validTime ?? 'unknown'})`;
-  for (const layer of [...WAVE_FILLED, ...(isObject(variables[WAVE_DIRECTION]) ? [WAVE_DIRECTION] : [])]) {
-    if (!isObject(variables[layer])) return `served gfs run lacks ${layer}`;
-    if (!sameTime(variables[layer].supplement?.initTime, manifest.init_time))
-      return `served gfs ${layer} wave fill is not from the ECMWF cycle at the GFS init (${variables[layer].supplement?.initTime ?? 'none'})`;
-  }
-  for (const layer of AEROSOL_LAYERS)
-    if (variables[layer].semantics?.missingEncoding !== undefined)
-      return `served gfs ${layer} has hours without a GEFS-Aerosols lead`;
   return null;
 }
 
@@ -225,7 +206,7 @@ export function collectedRunReason({model, forecastRun, servedIndex, packIndex, 
 export function decide(evidence) {
   const publish = reason => ({standAside: false, reason});
   const {model, forecastRun, definitionChangedAt} = evidence;
-  if (!PUBLISHER_STAND_ASIDE_MODELS.includes(model)) return publish(`${model} is not ECMWF or GFS`);
+  if (!PUBLISHER_STAND_ASIDE_MODELS.includes(model)) return publish(`${model} is not ECMWF`);
   if (!RUN.test(forecastRun ?? '')) return publish('collected run unavailable');
   const served = servedComponentReason(evidence);
   if (typeof served === 'string') return publish(served);
@@ -254,8 +235,8 @@ export function summaryText(model, decision) {
   if (!decision.standAside)
     return `### Component publisher: ${model} runs\n\n${model}: the publisher runs as before (${decision.reason}).\n`;
   return [`### Component publisher: ${model} stood aside`, '',
-    `Production already serves ${model} run ${decision.run} complete: map and point at that run, no absence receipt, every optional layer ` +
-    'fresh, every viewport-native bundle present, and every collected file byte-identical to the served object. ' +
+    `Production already serves ${model} run ${decision.run} complete: map and point at that run, no absence receipt, all six upper-air layers, ` +
+    'every viewport-native bundle present, and every collected file byte-identical to the served object. ' +
     `Served component \`${decision.rootPrefix}\` completed ${decision.completedAt}, after this lane's definition last changed (${decision.definitionChangedAt}).`,
     '', 'Nothing was hydrated, uploaded or promoted; the served component stays and this publisher reports `unchanged`.', ''].join('\n');
 }
@@ -381,7 +362,8 @@ export async function main(argv, env = process.env, deps = {}) {
   const [atmosRoot = '.', controllerRoot = '..', handoffDir = join(env.RUNNER_TEMP ?? tmpdir(), 'model-handoff')] = argv;
   const model = env.MODEL ?? '';
   let decision;
-  const ineligible = eligibility({model, kind: env.COMPONENT_KIND, handoffStatus: env.HANDOFF_STATUS, retainedRunId: env.RETAINED_RUN_ID});
+  const ineligible = eligibility({model, kind: env.COMPONENT_KIND, handoffStatus: env.HANDOFF_STATUS, retainedRunId: env.RETAINED_RUN_ID,
+    pointReuse: env.POINT_REUSE_ENABLED});
   if (ineligible) decision = {standAside: false, reason: ineligible};
   else {
     const workDir = mkdtempSync(join(env.RUNNER_TEMP || tmpdir(), 'publisher-stand-aside-'));

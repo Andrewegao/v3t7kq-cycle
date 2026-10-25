@@ -65,9 +65,10 @@ an artifact is authenticated, the reusable publisher hydrates the current model
 from the hard-coded production data/component buckets under the protected
 `production` environment. This is the data source actually read by production,
 staging, and the shared-data localhost preview. No Pages/UI credential exists in
-this lane. For core ECMWF and GFS, a read-only check first stands the publisher
-aside (outcome `unchanged`, no hydrate or upload) when production already serves
-the collected run complete and byte-identical; see
+this lane. For core ECMWF (with point reuse on), a read-only check first stands
+the publisher aside (outcome `unchanged`, no hydrate or upload) when production
+already serves the collected run complete and byte-identical; GFS always
+publishes. See
 [workflow operations](WORKFLOW_OPERATIONS.md) for its conditions.
 
 Regional replacement binds the hydrated last-good manifest into the unchanged
