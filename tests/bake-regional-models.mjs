@@ -134,9 +134,16 @@ test('per-model authentication precedes production baseline and publication cred
   const baseline=publisher.indexOf('name: hydrate authenticated current production component baseline');
   const publish=publisher.indexOf('name: validate and publish only the selected production data component');
   assert.ok(auth>0&&auth<baseline&&baseline<publish);
-  const authBlock=publisher.slice(auth,baseline);
+  const authBlock=publisher.slice(auth,publisher.indexOf('\n      - name:',auth));
   assert.match(authBlock,/GH_TOKEN: \$\{\{ github\.token \}\}/);
   assert.doesNotMatch(authBlock,/R2_PRODUCTION|CATALOG_PROMOTION_KEY/);
+  // The read-only ECMWF/GFS stand-aside check sits between authentication and the baseline; every
+  // production credential use, including its R2 read, still follows authentication.
+  const standAside=publisher.indexOf('name: stand aside when production already serves this collected run complete');
+  assert.ok(auth<standAside&&standAside<baseline);
+  for(const match of publisher.matchAll(/secrets\.(?:R2_PRODUCTION_[A-Z_]+|CATALOG_PROMOTION_KEY_PRODUCTION|CATALOG_ENDPOINT_PRODUCTION)/g))
+    assert.ok(match.index>auth,match[0]);
+  assert.doesNotMatch(publisher.slice(standAside,baseline),/CATALOG_PROMOTION_KEY|CATALOG_ENDPOINT/);
   assert.match(publisher,/REGIONAL_INPUT_RECEIPT_SHA256/);
   assert.match(publisher,/REGIONAL_POINT_RECEIPT_SHA256/);
   assert.match(publisher,/CORE_INPUT_MANIFEST_SHA256/);
