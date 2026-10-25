@@ -133,8 +133,34 @@ jobs:
             --controller-sha "$GITHUB_SHA" --atmos-source-sha "$ATMOS_SHA" --atmos-root "$GITHUB_WORKSPACE/atmos" \
             --kind "$COMPONENT_KIND" --model "$MODEL" --output "$RUNNER_TEMP/model-handoff" \
             --github-output "$GITHUB_OUTPUT" --retained-run-id "$RETAINED_RUN_ID"
+      # ECMWF/GFS: bake.yml's publisher usually runs minutes after the catalog-bake slow lane promoted
+      # the very run its collector fetched, and would re-upload the whole map component for it. Stand
+      # aside before hydrate only when production already serves that run complete (map and point at
+      # it, no absence receipt, every optional layer fresh, every viewport-native bundle present, every
+      # collected file byte-identical to the served object, reviewed Atmos pin, served component newer
+      # than this lane's definition); the outcome is then `unchanged`. Fails open: any error, timeout or
+      # missing evidence leaves stand_aside unset and every step below runs exactly as before. It reads
+      # only; GITHUB_ENV and the Atmos checkout stay untouched.
+      - name: stand aside when production already serves this collected run complete
+        id: stand_aside
+        if: ${{ steps.handoff.outputs.status == 'ready' && inputs.kind == 'core' && (inputs.model == 'ecmwf' || inputs.model == 'gfs') && inputs.retained_run_id == '' }}
+        continue-on-error: true
+        timeout-minutes: 8
+        working-directory: atmos
+        env:
+          HANDOFF_STATUS: ${{ steps.handoff.outputs.status }}
+          GH_TOKEN: ${{ github.token }}
+          CATALOG_R2_REMOTE: weatherx:weatherx-data-production
+          COMPONENT_R2_REMOTE: weatherx:weatherx-components-production
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+        run: node "$GITHUB_WORKSPACE/cycle-controller/tools/current-run-publisher-stand-aside.mjs" "$GITHUB_WORKSPACE/atmos" "$GITHUB_WORKSPACE/cycle-controller" "$RUNNER_TEMP/model-handoff"
       - name: hydrate authenticated current production component baseline
-        if: ${{ steps.handoff.outputs.status == 'ready' }}
+        if: ${{ steps.handoff.outputs.status == 'ready' && steps.stand_aside.outputs.stand_aside != 'true' }}
         env:
           COMPONENT_ID: ${{ inputs.model }}
           CATALOG_R2_REMOTE: weatherx:weatherx-data-production
@@ -162,7 +188,7 @@ jobs:
           fi
       - name: validate and publish only the selected production data component
         id: publish
-        if: ${{ steps.handoff.outputs.status == 'ready' }}
+        if: ${{ steps.handoff.outputs.status == 'ready' && steps.stand_aside.outputs.stand_aside != 'true' }}
         env:
           CATALOG_R2_REMOTE: weatherx:weatherx-data-production
           COMPONENT_R2_REMOTE: weatherx:weatherx-components-production
@@ -232,9 +258,11 @@ jobs:
         if: ${{ always() }}
         env:
           HANDOFF_STATUS: ${{ steps.handoff.outputs.status }}
+          STAND_ASIDE: ${{ steps.stand_aside.outputs.stand_aside }}
           PUBLISH_STATUS: ${{ steps.publish.outputs.status }}
         run: |
           if [ "$HANDOFF_STATUS" = withheld ]; then status=withheld
+          elif [ "$HANDOFF_STATUS" = ready ] && [ "$STAND_ASIDE" = true ] && [ -z "$PUBLISH_STATUS" ]; then status=unchanged
           elif [ "$PUBLISH_STATUS" = published ] || [ "$PUBLISH_STATUS" = unchanged ]; then status="$PUBLISH_STATUS"
           else status=failed; fi
           echo "status=$status" >> "$GITHUB_OUTPUT"
