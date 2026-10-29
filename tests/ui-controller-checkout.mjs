@@ -45,7 +45,7 @@ test('all four reviewed controller dependency inventories fit the sparse selecti
     assert.ok(record.externalPackages.includes('pngjs'));
     assert.ok(record.externalPackages.includes('pixelmatch'));
   }
-  const combined=fixture.controllers.find(row=>row.pin==='d6548b9d1545d45b7fd7a3eb2353bd79e7988769');
+  const combined=fixture.controllers.find(row=>row.pin==='cc2b5935a0a58e5dc51cc697c5ffc4c36f987c1a');
   assert.ok(combined.files.includes('app/e2e/public-release-journeys.mjs'));
   assert.ok(combined.files.includes('app/e2e/staging-account-qualification.mjs'));
   assert.equal(combined.files.length,23);
@@ -76,7 +76,7 @@ const buildController=staging.split('      - name: checkout reviewed release con
   .split('      - uses: actions/setup-node@')[0];
 const buildClosure=fixture.stagingBuild;
 const controllerRefs=[
-  ['production-account-ru-kk-wind100-onboarding-v2','d6548b9d1545d45b7fd7a3eb2353bd79e7988769'],
+  ['production-account-ru-kk-wind100-onboarding-v2','cc2b5935a0a58e5dc51cc697c5ffc4c36f987c1a'],
   ['production-account-ru-kk-beta-v1','b9db38dd22eed1da56c6c4dd4140480da7e89153'],
   ['production-account-billing-v1','6fcec22638f6696be71daa2f2e974ebc4b24318e'],
   ['none','25c402db5149daa018e349a34a4beeba1f2dca45'],
