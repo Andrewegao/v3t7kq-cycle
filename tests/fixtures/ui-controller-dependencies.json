@@ -91,7 +91,7 @@
       ]
     },
     {
-      "pin": "09472cebae35075a8ec424527971b2b4ad7f7b52",
+      "pin": "64922cf1a8431abc6de60bf336ab36008ac46f90",
       "files": [
         "app/e2e/layer-switch-surface.mjs",
         "app/e2e/layer-switch-tint.mjs",
@@ -123,14 +123,14 @@
         "pngjs"
       ],
       "releaseLayerFiles": {
-        "app/e2e/layer-switch-tint.mjs": "7f4acb74f23d69c2a38c702a8a5e9c532e666827b833695fa6a55f71278d98f3",
-        "app/e2e/layer-switch-surface.mjs": "067e97b7203304e78715980098940bc6c63337e60ec89d529e6288c014582265"
+        "app/e2e/layer-switch-tint.mjs": "4782ceec6f86e6e61effcb6f17e60d78c7e6276e998bda467577fa1bec49bf4e",
+        "app/e2e/layer-switch-surface.mjs": "a00b43bbaf99a5116125cc134600e04ebfc054b01f9680a0119537df5dc3bbaf"
       }
     }
   ],
   "stagingBuild": {
     "profile": "production-account-ru-kk-wind100-onboarding-v2",
-    "pin": "09472cebae35075a8ec424527971b2b4ad7f7b52",
+    "pin": "64922cf1a8431abc6de60bf336ab36008ac46f90",
     "paths": [
       ".gitignore",
       "platform/edge/package.json",
@@ -138,6 +138,6 @@
       "ops/release/build-release-receipt.mjs"
     ],
     "coneMode": false,
-    "provenance": "Merged Atmos master head source 09472cebae35075a8ec424527971b2b4ad7f7b52 (merge of atmos PR #656, the post-ready lane), tree 77b3b079fbc006f787a15a280bd433dbb1714326, committed 2026-11-01T09:30:47Z (atmos master head at pin time). Supersedes the cc2b5935a0a58e5dc51cc697c5ffc4c36f987c1a pin, qualified at staging in run 40837411242 (Pages deployment 2f970c94-e9ca-41c8-bc38-45c6131f748c; its production promotion 40840505057 was cancelled, not approved). Between the pins (97 commits, 251 files) the 23 qualification inventory files, the four sparse build paths, the release layer harness hashes, the intro digest and all 43 account/onboarding source digests are byte-identical. The production platform Worker is not part of this UI candidate and is not deployed by it. Fresh controller CI, current-master/clean-checkout admission and one new exact-source guarded staging run remain required; no deployment, performance or memory completion is asserted. See docs/ui-public-combined.md."
+    "provenance": "Merged Atmos source 64922cf1a8431abc6de60bf336ab36008ac46f90, tree b3e257cd16ddcd37d56c9371510e13abf586ad73, committed 2026-11-02T00:58:21Z; Merge pull request #658 from weatherx-hq/codex/startup-compaction-gate-20261101. Supersedes 09472cebae35075a8ec424527971b2b4ad7f7b52, whose staging run 41353229063 failed the mandatory inactive texture cleanup coverage assertion before deployment. Between pins: 3 commits, 8 files. Within the 23-file controller inventory only app/e2e/layer-switch-tint.mjs and app/e2e/layer-switch-surface.mjs changed; both release-layer digests are recomputed from this exact merged tree. The other 21 controller inventory files, all four sparse build paths, the intro digest and all 43 account/onboarding source digests are unchanged. The production platform Worker and production data source pin are outside this candidate. Fresh controller CI, clean exact-source admission and one new guarded staging run remain required; no deployment or qualification is asserted. See docs/ui-public-combined.md."
   }
 }
