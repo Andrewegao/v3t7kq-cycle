@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, accessSync, constants } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -167,20 +167,24 @@ test('only a staging candidate receives the bounded degraded-cache convergence w
   assert.ok(verify.indexOf('verify-platform-production.sh')<verify.indexOf("if (phase !== 'rollback')"));
   assert.doesNotMatch(verify,/catch\s*\(/); // exhaustion still throws into the rollback guard
 });
-const gnuTimeout=['/usr/bin/timeout','/opt/homebrew/bin/gtimeout','/usr/local/bin/gtimeout'].find(path=>
+const localGnuTimeout=['/opt/homebrew/bin/gtimeout','/usr/local/bin/gtimeout'].find(path=>
   existsSync(path)&&spawnSync(path,['--version'],{encoding:'utf8'}).stdout?.startsWith('timeout (GNU coreutils)'));
+// Linux must exercise the exact deployed binary on the qualification runner.
+// Its behavior is the contract; a vendor-specific version banner is not.
+const verifierTimeout=process.platform==='linux'?'/usr/bin/timeout':localGnuTimeout;
 test('the candidate wallclock propagates failures and kills the whole verifier process group',
-  {skip:process.platform!=='linux'&&!gnuTimeout},()=>{
-  assert.ok(gnuTimeout,'GNU timeout is required on the Linux release runner');
-  const ordinary=spawnSync(gnuTimeout,['5s','bash','-c','exit 23'],{stdio:'pipe'});
+  {skip:process.platform!=='linux'&&!verifierTimeout},()=>{
+  assert.ok(verifierTimeout,'timeout is required on the Linux release runner');
+  accessSync(verifierTimeout,constants.X_OK);
+  const ordinary=spawnSync(verifierTimeout,['5s','bash','-c','exit 23'],{stdio:'pipe'});
   assert.equal(ordinary.status,23,'an ordinary verifier failure must remain visible');
   const temp=mkdtempSync(resolve(tmpdir(),'wx-ui-timeout-')),script=resolve(temp,'hold.sh');
   const survived=resolve(temp,'survived');
   try{
     writeFileSync(script,"#!/usr/bin/env bash\nset -euo pipefail\ntrap '' TERM\nout=$1\n( trap '' TERM; sleep 3; printf survived > \"$out\" ) &\nwait $!\n",{mode:0o700});
     const started=Date.now();
-    const result=spawnSync(gnuTimeout,['--signal=KILL','0.1s','bash',script,survived],{stdio:'pipe'});
-    assert.notEqual(result.status,0,'a real wallclock deadline must fail closed');
+    const result=spawnSync(verifierTimeout,['--signal=KILL','0.1s','bash',script,survived],{stdio:'pipe'});
+    assert.ok(result.signal==='SIGKILL'||result.status===137,'the deadline must kill the verifier, not merely reject its arguments');
     assert.ok(Date.now()-started<2000,'descendant kept the verifier process group alive');
     assert.equal(existsSync(survived),false);
   }finally{rmSync(temp,{recursive:true,force:true});}

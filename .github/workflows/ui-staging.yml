@@ -351,7 +351,8 @@ jobs:
     environment:
       name: ui-staging
       url: https://staging.weatherx.org
-    runs-on: ubuntu-latest
+    # Ubuntu 26 uutils timeout does not satisfy the verifier process-group gate.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       UI_APP_TEST_RECEIPT: ${{ needs.app-tests.outputs.receipt }}

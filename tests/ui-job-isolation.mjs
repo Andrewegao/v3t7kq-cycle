@@ -35,7 +35,8 @@ test('candidate execution uses only the isolated source environment, never publi
   assert.match(build,/ui-release\.mjs pack-build/);
   const qualify=wf.slice(wf.indexOf('\n  qualify:\n'));
   assert.match(qualify,/needs: \[profile, build, atmos-evidence, app-tests\]/);
-  assert.match(qualify,/runs-on: ubuntu-latest/);
+  assert.match(qualify,/runs-on: ubuntu-24\.04/);
+  assert.match(read('.github/workflows/scheduler-ci.yml'),/scheduler:\n(?:[^\n]*\n)*?    runs-on: ubuntu-24\.04/);
   assert.match(qualify,/name: ui-staging/);
   assert.match(qualify,/UI_STAGING_STATIC_COMPRESSION_APPROVED: \$\{\{ vars\.UI_STAGING_STATIC_COMPRESSION_APPROVED \}\}/);
   assert.equal((wf.match(/vars\.UI_STAGING_STATIC_COMPRESSION_APPROVED/g)||[]).length,2);
