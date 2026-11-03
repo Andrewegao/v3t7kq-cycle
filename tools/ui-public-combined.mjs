@@ -56,8 +56,8 @@ export const PUBLIC_COMBINED_ONBOARDING_SOURCES = Object.freeze({
   'onboarding/useObData.ts': '84696745e68d6c2a5b927439183751e53a3cd65604b619833899e1741ee936b3',
 });
 export const PUBLIC_COMBINED_SIDECAR = 'assets/weatherx-production-account-build-v1.json';
-// Reviewed merged master head (master head 04:03Z); new-source staging acceptance remains pending.
-export const PUBLIC_COMBINED_ATMOS_SHA = 'f8085daf43dc269c3f49799f7887c44e583b5718';
+// Reviewed merged source for synthetic public-journey DNT; new-source staging acceptance remains pending.
+export const PUBLIC_COMBINED_ATMOS_SHA = '0699effe3d2e42f7a64cd6a7ed4bfe10ace54e43';
 
 export function assertPublicCombinedReady() {
   assert.match(PUBLIC_COMBINED_ATMOS_SHA, /^[a-f0-9]{40}$/);
