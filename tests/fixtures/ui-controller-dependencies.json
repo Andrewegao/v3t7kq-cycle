@@ -91,7 +91,7 @@
       ]
     },
     {
-      "pin": "2c4146fc63604ba9e5469cac5e61ec97463477de",
+      "pin": "c2fad0e6384834ddd16e65226a2efb77d214b1f4",
       "files": [
         "app/e2e/layer-switch-surface.mjs",
         "app/e2e/layer-switch-tint.mjs",
@@ -131,7 +131,7 @@
   ],
   "stagingBuild": {
     "profile": "production-account-ru-kk-wind100-onboarding-v2",
-    "pin": "2c4146fc63604ba9e5469cac5e61ec97463477de",
+    "pin": "c2fad0e6384834ddd16e65226a2efb77d214b1f4",
     "paths": [
       ".gitignore",
       "platform/edge/package.json",
@@ -139,6 +139,6 @@
       "ops/release/build-release-receipt.mjs"
     ],
     "coneMode": false,
-    "provenance": "Merged Atmos source 2c4146fc63604ba9e5469cac5e61ec97463477de, tree 94dc6df7ef732b0614f7ed14bd6f62faaca70974, committed 2026-11-04T12:34:16Z; Merge pull request #664 from weatherx-hq/codex/slow-wifi-map-20261104. Supersedes 5db01036be4870bd38b2c95670ea26dadfe12774, which qualified at staging in run 41796863421 (Cycle 4b75f13b8722c854f8abb02a139efd3866c5427e); automatic production promotion 41799821538 was cancelled and did not promote it. Between pins: 2 commits, 9 files. Atmos #664 keeps account-session/API dependencies outside the map bundle, limits flat overview requests to visible tiles, and lets compact point cards finish the selected forecast before scanning alternative models. Desktop chart expansion and mobile sheet interactions retain the existing eager painter. The three source merge-queue workflows (ci, quality, overlay-quality) succeeded on this exact merged commit. All 23 controller inventory files, four sparse build paths, both release-layer hashes, the public journey harness hash, the intro digest and all 43 account/onboarding source digests are byte-identical to the prior qualified pin, verified from actual Git blobs. The production platform Worker and production data-source pin are outside this candidate. Fresh controller CI, clean exact-source admission and one new guarded staging run remain required; no deployment or qualification is asserted. See docs/ui-public-combined.md."
+    "provenance": "Merged Atmos source c2fad0e6384834ddd16e65226a2efb77d214b1f4, tree 96902611cc60eebd786d56ad8774049e148b4a9b, committed 2026-11-04T15:08:38Z; Merge pull request #665 from weatherx-hq/codex/draft-catalog-test-speed-20261104. Supersedes unqualified source 2c4146fc63604ba9e5469cac5e61ec97463477de (Cycle 537dd977529a27977656a8684e25c1b267079440). Its staging run 41836782233 passed build and Weather Lab but failed six draft-catalog tests at their unchanged 5000 ms deadline in the full application test gate. The qualify job was skipped: that source did not qualify or deploy. Automatic production release 41838475028 was skipped. Between pins: 2 commits, 9 files. The correction sends conventional PO entries through the same Lingui formatter in 64-entry batches and retains the original whole-file parser for unrecognized syntax. Catalog bytes, existing assertions, five-second test limits, release compilation and the candidate profile remain unchanged. The correction's three full source merge-queue workflows (ci, quality, overlay-quality) succeeded on this exact merged commit. All 23 controller inventory files, four sparse build paths, both release-layer hashes, the public journey harness hash, the intro digest and all 43 account/onboarding source digests are byte-identical to the preceding unqualified source, verified from actual Git blobs. The production platform Worker and production data-source pin are outside this candidate. Fresh controller CI, clean exact-source admission and one new guarded staging run remain required; no deployment or qualification is asserted. See docs/ui-public-combined.md."
   }
 }
