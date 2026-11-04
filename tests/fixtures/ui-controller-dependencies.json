@@ -91,7 +91,7 @@
       ]
     },
     {
-      "pin": "f8085daf43dc269c3f49799f7887c44e583b5718",
+      "pin": "0699effe3d2e42f7a64cd6a7ed4bfe10ace54e43",
       "files": [
         "app/e2e/layer-switch-surface.mjs",
         "app/e2e/layer-switch-tint.mjs",
@@ -125,12 +125,13 @@
       "releaseLayerFiles": {
         "app/e2e/layer-switch-tint.mjs": "4782ceec6f86e6e61effcb6f17e60d78c7e6276e998bda467577fa1bec49bf4e",
         "app/e2e/layer-switch-surface.mjs": "a00b43bbaf99a5116125cc134600e04ebfc054b01f9680a0119537df5dc3bbaf"
-      }
+      },
+      "publicJourneyHarnessSha256": "f8df341d660feb3e38d0ec03bac5931aa17385eed83c264c3450013ca209bb54"
     }
   ],
   "stagingBuild": {
     "profile": "production-account-ru-kk-wind100-onboarding-v2",
-    "pin": "f8085daf43dc269c3f49799f7887c44e583b5718",
+    "pin": "0699effe3d2e42f7a64cd6a7ed4bfe10ace54e43",
     "paths": [
       ".gitignore",
       "platform/edge/package.json",
@@ -138,6 +139,6 @@
       "ops/release/build-release-receipt.mjs"
     ],
     "coneMode": false,
-    "provenance": "Merged Atmos source f8085daf43dc269c3f49799f7887c44e583b5718, tree e1bff88b3efe8a24540831998d7bcebd5704cb77, committed 2026-11-02T04:09:07Z; Merge pull request #659 from weatherx-hq/codex/startup-opening-retirement-20261101. Supersedes 64922cf1a8431abc6de60bf336ab36008ac46f90, whose staging run 41378592127 passed build, app tests and Weather Lab, then failed deployed startup-opening-retired before prefill. Its candidate was rolled back and the exact prior staging deployment verified; fuse #459 remains open pending diagnosed fresh-candidate validation. Between pins: 2 commits, 6 files. The app HTML owner now retires an app-ready cover after natural mark completion while preserving bootstrap gesture handoff. The local module-download browser fixture retains its body fault on both explicit imports, allows native browser cache-policy differences and forbids automatic repair fetches. Five mounted lane tests settle real dynamic imports at each original 250 ms fake-clock boundary, preserving every assertion and total simulated budget. All 23 controller inventory files, four sparse build paths, both release harness hashes, the intro digest and all 43 account/onboarding source digests are unchanged. The production platform Worker and production data-source pin are outside this candidate. Fresh controller CI, clean exact-source admission, fuse recovery and one new guarded staging run remain required; no deployment or qualification is asserted. See docs/ui-public-combined.md."
+    "provenance": "Merged Atmos source 0699effe3d2e42f7a64cd6a7ed4bfe10ace54e43, tree 2a099efb28d8cfea580b0fe06e6960c2c8d6a7c2, committed 2026-11-03T22:32:41Z; Merge pull request #661 from weatherx-hq/codex/public-journey-synthetic-dnt. Supersedes f8085daf43dc269c3f49799f7887c44e583b5718, which qualified at staging in run 41405223754 but failed production promotion 41718826230 after the public journey recorded four blocked /api/rum writes. The production rollback restored and verified prior Pages deployment 0a071531-d94a-4d67-9880-2caab23ee893; production fuse #461 remains open. The synthetic journey context now sets navigator.doNotTrack before page scripts and sends DNT: 1, preserving analytics=0 and the strict zero-write gate. Among the same 23 controller dependency paths only app/e2e/public-release-journeys.mjs changed, reviewed SHA256 f8df341d660feb3e38d0ec03bac5931aa17385eed83c264c3450013ca209bb54. No imports or external packages were added. All four sparse build paths, both release-layer hashes, the intro digest and all 43 account/onboarding source digests are unchanged. The public journey harness hash remains dynamically bound into the qualified candidate and reauthenticated at promotion. The production platform Worker and production data-source pin are outside this candidate. Fresh controller CI, clean exact-source admission and one new guarded staging run remain required; no deployment or qualification is asserted. See docs/ui-public-combined.md."
   }
 }
