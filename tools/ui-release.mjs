@@ -214,12 +214,22 @@ async function resolveAuto() {
   console.log(`Automatic promotion routed: staging run ${result.staging_run_id} attempt ${result.staging_run_attempt}, source ${result.atmos_sha}, profile ${result.release_profile}`);
   output(result);
 }
-async function get(url, token, limit = 2 * 1024 * 1024, {fetcher=fetch,timeoutMs=20000} = {}) {
+async function get(url, token, limit = 2 * 1024 * 1024, {fetcher=fetch,timeoutMs=20000,observation} = {}) {
   const response = await fetcher(url, { redirect: 'error', signal: AbortSignal.timeout(timeoutMs),
     headers: { 'Cache-Control': 'no-cache', ...(token ? { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } : {}) } });
-  assert.equal(response.status, 200, `read failed (${response.status}): ${new URL(url).pathname}`);
+  const status = response.status;
+  if (observation) {
+    observation.httpStatus = Number.isInteger(status) && status >= 100 && status <= 599 ? status : null;
+    observation.failureCategory = status === 200 ? 'response-body' : 'http-status';
+  }
+  assert.equal(status, 200, `read failed (${status}): ${new URL(url).pathname}`);
   const chunks = []; let size = 0;
-  for await (const chunk of response.body) { size += chunk.length; assert.ok(size <= limit, 'response too large'); chunks.push(chunk); }
+  for await (const chunk of response.body) {
+    size += chunk.length;
+    if (observation && size > limit) observation.failureCategory = 'body-limit';
+    assert.ok(size <= limit, 'response too large');
+    chunks.push(chunk);
+  }
   return { bytes: Buffer.concat(chunks), headers: response.headers };
 }
 const json = async (url, token) => JSON.parse((await get(url, token)).bytes);
@@ -384,9 +394,13 @@ export async function pagesProjectMetadata(stage, token, {fetcher=fetch,now=()=>
   for(let attempt=0;attempt<3;attempt++){
     const budget=remaining();assert.ok(budget>0,'Pages metadata GET deadline exhausted');
     let payload,requestSignal;
+    // Track only bounded response metadata and the current failure category.
+    // Never include the URL, headers, bytes or exception text in this record.
+    const observation={httpStatus:null,failureCategory:'request'};
     try{
-      const {bytes}=await get(url,token,2*1024*1024,{timeoutMs:Math.min(20000,Math.ceil(budget)),
+      const {bytes}=await get(url,token,2*1024*1024,{observation,timeoutMs:Math.min(20000,Math.ceil(budget)),
         fetcher:(url,options)=>{requestSignal=options.signal;return fetcher(url,{...options,method:'GET'});}});
+      observation.failureCategory='invalid-json';
       payload=JSON.parse(bytes);
     }catch(error){
       const code=error?.code??error?.cause?.code;
@@ -395,7 +409,7 @@ export async function pagesProjectMetadata(stage, token, {fetcher=fetch,now=()=>
       const retryEligible=Boolean(ownTimeout||transientCodes.has(code));
       const refuse=(failure,reason)=>{
         onFailure({kind:'ui-pages-metadata-get-failure',attempt:attempt+1,maxAttempts:3,reason,
-          transportCode:diagnosticCodes.has(code)?code:null,ownTimeout:Boolean(ownTimeout),retryEligible});
+          transportCode:diagnosticCodes.has(code)?code:null,ownTimeout:Boolean(ownTimeout),retryEligible,...observation});
         throw new Error('Pages metadata GET refused',{cause:failure});
       };
       if(!retryEligible)refuse(error,'nontransient-or-unclassified');
