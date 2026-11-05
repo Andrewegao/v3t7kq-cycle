@@ -10,8 +10,8 @@ import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Reviewed merged source for draft-catalog staging correction (Atmos #665); fresh staging qualification remains required.
-export const UI_SOURCE = 'c2fad0e6384834ddd16e65226a2efb77d214b1f4';
+// Reviewed merged source for point preview and hint placement (Atmos #666); fresh staging qualification remains required.
+export const UI_SOURCE = 'e33b6625c3516c2b0c2ef0f70153bd8aa165ee32';
 export const REVIEWED_MASTER = UI_SOURCE;
 /** Exact extra paths allowed to differ between the pin and master (none at this pin). */
 export const EDGE_ONLY_DIFF = Object.freeze([]);
