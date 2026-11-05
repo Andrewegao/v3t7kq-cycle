@@ -113,18 +113,31 @@ test('Pages metadata failure diagnostics are fixed bounded fields without source
     const f=fixture(()=>{throw failure;});
     await assert.rejects(pagesProjectMetadata('staging','inert-token',f.options),error=>error.cause===failure);
     assert.equal(f.diagnostics.length,1);
-    const row=f.diagnostics[0];assert.deepEqual(Object.keys(row).sort(),['kind','attempt','maxAttempts','reason','transportCode','ownTimeout','retryEligible'].sort());
+    const row=f.diagnostics[0];assert.deepEqual(Object.keys(row).sort(),[
+      'kind','attempt','maxAttempts','reason','transportCode','ownTimeout','retryEligible','httpStatus','failureCategory',
+    ].sort());
     assert.equal(row.transportCode,code===sensitive?null:code);assert.equal(row.attempt,code==='ECONNRESET'?3:1);
     assert.equal(row.retryEligible,code==='ECONNRESET');assert.equal(row.ownTimeout,false);
+    assert.equal(row.httpStatus,null);assert.equal(row.failureCategory,'request');
     assert.ok(!JSON.stringify(row).includes('sensitive'));assert.ok(!JSON.stringify(row).includes('inert-token'));
   }
 });
 test('Pages metadata does not retry fatal auth, redirect, HTTP, JSON, body bound or unknown failures',async()=>{
-  for(const response of [()=>new Response('',{status:401}),()=>new Response('',{status:403}),()=>new Response('',{status:404}),
-    ()=>new Response('',{status:429}),()=>new Response('',{status:503}),()=>new Response('',{status:302}),
-    ()=>new Response('not-json'),()=>new Response('x'.repeat(2*1024*1024+1))]){
-    const f=fixture(response);await assert.rejects(pagesProjectMetadata('staging','inert-token',f.options));
+  const sensitive='inert-token https://private.invalid/?credential=sensitive body-secret';
+  const cases=[
+    ...[401,403,404,429,503,302].map(status=>[()=>new Response(sensitive,{status}),'http-status',status]),
+    [()=>new Response(sensitive),'invalid-json',200],
+    [()=>new Response(sensitive+'x'.repeat(2*1024*1024)),'body-limit',200],
+    [()=>new Response(new ReadableStream({start(controller){controller.error(new Error(sensitive));}})),'response-body',200],
+    [()=>({status:sensitive}),'http-status',null],
+    [()=>{throw new TypeError(sensitive);},'request',null],
+  ];
+  for(const [fetcher,failureCategory,httpStatus] of cases){
+    const f=fixture(fetcher);await assert.rejects(pagesProjectMetadata('staging','inert-token',f.options),/^Error: Pages metadata GET refused$/);
     assert.equal(f.requests.length,1);assert.deepEqual(f.sleeps,[]);
+    assert.deepEqual(f.diagnostics,[{kind:'ui-pages-metadata-get-failure',attempt:1,maxAttempts:3,
+      reason:'nontransient-or-unclassified',transportCode:null,ownTimeout:false,retryEligible:false,failureCategory,httpStatus}]);
+    assert.doesNotMatch(JSON.stringify(f.diagnostics),/inert-token|private\.invalid|body-secret|credential/);
   }
   for(const failure of [transport('ENOTFOUND'),transport('ECONNREFUSED'),transport('CERT_HAS_EXPIRED'),transport('ERR_TLS_CERT_ALTNAME_INVALID'),
     new TypeError('fetch failed'),new Error('configuration failed'),new DOMException('cancelled','AbortError'),new DOMException('unrelated timeout','TimeoutError')]){
