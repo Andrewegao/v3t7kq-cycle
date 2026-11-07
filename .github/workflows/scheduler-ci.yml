@@ -100,7 +100,7 @@ jobs:
           node --test tests/bake-throughput-qualification.mjs
           node tests/bake-diagnostics.mjs
           node --test tests/bake-public-diagnostic.mjs
-          node --test tests/collector-source.mjs
+          node --test tests/collector-source.mjs tests/decode-runtime.mjs
           node --test tests/bake-regional-models.mjs
           node --test tests/bake-model-status.mjs
           node --test tests/model-recovery-workflow.mjs

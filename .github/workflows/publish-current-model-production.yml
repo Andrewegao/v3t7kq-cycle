@@ -105,15 +105,6 @@ jobs:
           test "$(git -C atmos rev-parse HEAD)" = "$ATMOS_SHA"
           git -C cycle-controller diff --exit-code HEAD
           git -C atmos diff --exit-code HEAD
-          # apt-get update stalled on a mirror for 69 and 89 min on 2026-10-07 (normally 15-27 s for
-          # both commands); bound each attempt so a stall retries instead of eating the job timeout.
-          for attempt in 1 2 3; do
-            sudo timeout -k 10 180 apt-get update && sudo timeout -k 10 300 apt-get install -y libeccodes-dev && break
-            test "$attempt" -lt 3
-            # A dpkg killed mid-install leaves its database locked/half-configured; repair it first.
-            sudo timeout -k 10 120 dpkg --configure -a || true
-            sleep 15
-          done
           archive="$RUNNER_TEMP/rclone-v1.75.0-linux-amd64.zip"
           curl --fail --silent --show-error --location \
             https://github.com/rclone/rclone/releases/download/v1.75.0/rclone-v1.75.0-linux-amd64.zip --output "$archive"
@@ -121,7 +112,34 @@ jobs:
           unzip -q "$archive" -d "$RUNNER_TEMP"
           sudo install -m 0755 "$RUNNER_TEMP/rclone-v1.75.0-linux-amd64/rclone" /usr/local/bin/rclone
           python -m venv atmos/data/.venv
-          atmos/data/.venv/bin/pip install -r atmos/data/requirements.txt
+          atmos/data/.venv/bin/pip install --only-binary=eccodes,eccodeslib,eckitlib -r atmos/data/requirements.txt
+          # The approved Atmos requirements provide the native Linux libraries; verify codecs before collection.
+          atmos/data/.venv/bin/python -m eccodes selfcheck
+          atmos/data/.venv/bin/python - <<'PYCODE'
+          import sys
+          from importlib.metadata import version
+          import eccodes
+          assert sys.platform == "linux" and sys.version_info[:2] == (3, 12)
+          assert version("eccodes") == "2.47.0"
+          assert version("eccodeslib") == "2.48.2.27"
+          assert version("eckitlib") == "2.2.0.27"
+          assert eccodes.codes_get_api_version() == "2.48.2"
+          for packing in ("grid_simple", "grid_ccsds", "grid_jpeg"):
+              handle = eccodes.codes_grib_new_from_samples("regular_ll_sfc_grib2")
+              try:
+                  values = [float(i % 17) for i in range(eccodes.codes_get_size(handle, "values"))]
+                  eccodes.codes_set(handle, "packingType", packing)
+                  eccodes.codes_set_values(handle, values)
+                  decoded = eccodes.codes_new_from_message(eccodes.codes_get_message(handle))
+                  try:
+                      assert eccodes.codes_get(decoded, "packingType") == packing
+                      assert list(eccodes.codes_get_values(decoded)) == values
+                  finally:
+                      eccodes.codes_release(decoded)
+              finally:
+                  eccodes.codes_release(handle)
+          print("Pinned ecCodes GRIB simple/CCSDS/JPEG round trips passed")
+          PYCODE
           npm ci --prefix atmos/app
       - name: authenticate and copy only this completed collector artifact
         id: handoff
