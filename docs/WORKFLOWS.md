@@ -6,13 +6,14 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `bd2e49d34434fb8bd2267615f85d1bc2d96a6552e759b49763880e566a83c9c6`.
+Source digest (registry and workflow bytes): `62b1de9831ae969c6c6878235860206174c83f9eb23f5af98236c0f4c9638385`.
 
-74 workflows. Ordering and output are deterministic; no API request or clock is used.
+75 workflows. Ordering and output are deterministic; no API request or clock is used.
 
 | Workflow | Family / subsystem | Lifecycle | Purpose | Runbook |
 | --- | --- | --- | --- | --- |
 | [bake](#bake) | models / Model collection | recurring | Collect independent model inputs and assemble the whole-maintenance fallback; dispatched on time by the scheduler Worker at 35 2,8,14,20 UTC, the GitHub cron is the fallback. | [guide](../docs/single-model-refresh.md) |
+| [cams-chain](#cams-chain) | maintenance / CAMS slot delivery | recurring | Deliver only overdue existing CAMS nominal slots from trusted component-bake requests; never publish data or add a Worker trigger. | [guide](../docs/cams-chain.md) |
 | [cams-ingest](#cams-ingest) | maintenance / Energy own ingest | recurring | Ingest CAMS dust and total aerosol optical depth for the Energy Desk solar clusters from the Copernicus ADS twice daily and publish the energy-cams component. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [catalog-bake](#catalog-bake) | models / Component freshness | recurring | Refresh individual core model components from provider schedules or a manual request. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
 | [catalog-bootstrap](#catalog-bootstrap) | models / Catalog bootstrap | manual-supported | Initialize the staging catalog through its guarded bootstrap path. | [guide](../docs/WORKFLOW_OPERATIONS.md) |
@@ -170,6 +171,31 @@ Checkout declarations (not a claim of approval or checkout success):
 | [run-summary / step 1](../.github/workflows/bake.yml#L696) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
 Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/bake.yml#L176), [PRODUCTION_WIND100_CALL_ENABLED](../.github/workflows/bake.yml#L99), [R2_FALLBACK_MIRROR_ENABLED](../.github/workflows/bake.yml#L617).
+
+
+## cams-chain
+
+[.github/workflows/cams-chain.yml](../.github/workflows/cams-chain.yml#L1) · <code>Chain CAMS ingest to the component bake</code>
+
+Declared triggers: [workflow_run](../.github/workflows/cams-chain.yml#L8) <code>{"workflows":["WeatherX component bake"],"types":["requested"],"branches":["main"]}</code>.
+
+Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: not declared.
+
+| Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
+| --- | --- | --- | --- | --- | --- | --- |
+| [dispatch](../.github/workflows/cams-chain.yml#L13) ← no needs | <code>ubuntu-24.04</code> | not declared | <code>4</code> | <code>{"group":"weatherx-cams-chain","cancel-in-progress":false}</code> | not declared | <code>{"contents":"read","actions":"write"}</code> |
+
+Declared job conditions (additional step/helper checks may apply):
+
+- [dispatch](../.github/workflows/cams-chain.yml#L13): <code>${{ (github.event.workflow_run.event == 'workflow_dispatch' &#124;&#124; github.event.workflow_run.event == 'schedule') &amp;&amp; github.event.workflow_run.head_repository.full_name == github.repository &amp;&amp; github.event.workflow_run.head_branch == 'main' }}</code>
+
+Checkout declarations (not a claim of approval or checkout success):
+
+| Job / checkout step | Repository | Ref |
+| --- | --- | --- |
+| [dispatch / step 1](../.github/workflows/cams-chain.yml#L26) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+
+Variable references (declared names only; values and activation unknown): none detected.
 
 
 ## cams-ingest

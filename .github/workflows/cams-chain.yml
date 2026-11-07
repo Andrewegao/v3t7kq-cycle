@@ -1,0 +1,53 @@
+# Reuses the component-bake delivery clock; retains all four CAMS slots and five Worker triggers.
+name: Chain CAMS ingest to the component bake
+run-name: "cams: slot check after component bake run ${{ github.event.workflow_run.id }}"
+permissions:
+  contents: read
+on:
+  workflow_run:
+    workflows: [WeatherX component bake]
+    types: [requested]
+    branches: [main]
+jobs:
+  dispatch:
+    if: >-
+      ${{ (github.event.workflow_run.event == 'workflow_dispatch' || github.event.workflow_run.event == 'schedule')
+      && github.event.workflow_run.head_repository.full_name == github.repository
+      && github.event.workflow_run.head_branch == 'main' }}
+    concurrency:
+      group: weatherx-cams-chain
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            tools/cams-chain.mjs
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: {node-version: '22'}
+      - name: Plan the due CAMS slot
+        id: plan
+        env:
+          CAMS_CHAIN_PHASE: plan
+          GH_TOKEN: ${{ github.token }}
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: node tools/cams-chain.mjs
+      - name: Dispatch the planned CAMS slot once
+        id: post
+        if: steps.plan.outputs.eligible == 'true'
+        env:
+          CAMS_CHAIN_PHASE: dispatch
+          CAMS_EXPECTED_SLOT: ${{ steps.plan.outputs.slot }}
+          CAMS_EXPECTED_RUN: ${{ steps.plan.outputs.run }}
+          GH_TOKEN: ${{ github.token }}
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: node tools/cams-chain.mjs
+      - name: Confirm no CAMS dispatch was attempted
+        if: steps.post.outcome == 'success' && steps.post.outputs.post_attempted == 'false'
+        run: echo 'Admission changed before POST; no dispatch was attempted.'
