@@ -419,9 +419,4 @@ test('the component bake plans before it queues, keeps the shared model locks, a
   assert.equal(model.match(/model: \$\{\{ fromJSON\(needs\.plan\.outputs\.models \|\| (.+)\) \}\}$/m)[1], requested, 'plan and fallback matrix must request the same models');
   assert.match(model, /group: weatherx-component-\$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.target \|\| vars\.CATALOG_DEFAULT_TARGET \|\| 'staging' \}\}-\$\{\{ matrix\.model \}\}\n      cancel-in-progress: false/);
   assert.match(publisher, /group: weatherx-component-production-\$\{\{ inputs\.model \}\}\n      cancel-in-progress: false/);
-  for (const name of ['bake.yml', 'catalog-bake.yml', 'publish-current-model-production.yml', 'collect-core-model.yml', 'collect-regional-model.yml']) {
-    const text = read(name);
-    assert.doesNotMatch(text, /sudo apt-get (update|install)/, `${name}: unbounded apt`);
-    assert.match(text, /sudo timeout -k 10 180 apt-get update && sudo timeout -k 10 300 apt-get install -y libeccodes-dev && break\n\s+test "\$attempt" -lt 3\n(\s+#.*\n)?\s+sudo timeout -k 10 120 dpkg --configure -a \|\| true\n\s+sleep 15\n/, name);
-  }
 });

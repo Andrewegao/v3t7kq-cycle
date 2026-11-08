@@ -641,6 +641,15 @@
       "runbook": "docs/WORKFLOW_OPERATIONS.md"
     },
     {
+      "id": "cams-chain",
+      "path": ".github/workflows/cams-chain.yml",
+      "family": "maintenance",
+      "purpose": "Deliver only overdue existing CAMS nominal slots from trusted component-bake requests; never publish data or add a Worker trigger.",
+      "subsystem": "CAMS slot delivery",
+      "lifecycle": "recurring",
+      "runbook": "docs/cams-chain.md"
+    },
+    {
       "id": "cams-ingest",
       "path": ".github/workflows/cams-ingest.yml",
       "family": "maintenance",
