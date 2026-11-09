@@ -60,27 +60,31 @@ test('wire gate refuses silent compression bypass, wrong bytes, headers, and pro
   }
   let calls=0;await assert.rejects(verifyStaticCompression('https://weatherx.org',manifest,()=>{calls++;}),/staging-only/);assert.equal(calls,0);
 });
-test('first wire failure cancels peers and never schedules remaining assets',async()=>{
+test('first wire failure cancels peers and never schedules remaining assets',{timeout:5000},async()=>{
   const paths=Array.from({length:12},(_,i)=>`/assets/wxbr11v1-test${i}-12345678.js`);
   const many={...manifest,selectedPaths:paths,entries:Object.fromEntries(paths.map(p=>[p,entry]))};
   const started=[],aborted=[];
+  let releaseFailure;
+  const allStarted=new Promise(resolve=>{releaseFailure=resolve;});
   const result=verifyStaticCompression(origin,many,async(url,options)=>{
     started.push(url.pathname);
+    if(started.length===4)releaseFailure();
     if(url.pathname===paths[0]){
-      await new Promise(resolve=>setImmediate(resolve));
+      // Fail only after every peer has started. Peers stay pending until aborted;
+      // elapsed wall time must not decide which response reaches the verifier first.
+      await allStarted;
       const r=await request(new URL(origin+path),options);r.headers.delete('vary');return r;
     }
-    return new Promise((resolve,reject)=>{
-      const timer=setTimeout(()=>{cleanup();request(new URL(origin+path),options).then(resolve,reject);},40);
-      const abort=()=>{clearTimeout(timer);cleanup();aborted.push(url.pathname);reject(options.signal.reason);};
-      const cleanup=()=>options.signal?.removeEventListener('abort',abort);
-      options.signal?.addEventListener('abort',abort,{once:true});
+    return new Promise((_,reject)=>{
+      assert.equal(options.signal.aborted,false,'peers must be active before the first failure');
+      options.signal.addEventListener('abort',()=>{
+        aborted.push(url.pathname);reject(options.signal.reason);
+      },{once:true});
     });
   });
   await assert.rejects(result,error=>{
     assert.match(error.message,/test0-12345678/);assert.match(error.message,/Vary Accept-Encoding missing/);return true;
   });
-  await new Promise(resolve=>setTimeout(resolve,60));
   assert.deepEqual(started,paths.slice(0,4),'failure must not leave peers walking the inventory');
   assert.deepEqual(aborted.sort(),paths.slice(1,4).sort(),'all active peers must receive cancellation');
 });

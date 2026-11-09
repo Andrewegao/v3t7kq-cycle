@@ -35,7 +35,7 @@ jobs:
       credentials_ready: ${{ steps.staging_credentials.outputs.ready }}
     env:
       ATMOS_SHA: 9174329db6ca8527569e67f14ef70406dedefb69
-      CORE_ATMOS_SHA: 30a211be7692868f36380b809cd9b2bb01011e6a
+      CORE_ATMOS_SHA: 6c8c8fb4026074d72a4bd94bc7bbfefdd1d72b60
       MODEL_ID: ecmwf
       STAGING_DATA_ISOLATION_APPROVED: ${{ vars.STAGING_DATA_ISOLATION_APPROVED }}
       STAGING_WIND100_ENABLED: ${{ vars.STAGING_WIND100_ENABLED }}
@@ -75,7 +75,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: weatherx-hq/atmos
-          ref: 30a211be7692868f36380b809cd9b2bb01011e6a
+          ref: 6c8c8fb4026074d72a4bd94bc7bbfefdd1d72b60
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: atmos-core
           persist-credentials: false
@@ -121,7 +121,9 @@ jobs:
             -r cycle/tools/staging-wind100-requirements.txt
           npm ci --ignore-scripts --prefix cycle/staging-controller
           archive="$RUNNER_TEMP/rclone-v1.75.0-linux-amd64.zip"
-          curl --fail --silent --show-error --location \
+          timeout -k 10 300 curl --fail --silent --show-error --location \
+            --connect-timeout 15 --max-time 120 \
+            --retry 2 --retry-delay 1 --retry-max-time 180 \
             https://github.com/rclone/rclone/releases/download/v1.75.0/rclone-v1.75.0-linux-amd64.zip --output "$archive"
           printf '%s  %s\n' aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa "$archive" | sha256sum --check --status
           unzip -q "$archive" -d "$RUNNER_TEMP"
