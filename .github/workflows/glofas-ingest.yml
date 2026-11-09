@@ -92,7 +92,7 @@ jobs:
     environment: production
     timeout-minutes: 120
     env:
-      ATMOS_SHA: 30a211be7692868f36380b809cd9b2bb01011e6a
+      ATMOS_SHA: 6c8c8fb4026074d72a4bd94bc7bbfefdd1d72b60
       APPROVED_SHA: ${{ vars.CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA }}
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
       HAS_KEY: ${{ (secrets.EWDS_API_KEY != '' || secrets.CDS_API_KEY != '') && 'true' || 'false' }}
@@ -119,7 +119,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: weatherx-hq/atmos
-          ref: 30a211be7692868f36380b809cd9b2bb01011e6a
+          ref: 6c8c8fb4026074d72a4bd94bc7bbfefdd1d72b60
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: atmos
           persist-credentials: false

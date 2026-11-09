@@ -12,6 +12,7 @@ import {DEFINITION_PATHS, NATIVE_PROFILE, NATIVE_REPRESENTATION, NATIVE_ROWS,
 
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const publisherWorkflow = read('.github/workflows/publish-current-model-production.yml');
+const producerSha = JSON.parse(read('ops/atmos-production-source.json')).atmosSha;
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const md5 = bytes => createHash('md5').update(bytes).digest('hex');
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -215,6 +216,7 @@ test('listings are parsed strictly: a missing hash, a duplicate or an unsafe pat
 
 test('reviewed constants match the pinned Atmos contract and the declaration file', () => {
   assert.equal(REVIEWED_ATMOS_SHA, '30a211be7692868f36380b809cd9b2bb01011e6a');
+  assert.notEqual(producerSha, REVIEWED_ATMOS_SHA, 'the old publisher optimization is not qualified for the new producer');
   const declaration = JSON.parse(read('ops/atmos-production-source.json'));
   assert.ok(declaration.otherAtmosCommits.commits[REVIEWED_ATMOS_SHA].includes('tools/current-run-publisher-stand-aside.mjs'));
   // data/optional_variables.json at 30a211be7: the six ECMWF optional layers, all from fetch_upperair.py.
@@ -332,6 +334,7 @@ test('a first publication reads only the two catalog preconditions and publishes
 test('every failure leaves the publisher running and the step green', async () => {
   for (const [name, options, changes, reason, maxCalls] of [
     ['other Atmos checkout', {head: 'd'.repeat(40)}, {}, /is not the reviewed pin/, 1],
+    ['current producer source', {head: producerSha, slowLanePin: producerSha}, {ATMOS_SHA: producerSha}, /is not the reviewed pin/, 1],
     ['publisher pinned elsewhere', {}, {ATMOS_SHA: 'd'.repeat(40)}, /is not the reviewed pin/, 1],
     ['slow lane pinned elsewhere', {slowLanePin: 'd'.repeat(40)}, {}, /catalog-bake\.yml is not pinned/, 1],
     ['handoff receipt hash differs', {tamperReceipt: true}, {}, /pack receipt differs from the authenticated handoff/, 1],

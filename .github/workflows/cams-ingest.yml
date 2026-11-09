@@ -94,7 +94,7 @@ jobs:
     environment: production
     timeout-minutes: 90
     env:
-      ATMOS_SHA: 30a211be7692868f36380b809cd9b2bb01011e6a
+      ATMOS_SHA: 6c8c8fb4026074d72a4bd94bc7bbfefdd1d72b60
       APPROVED_SHA: ${{ vars.CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA }}
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
       HAS_KEY: ${{ (secrets.ADS_API_KEY != '' || secrets.CDS_API_KEY != '') && 'true' || 'false' }}
@@ -126,7 +126,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: weatherx-hq/atmos
-          ref: 30a211be7692868f36380b809cd9b2bb01011e6a
+          ref: 6c8c8fb4026074d72a4bd94bc7bbfefdd1d72b60
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: atmos
           persist-credentials: false
@@ -167,7 +167,9 @@ jobs:
           atmos/data/.venv/bin/pip install --require-hashes --only-binary=:all: -r atmos/data/requirements.lock
           atmos/data/.venv/bin/pip install --require-hashes --only-binary=:all: --no-deps -r cycle/tools/energy-ingest-requirements.txt
           archive="$RUNNER_TEMP/rclone-v1.75.0-linux-amd64.zip"
-          curl --fail --silent --show-error --location --max-time 120 \
+          timeout -k 10 300 curl --fail --silent --show-error --location \
+            --connect-timeout 15 --max-time 120 \
+            --retry 2 --retry-delay 1 --retry-max-time 180 \
             https://github.com/rclone/rclone/releases/download/v1.75.0/rclone-v1.75.0-linux-amd64.zip --output "$archive"
           printf '%s  %s\n' aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa "$archive" | sha256sum --check --status
           unzip -q "$archive" -d "$RUNNER_TEMP"

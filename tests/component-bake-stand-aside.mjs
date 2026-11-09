@@ -12,6 +12,7 @@ import {componentMarkdown, PRODUCTION_BAKE_STEP, STAND_ASIDE_STEP, stoodAsideOnS
 
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const catalog = read('.github/workflows/catalog-bake.yml');
+const producerSha = JSON.parse(read('ops/atmos-production-source.json')).atmosSha;
 const SHA = 'c'.repeat(40);
 const PREFIX = 'components/ecmwf/ecmwf-20261010T000000Z-1791660000/';
 const manifestFor = (changes = {}) => Buffer.from(`${JSON.stringify({schemaVersion: 1, componentId: 'ecmwf',
@@ -177,7 +178,7 @@ test('the upstream probe calls the pinned collector selectors with the bake\'s o
 });
 
 test('collector call strings still match the pinned bake script shape', () => {
-  // The pinned script (Atmos 30a211be7) is not in this repository; these are the reviewed lines.
+  // The historically reviewed script (Atmos 30a211be7) is not in this repository; these are its reviewed lines.
   assert.equal(COLLECTOR_CALLS.ecmwf, '"$PY" fetch_ecmwf.py --hours 336 --keep 2 ${ecmwf_run_args[@]+"${ecmwf_run_args[@]}"}');
   assert.equal(COLLECTOR_CALLS.gfs, '"$PY" fetch.py --hours 72 --point-hours 336 --keep 2 ');
   assert.equal(COLLECTOR_CALLS.hrrr, '"$PY" fetch_hrrr.py --hours 48 --keep 2 --point-out "$ROOT/data/.hrrr-point" )');
@@ -394,26 +395,29 @@ test('hrrr: the probe asserts hourly leads and calls fetch_hrrr.pick_init(zarr, 
   } finally { rmSync(root, {recursive: true, force: true}); }
 });
 
-test('hrrr: the reviewed same-run lines are the pinned bake script\'s own', () => {
-  // The pinned script (Atmos 30a211be7) is not in this repository; these are the reviewed lines.
+test('hrrr: historical same-run guards stay bound to their reviewed source', () => {
+  // The historically reviewed script (Atmos 30a211be7) is not in this repository; these are its reviewed lines.
   assert.deepEqual(SAME_RUN_GUARDS, [
     'case "$MODEL" in ecmwf|gfs|aifs|icon|hrrr) HAS_POINT=1 ;; *) HAS_POINT=0 ;; esac\n',
     'NATIVE_CHANGED=0\nif [ "$MODEL" = ecmwf ] || [ "$MODEL" = gfs ]; then\n',
     '  NATIVE_CHANGED="$(node -e \'process.stdout.write(JSON.parse(process.argv[1]).changed ? "1" : "0")\' "$NATIVE_JSON")"\nfi\n',
     '  if [ "$ACTIVE_MODEL_RUN" = "$RUN_ID" ] && [ "$ACTIVE_POINT_RUN" = "$RUN_ID" ] && [ "$NATIVE_CHANGED" = 0 ]; then\n' +
       '    echo "$MODEL and point-$MODEL unchanged ($RUN_ID) — no upload or pointer mutation"\n    exit 0\n']);
-  assert.match(catalog, /ATMOS_SHA: 30a211be7692868f36380b809cd9b2bb01011e6a/);
+  assert.match(catalog, new RegExp(`ATMOS_SHA: ${producerSha}`));
   assert.equal(HRRR_REVIEWED_ATMOS_SHA, '30a211be7692868f36380b809cd9b2bb01011e6a');
+  assert.notEqual(producerSha, HRRR_REVIEWED_ATMOS_SHA, 'the old same-run optimization is not qualified for the new producer');
 });
 
 test('hrrr: a re-pinned atmos checkout reads nothing else and the bake runs', async () => {
-  const f = hrrrFixture({head: {stdout: `${'0'.repeat(40)}\n`}});
-  const original = console.log;console.log = () => {};
-  try {
-    assert.equal(await f.run(), 0);
-    assert.equal(readFileSync(f.output, 'utf8'), 'stand_aside=false\nserved_run=\n');
-    assert.deepEqual(f.calls.map(call => call.command), ['git'], 'no precondition, manifest or probe read after a pin mismatch');
-  } finally { console.log = original;f.cleanup(); }
+  for (const head of ['0'.repeat(40), producerSha]) {
+    const f = hrrrFixture({head: {stdout: `${head}\n`}});
+    const original = console.log;console.log = () => {};
+    try {
+      assert.equal(await f.run(), 0);
+      assert.equal(readFileSync(f.output, 'utf8'), 'stand_aside=false\nserved_run=\n');
+      assert.deepEqual(f.calls.map(call => call.command), ['git'], 'no precondition, manifest or probe read after a pin mismatch');
+    } finally { console.log = original;f.cleanup(); }
+  }
 });
 
 test('ecmwf/gfs do not consult the HRRR or AIFS reviewed pin', async () => {
@@ -575,13 +579,15 @@ test('aifs: a new cycle, any doubt or a changed pinned bake leaves the bake runn
 });
 
 test('aifs: a re-pinned atmos checkout reads nothing else and the bake runs', async () => {
-  const f = aifsFixture({head: {stdout: `${'0'.repeat(40)}\n`}});
-  const original = console.log;console.log = () => {};
-  try {
-    assert.equal(await f.run(), 0);
-    assert.equal(readFileSync(f.output, 'utf8'), 'stand_aside=false\nserved_run=\n');
-    assert.deepEqual(f.calls.map(call => call.command), ['git'], 'no precondition, manifest or probe read after a pin mismatch');
-  } finally { console.log = original;f.cleanup(); }
+  for (const head of ['0'.repeat(40), producerSha]) {
+    const f = aifsFixture({head: {stdout: `${head}\n`}});
+    const original = console.log;console.log = () => {};
+    try {
+      assert.equal(await f.run(), 0);
+      assert.equal(readFileSync(f.output, 'utf8'), 'stand_aside=false\nserved_run=\n');
+      assert.deepEqual(f.calls.map(call => call.command), ['git'], 'no precondition, manifest or probe read after a pin mismatch');
+    } finally { console.log = original;f.cleanup(); }
+  }
 });
 
 test('aifs: the probe calls fetch_aifs.latest_run(360) like the bake and prints the init last', () => {
@@ -607,7 +613,8 @@ test('aifs: the probe calls fetch_aifs.latest_run(360) like the bake and prints 
 
 test('aifs: the reviewed pin, collector call and guard set are the ones reviewed at Atmos 30a211be7', () => {
   assert.equal(AIFS_REVIEWED_ATMOS_SHA, '30a211be7692868f36380b809cd9b2bb01011e6a');
-  assert.match(catalog, /ATMOS_SHA: 30a211be7692868f36380b809cd9b2bb01011e6a/);
+  assert.match(catalog, new RegExp(`ATMOS_SHA: ${producerSha}`));
+  assert.notEqual(producerSha, AIFS_REVIEWED_ATMOS_SHA, 'the old same-run optimization is not qualified for the new producer');
   // HAS_POINT pairs aifs; NATIVE_CHANGED is reset and only set inside the ECMWF/GFS block.
   assert.match(SAME_RUN_GUARDS[0], /ecmwf\|gfs\|aifs\|icon\|hrrr\) HAS_POINT=1/);
   assert.match(SAME_RUN_GUARDS[1], /if \[ "\$MODEL" = ecmwf \] \|\| \[ "\$MODEL" = gfs \]; then/);
