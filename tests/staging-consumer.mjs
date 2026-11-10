@@ -10,8 +10,28 @@ const env={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_REPOS
 const settings={bindings:[{name:'AUTH_MODE',type:'plain_text',text:'enforce'},{name:'BILLING_MODE',type:'plain_text',text:'enabled'},{name:'DATA_BUCKET',type:'r2_bucket',bucket_name:'weatherx-data-staging'}],compatibility_date:'2026-08-15'};
 const workflow=readFileSync(new URL('../.github/workflows/staging-consumer-refresh.yml',import.meta.url),'utf8');
 test('workflow checkout and controller approval use the exact reviewed source pin',()=>{
-  assert.equal(workflow.match(/STAGING_CONSUMER_SOURCE_SHA: ([a-f0-9]{40})/)?.[1],SOURCE_SHA);
-  assert.equal(workflow.match(/repository: Andrewegao\/atmos\s+ref: ([a-f0-9]{40})/)?.[1],SOURCE_SHA);
+  assert.match(workflow,new RegExp(`STAGING_CONSUMER_SOURCE_SHA: .*'${repair.OWNED_REUSE.sourceSha}'.*'${SOURCE_SHA}'`));
+  assert.match(workflow,/repository: weatherx-hq\/atmos\s+ref: \$\{\{ env\.STAGING_CONSUMER_SOURCE_SHA \}\}/);
+  assert.match(workflow,/git -C control merge-base --is-ancestor "\$STAGING_CONSUMER_SOURCE_SHA" refs\/remotes\/origin\/master/);
+  assert.match(workflow,/fetch-depth: 0/);
+});
+test('upload and historical reuse keep separate exact source identities',()=>{
+  assert.notEqual(SOURCE_SHA,repair.OWNED_REUSE.sourceSha);
+  assert.equal(repair.sourceForMode('upload'),SOURCE_SHA);
+  assert.equal(repair.sourceForMode('reuse-owned-33988771315'),repair.OWNED_REUSE.sourceSha);
+  assert.throws(()=>repair.sourceForMode('reuse-any'));
+  assert.throws(()=>consumerGate({...env,STAGING_CONSUMER_SOURCE_SHA:repair.OWNED_REUSE.sourceSha}));
+  assert.throws(()=>consumerGate({...env,STAGING_CONSUMER_MODE:'reuse-owned-33988771315',CONFIRM:'REUSE-STAGING-33988771315'}));
+});
+test('new reader upload refuses any configuration, billing, secret or runtime change',()=>{
+  const before=settingsState(settings,EXISTING_ROUTES,[]);
+  repair.assertCodeOnlySettings(before,structuredClone(before));
+  for(const mutate of [s=>s.bindings.push({name:'NEW_SECRET',type:'secret_text'}),
+    s=>s.bindings.find(b=>b.name==='BILLING_MODE').text='disabled',s=>s.routes.pop(),
+    s=>s.compatibility_date='2026-09-07',s=>s.observability={enabled:true}]){
+    const desired=structuredClone(before);mutate(desired);
+    assert.throws(()=>repair.assertCodeOnlySettings(before,desired),/must not change/);
+  }
 });
 test('staging refresh preserves the complete live weather and hazard route boundary',()=>{
   assert.deepEqual([...EXISTING_ROUTES].sort(),[
@@ -97,6 +117,15 @@ test('only the two known mode values change; snapshots survive JSON receipt seri
 });
 function fixture(){const before={version:OLD,state:settingsState(settings,[],[])},desired=desiredSettings(before.state),calls=[],receipts=[];let current=before;return{before,desired,calls,receipts,get current(){return current;},set current(v){current=v;},ops:{before,desired,upload:async()=>{calls.push('upload');return NEW;},snapshot:async()=>current,activate:async()=>{calls.push('activate');current={version:NEW,state:desired};},verify:async()=>calls.push('verify'),rollback:async()=>{calls.push('rollback');current=before;},persist:async r=>receipts.push(structuredClone(r))}};}
 test('inactive upload precedes activation and live proof precedes success',async()=>{const f=fixture();const r=await guardedRepair(f.ops);assert.equal(r.status,'passed');assert.deepEqual(f.calls,['upload','activate','verify']);assert.equal(f.receipts[0].status,'preflight-passed');assert.equal(f.receipts.at(-1).status,'passed');});
+test('repair receipts preserve selected source and refuse unreviewed source before upload',async()=>{
+  for(const sourceSha of [SOURCE_SHA,repair.OWNED_REUSE.sourceSha]){
+    const f=fixture();const receipt=await guardedRepair({...f.ops,sourceSha});
+    assert.equal(receipt.sourceSha,sourceSha);
+    assert.ok(f.receipts.every(row=>row.sourceSha===sourceSha));
+  }
+  const f=fixture();await assert.rejects(guardedRepair({...f.ops,sourceSha:'f'.repeat(40)}));
+  assert.deepEqual(f.calls,[]);
+});
 test('live failure and activation acknowledgement loss restore only our prior version',async()=>{
   for(const phase of ['verify','activate']){const f=fixture(),original=f.ops[phase];f.ops[phase]=async()=>{await original();throw Error('fixture failure');};await assert.rejects(guardedRepair(f.ops));assert.deepEqual(f.current,f.before);assert.equal(f.receipts.at(-1).status,'failed-restored');assert.ok(f.calls.includes('rollback'));}
 });

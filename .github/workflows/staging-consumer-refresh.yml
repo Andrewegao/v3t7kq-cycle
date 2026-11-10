@@ -28,7 +28,8 @@ jobs:
       CONFIRM: ${{ inputs.confirm }}
       STAGING_CONSUMER_MODE: ${{ inputs.mode || 'upload' }}
       STAGING_CONSUMER_ENABLED: ${{ vars.STAGING_CONSUMER_ENABLED }}
-      STAGING_CONSUMER_SOURCE_SHA: 0aa9fbed9e179ab2ccb6ac456727b9f33124ddb6
+      # Historical reuse always checks out its original source, never the new upload pin.
+      STAGING_CONSUMER_SOURCE_SHA: ${{ inputs.mode == 'reuse-owned-33988771315' && '0aa9fbed9e179ab2ccb6ac456727b9f33124ddb6' || '263574001bedcf8e987d7d5909e69321d601348b' }}
       STAGING_R2_ACCOUNT_ID: ${{ vars.STAGING_R2_ACCOUNT_ID }}
       STAGING_CONSUMER_APPROVED_VERSION: ${{ vars.STAGING_CONSUMER_APPROVED_VERSION }}
       STAGING_CONSUMER_APPROVED_SETTINGS_SHA256: ${{ vars.STAGING_CONSUMER_APPROVED_SETTINGS_SHA256 }}
@@ -46,11 +47,18 @@ jobs:
       - name: Checkout only the fixed already-qualified staging consumer
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: Andrewegao/atmos
-          ref: 0aa9fbed9e179ab2ccb6ac456727b9f33124ddb6
+          repository: weatherx-hq/atmos
+          ref: ${{ env.STAGING_CONSUMER_SOURCE_SHA }}
+          fetch-depth: 0
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: control
           persist-credentials: false
+      - name: Prove the exact upload source is merged without changing historical reuse
+        run: |
+          test "$(git -C control rev-parse HEAD)" = "$STAGING_CONSUMER_SOURCE_SHA"
+          if [ "$STAGING_CONSUMER_MODE" = upload ]; then
+            git -C control merge-base --is-ancestor "$STAGING_CONSUMER_SOURCE_SHA" refs/remotes/origin/master
+          fi
       - name: Install locked dependencies without a deployment credential
         working-directory: control/platform/edge
         run: |
