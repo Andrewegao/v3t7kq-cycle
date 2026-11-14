@@ -8,7 +8,9 @@
 //     `point-series/v2/<model>/<run>/` → `point-<model>`) is recorded as `copy: component`;
 //     components retention keeps one complete root per model run for good;
 //   - anything else (bricks, China crops, air, verification, replays, a run whose component
-//     publication failed) is copied server-side into the forecast history bucket and checked.
+//     publication failed) is copied server-side into the forecast history bucket and checked;
+//   - state rewritten in place each cycle with no other copy (jet-stream frames, rivers, each
+//     family's index.json; SNAPSHOT_PATH) is copied per release into `snapshots/<release>/`.
 // Releases retention deletes a release only with a receipt bound to its manifest that covers every
 // run directory, so any failure here holds releases and loses nothing.
 //
@@ -17,7 +19,10 @@
 // never writes under releases/.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { RECEIPT_KIND, summarizeManifest } from './production-releases-retention.mjs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { RECEIPT_KIND, SNAPSHOT_DIR, SNAPSHOT_PATH, componentIdOf, summarizeManifest } from './production-releases-retention.mjs';
 
 const { RELEASE_ID, R2_REMOTE, COMPONENT_REMOTE, HISTORY_REMOTE } = process.env;
 const FLAGS = ['--s3-no-check-bucket'];
@@ -25,12 +30,7 @@ const rclone = (...args) => execFileSync('rclone', [...args, ...FLAGS], { encodi
 const lines = text => text.split('\n').filter(Boolean);
 const bucketOf = remote => remote.replace(/^[^:]*:/, '').replace(/\/+$/, '').split('/').pop();
 
-export function componentIdOf(dir) {
-  let m = /^data\/([a-z][a-z0-9-]{0,39})\/runs\/\d{10}\/$/.exec(dir);
-  if (m) return m[1];
-  m = /^point-series\/v2\/([a-z][a-z0-9-]{0,33})\/\d{10}\/$/.exec(dir);
-  return m ? `point-${m[1]}` : null;
-}
+export { componentIdOf };
 
 function main() {
   if (!/^cycle-[1-9]\d{0,19}$/.test(RELEASE_ID ?? '')) throw new Error(`unexpected RELEASE_ID ${RELEASE_ID}`);
@@ -60,6 +60,20 @@ function main() {
   const runs = {};
   let copied = 0, matched = 0;
   for (const [dir, objects] of Object.entries(summary.runs).sort()) {
+    if (dir === SNAPSHOT_DIR) {
+      // Rewritten in place each cycle: one snapshot per release, under its own prefix.
+      const work = mkdtempSync(join(tmpdir(), 'history-snapshot-'));
+      try {
+        const list = join(work, 'files');
+        writeFileSync(list, `${summary.manifest.objects.map(o => o.path).filter(p => SNAPSHOT_PATH.test(p)).join('\n')}\n`);
+        const target = `${HISTORY_REMOTE}/snapshots/${RELEASE_ID}`;
+        rclone('copy', prefix, target, '--files-from', list, '--checksum');
+        rclone('check', prefix, target, '--files-from', list, '--one-way');
+      } finally { rmSync(work, { recursive: true, force: true }); }
+      runs[dir] = { objects, copy: 'history', historyPrefix: `snapshots/${RELEASE_ID}/` };
+      copied += 1;
+      continue;
+    }
     const id = componentIdOf(dir), run = /(\d{10})\/$/.exec(dir)[1];
     let component = null;
     if (id) {

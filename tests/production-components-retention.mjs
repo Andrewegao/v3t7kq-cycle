@@ -398,10 +398,10 @@ test('workflow defaults to a dry run, needs its own protected environment, diges
   assert.match(workflow, /automatic:\n\s+description:[^\n]+\n\s+type: boolean\n\s+required: false\n\s+default: false/);
   assert.match(workflow, new RegExp(`${STEM}_GC_AUTO_ENABLED: \\$\\{\\{ vars\\.${STEM}_GC_AUTO_ENABLED \\}\\}`));
   const auto = workflow.split('      - name: Automatic daily cleanup (plan, independent approval checks, execute that plan)\n')[1].split('\n      - ')[0];
-  assert.match(auto, /if: \$\{\{ \(github\.event_name == 'schedule' \|\| inputs\.automatic == true\) \}\}/);
+  assert.match(auto, /if: \$\{\{ \(github\.event_name == 'schedule' \|\| \(inputs\.automatic == true && inputs\.dry_run == false\)\) \}\}/);
   assert.match(auto, /retention\.mjs auto > /);
   // Every manual step is dispatch-only: on a schedule `inputs.dry_run` is null, and null == false.
-  for (const step of workflow.split('\n      - ').filter(s => /inputs\.dry_run ==/.test(s)))
+  for (const step of workflow.split('\n      - ').filter(s => /inputs\.dry_run ==/.test(s) && !/event_name == 'schedule'/.test(s)))
     assert.match(step, /github\.event_name == 'workflow_dispatch' && inputs\.automatic != true && inputs\.dry_run == (true|false)/);
 
   assert.match(execute, /INPUT_BASELINE_CATALOG_ID: \$\{\{ inputs\.baseline_catalog_id \}\}/);
@@ -607,4 +607,18 @@ test('automatic approval: a fresh plan passes only the independent checks a revi
   refuse({ ...long, candidates: [{ ...first, prefix: 'components/other/x/' }] }, /prefix/);
   refuse({ ...long, totals: { ...long.totals, objects: policy.maximumDeletesPerRun + 1 } }, /budget/);
   refuse({ ...long, kind: 'x' }, /not a component/);
+});
+
+test('cli: only the dry run refuses to hold the delete token', () => {
+  const cli = new URL('../tools/production-components-retention.mjs', import.meta.url).pathname;
+  const env = { PATH: process.env.PATH, GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'Andrewegao/v3t7kq-cycle', GITHUB_REF: 'refs/heads/main',
+    GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_WORKFLOW_REF: 'Andrewegao/v3t7kq-cycle/.github/workflows/production-components-retention.yml@refs/heads/main',
+    GITHUB_JOB: 'retention', COMPONENTS_GC_ENVIRONMENT: 'data-production-components-cleanup', PRODUCTION_COMPONENTS_GC_ENABLED: 'true',
+    PRODUCTION_COMPONENTS_GC_CONTROLLER_SHA256: controllerDigest(), PRODUCTION_COMPONENTS_GC_EXECUTE_ENABLED: 'true',
+    PRODUCTION_COMPONENTS_GC_DELETE_ACCESS_KEY_ID: 'deletekeyid', PRODUCTION_COMPONENTS_GC_DELETE_SECRET_ACCESS_KEY: 'd'.repeat(64) };
+  const run = (command, extra = {}) => spawnSync(process.execPath, [cli, command], { encoding: 'utf8', env: { ...env, ...extra } }).stderr;
+  assert.match(run('dry-run'), /the dry run never holds the delete token/);
+  assert.doesNotMatch(run('execute'), /the dry run never holds the delete token/);
+  assert.match(run('auto'), /automatic retention is off/);
+  assert.match(run('execute', { GITHUB_EVENT_NAME: 'schedule' }), /refused/);
 });

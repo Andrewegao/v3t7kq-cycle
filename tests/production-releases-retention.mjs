@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'n
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { autoApproval, RECEIPT_KIND, receiptCovers, runDirsOf, controllerDigest, createRetentionIo, executeRetention, executionSummary, planRetention, planSummary, readPolicy,
+import { autoApproval, componentIdOf, RECEIPT_KIND, receiptCovers, runDirsOf, SNAPSHOT_DIR, controllerDigest, createRetentionIo, executeRetention, executionSummary, planRetention, planSummary, readPolicy,
   scopedDeleteCredentials, scopedRelease, summarizeManifest, validatePolicy } from '../tools/production-releases-retention.mjs';
 
 const sha = value => createHash('sha256').update(value).digest('hex');
@@ -612,7 +612,7 @@ test('workflow: dispatch-only, dry run by default, its own environment, digest a
   assert.doesNotMatch(workflow, /^\s*concurrency:/m, 'no lock held across the environment gate');
   assert.match(workflow, /^permissions:\n {2}contents: read\n {2}actions: read\n(?! )/m);
   const active = workflow.split('      - name: Refuse while a re-run of an old bake or a release bootstrap is queued or running\n')[1].split('\n      - ')[0];
-  assert.match(active, /if: \$\{\{ \(github\.event_name == 'workflow_dispatch' && inputs\.automatic != true && inputs\.dry_run == false\) \|\| \(github\.event_name == 'schedule' \|\| inputs\.automatic == true\) \}\}/);
+  assert.match(active, /if: \$\{\{ \(github\.event_name == 'workflow_dispatch' && inputs\.automatic != true && inputs\.dry_run == false\) \|\| \(github\.event_name == 'schedule' \|\| \(inputs\.automatic == true && inputs\.dry_run == false\)\) \}\}/);
   assert.match(active, /GH_TOKEN: \$\{\{ github\.token \}\}/);
   assert.match(active, /for workflow in bake\.yml catalog-production-bootstrap\.yml/);
   assert.match(active, /minimumAgeHours/);
@@ -636,10 +636,10 @@ test('workflow: dispatch-only, dry run by default, its own environment, digest a
   assert.match(workflow, /automatic:\n\s+description:[^\n]+\n\s+type: boolean\n\s+required: false\n\s+default: false/);
   assert.match(workflow, new RegExp(`${STEM}_GC_AUTO_ENABLED: \\$\\{\\{ vars\\.${STEM}_GC_AUTO_ENABLED \\}\\}`));
   const auto = workflow.split('      - name: Automatic daily cleanup (plan, independent approval checks, execute that plan)\n')[1].split('\n      - ')[0];
-  assert.match(auto, /if: \$\{\{ \(github\.event_name == 'schedule' \|\| inputs\.automatic == true\) \}\}/);
+  assert.match(auto, /if: \$\{\{ \(github\.event_name == 'schedule' \|\| \(inputs\.automatic == true && inputs\.dry_run == false\)\) \}\}/);
   assert.match(auto, /retention\.mjs auto > /);
   // Every manual step is dispatch-only: on a schedule `inputs.dry_run` is null, and null == false.
-  for (const step of workflow.split('\n      - ').filter(s => /inputs\.dry_run ==/.test(s)))
+  for (const step of workflow.split('\n      - ').filter(s => /inputs\.dry_run ==/.test(s) && !/event_name == 'schedule'/.test(s)))
     assert.match(step, /github\.event_name == 'workflow_dispatch' && inputs\.automatic != true && inputs\.dry_run == (true|false)/);
 
   assert.match(execute, /INPUT_PLAN_AS_OF: \$\{\{ inputs\.plan_as_of \}\}/);
@@ -798,4 +798,40 @@ test('automatic approval: a fresh plan passes only the independent checks a revi
   refuse({ ...plan, totals: { ...plan.totals, objects: policy.maximumDeletesPerRun + 1 } }, /budget/);
   // A covered release-only release passes.
   assert.deepEqual(autoApproval({ ...plan, candidates: [{ ...first, historyRuns: 2, history: 'covered' }] }, policy, at), []);
+});
+
+test('forecast runs: in-place forecast state is a per-release snapshot; components must be the same model', () => {
+  const paths = ['data-atmos/jetwind/000.png', 'data-atmos/jetwind/index.json', 'data-atmos/rivers/rivers.json', 'data/gfs-brick/index.json',
+    'data/gfs/runs/2026101806/wind/0.png', 'data/gfs-brick/runs/2026101806/b.bin', 'data-atmos/fires/f.json'];
+  const { runs, unrecognized } = runDirsOf(paths);
+  assert.deepEqual(unrecognized, []);
+  assert.equal(runs[SNAPSHOT_DIR], 4);
+  assert.equal(componentIdOf('data/gfs/runs/2026101806/'), 'gfs');
+  assert.equal(componentIdOf('data/replay/bebinca-2024/air/runs/2024091500/'), null);
+  const summary = { manifestSha256: 'a'.repeat(64), runs };
+  const receipt = runsOver => Buffer.from(JSON.stringify({ schemaVersion: 2, kind: RECEIPT_KIND, releaseId: 'cycle-5', manifestSha256: 'a'.repeat(64),
+    historyBucket: 'weatherx-forecast-history', componentBucket: 'weatherx-components-production', runs: {
+      [SNAPSHOT_DIR]: { objects: 4, copy: 'history', historyPrefix: 'snapshots/cycle-5/' },
+      'data/gfs/runs/2026101806/': { objects: 1, copy: 'component', component: 'components/gfs/gfs-20261018T060000Z-1/' },
+      'data/gfs-brick/runs/2026101806/': { objects: 1, copy: 'history' }, ...runsOver } }));
+  assert.equal(receiptCovers(receipt({}), 'cycle-5', policy, summary), true);
+  assert.equal(receiptCovers(receipt({ [SNAPSHOT_DIR]: { objects: 4, copy: 'history', historyPrefix: 'snapshots/cycle-4/' } }), 'cycle-5', policy, summary), false);
+  assert.equal(receiptCovers(receipt({ 'data/gfs-brick/runs/2026101806/': { objects: 1, copy: 'component', component: 'components/gfs/gfs-20261018T060000Z-1/' } }), 'cycle-5', policy, summary), false, 'another model\'s component');
+  assert.equal(receiptCovers(receipt({ 'data/gfs/runs/2026101806/': { objects: 1, copy: 'component', component: 'components/gfs/gfs-20261018T120000Z-1/' } }), 'cycle-5', policy, summary), false, 'another run');
+});
+
+test('cli: only the dry run refuses to hold the delete token', () => {
+  const cli = fileURLToPath(new URL('../tools/production-releases-retention.mjs', import.meta.url));
+  const env = { PATH: process.env.PATH, GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'Andrewegao/v3t7kq-cycle', GITHUB_REF: 'refs/heads/main',
+    GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_WORKFLOW_REF: 'Andrewegao/v3t7kq-cycle/.github/workflows/production-releases-retention.yml@refs/heads/main',
+    GITHUB_JOB: 'retention', RELEASES_GC_ENVIRONMENT: 'production-releases-retention', PRODUCTION_RELEASES_GC_ENABLED: 'true',
+    PRODUCTION_RELEASES_GC_CONTROLLER_SHA256: controllerDigest(), PRODUCTION_RELEASES_GC_EXECUTE_ENABLED: 'true',
+    PRODUCTION_RELEASES_GC_DELETE_ACCESS_KEY_ID: 'deletekeyid', PRODUCTION_RELEASES_GC_DELETE_SECRET_ACCESS_KEY: 'd'.repeat(64) };
+  const run = (command, extra = {}) => spawnSync(process.execPath, [cli, command], { encoding: 'utf8', env: { ...env, ...extra } }).stderr;
+  assert.match(run('dry-run'), /the dry run never holds the delete token/);
+  assert.doesNotMatch(run('execute'), /the dry run never holds the delete token/);
+  assert.match(run('auto'), /automatic retention is off/);
+  assert.doesNotMatch(run('auto', { PRODUCTION_RELEASES_GC_AUTO_ENABLED: 'true' }), /never holds|automatic retention is off/);
+  assert.match(run('auto', { GITHUB_EVENT_NAME: 'schedule', PRODUCTION_RELEASES_GC_AUTO_ENABLED: 'true' }), /refused/);
+  assert.match(run('execute', { GITHUB_EVENT_NAME: 'schedule' }), /refused/);
 });

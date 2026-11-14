@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       automatic:
-        description: Run the automatic cleanup now (plan, automatic approval checks, execute); ignores the inputs below
+        description: Run the automatic cleanup now (plan, automatic approval checks, execute); needs dry_run unticked
         type: boolean
         required: false
         default: false
@@ -87,7 +87,7 @@ jobs:
           PRODUCTION_COMPONENTS_GC_DELETE_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_COMPONENTS_GC_DELETE_SECRET_ACCESS_KEY }}
         run: node cycle/tools/production-components-retention.mjs execute
       - name: Automatic daily cleanup (plan, independent approval checks, execute that plan)
-        if: ${{ (github.event_name == 'schedule' || inputs.automatic == true) }}
+        if: ${{ (github.event_name == 'schedule' || (inputs.automatic == true && inputs.dry_run == false)) }}
         env:
           PRODUCTION_COMPONENTS_GC_READ_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_COMPONENTS_GC_READ_ACCESS_KEY_ID }}
           PRODUCTION_COMPONENTS_GC_READ_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_COMPONENTS_GC_READ_SECRET_ACCESS_KEY }}
@@ -111,7 +111,7 @@ jobs:
           ' "$out"
           exit "$status"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: ${{ always() && (github.event_name == 'schedule' || inputs.automatic == true) }}
+        if: ${{ always() && (github.event_name == 'schedule' || (inputs.automatic == true && inputs.dry_run == false)) }}
         with:
           name: production-components-retention-auto
           path: ${{ runner.temp }}/production-components-retention-auto.json

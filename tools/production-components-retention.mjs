@@ -717,7 +717,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     assert.equal(env.PRODUCTION_COMPONENTS_GC_CONTROLLER_SHA256, controllerDigest());
     if (command !== 'dry-run') assert.equal(env.PRODUCTION_COMPONENTS_GC_EXECUTE_ENABLED, 'true');
     if (command === 'auto') assert.equal(env.PRODUCTION_COMPONENTS_GC_AUTO_ENABLED, 'true', 'automatic retention is off');
-    else assert.ok(!env.PRODUCTION_COMPONENTS_GC_DELETE_ACCESS_KEY_ID && !env.PRODUCTION_COMPONENTS_GC_DELETE_SECRET_ACCESS_KEY,
+    if (command === 'dry-run') assert.ok(!env.PRODUCTION_COMPONENTS_GC_DELETE_ACCESS_KEY_ID && !env.PRODUCTION_COMPONENTS_GC_DELETE_SECRET_ACCESS_KEY,
       'the dry run never holds the delete token');
     const policy = readPolicy();
     const io = await createRetentionIo(env, policy);

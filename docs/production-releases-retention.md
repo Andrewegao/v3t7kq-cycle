@@ -262,11 +262,21 @@ only in releases.
   `<family>/runs/<YYYYMMDDHH>/` (families may be nested) and `point-series/v<N>/<model>/<YYYYMMDDHH>/`.
   Any other path with a `/runs/` segment or eight consecutive digits is `unrecognized`, and a
   release carrying one is held. An unknown layout is never assumed to need no copy.
+- **Snapshots.** Some forecast state is rewritten in place every cycle and has no other copy:
+  `data-atmos/jetwind/` (jet-stream frames), `data-atmos/rivers/`, and each family's run
+  `index.json` (`SNAPSHOT_PATH`). These count as the run directory `@snapshot/` and are copied once
+  per release into history `snapshots/<releaseId>/<path>`, about 4.5 MB per release. Observation
+  state (`fires`, `synop`, `buoys`, `openaq`, `metar`) has its own `obs-*` components. The rest
+  (`search`, `stations`, `health.json`, rosters, `precomputed`, airports, footprints) is current
+  state that the newer releases supersede. The ledger accumulates: every newer release carries all
+  of its days.
 - **Bake.** After `bake.yml` publishes `releases/cycle-<run>/`, `tools/forecast-history-copy.mjs`
   handles every run directory of that manifest:
-  - If a complete component root of the same model run exists (`component.json` present), the
-    directory is recorded as `copy: component`. Components retention keeps one complete root per
-    model run for good.
+  - If a component root of the same model and run exists with its `component.json`, the
+    directory is recorded as `copy: component`, and the receipt must name that model's component.
+    Components retention keeps the newest valid root of every model run for good, and it holds
+    every root of a run that has no valid root. So the run keeps a component copy, though the root
+    named in the receipt may later be removed in favour of a newer valid root of the same run.
   - Otherwise the directory is copied server-side into `weatherx-forecast-history/<dir>`
     (`--checksum`), checked with `rclone check --one-way`, and recorded as `copy: history`.
 

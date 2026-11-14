@@ -184,17 +184,30 @@ function pool(limit) {
 // `point-series/v<N>/<model>/<YYYYMMDDHH>/`. Any other path that looks run-keyed (a `/runs/` segment
 // or eight consecutive digits) is `unrecognized`, and a release carrying one is held: the guard
 // never assumes an unknown layout needs no copy.
+// Per-release snapshots of forecast state that is rewritten in place every cycle and has no other
+// copy (jet-stream frames, river forecast) plus each family's run index: copied per release into
+// history `snapshots/<releaseId>/<path>`, counted as the run directory `@snapshot/`.
+export const SNAPSHOT_PATH = /^(?:data-atmos\/jetwind\/[^/]+|data-atmos\/rivers\/[^/]+|(?:data|data-atmos)\/[a-z0-9-]+\/index\.json)$/;
+export const SNAPSHOT_DIR = '@snapshot/';
 const RUN_DIR = /^([a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)*)\/runs\/(\d{10})\/[^/]/;
 const POINT_DIR = /^(point-series\/v\d{1,3}\/[a-z0-9][a-z0-9-]*)\/(\d{10})\/[^/]/;
 export function runDirsOf(paths) {
   const runs = {}, unrecognized = [];
   for (const path of paths) {
+    if (SNAPSHOT_PATH.test(path)) { runs[SNAPSHOT_DIR] = (runs[SNAPSHOT_DIR] ?? 0) + 1; continue; }
     const m = RUN_DIR.exec(path), p = m ? null : POINT_DIR.exec(path);
     if (m) { const dir = `${m[1]}/runs/${m[2]}/`; runs[dir] = (runs[dir] ?? 0) + 1; }
     else if (p) { const dir = `${p[1]}/${p[2]}/`; runs[dir] = (runs[dir] ?? 0) + 1; }
     else if (path.includes('/runs/') || /\d{8}/.test(path)) unrecognized.push(path);
   }
   return { runs, unrecognized };
+}
+// The model component that holds a served run directory, if any.
+export function componentIdOf(dir) {
+  let m = /^data\/([a-z][a-z0-9-]{0,39})\/runs\/\d{10}\/$/.exec(dir);
+  if (m) return m[1];
+  m = /^point-series\/v2\/([a-z][a-z0-9-]{0,33})\/\d{10}\/$/.exec(dir);
+  return m ? `point-${m[1]}` : null;
 }
 const COMPONENT_ROOT = /^components\/([a-z][a-z0-9-]{1,40})\/\1-(\d{8})T(\d{2})0000Z-[^/]+\/$/;
 // A receipt covers a release when it was written for this exact manifest (the manifest is
@@ -210,9 +223,10 @@ export function receiptCovers(body, releaseId, policy, summary) {
   return Object.entries(summary.runs).every(([dir, n]) => {
     const e = r.runs[dir];
     if (!object(e) || e.objects !== n) return false;
+    if (dir === SNAPSHOT_DIR) return e.copy === 'history' && e.historyPrefix === `snapshots/${releaseId}/`;
     if (e.copy === 'history') return true;
     const run = /(\d{10})\/$/.exec(dir)[1], m = e.copy === 'component' && typeof e.component === 'string' && COMPONENT_ROOT.exec(e.component);
-    return Boolean(m && `${m[2]}${m[3]}` === run);
+    return Boolean(m && m[1] === componentIdOf(dir) && `${m[2]}${m[3]}` === run);
   });
 }
 // Every release prefix under `releases/`, each listed in full (paginated) for its object count,
@@ -714,7 +728,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     assert.equal(env.PRODUCTION_RELEASES_GC_CONTROLLER_SHA256, controllerDigest());
     if (command !== 'dry-run') assert.equal(env.PRODUCTION_RELEASES_GC_EXECUTE_ENABLED, 'true');
     if (command === 'auto') assert.equal(env.PRODUCTION_RELEASES_GC_AUTO_ENABLED, 'true', 'automatic retention is off');
-    else assert.ok(!env.PRODUCTION_RELEASES_GC_DELETE_ACCESS_KEY_ID && !env.PRODUCTION_RELEASES_GC_DELETE_SECRET_ACCESS_KEY,
+    if (command === 'dry-run') assert.ok(!env.PRODUCTION_RELEASES_GC_DELETE_ACCESS_KEY_ID && !env.PRODUCTION_RELEASES_GC_DELETE_SECRET_ACCESS_KEY,
       'the dry run never holds the delete token');
     const policy = readPolicy();
     const io = await createRetentionIo(env, policy);

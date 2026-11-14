@@ -40,7 +40,8 @@ test('matches complete components, copies everything else, writes a receipt that
     const m = release(root, 'cycle-42', {
       'data/gfs/runs/2026101806/wind/0.png': 'served gfs', 'data/gfs/runs/2026101812/wind/0.png': 'gfs no component',
       'point-series/v2/gfs/2026101806/chunks/c.bin': 'point', 'data/verify/runs/2026101000/a.json': 'scores v2',
-      'data/replay/bebinca-2024/air/runs/2024091500/x.bin': 'replay', 'data/x.json': 'state' });
+      'data/replay/bebinca-2024/air/runs/2024091500/x.bin': 'replay', 'data/x.json': 'state',
+      'data-atmos/jetwind/000.png': 'jet frame', 'data/verify/index.json': 'run index' });
     write(`${root}/weatherx-components-production`, 'components/gfs/gfs-20261018T060000Z-1700/component.json', '{}');
     write(`${root}/weatherx-components-production`, 'components/gfs/gfs-20261018T120000Z-1701/frame.png', 'incomplete root');
     write(`${root}/weatherx-components-production`, 'components/point-gfs/point-gfs-20261018T060000Z-9/component.json', '{}');
@@ -62,8 +63,11 @@ test('matches complete components, copies everything else, writes a receipt that
     assert.equal(receipt.runs['data/gfs/runs/2026101812/'].copy, 'history');
     const summary = summarizeManifest(readFileSync(`${root}/weatherx-data-production/releases/cycle-42/manifest.json`, 'utf8'), 'cycle-42');
     assert.ok(receiptCovers(body, 'cycle-42', readPolicy(), summary), 'retention accepts the receipt');
-    assert.equal(Object.keys(receipt.runs).length, 5);
-    assert.equal(m.objects.length, 6);
+    assert.equal(readFileSync(`${hist}/snapshots/cycle-42/data-atmos/jetwind/000.png`, 'utf8'), 'jet frame');
+    assert.ok(existsSync(`${hist}/snapshots/cycle-42/data/verify/index.json`));
+    assert.deepEqual(receipt.runs['@snapshot/'], { objects: 2, copy: 'history', historyPrefix: 'snapshots/cycle-42/' });
+    assert.equal(Object.keys(receipt.runs).length, 6);
+    assert.equal(m.objects.length, 8);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

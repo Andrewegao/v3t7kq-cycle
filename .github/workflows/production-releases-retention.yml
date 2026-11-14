@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       automatic:
-        description: Run the automatic cleanup now (plan, automatic approval checks, execute); ignores the inputs below
+        description: Run the automatic cleanup now (plan, automatic approval checks, execute); needs dry_run unticked
         type: boolean
         required: false
         default: false
@@ -85,7 +85,7 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       - name: Refuse while a re-run of an old bake or a release bootstrap is queued or running
-        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.automatic != true && inputs.dry_run == false) || (github.event_name == 'schedule' || inputs.automatic == true) }}
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.automatic != true && inputs.dry_run == false) || (github.event_name == 'schedule' || (inputs.automatic == true && inputs.dry_run == false)) }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -131,7 +131,7 @@ jobs:
             appendFileSync(process.env.GITHUB_STEP_SUMMARY, executionSummary(r));
           ' "$result"
       - name: Automatic daily cleanup (plan, independent approval checks, execute that plan)
-        if: ${{ (github.event_name == 'schedule' || inputs.automatic == true) }}
+        if: ${{ (github.event_name == 'schedule' || (inputs.automatic == true && inputs.dry_run == false)) }}
         env:
           PRODUCTION_RELEASES_GC_READ_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_RELEASES_GC_READ_ACCESS_KEY_ID }}
           PRODUCTION_RELEASES_GC_READ_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_RELEASES_GC_READ_SECRET_ACCESS_KEY }}
@@ -155,7 +155,7 @@ jobs:
           ' "$out"
           exit "$status"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: ${{ always() && (github.event_name == 'schedule' || inputs.automatic == true) }}
+        if: ${{ always() && (github.event_name == 'schedule' || (inputs.automatic == true && inputs.dry_run == false)) }}
         with:
           name: production-releases-retention-auto
           path: ${{ runner.temp }}/production-releases-retention-auto.json
