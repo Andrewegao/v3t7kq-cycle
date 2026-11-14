@@ -14,5 +14,8 @@
   "maximumManifestBytes": 16777216,
   "maximumDeletesPerRun": 4000000,
   "deleteConcurrency": 256,
-  "guardReuseMs": 1000
+  "guardReuseMs": 1000,
+  "historyBucket": "weatherx-forecast-history",
+  "historyReceiptPrefix": "history-receipts/",
+  "receiptComponentBucket": "weatherx-components-production"
 }

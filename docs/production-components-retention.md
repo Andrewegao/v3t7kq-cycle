@@ -132,3 +132,24 @@ objects eligible. At 500,000 objects per approved run, that is roughly 18 runs (
 backlog. (2026-11-14: the backlog had grown to 16.5 M objects; the 500,000-object run took about 3 hours at 16 in
 flight, so the policy now allows 4,000,000 objects per run, with a 350-minute bound. At 96 in flight with a fresh guard per delete a run deleted about 370 objects per second; the deletes in flight now share one guard check refreshed at least once a second (`guardReuseMs`), at 256 in flight.) At steady state, after the hourly ECMWF stand-aside, retention keeps about one window of
 data.
+
+## Automatic daily cleanup
+
+Owner ruling, 2026-11-14: fully automatic. The workflow runs daily on `schedule` (`17 3 * * *`), and
+`automatic=true` on dispatch does the same now. In one job it:
+
+1. plans afresh;
+2. runs `autoApproval`:
+   - the plan keeps forecast history (`historyRule`);
+   - the window starts at least `windowHours` ago;
+   - the window holds at least `AUTO_MINIMUM_CHAIN_SNAPSHOTS` (50) catalog snapshots;
+   - the plan is within budget;
+   - every candidate is a scoped root older than the window, with a kept copy of its model run
+     that is not itself a candidate;
+3. only when every check passes, executes that plan's SHA; the execution recomputes the plan and
+   must reproduce it.
+
+Any problem deletes nothing and fails the run. The run requires
+`PRODUCTION_COMPONENTS_GC_AUTO_ENABLED=true` and `PRODUCTION_COMPONENTS_GC_EXECUTE_ENABLED=true`, the
+attested controller digest and `main`. The environment no longer requires a reviewer.
+

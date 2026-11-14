@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { createHash, createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { canonicalArtifact, capacityLine, controllerDigest, createRetentionIo, executeRetention, planRetention, planSummary,
+import { AUTO_MINIMUM_CHAIN_SNAPSHOTS, autoApproval, canonicalArtifact, capacityLine, controllerDigest, createRetentionIo, executeRetention, planRetention, planSummary,
   readPolicy, scopedDeleteCredentials, scopedRoot, validatePolicy } from '../tools/production-components-retention.mjs';
 
 const sha = value => createHash('sha256').update(value).digest('hex');
@@ -387,12 +387,25 @@ test('workflow defaults to a dry run, needs its own protected environment, diges
   assert.deepEqual([...new Set(secrets)].sort(), ['PRODUCTION_COMPONENTS_GC_DELETE_ACCESS_KEY_ID', 'PRODUCTION_COMPONENTS_GC_DELETE_SECRET_ACCESS_KEY',
     'PRODUCTION_COMPONENTS_GC_READ_ACCESS_KEY_ID', 'PRODUCTION_COMPONENTS_GC_READ_SECRET_ACCESS_KEY']);
   const dry = workflow.split('      - name: Produce dry-run deletion plan for review\n')[1].split('\n      - ')[0];
-  assert.match(dry, /if: \$\{\{ inputs\.dry_run == true \}\}/);
+  assert.match(dry, /if: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.automatic != true && inputs\.dry_run == true \}\}/);
   assert.doesNotMatch(dry, /DELETE/);
   const execute = workflow.split('      - name: Delete only an approved, still-unreferenced plan with per-root temporary credentials\n')[1];
-  assert.match(execute, /if: \$\{\{ inputs\.dry_run == false \}\}/);
+  assert.match(execute, /if: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.automatic != true && inputs\.dry_run == false \}\}/);
+  const STEM = 'PRODUCTION_COMPONENTS';
+  // Automatic daily cleanup (owner 2026-11-14): only a daily GitHub schedule, behind its own variable,
+  // planning and approving in one step that deletes only when the independent checks pass.
+  assert.match(workflow, /^ {2}schedule:\n {4}- cron: '\d+ \d+ \* \* \*'\n {2}workflow_dispatch:\n/m);
+  assert.match(workflow, /automatic:\n\s+description:[^\n]+\n\s+type: boolean\n\s+required: false\n\s+default: false/);
+  assert.match(workflow, new RegExp(`${STEM}_GC_AUTO_ENABLED: \\$\\{\\{ vars\\.${STEM}_GC_AUTO_ENABLED \\}\\}`));
+  const auto = workflow.split('      - name: Automatic daily cleanup (plan, independent approval checks, execute that plan)\n')[1].split('\n      - ')[0];
+  assert.match(auto, /if: \$\{\{ \(github\.event_name == 'schedule' \|\| \(inputs\.automatic == true && inputs\.dry_run == false\)\) \}\}/);
+  assert.match(auto, /retention\.mjs auto > /);
+  // Every manual step is dispatch-only: on a schedule `inputs.dry_run` is null, and null == false.
+  for (const step of workflow.split('\n      - ').filter(s => /inputs\.dry_run ==/.test(s) && !/event_name == 'schedule'/.test(s)))
+    assert.match(step, /github\.event_name == 'workflow_dispatch' && inputs\.automatic != true && inputs\.dry_run == (true|false)/);
+
   assert.match(execute, /INPUT_BASELINE_CATALOG_ID: \$\{\{ inputs\.baseline_catalog_id \}\}/);
-  assert.doesNotMatch(workflow, /ssh-key|ATMOS_DEPLOY_KEY|R2_PRODUCTION_|CATALOG_PROMOTION|: write|schedule:/);
+  assert.doesNotMatch(workflow, /ssh-key|ATMOS_DEPLOY_KEY|R2_PRODUCTION_|CATALOG_PROMOTION|: write/);
   assert.match(controllerDigest(), /^[a-f0-9]{64}$/);
   const registry = JSON.parse(readFileSync(new URL('../ops/workflows.json', import.meta.url), 'utf8'));
   const entry = registry.workflows.find(row => row.id === 'production-components-retention');
@@ -570,4 +583,42 @@ test('a shared guard (guardReuseMs > 0) reads the pointer far less than once per
     baselineCatalogId: plan.baseline.catalogId, approvedPlanSha256: plan.planSha256 }), /pin changed/);
   assert.ok(h.io.deletes.length < plan.totals.objects, 'stopped early');
   assert.ok(reads - 2 < h.io.deletes.length, `guard reads during execution (${reads}) are shared, not one per delete (${h.io.deletes.length})`);
+});
+
+test('automatic approval: a fresh plan passes only the independent checks a reviewer made', async () => {
+  const h = history();
+  const plan = await planRetention({ io: h.io, policy, now });
+  assert.ok(plan.candidates.length > 0);
+  const at = now();
+  const without = problems => problems.filter(p => !/catalog snapshots/.test(p));
+  // The fixture chain is shorter than the production floor; everything else must pass.
+  const base = autoApproval(plan, policy, at);
+  assert.deepEqual(without(base), [], base.join('; '));
+  assert.equal(base.length, plan.chain.snapshots >= AUTO_MINIMUM_CHAIN_SNAPSHOTS ? 0 : 1);
+  const long = { ...plan, chain: { ...plan.chain, snapshots: AUTO_MINIMUM_CHAIN_SNAPSHOTS } };
+  assert.deepEqual(autoApproval(long, policy, at), []);
+  const first = plan.candidates[0];
+  const refuse = (mutated, pattern) => assert.ok(autoApproval(mutated, policy, at).some(p => pattern.test(p)), String(pattern));
+  refuse({ ...long, historyRule: undefined }, /forecast history/);
+  refuse({ ...long, baseline: { ...long.baseline, windowStart: new Date(at - 100 * HOUR).toISOString() } }, /window starts/);
+  refuse({ ...long, candidates: [{ ...first, newestModified: long.baseline.windowStart }] }, /recent/);
+  refuse({ ...long, candidates: [{ ...first, historyCopy: null }] }, /no kept copy/);
+  refuse({ ...long, candidates: [{ ...first, historyCopy: first.prefix }] }, /no kept copy/);
+  refuse({ ...long, candidates: [{ ...first, prefix: 'components/other/x/' }] }, /prefix/);
+  refuse({ ...long, totals: { ...long.totals, objects: policy.maximumDeletesPerRun + 1 } }, /budget/);
+  refuse({ ...long, kind: 'x' }, /not a component/);
+});
+
+test('cli: only the dry run refuses to hold the delete token', () => {
+  const cli = new URL('../tools/production-components-retention.mjs', import.meta.url).pathname;
+  const env = { PATH: process.env.PATH, GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'Andrewegao/v3t7kq-cycle', GITHUB_REF: 'refs/heads/main',
+    GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_WORKFLOW_REF: 'Andrewegao/v3t7kq-cycle/.github/workflows/production-components-retention.yml@refs/heads/main',
+    GITHUB_JOB: 'retention', COMPONENTS_GC_ENVIRONMENT: 'data-production-components-cleanup', PRODUCTION_COMPONENTS_GC_ENABLED: 'true',
+    PRODUCTION_COMPONENTS_GC_CONTROLLER_SHA256: controllerDigest(), PRODUCTION_COMPONENTS_GC_EXECUTE_ENABLED: 'true',
+    PRODUCTION_COMPONENTS_GC_DELETE_ACCESS_KEY_ID: 'deletekeyid', PRODUCTION_COMPONENTS_GC_DELETE_SECRET_ACCESS_KEY: 'd'.repeat(64) };
+  const run = (command, extra = {}) => spawnSync(process.execPath, [cli, command], { encoding: 'utf8', env: { ...env, ...extra } }).stderr;
+  assert.match(run('dry-run'), /the dry run never holds the delete token/);
+  assert.doesNotMatch(run('execute'), /the dry run never holds the delete token/);
+  assert.match(run('auto'), /automatic retention is off/);
+  assert.match(run('execute', { GITHUB_EVENT_NAME: 'schedule' }), /refused/);
 });

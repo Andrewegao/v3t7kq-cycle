@@ -1,7 +1,16 @@
 name: inspect or clean old whole production data releases
 on:
+  # Daily automatic cleanup (owner 2026-11-14). A late GitHub schedule is fine: nothing here is due
+  # at a time. PRODUCTION_RELEASES_GC_AUTO_ENABLED=false turns it off.
+  schedule:
+    - cron: '41 4 * * *'
   workflow_dispatch:
     inputs:
+      automatic:
+        description: Run the automatic cleanup now (plan, automatic approval checks, execute); needs dry_run unticked
+        type: boolean
+        required: false
+        default: false
       dry_run:
         description: Inspect an immutable plan without deleting objects
         type: boolean
@@ -38,6 +47,7 @@ jobs:
       PRODUCTION_RELEASES_GC_EXECUTE_ENABLED: ${{ vars.PRODUCTION_RELEASES_GC_EXECUTE_ENABLED }}
       PRODUCTION_RELEASES_GC_CONTROLLER_SHA256: ${{ vars.PRODUCTION_RELEASES_GC_CONTROLLER_SHA256 }}
       PRODUCTION_RELEASES_GC_APPROVED_PLAN_SHA256: ${{ vars.PRODUCTION_RELEASES_GC_APPROVED_PLAN_SHA256 }}
+      PRODUCTION_RELEASES_GC_AUTO_ENABLED: ${{ vars.PRODUCTION_RELEASES_GC_AUTO_ENABLED }}
       PRODUCTION_RELEASES_R2_ACCOUNT_ID: ${{ vars.PRODUCTION_RELEASES_R2_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -51,7 +61,7 @@ jobs:
           git -C cycle diff --exit-code HEAD
           npm ci --ignore-scripts --prefix cycle/staging-controller
       - name: Produce dry-run release deletion plan for review
-        if: ${{ inputs.dry_run == true }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.automatic != true && inputs.dry_run == true }}
         env:
           PRODUCTION_RELEASES_GC_READ_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_RELEASES_GC_READ_ACCESS_KEY_ID }}
           PRODUCTION_RELEASES_GC_READ_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_RELEASES_GC_READ_SECRET_ACCESS_KEY }}
@@ -68,14 +78,14 @@ jobs:
             appendFileSync(process.env.GITHUB_STEP_SUMMARY, text);
           ' "$plan"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: ${{ inputs.dry_run == true }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.automatic != true && inputs.dry_run == true }}
         with:
           name: production-releases-retention-plan
           path: ${{ runner.temp }}/production-releases-retention-plan.json
           retention-days: 7
           if-no-files-found: error
       - name: Refuse while a re-run of an old bake or a release bootstrap is queued or running
-        if: ${{ inputs.dry_run == false }}
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.automatic != true && inputs.dry_run == false) || (github.event_name == 'schedule' || (inputs.automatic == true && inputs.dry_run == false)) }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -101,7 +111,7 @@ jobs:
           done < "$active"
           test "$refused" = 0
       - name: Delete only an approved, still-unreferenced release plan with per-release temporary credentials
-        if: ${{ inputs.dry_run == false }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.automatic != true && inputs.dry_run == false }}
         env:
           INPUT_PLAN_AS_OF: ${{ inputs.plan_as_of }}
           INPUT_BASELINE_RELEASE_ID: ${{ inputs.baseline_release_id }}
@@ -120,3 +130,34 @@ jobs:
             const r = JSON.parse(readFileSync(process.argv[1], "utf8"));
             appendFileSync(process.env.GITHUB_STEP_SUMMARY, executionSummary(r));
           ' "$result"
+      - name: Automatic daily cleanup (plan, independent approval checks, execute that plan)
+        if: ${{ (github.event_name == 'schedule' || (inputs.automatic == true && inputs.dry_run == false)) }}
+        env:
+          PRODUCTION_RELEASES_GC_READ_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_RELEASES_GC_READ_ACCESS_KEY_ID }}
+          PRODUCTION_RELEASES_GC_READ_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_RELEASES_GC_READ_SECRET_ACCESS_KEY }}
+          PRODUCTION_RELEASES_GC_DELETE_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_RELEASES_GC_DELETE_ACCESS_KEY_ID }}
+          PRODUCTION_RELEASES_GC_DELETE_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_RELEASES_GC_DELETE_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/production-releases-retention-auto.json"
+          status=0
+          node cycle/tools/production-releases-retention.mjs auto > "$out" || status=$?
+          node --input-type=module -e '
+            import { readFileSync, appendFileSync, existsSync } from "node:fs";
+            import { planSummary, executionSummary } from "./cycle/tools/production-releases-retention.mjs";
+            const text = existsSync(process.argv[1]) ? readFileSync(process.argv[1], "utf8").trim() : "";
+            if (!text) process.exit(0);
+            const { plan, problems, result } = JSON.parse(text);
+            const lines = [planSummary(plan), "", problems.length ? `### Automatic approval refused\n\n${problems.map(p => `- ${p}`).join("\n")}` : "Automatic approval: all checks passed."];
+            if (result) lines.push("", executionSummary(result));
+            console.log(lines.join("\n"));
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`);
+          ' "$out"
+          exit "$status"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ always() && (github.event_name == 'schedule' || (inputs.automatic == true && inputs.dry_run == false)) }}
+        with:
+          name: production-releases-retention-auto
+          path: ${{ runner.temp }}/production-releases-retention-auto.json
+          retention-days: 30
+          if-no-files-found: warn

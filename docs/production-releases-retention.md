@@ -249,6 +249,75 @@ second. With the shared guard and 256 in flight, a 4,000,000-object run is expec
 350-minute bound; a run cut off by the bound
 leaves whole or partial releases that the next dry run plans again.
 
+## Forecast history
+
+A release is the only copy of any forecast run it carries that has no other copy. That covers six
+release-only families (`data/ecmwf-brick`, `data/gfs-brick`, `data/ecmwf-cn`, `data/gfs-cn`,
+`data-atmos/air`, `data/verify`), replays and fixtures (`data/replay/...`, `data-atmos/<model>`), and
+any served run (`data/<model>/runs/<run>/`, `point-series/v2/<model>/<run>/`) whose component
+publication failed or was skipped. On 2026-11-14, 15 served model runs from 10-18 to 11-08 existed
+only in releases.
+
+- **Run directories.** `runDirsOf` reads them from the release's immutable `manifest.json`:
+  `<family>/runs/<YYYYMMDDHH>/` (families may be nested) and `point-series/v<N>/<model>/<YYYYMMDDHH>/`.
+  Any other path with a `/runs/` segment or eight consecutive digits is `unrecognized`, and a
+  release carrying one is held. An unknown layout is never assumed to need no copy.
+- **Snapshots.** Some forecast state is rewritten in place every cycle and has no other copy:
+  `data-atmos/jetwind/` (jet-stream frames), `data-atmos/rivers/`, and each family's run
+  `index.json` (`SNAPSHOT_PATH`). These count as the run directory `@snapshot/` and are copied once
+  per release into history `snapshots/<releaseId>/<path>`, about 4.5 MB per release. Observation
+  state (`fires`, `synop`, `buoys`, `openaq`, `metar`) has its own `obs-*` components. The rest
+  (`search`, `stations`, `health.json`, rosters, `precomputed`, airports, footprints) is current
+  state that the newer releases supersede. The ledger accumulates: every newer release carries all
+  of its days.
+- **Bake.** After `bake.yml` publishes `releases/cycle-<run>/`, `tools/forecast-history-copy.mjs`
+  handles every run directory of that manifest:
+  - If a component root of the same model and run exists with its `component.json`, the
+    directory is recorded as `copy: component`, and the receipt must name that model's component.
+    Components retention keeps the newest valid root of every model run for good, and it holds
+    every root of a run that has no valid root. So the run keeps a component copy, though the root
+    named in the receipt may later be removed in favour of a newer valid root of the same run.
+  - Otherwise the directory is copied server-side into `weatherx-forecast-history/<dir>`
+    (`--checksum`), checked with `rclone check --one-way`, and recorded as `copy: history`.
+
+  It then writes `history-receipts/cycle-<run>.json`, bound to the manifest's SHA-256. Only the newest
+  release writes. A re-run of an old bake stands aside, so older bytes never overwrite newer ones in
+  history. The step is `continue-on-error`: a failure only leaves no receipt.
+- **Retention.** A release with run directories is a candidate only when its receipt names this
+  release, this manifest SHA-256, the history and component buckets, and every run directory with the
+  manifest's object count, either as `history` or as a component root of the same run. Otherwise it
+  is held as `no-history` (`missing`, `short` or `unrecognized`) and listed in the plan summary. The
+  manifest is uploaded `--immutable` and deleted last, so a partial (interrupted) release stays
+  covered, and its bytes cannot change under a receipt. A receipt removed after the dry run changes
+  the recomputed plan, so the execution refuses.
+- **Backfill (2026-11-14).** The six release-only families of the 140 releases then listed were
+  copied from the newest release carrying each run (567 run directories, 519,749 objects, 29.4 GB).
+  Receipts for the releases that remained were written after each of their run directories was
+  matched to a complete component or copied into history.
+- **Known edge.** After a manual rollback, the next bake starts from the older release. It is the
+  newest by run id, so its copy can replace newer bytes of the same run in history.
+
+## Automatic daily cleanup
+
+Owner ruling, 2026-11-14: fully automatic. The workflow runs daily on `schedule` (`41 4 * * *`), and
+`automatic=true` on dispatch does the same now. In one job it:
+
+1. plans afresh;
+2. runs `autoApproval`, the independent checks a reviewer made before approving a plan SHA:
+   - the age cutoff is `minimumAgeHours` before `asOf` and at least that long ago;
+   - the plan is fresh;
+   - at least `keepNewestReleases` whole protected releases exist, including the current one;
+   - newest-by-createdAt and newest-by-run-id agree;
+   - the plan is within budget;
+   - every candidate is in scope, unprotected, older than the cutoff, and has a covering receipt;
+3. only when every check passes, executes that plan's SHA; the execution recomputes the plan and
+   must reproduce it.
+
+Any problem deletes nothing and fails the run, with the list in the step summary. The run requires
+`PRODUCTION_RELEASES_GC_AUTO_ENABLED=true` and `PRODUCTION_RELEASES_GC_EXECUTE_ENABLED=true`, the
+attested controller digest and `main`. The environment no longer requires a reviewer. Manual dry
+runs and approved executions work as before.
+
 ## Steady state
 
 About seven days of releases: 28 × 7.5–8 GB ≈ 210–225 GB and about 1.5 M objects under
