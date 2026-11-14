@@ -510,3 +510,30 @@ test('execution re-checks each kept copy before deleting its duplicates', async 
   assert.ok(w.io.deletes.every(key => key.startsWith(a)), 'only the first run, whose kept copy is present, lost its duplicate');
   assert.ok([...w.buckets[COMPONENTS].keys()].some(key => key.startsWith(b)), 'the second duplicate is untouched');
 });
+
+test('only intact plain roots are kept copies; broken routing never displaces one and never fails the plan', async () => {
+  const w = world();
+  w.promote([w.component('ecmwf', 0)], T0 - 170 * HOUR);
+  w.promote([w.component('ecmwf', 0, { suffix: 1799000000 })], T0);
+  const big = { ...policy, maximumDeletesPerRun: 1000 };
+  // Run Z: an intact plain root, then a newer references-v1 re-bake routing into a root that is gone.
+  const plain = w.component('gfs', 220).rootPrefix;
+  const routedRoot = rootFor('gfs', 220, 1791800000);
+  const gone = rootFor('gfs', 300, 1791000000);
+  const body = `${JSON.stringify({ schemaVersion: 1, kind: 'weatherx-map-object-references-v1', sourceRoots: [
+    { rootPrefix: gone, manifestKey: `${gone}component.json`, manifestSha256: sha('x') }] })}\n`;
+  w.put(COMPONENTS, `${routedRoot}.weatherx-object-references-v1.json`, body, T0 - 219 * HOUR);
+  w.component('gfs', 220, { suffix: 1791800000, layout: { schemaVersion: 1, kind: 'references-v1',
+    manifestKey: `${routedRoot}.weatherx-object-references-v1.json`, manifestSha256: sha(body) } });
+  // A malformed old root: references-v1 manifest whose routing file is missing, plus a plain duplicate run.
+  const junk = rootFor('hrrr', 240, 1791300000);
+  w.put(COMPONENTS, `${junk}component.json`, `${JSON.stringify({ schemaVersion: 1, componentId: 'hrrr', artifactId: junk.split('/')[2],
+    rootPrefix: junk, objectCount: 0, objectLayout: { kind: 'references-v1', manifestKey: `${junk}.weatherx-object-references-v1.json`,
+    manifestSha256: sha('missing') } })}\n`, T0 - 240 * HOUR);
+  const plan = await planRetention({ io: w.io, policy: big, now });
+  const selected = plan.candidates.map(row => row.prefix);
+  assert.ok(!selected.includes(plain), 'the intact plain copy is kept');
+  assert.ok(selected.includes(routedRoot), 'the routed re-bake is a duplicate of the plain copy');
+  assert.equal(plan.candidates.find(row => row.prefix === routedRoot).historyCopy, plain);
+  assert.ok(!selected.includes(junk), 'a run whose only root is unreadable is held, and planning still succeeds');
+});

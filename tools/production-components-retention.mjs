@@ -105,54 +105,66 @@ export function runKeyOf(prefix) {
   const match = /^components\/([a-z][a-z0-9-]{1,40})\/\1-(\d{8}T\d{6}Z)-[^/]+\/$/.exec(prefix ?? '');
   return match ? `${match[1]}/${match[2]}` : null;
 }
-// A kept copy must be a root whose own component.json names it, passed its quality gate and, for the
-// plain layout, lists exactly objectCount objects plus that manifest. Objects a kept copy routes to in
-// another root (references-v1) are held with it. A run with no such root is held entirely.
+// A kept copy is a self-contained (plain layout) root whose own component.json names it, passed its
+// quality gate and lists exactly objectCount objects plus that manifest. Any other root never counts as
+// a kept copy, and an unreadable or malformed root is simply not one (it never fails the plan). A run
+// without a kept copy is held whole. Roots that any held root routes objects to (references-v1,
+// followed transitively) are held too; if a held root's routing cannot be resolved, every root of
+// its component is held.
 async function inspectRoot(io, policy, row) {
-  if (!row.complete) return { valid: false, sources: [] };
-  const got = await io.getOptional(policy.componentBucket, `${row.prefix}component.json`, MAX_MANIFEST);
-  if (!got) return { valid: false, sources: [] };
-  let manifest;
-  try { manifest = JSON.parse(got.body); } catch { return { valid: false, sources: [] }; }
-  if (!object(manifest) || manifest.componentId !== row.componentId || manifest.rootPrefix !== row.prefix) return { valid: false, sources: [] };
-  const layout = manifest.objectLayout ?? null, sources = [];
-  if (layout !== null) {
-    assert.ok(object(layout), `${row.prefix}component.json object layout`);
-    if (layout.kind === 'references-v1') {
-      assert.equal(layout.manifestKey, `${row.prefix}.weatherx-object-references-v1.json`);
-      const routing = await io.get(policy.componentBucket, layout.manifestKey, MAX_MANIFEST);
-      assert.equal(hash(routing.body), layout.manifestSha256, `${layout.manifestKey} hash`);
-      const value = JSON.parse(routing.body);
-      assert.ok(value?.kind === 'weatherx-map-object-references-v1' && Array.isArray(value.sourceRoots), `${layout.manifestKey} kind`);
-      const own = new RegExp(`^components/${escape(row.componentId)}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}/$`);
-      for (const source of value.sourceRoots) {
-        assert.ok(own.test(source?.rootPrefix ?? ''), `${layout.manifestKey} source root`);
-        sources.push(source.rootPrefix);
-      }
-    } else assert.ok(LAYOUTS_WITHIN_ROOT.has(layout.kind), `unknown object layout ${String(layout.kind).slice(0, 40)}: refusing to plan`);
-  }
-  const passed = manifest.quality?.status === 'passed';
-  const counted = layout !== null || (Number.isSafeInteger(manifest.objectCount) && row.objects === manifest.objectCount + 1);
-  return { valid: passed && counted, sources };
+  const none = { valid: false, layout: 'unknown', sources: null };
+  if (!row.complete) return { ...none, layout: 'incomplete' };
+  try {
+    const got = await io.getOptional(policy.componentBucket, `${row.prefix}component.json`, MAX_MANIFEST);
+    if (!got) return { ...none, layout: 'incomplete' };
+    const manifest = JSON.parse(got.body);
+    if (!object(manifest) || manifest.componentId !== row.componentId || manifest.rootPrefix !== row.prefix) return none;
+    const layout = manifest.objectLayout ?? null;
+    if (layout === null) {
+      const valid = manifest.quality?.status === 'passed' && Number.isSafeInteger(manifest.objectCount) &&
+        row.objects === manifest.objectCount + 1;
+      return { valid, layout: 'plain', sources: [] };
+    }
+    if (!object(layout) || layout.kind !== 'references-v1') return { ...none, layout: String(layout?.kind ?? 'unknown').slice(0, 40), sources: [] };
+    if (layout.manifestKey !== `${row.prefix}.weatherx-object-references-v1.json`) return { ...none, layout: 'references-v1' };
+    const routing = await io.get(policy.componentBucket, layout.manifestKey, MAX_MANIFEST);
+    if (hash(routing.body) !== layout.manifestSha256) return { ...none, layout: 'references-v1' };
+    const value = JSON.parse(routing.body);
+    const own = new RegExp(`^components/${escape(row.componentId)}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}/$`);
+    if (value?.kind !== 'weatherx-map-object-references-v1' || !Array.isArray(value.sourceRoots) ||
+      !value.sourceRoots.every(source => own.test(source?.rootPrefix ?? ''))) return { ...none, layout: 'references-v1' };
+    return { valid: false, layout: 'references-v1', sources: value.sourceRoots.map(source => source.rootPrefix) };
+  } catch { return none; }
 }
 export async function historyCopies(roots, policy, io) {
   const scoped = roots.filter(row => row.prefix && scopedRoot(policy, row.prefix));
   const limit = pool(8), inspected = new Map();
   await Promise.all(scoped.map(row => limit(async () => inspected.set(row.prefix, await inspectRoot(io, policy, row)))));
-  const best = new Map(), runs = new Set();
+  const best = new Map(), runs = new Map();
   for (const row of scoped) {
     const run = runKeyOf(row.prefix);
     assert.ok(run, `${row.prefix} has no model init time`);
-    runs.add(run);
+    runs.set(run, [...(runs.get(run) ?? []), row]);
     if (!inspected.get(row.prefix).valid) continue;
     const current = best.get(run);
     if (!current || row.newest > current.newest || (row.newest === current.newest && row.prefix > current.prefix)) best.set(run, row);
   }
   const copies = new Map([...best].map(([run, row]) => [run, row.prefix]));
-  const heldRuns = new Set([...runs].filter(run => !copies.has(run)));
-  const sources = new Set();
-  for (const prefix of copies.values()) for (const source of inspected.get(prefix).sources) sources.add(source);
-  return { copies, heldRuns, sources };
+  const heldRuns = new Set([...runs.keys()].filter(run => !copies.has(run)));
+  const held = [...copies.values(), ...[...heldRuns].flatMap(run => runs.get(run).map(row => row.prefix))];
+  // Transitive closure over routed sources of every held root.
+  const sources = new Set(), heldComponents = new Set(), queue = [...held], seen = new Set(queue);
+  while (queue.length) {
+    const prefix = queue.pop();
+    const info = inspected.get(prefix);
+    if (!info) continue;                                   // a source outside the inventory holds nothing more
+    if (info.sources === null) { if (info.layout === 'references-v1') heldComponents.add(prefix.split('/')[1]); continue; }
+    for (const source of info.sources) {
+      sources.add(source);
+      if (!seen.has(source)) { seen.add(source); queue.push(source); }
+    }
+  }
+  return { copies, heldRuns, sources, heldComponents };
 }
 function rootOf(key) {
   const parts = key.split('/');
@@ -360,7 +372,8 @@ export async function planRetention({ io, policy, now = Date.now, baselineCatalo
     if (row.prefix && (keep.has(row.prefix) || later.has(row.prefix) || history.sources.has(row.prefix))) add(row, 'referenced');
     else if (!row.prefix || !scopedRoot(policy, row.prefix)) add(row, 'nonCanonical');
     else if (row.newest >= windowStart) add(row, 'recent');
-    else if (historyRoots.has(row.prefix) || history.heldRuns.has(runKeyOf(row.prefix))) add(row, 'history');
+    else if (historyRoots.has(row.prefix) || history.heldRuns.has(runKeyOf(row.prefix)) ||
+      history.heldComponents.has(row.componentId)) add(row, 'history');
     else eligible.push(row);
   }
   eligible.sort((a, b) => a.newest - b.newest || a.prefix.localeCompare(b.prefix));
@@ -404,6 +417,8 @@ export async function planRetention({ io, policy, now = Date.now, baselineCatalo
     held: { ...Object.fromEntries(Object.entries(held).map(([k, [objects, bytes]]) => [k, { objects, bytes }])),
       outOfScope: { objects: listing.bucket.objects - sum(listing.roots, 'objects'), bytes: listing.bucket.bytes - sum(listing.roots, 'bytes') } },
     afterAllEligible: { objects: listing.bucket.objects - plan.eligible.objects, bytes: listing.bucket.bytes - plan.eligible.bytes },
+    history: { runsWithKeptCopy: history.copies.size, runsHeldWhole: history.heldRuns.size, routedSourcesHeld: history.sources.size,
+      componentsHeldWhole: [...history.heldComponents].sort() },
     last24h, capacity: capacityLine(policy, listing.bucket, after, last24h) };
   return { ...plan, planSha256, report };
 }
@@ -635,6 +650,8 @@ export function planSummary(plan) {
       `not canonical ${plan.report.held.nonCanonical.objects.toLocaleString('en-US')} / ${gb(plan.report.held.nonCanonical.bytes)}, ` +
       `forecast history (one copy per model run) ${plan.report.held.history.objects.toLocaleString('en-US')} / ${gb(plan.report.held.history.bytes)}, ` +
       `outside the model prefixes ${plan.report.held.outOfScope.objects.toLocaleString('en-US')} / ${gb(plan.report.held.outOfScope.bytes)}.`,
+    `- Forecast history: ${plan.report.history.runsWithKeptCopy} runs keep one copy, ${plan.report.history.runsHeldWhole} runs held whole (no intact plain copy), ` +
+      `${plan.report.history.routedSourcesHeld} routed source roots held, components held whole: ${plan.report.history.componentsHeldWhole.join(', ') || 'none'}.`,
     `- Eligible (unreferenced, older than the window): ${plan.eligible.roots} roots, ${plan.eligible.objects.toLocaleString('en-US')} objects, ${gb(plan.eligible.bytes)}.`,
     `- This run deletes: ${plan.totals.roots} roots, ${plan.totals.objects.toLocaleString('en-US')} objects, ${gb(plan.totals.bytes)}.`,
     `- ${plan.report.capacity}`, ''].join('\n');
