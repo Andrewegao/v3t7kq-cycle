@@ -41,12 +41,17 @@ A root is never a candidate when any of these holds:
    never touched.
 
 6. **It is forecast history.** For every model run (component id and init time, for example
-   `gfs` at `20261113T120000Z`) the newest root that has its `component.json` is kept for good,
-   whatever its age and whether or not any catalog references it (`keepOneCopyPerRun`, which the
-   policy validator requires to be `true`). Only further copies of the same run, re-bakes and
-   incomplete uploads, are candidates. Each candidate in the plan names that kept copy as
-   `historyCopy`, and the execution lists the kept copy and requires its `component.json` before
-   it deletes anything under the candidate. Owner ruling 2026-11-14: "delete the duplicates but
+   `gfs` at `20261113T120000Z`) one root is kept for good, whatever its age and whether or not any
+   catalog references it (`keepOneCopyPerRun`, which the policy validator requires to be `true`).
+   The kept copy is the newest root whose own `component.json` names it, has `quality.status`
+   `passed` and, for the plain layout, lists exactly `objectCount` objects plus that manifest. Any
+   root a kept copy routes objects to (`references-v1` `sourceRoots`) is held with it. A run with no
+   such root is held whole. Only further copies of a run that has a valid kept copy (re-bakes,
+   failed or incomplete uploads) are candidates. Each candidate names its kept copy as
+   `historyCopy` inside the plan digest, and before deleting under a candidate the execution reads
+   the kept copy's `component.json` and stops if it is gone. Because only duplicates are deleted,
+   the bucket keeps growing by roughly one copy of every run (about 30 GB a day in 2026-11); the
+   cap line reports that growth. Owner ruling 2026-11-14: "delete the duplicates but
    keep the forecast history".
 
 Everything else in scope is **eligible**. A plan selects the oldest eligible roots, up to

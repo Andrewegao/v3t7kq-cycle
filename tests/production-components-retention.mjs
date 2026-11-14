@@ -175,7 +175,7 @@ test('dry run keeps the verified window, pins and routed sources and selects the
   assert.ok(plan.eligible.objects > plan.totals.objects, 'the budget bounds this run, the rest waits');
   const ages = plan.candidates.map(row => Date.parse(row.newestModified));
   assert.deepEqual(ages, [...ages].sort((a, b) => a - b), 'oldest first');
-  assert.ok(selected.includes(h.orphan.rootPrefix) || plan.eligible.roots > plan.totals.roots, 'never-activated old uploads are eligible');
+  assert.ok(!selected.includes(h.orphan.rootPrefix), 'a never-activated old upload that is the only copy of its run is forecast history');
   assert.equal(plan.report.held.nonCanonical.objects, 2, 'the Wind100 and canary roots are held');
   assert.equal(plan.report.held.outOfScope.objects, 1, 'the observation component is outside the model prefixes');
   assert.equal(Object.values(plan.report.held).reduce((n, v) => n + v.objects, 0) + plan.eligible.objects, plan.report.bucket.objects);
@@ -448,4 +448,65 @@ test('forecast history: one complete copy of every model run is never a candidat
     deleteForPrefix: w.io.deleteForPrefix, baselineCatalogId: plan.baseline.catalogId, approvedPlanSha256: plan.planSha256 }),
     /differs from the approved plan|missing or incomplete/);
   for (const key of w.io.deletes ?? []) assert.ok(!key.startsWith(first) && !key.startsWith(second), `${key} deleted without its kept copy`);
+});
+
+test('forecast history copies hold the roots they route to, need a passed manifest, and hold runs without one', async () => {
+  const w = world();
+  w.promote([w.component('ecmwf', 0)], T0 - 170 * HOUR);
+  w.promote([w.component('ecmwf', 0, { suffix: 1799000000 })], T0);
+  const big = { ...policy, maximumDeletesPerRun: 1000 };
+  // Run X (220 h) has a promoted copy P and a newer re-bake R. Run Y (210 h) has one copy that routes its
+  // objects into P (references-v1). Deleting P would empty Y's only copy, so P is held.
+  const p = w.component('ecmwf', 220).rootPrefix;
+  rebake(w, 'ecmwf', 220);
+  const yRoot = rootFor('ecmwf', 210);
+  const routingBody = `${JSON.stringify({ schemaVersion: 1, kind: 'weatherx-map-object-references-v1', sourceRoots: [
+    { rootPrefix: p, manifestKey: `${p}component.json`, manifestSha256: sha('x') }] })}\n`;
+  w.put(COMPONENTS, `${yRoot}.weatherx-object-references-v1.json`, routingBody, T0 - 210 * HOUR);
+  w.component('ecmwf', 210, { layout: { schemaVersion: 1, kind: 'references-v1',
+    manifestKey: `${yRoot}.weatherx-object-references-v1.json`, manifestSha256: sha(routingBody) } });
+  // Run Z (230 h): the newest copy failed its quality gate, so the older passed copy is kept.
+  const passed = w.component('hrrr', 230).rootPrefix;
+  const failedRoot = rootFor('hrrr', 230, 1791700000);
+  w.put(COMPONENTS, `${failedRoot}f0.png`, 'failed', T0 - 229 * HOUR);
+  w.put(COMPONENTS, `${failedRoot}component.json`, `${JSON.stringify({ schemaVersion: 1, componentId: 'hrrr',
+    artifactId: failedRoot.split('/')[2], rootPrefix: failedRoot, objectCount: 1, quality: { status: 'failed' } })}\n`, T0 - 229 * HOUR);
+  // Run V (235 h): two copies, neither has a component.json. Both are held; nothing stalls.
+  const v1 = rootFor('gfs', 235, 1791100000), v2 = rootFor('gfs', 235, 1791200000);
+  w.put(COMPONENTS, `${v1}a.bin`, 'a', T0 - 235 * HOUR); w.put(COMPONENTS, `${v2}a.bin`, 'b', T0 - 234 * HOUR);
+  const plan = await planRetention({ io: w.io, policy: big, now });
+  const selected = plan.candidates.map(row => row.prefix);
+  assert.ok(!selected.includes(p), 'a root a kept copy routes to is held');
+  assert.ok(!selected.includes(yRoot), 'the single copy of run Y is history');
+  assert.ok(!selected.includes(passed) && selected.includes(failedRoot), 'a failed re-bake never becomes the kept copy');
+  assert.equal(plan.candidates.find(row => row.prefix === failedRoot).historyCopy, passed);
+  assert.ok(!selected.includes(v1) && !selected.includes(v2), 'a run with no complete copy is held whole');
+  const result = await executeRetention({ io: w.io, policy: big, now, deleteForPrefix: w.io.deleteForPrefix,
+    baselineCatalogId: plan.baseline.catalogId, approvedPlanSha256: plan.planSha256 });
+  assert.equal(result.rootsConfirmedEmpty, plan.candidates.length, 'held runs do not stall the execution');
+  assert.ok([...w.buckets[COMPONENTS].keys()].some(key => key.startsWith(p)), 'routed source survives');
+});
+
+test('execution re-checks each kept copy before deleting its duplicates', async () => {
+  const w = world();
+  w.promote([w.component('ecmwf', 0)], T0 - 170 * HOUR);
+  w.promote([w.component('ecmwf', 0, { suffix: 1799000000 })], T0);
+  const big = { ...policy, maximumDeletesPerRun: 1000 };
+  const a = w.component('hrrr', 230).rootPrefix; const keptA = rebake(w, 'hrrr', 230);
+  const b = w.component('hrrr', 220).rootPrefix; const keptB = rebake(w, 'hrrr', 220);
+  const plan = await planRetention({ io: w.io, policy: big, now });
+  assert.deepEqual(plan.candidates.map(row => [row.prefix, row.historyCopy]), [[a, keptA], [b, keptB]]);
+  // The kept copy of the second run vanishes while the first run's duplicate is being deleted.
+  let removed = false;
+  const deleteForPrefix = async prefix => {
+    const inner = await w.io.deleteForPrefix(prefix);
+    return { ...inner, delete: async key => {
+      if (!removed) { removed = true; w.buckets[COMPONENTS].delete(`${keptB}component.json`); }
+      return inner.delete(key);
+    } };
+  };
+  await assert.rejects(executeRetention({ io: w.io, policy: big, now, deleteForPrefix,
+    baselineCatalogId: plan.baseline.catalogId, approvedPlanSha256: plan.planSha256 }), /kept copy .* missing or incomplete/);
+  assert.ok(w.io.deletes.every(key => key.startsWith(a)), 'only the first run, whose kept copy is present, lost its duplicate');
+  assert.ok([...w.buckets[COMPONENTS].keys()].some(key => key.startsWith(b)), 'the second duplicate is untouched');
 });

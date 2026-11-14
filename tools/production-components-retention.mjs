@@ -105,19 +105,54 @@ export function runKeyOf(prefix) {
   const match = /^components\/([a-z][a-z0-9-]{1,40})\/\1-(\d{8}T\d{6}Z)-[^/]+\/$/.exec(prefix ?? '');
   return match ? `${match[1]}/${match[2]}` : null;
 }
-export function historyCopies(roots, policy) {
-  const best = new Map();
-  for (const row of roots) {
-    if (!row.prefix || !scopedRoot(policy, row.prefix)) continue;
+// A kept copy must be a root whose own component.json names it, passed its quality gate and, for the
+// plain layout, lists exactly objectCount objects plus that manifest. Objects a kept copy routes to in
+// another root (references-v1) are held with it. A run with no such root is held entirely.
+async function inspectRoot(io, policy, row) {
+  if (!row.complete) return { valid: false, sources: [] };
+  const got = await io.getOptional(policy.componentBucket, `${row.prefix}component.json`, MAX_MANIFEST);
+  if (!got) return { valid: false, sources: [] };
+  let manifest;
+  try { manifest = JSON.parse(got.body); } catch { return { valid: false, sources: [] }; }
+  if (!object(manifest) || manifest.componentId !== row.componentId || manifest.rootPrefix !== row.prefix) return { valid: false, sources: [] };
+  const layout = manifest.objectLayout ?? null, sources = [];
+  if (layout !== null) {
+    assert.ok(object(layout), `${row.prefix}component.json object layout`);
+    if (layout.kind === 'references-v1') {
+      assert.equal(layout.manifestKey, `${row.prefix}.weatherx-object-references-v1.json`);
+      const routing = await io.get(policy.componentBucket, layout.manifestKey, MAX_MANIFEST);
+      assert.equal(hash(routing.body), layout.manifestSha256, `${layout.manifestKey} hash`);
+      const value = JSON.parse(routing.body);
+      assert.ok(value?.kind === 'weatherx-map-object-references-v1' && Array.isArray(value.sourceRoots), `${layout.manifestKey} kind`);
+      const own = new RegExp(`^components/${escape(row.componentId)}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}/$`);
+      for (const source of value.sourceRoots) {
+        assert.ok(own.test(source?.rootPrefix ?? ''), `${layout.manifestKey} source root`);
+        sources.push(source.rootPrefix);
+      }
+    } else assert.ok(LAYOUTS_WITHIN_ROOT.has(layout.kind), `unknown object layout ${String(layout.kind).slice(0, 40)}: refusing to plan`);
+  }
+  const passed = manifest.quality?.status === 'passed';
+  const counted = layout !== null || (Number.isSafeInteger(manifest.objectCount) && row.objects === manifest.objectCount + 1);
+  return { valid: passed && counted, sources };
+}
+export async function historyCopies(roots, policy, io) {
+  const scoped = roots.filter(row => row.prefix && scopedRoot(policy, row.prefix));
+  const limit = pool(8), inspected = new Map();
+  await Promise.all(scoped.map(row => limit(async () => inspected.set(row.prefix, await inspectRoot(io, policy, row)))));
+  const best = new Map(), runs = new Set();
+  for (const row of scoped) {
     const run = runKeyOf(row.prefix);
     assert.ok(run, `${row.prefix} has no model init time`);
+    runs.add(run);
+    if (!inspected.get(row.prefix).valid) continue;
     const current = best.get(run);
-    // Prefer a complete root (its component.json exists), then the latest publish, then key order.
-    const better = !current || (row.complete && !current.complete) ||
-      (row.complete === current.complete && (row.newest > current.newest || (row.newest === current.newest && row.prefix > current.prefix)));
-    if (better) best.set(run, row);
+    if (!current || row.newest > current.newest || (row.newest === current.newest && row.prefix > current.prefix)) best.set(run, row);
   }
-  return new Map([...best].map(([run, row]) => [run, row.prefix]));
+  const copies = new Map([...best].map(([run, row]) => [run, row.prefix]));
+  const heldRuns = new Set([...runs].filter(run => !copies.has(run)));
+  const sources = new Set();
+  for (const prefix of copies.values()) for (const source of inspected.get(prefix).sources) sources.add(source);
+  return { copies, heldRuns, sources };
 }
 function rootOf(key) {
   const parts = key.split('/');
@@ -317,15 +352,15 @@ export async function planRetention({ io, policy, now = Date.now, baselineCatalo
   }
   const listing = await inventory({ io, policy });
   const held = { referenced: [0, 0], nonCanonical: [0, 0], history: [0, 0], recent: [0, 0] };
-  const history = historyCopies(listing.roots, policy);
-  const historyRoots = new Set(history.values());
+  const history = await historyCopies(listing.roots, policy, io);
+  const historyRoots = new Set(history.copies.values());
   const add = (row, key) => { held[key][0] += row.objects; held[key][1] += row.bytes; };
   const eligible = [];
   for (const row of listing.roots) {
-    if (row.prefix && (keep.has(row.prefix) || later.has(row.prefix))) add(row, 'referenced');
+    if (row.prefix && (keep.has(row.prefix) || later.has(row.prefix) || history.sources.has(row.prefix))) add(row, 'referenced');
     else if (!row.prefix || !scopedRoot(policy, row.prefix)) add(row, 'nonCanonical');
     else if (row.newest >= windowStart) add(row, 'recent');
-    else if (historyRoots.has(row.prefix)) add(row, 'history');
+    else if (historyRoots.has(row.prefix) || history.heldRuns.has(runKeyOf(row.prefix))) add(row, 'history');
     else eligible.push(row);
   }
   eligible.sort((a, b) => a.newest - b.newest || a.prefix.localeCompare(b.prefix));
@@ -337,7 +372,7 @@ export async function planRetention({ io, policy, now = Date.now, baselineCatalo
     assert.equal(rows.length, row.objects, `${row.prefix} changed while planning`);
     assert.ok(rows.every(r => r.key.startsWith(row.prefix) && r.key.length > row.prefix.length && r.key.length <= 1024 &&
       !r.key.slice(row.prefix.length).split('/').some(part => part === '' || part === '.' || part === '..')), `${row.prefix} key shape`);
-    const historyCopy = history.get(runKeyOf(row.prefix));
+    const historyCopy = history.copies.get(runKeyOf(row.prefix));
     assert.ok(historyCopy && historyCopy !== row.prefix, `${row.prefix} would be the last copy of its model run`);
     candidates.push({ prefix: row.prefix, componentId: row.componentId, historyCopy, objectCount: rows.length,
       bytes: rows.reduce((n, r) => n + r.size, 0), newestModified: new Date(row.newest).toISOString(),
@@ -428,12 +463,15 @@ export async function executeRetention({ io, policy, approvedPlanSha256, baselin
   const limit = pool(policy.deleteConcurrency);
   let deleteRequests = 0;
   const prefixReceipts = [];
+  const twinsSeen = new Set();
   for (const candidate of content.candidates) {
     const rows = (await io.listRows(candidate.prefix, policy.maximumDeletesPerRun)).sort((a, b) => a.key.localeCompare(b.key));
     assert.equal(keyDigest(rows), candidate.keysSha256, `${candidate.prefix} changed since the dry run; replan`);
-    const twin = await io.listRows(candidate.historyCopy, policy.maximumDeletesPerRun);
-    assert.ok(twin.some(row => row.key === `${candidate.historyCopy}component.json`),
-      `${candidate.historyCopy}, the kept copy of ${candidate.prefix}'s model run, is missing or incomplete; stopping`);
+    if (!twinsSeen.has(candidate.historyCopy)) {
+      const twin = await io.getOptional(policy.componentBucket, `${candidate.historyCopy}component.json`, MAX_MANIFEST);
+      assert.ok(twin, `${candidate.historyCopy}, the kept copy of ${candidate.prefix}'s model run, is missing or incomplete; stopping`);
+      twinsSeen.add(candidate.historyCopy);
+    }
     // The manifest goes last so an interrupted root still names itself.
     const keys = rows.map(row => row.key);
     const manifest = `${candidate.prefix}component.json`;
