@@ -537,3 +537,17 @@ test('only intact plain roots are kept copies; broken routing never displaces on
   assert.equal(plan.candidates.find(row => row.prefix === routedRoot).historyCopy, plain);
   assert.ok(!selected.includes(junk), 'a run whose only root is unreadable is held, and planning still succeeds');
 });
+
+test('a held root with an unknown layout holds every root of its component', async () => {
+  const w = world();
+  w.promote([w.component('ecmwf', 0)], T0 - 170 * HOUR);
+  w.promote([w.component('ecmwf', 0, { suffix: 1799000000 })], T0);
+  const big = { ...policy, maximumDeletesPerRun: 1000 };
+  const dup = w.component('aifs', 230).rootPrefix; rebake(w, 'aifs', 230);   // an ordinary duplicate
+  const odd = w.component('aifs', 220, { layout: { schemaVersion: 1, kind: 'references-v2' } }).rootPrefix;
+  const plan = await planRetention({ io: w.io, policy: big, now });
+  const selected = plan.candidates.map(row => row.prefix);
+  assert.ok(!selected.includes(odd) && !selected.includes(dup), 'unknown routing holds the component');
+  assert.deepEqual(plan.report.history.componentsHeldWhole, ['aifs']);
+  assert.match(planSummary(plan), /components held whole: aifs/);
+});

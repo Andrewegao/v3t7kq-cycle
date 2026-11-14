@@ -112,11 +112,13 @@ export function runKeyOf(prefix) {
 // followed transitively) are held too; if a held root's routing cannot be resolved, every root of
 // its component is held.
 async function inspectRoot(io, policy, row) {
+  // sources: [] only when the root provably keeps its objects inside itself (plain, a layout in
+  // LAYOUTS_WITHIN_ROOT, or no manifest at all); null means "unknown", which holds the component.
   const none = { valid: false, layout: 'unknown', sources: null };
-  if (!row.complete) return { ...none, layout: 'incomplete' };
+  if (!row.complete) return { valid: false, layout: 'incomplete', sources: [] };
   try {
     const got = await io.getOptional(policy.componentBucket, `${row.prefix}component.json`, MAX_MANIFEST);
-    if (!got) return { ...none, layout: 'incomplete' };
+    if (!got) return { valid: false, layout: 'incomplete', sources: [] };
     const manifest = JSON.parse(got.body);
     if (!object(manifest) || manifest.componentId !== row.componentId || manifest.rootPrefix !== row.prefix) return none;
     const layout = manifest.objectLayout ?? null;
@@ -125,7 +127,8 @@ async function inspectRoot(io, policy, row) {
         row.objects === manifest.objectCount + 1;
       return { valid, layout: 'plain', sources: [] };
     }
-    if (!object(layout) || layout.kind !== 'references-v1') return { ...none, layout: String(layout?.kind ?? 'unknown').slice(0, 40), sources: [] };
+    if (object(layout) && LAYOUTS_WITHIN_ROOT.has(layout.kind)) return { valid: false, layout: layout.kind, sources: [] };
+    if (!object(layout) || layout.kind !== 'references-v1') return { ...none, layout: String(layout?.kind ?? 'unknown').slice(0, 40) };
     if (layout.manifestKey !== `${row.prefix}.weatherx-object-references-v1.json`) return { ...none, layout: 'references-v1' };
     const routing = await io.get(policy.componentBucket, layout.manifestKey, MAX_MANIFEST);
     if (hash(routing.body) !== layout.manifestSha256) return { ...none, layout: 'references-v1' };
@@ -136,7 +139,7 @@ async function inspectRoot(io, policy, row) {
     return { valid: false, layout: 'references-v1', sources: value.sourceRoots.map(source => source.rootPrefix) };
   } catch { return none; }
 }
-export async function historyCopies(roots, policy, io) {
+export async function historyCopies(roots, policy, io, protectedRoots = new Set()) {
   const scoped = roots.filter(row => row.prefix && scopedRoot(policy, row.prefix));
   const limit = pool(8), inspected = new Map();
   await Promise.all(scoped.map(row => limit(async () => inspected.set(row.prefix, await inspectRoot(io, policy, row)))));
@@ -151,14 +154,14 @@ export async function historyCopies(roots, policy, io) {
   }
   const copies = new Map([...best].map(([run, row]) => [run, row.prefix]));
   const heldRuns = new Set([...runs.keys()].filter(run => !copies.has(run)));
-  const held = [...copies.values(), ...[...heldRuns].flatMap(run => runs.get(run).map(row => row.prefix))];
+  const held = [...copies.values(), ...[...heldRuns].flatMap(run => runs.get(run).map(row => row.prefix)), ...protectedRoots];
   // Transitive closure over routed sources of every held root.
   const sources = new Set(), heldComponents = new Set(), queue = [...held], seen = new Set(queue);
   while (queue.length) {
     const prefix = queue.pop();
     const info = inspected.get(prefix);
     if (!info) continue;                                   // a source outside the inventory holds nothing more
-    if (info.sources === null) { if (info.layout === 'references-v1') heldComponents.add(prefix.split('/')[1]); continue; }
+    if (info.sources === null) { heldComponents.add(prefix.split('/')[1]); continue; }
     for (const source of info.sources) {
       sources.add(source);
       if (!seen.has(source)) { seen.add(source); queue.push(source); }
@@ -364,7 +367,10 @@ export async function planRetention({ io, policy, now = Date.now, baselineCatalo
   }
   const listing = await inventory({ io, policy });
   const held = { referenced: [0, 0], nonCanonical: [0, 0], history: [0, 0], recent: [0, 0] };
-  const history = await historyCopies(listing.roots, policy, io);
+  // Every root this plan protects anyway starts the routed-source closure too.
+  const protectedRoots = new Set(listing.roots.filter(row => row.prefix &&
+    (keep.has(row.prefix) || later.has(row.prefix) || row.newest >= windowStart)).map(row => row.prefix));
+  const history = await historyCopies(listing.roots, policy, io, protectedRoots);
   const historyRoots = new Set(history.copies.values());
   const add = (row, key) => { held[key][0] += row.objects; held[key][1] += row.bytes; };
   const eligible = [];
