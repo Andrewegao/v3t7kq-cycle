@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `92767242d9c8eba1fe33f4b3dfd6033110246765ff5947e99a62be1b13f02ac6`.
+Source digest (registry and workflow bytes): `3cab80c2267f4f6828c1290d6905f2f243bf58d46c56d93613cd81c11e9782b3`.
 
 75 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -1026,7 +1026,7 @@ Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <c
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [retention](../.github/workflows/production-components-retention.yml#L22) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"data-production-components-cleanup","url":"https://weatherx.org"}</code> | <code>240</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [retention](../.github/workflows/production-components-retention.yml#L22) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"data-production-components-cleanup","url":"https://weatherx.org"}</code> | <code>350</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Declared job conditions (additional step/helper checks may apply):
 
@@ -1103,7 +1103,7 @@ Workflow permissions: <code>{"contents":"read","actions":"read"}</code>. Workflo
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [retention](../.github/workflows/production-releases-retention.yml#L29) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"production-releases-retention","url":"https://weatherx.org"}</code> | <code>240</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [retention](../.github/workflows/production-releases-retention.yml#L29) ← no needs | <code>ubuntu-latest</code> | <code>{"name":"production-releases-retention","url":"https://weatherx.org"}</code> | <code>350</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Declared job conditions (additional step/helper checks may apply):
 

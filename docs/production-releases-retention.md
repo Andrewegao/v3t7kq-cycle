@@ -44,7 +44,7 @@ run's `plan_as_of`, so the execution recomputes the same answer.
    (`baseline_release_id`), and the live pointer read again by the execution. The execution also
    re-reads the pointer **before every delete** and stops if it names a candidate (a rollback
    onto a candidate). A promotion to any other release, such as a new bake, does not stop it.
-   Up to `deleteConcurrency` (16) deletes may already be in flight when the pointer changes, so
+   Up to `deleteConcurrency` (96) deletes may already be in flight when the pointer changes, so
    this check bounds the damage of a rollback during an execution; it does not prevent it. The
    operating rule below does.
 2. **It is among the newest `keepNewestReleases` (8) complete releases.** The pointer carries no
@@ -77,7 +77,7 @@ run's `plan_as_of`, so the execution recomputes the same answer.
    outside `releases/` are never listed for deletion; nothing outside `releases/` is listed at all.
 
 Everything else in scope is **eligible**. A plan selects the oldest eligible releases, up to
-`maximumDeletesPerRun` (500,000) objects. Each selected release is listed in full (every page),
+`maximumDeletesPerRun` (4,000,000) objects. Each selected release is listed in full (every page),
 and the plan records its object count, bytes, manifest digest and the SHA-256 of its sorted
 `[key, size, etag]` rows. A release with fewer objects than its manifest names, but with the
 manifest present, can only be the remainder of an interrupted deletion (the publisher uploads
@@ -240,8 +240,10 @@ surge investigation there are about 76 release folders as of 10-21 (24 from befo
 With the default the newest-8 rule is not the binding one; it binds only if bakes stall for
 more than five days. Each plan lists the whole `releases/` prefix once (about 3,300 list
 requests) and reads about 80 manifests; an execution plans again, re-lists its candidates and
-issues two guard reads per delete. At 16 deletes in flight a 500,000-object run takes roughly 1.5
-to 2.5 hours, inside the 240-minute bound.
+issues two guard reads per delete. The 10-25 run took 2 h 52 min for 491 k objects at 16 deletes in
+flight (about 48 per second). At 96 in flight, with sockets sized to match, a 4,000,000-object run is
+expected to take roughly 2.5 to 4 hours, inside the 350-minute bound; a run cut off by the bound
+leaves whole or partial releases that the next dry run plans again.
 
 ## Steady state
 

@@ -31,7 +31,7 @@ jobs:
       name: production-releases-retention
       url: https://weatherx.org
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 350
     env:
       RELEASES_GC_ENVIRONMENT: production-releases-retention
       PRODUCTION_RELEASES_GC_ENABLED: ${{ vars.PRODUCTION_RELEASES_GC_ENABLED }}
