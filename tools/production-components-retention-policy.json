@@ -9,6 +9,7 @@
   "stagingPinKey": "shared-read/pin.json",
   "models": ["ecmwf", "gfs", "hrrr", "aifs", "icon", "hrdps", "arome-antilles", "hrrr-ak", "nam", "nam-hi", "nam-ak"],
   "windowHours": 168,
+  "keepOneCopyPerRun": true,
   "maximumPlanAgeHours": 48,
   "maximumChainSnapshots": 6000,
   "maximumDeletesPerRun": 4000000,

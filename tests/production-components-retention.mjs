@@ -81,6 +81,14 @@ function world() {
   return { buckets, put, component, promote, io, components, head: () => head };
 }
 
+function rebake(w, id, hoursAgo, { objects = 1 } = {}) {
+  const root = rootFor(id, hoursAgo, 1791500000);
+  const modified = T0 - hoursAgo * HOUR + 60_000;
+  for (let i = 0; i < objects; i++) w.put(COMPONENTS, `${root}r${i}.png`, `rebake ${root} ${i}`, modified);
+  w.put(COMPONENTS, `${root}component.json`, `${JSON.stringify({ schemaVersion: 1, componentId: id, artifactId: root.split('/')[2],
+    rootPrefix: root, objectCount: objects, quality: { status: 'passed' } })}\n`, modified);
+  return root;
+}
 // Ten days of history: ECMWF twice a day, HRRR hourly-ish, an obs component, a Wind100 root and an experiment.
 function history({ pinCatalog = false, referenced = false } = {}) {
   const w = world();
@@ -90,6 +98,9 @@ function history({ pinCatalog = false, referenced = false } = {}) {
     const hrrr = w.component('hrrr', h, { objects: 4 });
     w.promote([ecmwf, point, hrrr], T0 - h * HOUR);
     if (h > 168 + 12) old.push(ecmwf.rootPrefix, point.rootPrefix, hrrr.rootPrefix);
+    // A later re-bake of the same model run that was never promoted: as the newest complete copy
+    // of its run it is forecast history, so the promoted copy above is the duplicate.
+    if (h > 0) for (const id of ['ecmwf', 'point-ecmwf', 'hrrr']) rebake(w, id, h);
   }
   // A failed upload that never activated, 9 days old: unreferenced, so eligible.
   const orphan = w.component('gfs', 216, { objects: 5 });
@@ -400,4 +411,41 @@ test('component CLI dry-run refuses either delete credential before loading the 
     assert.equal(result.status, 1);
     assert.match(result.stderr, /the dry run never holds the delete token/);
   }
+});
+
+test('forecast history: one complete copy of every model run is never a candidate; only re-bake duplicates go', async () => {
+  assert.throws(() => validatePolicy({ ...readPolicy(), keepOneCopyPerRun: false }), /forecast history/);
+  const w = world();
+  // Window: one promoted ECMWF run now, so the chain walk has a baseline.
+  w.promote([w.component('ecmwf', 0)], T0 - 170 * HOUR);
+  w.promote([w.component('ecmwf', 0, { suffix: 1799000000 })], T0);
+  // 9-day-old runs, never referenced by any catalog in the window.
+  const single = w.component('gfs', 216).rootPrefix;                                    // only copy: history
+  const first = w.component('hrrr', 220).rootPrefix;                                    // re-baked twice
+  const second = w.component('hrrr', 220, { suffix: 1791400000 }).rootPrefix;
+  const newest = rebake(w, 'hrrr', 220);
+  // An incomplete later upload (no component.json) never becomes the kept copy.
+  const brokenRoot = rootFor('point-gfs', 230, 1791900000);
+  w.put(COMPONENTS, `${brokenRoot}part.bin`, 'partial', T0 - 229 * HOUR);
+  const complete = w.component('point-gfs', 230).rootPrefix;
+  const plan = await planRetention({ io: w.io, policy: { ...policy, maximumDeletesPerRun: 1000 }, now });
+  const selected = plan.candidates.map(row => row.prefix);
+  assert.ok(!selected.includes(single), 'a run with a single copy is history');
+  assert.ok(!selected.includes(newest), 'the newest complete copy of a re-baked run is history');
+  assert.ok(selected.includes(first) && selected.includes(second), 'older copies of a re-baked run are duplicates');
+  assert.ok(!selected.includes(complete), 'a complete copy wins over a later incomplete upload');
+  assert.ok(selected.includes(brokenRoot), 'the incomplete duplicate goes');
+  for (const row of plan.candidates) {
+    assert.notEqual(row.historyCopy, row.prefix);
+    assert.ok(!selected.includes(row.historyCopy), `${row.prefix} names a kept copy`);
+  }
+  assert.equal(plan.candidates.find(row => row.prefix === first).historyCopy, newest);
+  assert.ok(plan.report.held.history.objects > 0);
+  assert.match(planSummary(plan), /forecast history \(one copy per model run\)/);
+  // The kept copy disappearing before execution stops the run before that root is touched.
+  for (const key of [...w.buckets[COMPONENTS].keys()]) if (key.startsWith(newest)) w.buckets[COMPONENTS].delete(key);
+  await assert.rejects(executeRetention({ io: w.io, policy: { ...policy, maximumDeletesPerRun: 1000 }, now,
+    deleteForPrefix: w.io.deleteForPrefix, baselineCatalogId: plan.baseline.catalogId, approvedPlanSha256: plan.planSha256 }),
+    /differs from the approved plan|missing or incomplete/);
+  for (const key of w.io.deletes ?? []) assert.ok(!key.startsWith(first) && !key.startsWith(second), `${key} deleted without its kept copy`);
 });

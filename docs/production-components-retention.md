@@ -40,6 +40,15 @@ A root is never a candidate when any of these holds:
    observation, place, energy and every other component, and any experiment or canary root are
    never touched.
 
+6. **It is forecast history.** For every model run (component id and init time, for example
+   `gfs` at `20261113T120000Z`) the newest root that has its `component.json` is kept for good,
+   whatever its age and whether or not any catalog references it (`keepOneCopyPerRun`, which the
+   policy validator requires to be `true`). Only further copies of the same run, re-bakes and
+   incomplete uploads, are candidates. Each candidate in the plan names that kept copy as
+   `historyCopy`, and the execution lists the kept copy and requires its `component.json` before
+   it deletes anything under the candidate. Owner ruling 2026-11-14: "delete the duplicates but
+   keep the forecast history".
+
 Everything else in scope is **eligible**. A plan selects the oldest eligible roots, up to
 `maximumDeletesPerRun` (4,000,000) objects, with `deleteConcurrency` (96) deletes in flight. Each selected root is listed in full, and the plan
 records its object count, bytes and the SHA-256 of its sorted `[key, size, etag]` rows.

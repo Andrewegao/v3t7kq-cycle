@@ -70,6 +70,7 @@ export function validatePolicy(p) {
   assert.match(p.accountId, /^[a-f0-9]{32}$/);
   assert.ok(Array.isArray(p.models) && p.models.length > 0 && p.models.every(m => /^[a-z][a-z0-9-]{1,30}$/.test(m)));
   assert.ok(Number.isSafeInteger(p.windowHours) && p.windowHours >= 168, 'the window never shrinks below 7 days');
+  assert.equal(p.keepOneCopyPerRun, true, 'one copy of every model run is forecast history and is never deleted');
   assert.ok(Number.isSafeInteger(p.maximumPlanAgeHours) && p.maximumPlanAgeHours > 0 && p.maximumPlanAgeHours <= 72);
   assert.ok(Number.isSafeInteger(p.maximumChainSnapshots) && p.maximumChainSnapshots > 0 && p.maximumChainSnapshots <= 20_000);
   assert.ok(Number.isSafeInteger(p.maximumDeletesPerRun) && p.maximumDeletesPerRun > 0 && p.maximumDeletesPerRun <= 5_000_000);
@@ -97,6 +98,26 @@ const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export function scopedRoot(policy, prefix) {
   const match = /^components\/([a-z][a-z0-9-]{1,40})\/([A-Za-z0-9][A-Za-z0-9._-]{0,95})\/$/.exec(prefix ?? '');
   return Boolean(match && scopeIds(policy).has(match[1]) && canonicalArtifact(match[1], match[2]));
+}
+// Forecast history: one root per component and model init time is never a candidate. Re-bakes of
+// the same init are the only roots outside the window this controller deletes.
+export function runKeyOf(prefix) {
+  const match = /^components\/([a-z][a-z0-9-]{1,40})\/\1-(\d{8}T\d{6}Z)-[^/]+\/$/.exec(prefix ?? '');
+  return match ? `${match[1]}/${match[2]}` : null;
+}
+export function historyCopies(roots, policy) {
+  const best = new Map();
+  for (const row of roots) {
+    if (!row.prefix || !scopedRoot(policy, row.prefix)) continue;
+    const run = runKeyOf(row.prefix);
+    assert.ok(run, `${row.prefix} has no model init time`);
+    const current = best.get(run);
+    // Prefer a complete root (its component.json exists), then the latest publish, then key order.
+    const better = !current || (row.complete && !current.complete) ||
+      (row.complete === current.complete && (row.newest > current.newest || (row.newest === current.newest && row.prefix > current.prefix)));
+    if (better) best.set(run, row);
+  }
+  return new Map([...best].map(([run, row]) => [run, row.prefix]));
 }
 function rootOf(key) {
   const parts = key.split('/');
@@ -242,8 +263,9 @@ async function inventory({ io, policy }) {
     const id = /^components\/([^/]+)\/$/.exec(prefix)?.[1];
     if (!id || !ids.has(id)) return;
     const root = rootOf(row.key);
-    const value = roots.get(root ?? `${prefix}(loose)`) ?? { prefix: root, componentId: id, objects: 0, bytes: 0, newest: 0 };
+    const value = roots.get(root ?? `${prefix}(loose)`) ?? { prefix: root, componentId: id, objects: 0, bytes: 0, newest: 0, complete: false };
     value.objects += 1; value.bytes += row.size; value.newest = Math.max(value.newest, row.lastModified);
+    if (root && row.key === `${root}component.json`) value.complete = true;
     roots.set(root ?? `${prefix}(loose)`, value);
   }))));
   return { roots: [...roots.values()], bucket, byPrefix };
@@ -294,13 +316,16 @@ export async function planRetention({ io, policy, now = Date.now, baselineCatalo
     for (const root of await referencedRoots({ io, policy, components: item.components, manifestCache })) later.add(root);
   }
   const listing = await inventory({ io, policy });
-  const held = { referenced: [0, 0], nonCanonical: [0, 0], recent: [0, 0] };
+  const held = { referenced: [0, 0], nonCanonical: [0, 0], history: [0, 0], recent: [0, 0] };
+  const history = historyCopies(listing.roots, policy);
+  const historyRoots = new Set(history.values());
   const add = (row, key) => { held[key][0] += row.objects; held[key][1] += row.bytes; };
   const eligible = [];
   for (const row of listing.roots) {
     if (row.prefix && (keep.has(row.prefix) || later.has(row.prefix))) add(row, 'referenced');
     else if (!row.prefix || !scopedRoot(policy, row.prefix)) add(row, 'nonCanonical');
     else if (row.newest >= windowStart) add(row, 'recent');
+    else if (historyRoots.has(row.prefix)) add(row, 'history');
     else eligible.push(row);
   }
   eligible.sort((a, b) => a.newest - b.newest || a.prefix.localeCompare(b.prefix));
@@ -312,7 +337,9 @@ export async function planRetention({ io, policy, now = Date.now, baselineCatalo
     assert.equal(rows.length, row.objects, `${row.prefix} changed while planning`);
     assert.ok(rows.every(r => r.key.startsWith(row.prefix) && r.key.length > row.prefix.length && r.key.length <= 1024 &&
       !r.key.slice(row.prefix.length).split('/').some(part => part === '' || part === '.' || part === '..')), `${row.prefix} key shape`);
-    candidates.push({ prefix: row.prefix, componentId: row.componentId, objectCount: rows.length,
+    const historyCopy = history.get(runKeyOf(row.prefix));
+    assert.ok(historyCopy && historyCopy !== row.prefix, `${row.prefix} would be the last copy of its model run`);
+    candidates.push({ prefix: row.prefix, componentId: row.componentId, historyCopy, objectCount: rows.length,
       bytes: rows.reduce((n, r) => n + r.size, 0), newestModified: new Date(row.newest).toISOString(),
       keysSha256: keyDigest(rows.sort((a, b) => a.key.localeCompare(b.key))) });
     selectedObjects += rows.length;
@@ -326,6 +353,7 @@ export async function planRetention({ io, policy, now = Date.now, baselineCatalo
       oldestCreatedAt: chain[chain.length - 1].createdAt, reachedGenesis },
     stagingPin: pin,
     keep: { roots: keep.size, rootsSha256: hash([...keep].sort().join('\n')) },
+    historyRule: 'keep-newest-complete-root-per-model-run',
     eligible: { roots: eligible.length, objects: sum(eligible, 'objects'), bytes: sum(eligible, 'bytes') },
     candidates,
     totals: { roots: candidates.length, objects: sum(candidates, 'objectCount'), bytes: sum(candidates, 'bytes') },
@@ -362,6 +390,9 @@ export async function executeRetention({ io, policy, approvedPlanSha256, baselin
   assert.ok(content.totals.objects <= policy.maximumDeletesPerRun, 'retention delete budget exceeded');
   const candidates = new Set(content.candidates.map(row => row.prefix));
   assert.ok(content.candidates.every(row => scopedRoot(policy, row.prefix)));
+  assert.equal(content.historyRule, 'keep-newest-complete-root-per-model-run', 'plan without forecast history');
+  assert.ok(content.candidates.every(row => runKeyOf(row.prefix) && row.historyCopy !== row.prefix &&
+    runKeyOf(row.historyCopy) === runKeyOf(row.prefix) && !candidates.has(row.historyCopy)), 'every candidate names a kept copy of its run');
   let verifiedHead = null, aborted = null;
   const verifiedPointers = new Set();
   let walking = Promise.resolve();
@@ -400,6 +431,9 @@ export async function executeRetention({ io, policy, approvedPlanSha256, baselin
   for (const candidate of content.candidates) {
     const rows = (await io.listRows(candidate.prefix, policy.maximumDeletesPerRun)).sort((a, b) => a.key.localeCompare(b.key));
     assert.equal(keyDigest(rows), candidate.keysSha256, `${candidate.prefix} changed since the dry run; replan`);
+    const twin = await io.listRows(candidate.historyCopy, policy.maximumDeletesPerRun);
+    assert.ok(twin.some(row => row.key === `${candidate.historyCopy}component.json`),
+      `${candidate.historyCopy}, the kept copy of ${candidate.prefix}'s model run, is missing or incomplete; stopping`);
     // The manifest goes last so an interrupted root still names itself.
     const keys = rows.map(row => row.key);
     const manifest = `${candidate.prefix}component.json`;
@@ -561,6 +595,7 @@ export function planSummary(plan) {
     `- Kept roots: ${plan.keep.roots}. Held: referenced ${plan.report.held.referenced.objects.toLocaleString('en-US')} objects / ${gb(plan.report.held.referenced.bytes)}, ` +
       `recent ${plan.report.held.recent.objects.toLocaleString('en-US')} / ${gb(plan.report.held.recent.bytes)}, ` +
       `not canonical ${plan.report.held.nonCanonical.objects.toLocaleString('en-US')} / ${gb(plan.report.held.nonCanonical.bytes)}, ` +
+      `forecast history (one copy per model run) ${plan.report.held.history.objects.toLocaleString('en-US')} / ${gb(plan.report.held.history.bytes)}, ` +
       `outside the model prefixes ${plan.report.held.outOfScope.objects.toLocaleString('en-US')} / ${gb(plan.report.held.outOfScope.bytes)}.`,
     `- Eligible (unreferenced, older than the window): ${plan.eligible.roots} roots, ${plan.eligible.objects.toLocaleString('en-US')} objects, ${gb(plan.eligible.bytes)}.`,
     `- This run deletes: ${plan.totals.roots} roots, ${plan.totals.objects.toLocaleString('en-US')} objects, ${gb(plan.totals.bytes)}.`,
