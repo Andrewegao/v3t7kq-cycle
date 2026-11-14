@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'n
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { controllerDigest, createRetentionIo, executeRetention, executionSummary, planRetention, planSummary, readPolicy,
+import { RECEIPT_KIND, receiptCovers, controllerDigest, createRetentionIo, executeRetention, executionSummary, planRetention, planSummary, readPolicy,
   scopedDeleteCredentials, scopedRelease, summarizeManifest, validatePolicy } from '../tools/production-releases-retention.mjs';
 
 const sha = value => createHash('sha256').update(value).digest('hex');
@@ -672,4 +672,71 @@ test('a shared guard (guardReuseMs > 0) reads the pointer far less than once per
     asOf: plan.asOf, baselineReleaseId: plan.baselineReleaseId, approvedPlanSha256: plan.planSha256 }), /now names candidate/);
   assert.ok(h.deletes.length < plan.totals.objects, 'stopped early');
   assert.ok(reads < h.deletes.length, `guard reads (${reads}) are shared, not one per delete (${h.deletes.length})`);
+});
+
+// Release-only forecast runs (bricks, cn, air, verify) have no copy outside whole releases: a release
+// that carries them is deleted only with a history receipt that covers every such run directory.
+test('forecast history: a release with release-only runs is held without a covering receipt', async () => {
+  const h = history();
+  const withRuns = h.ids.slice(0, 4);
+  const add = (id, run, n) => { for (let i = 0; i < n; i++) h.put(DATA, `releases/${id}/data/verify/runs/${run}/s${i}.json`, `v${i}`, T0 - 240 * HOUR); };
+  // Extra objects break `complete` unless the manifest names them; rebuild those manifests.
+  for (const id of withRuns) {
+    add(id, '2026100100', 3); add(id, '2026100112', 2);
+    const m = h.manifests.get(id);
+    for (const [key, v] of h.buckets[DATA]) if (key.startsWith(`releases/${id}/data/verify/`))
+      m.objects.push({ path: key.slice(`releases/${id}/`.length), bytes: v.body.length, sha256: sha(v.body) });
+    m.objectCount = m.objects.length;
+    h.put(DATA, `releases/${id}/manifest.json`, `${JSON.stringify(m)}\n`, T0 - 240 * HOUR);
+  }
+  const receipt = (id, runs, extra = {}) => h.put(DATA, `history-receipts/${id}.json`,
+    JSON.stringify({ schemaVersion: 1, kind: RECEIPT_KIND, releaseId: id, historyBucket: 'weatherx-forecast-history', runs, ...extra }));
+  receipt(withRuns[1], { 'data/verify/runs/2026100100/': 3, 'data/verify/runs/2026100112/': 2 });   // covers
+  receipt(withRuns[2], { 'data/verify/runs/2026100100/': 3, 'data/verify/runs/2026100112/': 1 });   // short
+  receipt(withRuns[3], { 'data/verify/runs/2026100100/': 3, 'data/verify/runs/2026100112/': 2 }, { historyBucket: 'other' });
+  const io = await h.io();
+  const plan = await planRetention({ io, policy, now });
+  const ids = plan.candidates.map(row => row.releaseId);
+  assert.ok(!ids.includes(withRuns[0]), 'no receipt: held');
+  assert.ok(ids.includes(withRuns[1]), 'covering receipt: eligible');
+  assert.ok(!ids.includes(withRuns[2]), 'short receipt: held');
+  assert.ok(!ids.includes(withRuns[3]), 'receipt for another bucket: held');
+  assert.equal(plan.candidates.find(row => row.releaseId === withRuns[1]).history, 'covered');
+  assert.ok(plan.candidates.filter(row => !withRuns.includes(row.releaseId)).every(row => row.history === 'not-needed'));
+  const held = Object.fromEntries(plan.report.history.heldNoHistory.map(row => [row.releaseId, row.history]));
+  assert.deepEqual(held, { [withRuns[0]]: 'missing', [withRuns[2]]: 'short', [withRuns[3]]: 'short' });
+  assert.ok(plan.report.kept.find(row => row.releaseId === withRuns[0]).reasons.includes('no-history'));
+  assert.match(planSummary(plan), /held without one: /);
+  // The execution recomputes the same plan, and a receipt removed after the dry run changes it.
+  const executed = await execute(h, io, plan);
+  assert.ok(h.deletes.some(key => key.startsWith(`releases/${withRuns[1]}/data/verify/`)), executed.status);
+  assert.ok(!h.deletes.some(key => key.startsWith(`releases/${withRuns[0]}/`)));
+});
+
+test('forecast history: a receipt deleted between the dry run and the execution stops it before any delete', async () => {
+  const h = history();
+  const id = h.ids[0];
+  h.put(DATA, `releases/${id}/data/ecmwf-brick/runs/2026100100/b.bin`, 'b', T0 - 240 * HOUR);
+  const m = h.manifests.get(id);
+  m.objects.push({ path: 'data/ecmwf-brick/runs/2026100100/b.bin', bytes: 1, sha256: sha('b') }); m.objectCount = m.objects.length;
+  h.put(DATA, `releases/${id}/manifest.json`, `${JSON.stringify(m)}\n`, T0 - 240 * HOUR);
+  h.put(DATA, `history-receipts/${id}.json`, JSON.stringify({ schemaVersion: 1, kind: RECEIPT_KIND, releaseId: id,
+    historyBucket: 'weatherx-forecast-history', runs: { 'data/ecmwf-brick/runs/2026100100/': 1 } }));
+  const io = await h.io();
+  const plan = await planRetention({ io, policy, now });
+  assert.ok(plan.candidates.some(row => row.releaseId === id));
+  h.buckets[DATA].delete(`history-receipts/${id}.json`);
+  await assert.rejects(execute(h, io, plan), /differs from the approved plan/);
+  assert.equal(h.deletes.length, 0);
+});
+
+test('forecast history: receipts are the only new key the read adapter may get', async () => {
+  const h = history();
+  const io = await h.io();
+  assert.equal(await io.getOptional(DATA, 'history-receipts/cycle-39000000000.json', 1024), null);
+  await assert.rejects(io.getOptional(DATA, 'history-receipts/other.json', 1024), /may not read/);
+  await assert.rejects(io.getOptional(DATA, 'history-receipts/cycle-1/x.json', 1024), /may not read/);
+  assert.ok(receiptCovers(Buffer.from('{"schemaVersion":1}'), 'cycle-1', policy, {}) === false);
+  assert.throws(() => validatePolicy({ ...policy, historyBucket: 'weatherx-data-production' }));
+  assert.throws(() => validatePolicy({ ...policy, historyFamilies: [] }));
 });

@@ -14,5 +14,15 @@
   "maximumManifestBytes": 16777216,
   "maximumDeletesPerRun": 4000000,
   "deleteConcurrency": 256,
-  "guardReuseMs": 1000
+  "guardReuseMs": 1000,
+  "historyBucket": "weatherx-forecast-history",
+  "historyReceiptPrefix": "history-receipts/",
+  "historyFamilies": [
+    "data/ecmwf-brick",
+    "data/gfs-brick",
+    "data/ecmwf-cn",
+    "data/gfs-cn",
+    "data-atmos/air",
+    "data/verify"
+  ]
 }

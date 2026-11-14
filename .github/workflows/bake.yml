@@ -575,6 +575,24 @@ jobs:
           RCLONE_CONFIG_WEATHERX_REGION: auto
           RCLONE_S3_NO_HEAD: 'true'
         run: bash ops/bake-weatherx.sh
+      - name: copy this release's release-only forecast runs into forecast history
+        # Bricks, China crops, air and verification have no copy outside the whole releases.
+        # Releases retention deletes a release carrying them only with the receipt this writes
+        # (docs/production-releases-retention.md), so a failure here holds releases and loses nothing.
+        if: ${{ success() && steps.bake_plan.outputs.skip != 'true' }}
+        continue-on-error: true
+        timeout-minutes: 30
+        env:
+          RELEASE_ID: cycle-${{ github.run_id }}
+          R2_REMOTE: weatherx:weatherx-data-production
+          HISTORY_REMOTE: weatherx:weatherx-forecast-history
+          RCLONE_CONFIG_WEATHERX_TYPE: s3
+          RCLONE_CONFIG_WEATHERX_PROVIDER: Cloudflare
+          RCLONE_CONFIG_WEATHERX_ACCESS_KEY_ID: ${{ secrets.R2_PRODUCTION_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY: ${{ secrets.R2_PRODUCTION_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_WEATHERX_ENDPOINT: https://a89f9a1af485021fbc60a68b163c7c6e.r2.cloudflarestorage.com
+          RCLONE_CONFIG_WEATHERX_REGION: auto
+        run: bash "$RUNNER_TEMP/public-diagnostic-controller/tools/forecast-history-copy.sh"
       - name: Report the whole bake's observation receipt when the pinned source writes one
         # Inert until the pin includes Atmos ops/report-refresh.py. These whole-release copies are
         # the legacy fallback; the served obs-* components come from observation-refresh.yml.

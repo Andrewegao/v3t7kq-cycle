@@ -49,6 +49,9 @@ const HOUR = 3_600_000;
 const MAX_POINTER = 256 * 1024;
 const MAX_PIN = 8 * 1024;
 const MAX_PROTECTED_OBJECTS = 2_000_000;
+const MAX_RECEIPT = 4 * 1024 * 1024;
+export const RECEIPT_KIND = 'weatherx-forecast-history-receipt';
+const RECEIPT_KEY = /^history-receipts\/cycle-[1-9]\d{0,19}\.json$/;
 const FORBIDDEN = ['R2_PRODUCTION_ACCESS_KEY_ID', 'R2_PRODUCTION_SECRET_ACCESS_KEY',
   'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'STAGING_R2_WRITE_ACCESS_KEY_ID', 'STAGING_R2_WRITE_SECRET_ACCESS_KEY',
   'PRODUCTION_WIND100_R2_ACCESS_KEY_ID', 'PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY',
@@ -90,6 +93,12 @@ export function validatePolicy(p) {
   assert.ok(Number.isSafeInteger(p.maximumDeletesPerRun) && p.maximumDeletesPerRun > 0 && p.maximumDeletesPerRun <= 5_000_000);
   assert.ok(Number.isSafeInteger(p.deleteConcurrency) && p.deleteConcurrency > 0 && p.deleteConcurrency <= 256);
   assert.ok(Number.isSafeInteger(p.guardReuseMs) && p.guardReuseMs >= 0 && p.guardReuseMs <= 2000);
+  // Release-only forecast products (no copy outside the whole releases) must be in the history
+  // bucket before a release that carries them may be deleted.
+  assert.equal(p.historyBucket, 'weatherx-forecast-history');
+  assert.equal(p.historyReceiptPrefix, 'history-receipts/');
+  assert.ok(Array.isArray(p.historyFamilies) && p.historyFamilies.length > 0 &&
+    p.historyFamilies.every(f => /^[a-z0-9-]+(\/[a-z0-9-]+)*$/.test(f)) && new Set(p.historyFamilies).size === p.historyFamilies.length);
   return p;
 }
 export function controllerDigest(root = ROOT) {
@@ -170,17 +179,35 @@ function pool(limit) {
     try { return await task(); } finally { active -= 1; waiting.shift()?.(); }
   };
 }
+// `<family>/runs/<YYYYMMDDHH>/` of a release-relative key when the family is release-only, else null.
+function historyRunMatcher(policy) {
+  const re = new RegExp(`^(${policy.historyFamilies.map(f => f.replace(/[-/]/g, c => `\\${c}`)).join('|')})\\/runs\\/(\\d{10})\\/.`);
+  return rest => { const m = re.exec(rest); return m ? `${m[1]}/runs/${m[2]}/` : null; };
+}
+// A receipt covers a release when it names that release and the history bucket and records, for
+// every release-only run directory the release lists, at least as many objects present in history.
+export function receiptCovers(body, releaseId, policy, runs) {
+  let r;
+  try { r = JSON.parse(Buffer.from(body).toString('utf8')); } catch { return false; }
+  if (!r || r.schemaVersion !== 1 || r.kind !== RECEIPT_KIND || r.releaseId !== releaseId ||
+    r.historyBucket !== policy.historyBucket || !r.runs || typeof r.runs !== 'object' || Array.isArray(r.runs)) return false;
+  return Object.entries(runs).every(([run, n]) => Number.isSafeInteger(r.runs[run]) && r.runs[run] >= n);
+}
 // Every release prefix under `releases/`, each listed in full (paginated) for its object count,
 // bytes and newest LastModified. Nothing outside `releases/` is listed.
 async function inventory({ io, policy }) {
   const top = await io.listPrefixes(RELEASES);
   assert.ok(top.prefixes.length <= policy.maximumReleasePrefixes, 'more release prefixes than maximumReleasePrefixes: refusing');
   const loose = { objects: top.rows.length, bytes: top.rows.reduce((n, row) => n + row.size, 0) };
-  const limit = pool(8);
+  const limit = pool(8), runOf = historyRunMatcher(policy);
   const releases = await Promise.all(top.prefixes.map(prefix => limit(async () => {
     assert.ok(RELEASE_PREFIX.test(prefix), `unexpected release prefix ${String(prefix).slice(0, 120)}: refusing`);
-    const value = { prefix, objects: 0, bytes: 0, newest: 0 };
-    await io.list(prefix, row => { value.objects += 1; value.bytes += row.size; value.newest = Math.max(value.newest, row.lastModified); });
+    const value = { prefix, objects: 0, bytes: 0, newest: 0, runs: {} };
+    await io.list(prefix, row => {
+      value.objects += 1; value.bytes += row.size; value.newest = Math.max(value.newest, row.lastModified);
+      const run = runOf(row.key.slice(prefix.length));
+      if (run) value.runs[run] = (value.runs[run] ?? 0) + 1;
+    });
     return value;
   })));
   return { loose, releases: releases.sort((a, b) => (a.prefix < b.prefix ? -1 : 1)) };
@@ -216,7 +243,7 @@ function requireWholeProtected(proofs, absentOwnerKeeps, requiredIds) {
 }
 
 // --- plan -------------------------------------------------------------------------------------
-const HELD_ORDER = ['current', 'live-current', 'staging-pin', 'owner-keep', 'newest', 'incomplete', 'inconsistent', 'recent'];
+const HELD_ORDER = ['current', 'live-current', 'staging-pin', 'owner-keep', 'newest', 'incomplete', 'inconsistent', 'no-history', 'recent'];
 
 export async function planRetention({ io, policy, now = Date.now, asOf = null, baselineReleaseId = null, retried = false }) {
   validatePolicy(policy);
@@ -262,7 +289,14 @@ export async function planRetention({ io, policy, now = Date.now, asOf = null, b
     }
     if (status === 'complete' && scoped.releaseId === live.releaseId && asOf === null)
       assert.equal(summary.manifestSha256, live.manifestSha256.toLowerCase(), 'releases/current.json and its manifest disagree: refusing');
+    const historyRuns = Object.keys(entry.runs).length;
+    let history = 'not-needed';
+    if (historyRuns) {
+      const receipt = await io.getOptional(policy.dataBucket, `${policy.historyReceiptPrefix}${scoped.releaseId}.json`, MAX_RECEIPT);
+      history = !receipt ? 'missing' : receiptCovers(receipt.body, scoped.releaseId, policy, entry.runs) ? 'covered' : 'short';
+    }
     const row = { ...scoped, prefix: entry.prefix, objects: entry.objects, bytes: entry.bytes, newest: entry.newest, status,
+      history, historyRuns,
       reason: summary.reason ?? null, createdAt: summary.createdAt ?? null, manifestSha256: summary.manifestSha256 ?? null };
     // Anything written or created after asOf did not exist for the approved plan: kept, outside it.
     if (row.newest > asOfMs || (row.createdAt && Date.parse(row.createdAt) > asOfMs)) later.push(row); else rows.push(row);
@@ -304,6 +338,7 @@ export async function planRetention({ io, policy, now = Date.now, asOf = null, b
     if (newest.has(row.releaseId)) reasons.push('newest');
     if (row.status === 'manifest-missing' || row.status === 'manifest-invalid') reasons.push('incomplete');
     if (row.status === 'surplus') reasons.push('inconsistent');
+    if (row.history === 'missing' || row.history === 'short') reasons.push('no-history');
     if (row.newest > cutoff || (row.createdAt && Date.parse(row.createdAt) > cutoff)) reasons.push('recent');
     row.reasons = reasons;
   }
@@ -319,7 +354,7 @@ export async function planRetention({ io, policy, now = Date.now, asOf = null, b
     assert.ok(keys.every(r => r.key.startsWith(row.prefix) && r.key.length > row.prefix.length && r.key.length <= 1024 &&
       !r.key.slice(row.prefix.length).split('/').some(part => part === '' || part === '.' || part === '..')), `${row.prefix} key shape`);
     candidates.push({ releaseId: row.releaseId, prefix: row.prefix, status: row.status, createdAt: row.createdAt,
-      manifestSha256: row.manifestSha256, objectCount: keys.length, bytes: keys.reduce((n, r) => n + r.size, 0),
+      manifestSha256: row.manifestSha256, history: row.history, historyRuns: row.historyRuns, objectCount: keys.length, bytes: keys.reduce((n, r) => n + r.size, 0),
       newestModified: isoOf(row.newest), keysSha256: listingDigest(keys) });
     selectedObjects += keys.length;
   }
@@ -355,6 +390,9 @@ export async function planRetention({ io, policy, now = Date.now, asOf = null, b
     incomplete: [...rows, ...later].filter(row => !['complete', 'partial'].includes(row.status))
       .map(row => ({ releaseId: row.releaseId, status: row.status, reason: row.reason, objects: row.objects, bytes: row.bytes })),
     partial: rows.filter(row => row.status === 'partial').map(row => row.releaseId),
+    history: { withReleaseOnlyRuns: rows.filter(row => row.historyRuns > 0).length,
+      covered: rows.filter(row => row.history === 'covered').length,
+      heldNoHistory: rows.filter(row => row.reasons.includes('no-history')).map(row => ({ releaseId: row.releaseId, history: row.history, runs: row.historyRuns })) },
     outOfScope: outOfScope.map(row => ({ prefix: row.prefix, objects: row.objects, bytes: row.bytes })),
     order: { newestByCreatedAt: byCreated, newestByRunId: byRun,
       agree: byCreated.length === byRun.length && byCreated.every(id => byRun.includes(id)) },
@@ -500,7 +538,8 @@ export async function createRetentionIo(env, policy, injectedSdk, injectedReadCl
       secretAccessKey: env.PRODUCTION_RELEASES_GC_READ_SECRET_ACCESS_KEY } });
   const send = command => readClient.send(command, { abortSignal: AbortSignal.timeout(120_000) });
   const readable = (bucket, key) =>
-    (bucket === policy.dataBucket && (key === policy.releasePointerKey || /^releases\/[A-Za-z0-9][A-Za-z0-9._-]{0,95}\/manifest\.json$/.test(key))) ||
+    (bucket === policy.dataBucket && (key === policy.releasePointerKey || /^releases\/[A-Za-z0-9][A-Za-z0-9._-]{0,95}\/manifest\.json$/.test(key) ||
+      RECEIPT_KEY.test(key))) ||
     (bucket === policy.stagingControlBucket && key === policy.stagingPinKey);
   async function get(bucket, key, maximum) {
     assert.ok(readable(bucket, key), `retention may not read ${bucket}/${key}`);
@@ -590,6 +629,9 @@ export function planSummary(plan) {
   if (plan.report.incomplete.length)
     lines.push(`- Incomplete or inconsistent, kept and reported: ${plan.report.incomplete.map(row => `${row.releaseId} (${row.status}, ${n(row.objects)} objects)`).join(', ')}.`);
   if (plan.report.partial.length) lines.push(`- Partially deleted by an earlier run: ${plan.report.partial.join(', ')}.`);
+  const h = plan.report.history;
+  lines.push(`- Forecast history: ${h.withReleaseOnlyRuns} releases carry release-only runs, ${h.covered} have a covering history receipt` +
+    (h.heldNoHistory.length ? `; held without one: ${h.heldNoHistory.map(r => `${r.releaseId} (${r.history})`).join(', ')}.` : '.'));
   if (plan.report.outOfScope.length) lines.push(`- Out of scope (not cycle-<digits>): ${plan.report.outOfScope.map(row => row.prefix).join(', ')}.`);
   return `${lines.join('\n')}\n`;
 }

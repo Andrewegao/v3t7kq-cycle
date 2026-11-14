@@ -249,6 +249,29 @@ second. With the shared guard and 256 in flight, a 4,000,000-object run is expec
 350-minute bound; a run cut off by the bound
 leaves whole or partial releases that the next dry run plans again.
 
+## Forecast history
+
+Six families exist only inside the whole releases: `data/ecmwf-brick`, `data/gfs-brick`,
+`data/ecmwf-cn`, `data/gfs-cn`, `data-atmos/air` and `data/verify`, each as `<family>/runs/<YYYYMMDDHH>/`.
+Deleting the last release that carries a run directory would delete that forecast run's only copy.
+The forecast parts of a release, by contrast, duplicate the model components, which keep one copy
+per model run for good (`production-components-retention.md`).
+
+- **Bake.** After `bake.yml` publishes `releases/cycle-<run>/`, `tools/forecast-history-copy.sh`
+  copies those run directories server-side into `weatherx-forecast-history/<family>/runs/<run>/`
+  (copy only, `--checksum`, so a run's newest bytes win), checks every file with `rclone check
+  --one-way`, then writes `history-receipts/cycle-<run>.json` in the data bucket with the object
+  count of each run directory. The step is `continue-on-error`: a failure only leaves no receipt.
+- **Retention.** The inventory counts each release's objects per release-only run directory. A
+  release that carries any is a candidate only when `history-receipts/<releaseId>.json` names that
+  release and `historyBucket` and records at least that many objects for every one of its run
+  directories. Otherwise it is held as `no-history` and listed in the plan summary. A receipt
+  removed after the dry run changes the recomputed plan, so the execution refuses.
+- **Backfill (2026-11-14).** The 567 run directories carried by the 140 releases then listed were
+  copied from the newest release carrying each (519,749 objects, 29.4 GB); every file of the
+  releases still to be deleted was then found in history by key (520,173 objects, 0 missing), and
+  receipts were written for the releases that passed.
+
 ## Steady state
 
 About seven days of releases: 28 × 7.5–8 GB ≈ 210–225 GB and about 1.5 M objects under
