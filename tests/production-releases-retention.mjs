@@ -14,7 +14,7 @@ const HOUR = 3_600_000;
 const T0 = Date.parse('2026-10-21T00:00:00.000Z');
 const iso = ms => new Date(ms).toISOString();
 const base = readPolicy();
-const policy = { ...base, keepNewestReleases: 3, minimumAgeHours: 72, maximumDeletesPerRun: 30, deleteConcurrency: 3 };
+const policy = { ...base, keepNewestReleases: 3, minimumAgeHours: 72, maximumDeletesPerRun: 30, deleteConcurrency: 3, guardReuseMs: 0 };
 const DATA = base.dataBucket, STAGING = base.stagingControlBucket;
 const now = () => T0 + 30 * 60_000;
 
@@ -655,4 +655,21 @@ test('execute workflow summary runs from the workspace root with its declared ch
     assert.equal(readFileSync(summary, 'utf8'), executionSummary(result));
     assert.match(readFileSync(summary, 'utf8'), /new live release; no before-listing comparison/);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a shared guard (guardReuseMs > 0) reads the pointer far less than once per delete and still stops on a rollback', async () => {
+  const shared = { ...policy, guardReuseMs: 20 };
+  const h = history();
+  const io = await h.io();
+  const plan = await planRetention({ io, policy: shared, now });
+  let reads = 0, changed = false;
+  const get = io.get;
+  io.get = async (bucket, key, maximum) => { if (key === 'releases/current.json') reads += 1; return get(bucket, key, maximum); };
+  h.setOnDelete(async count => { if (!changed && count === 2) { changed = true; h.promote(plan.candidates[2].releaseId, T0 + 60_000); } });
+  const slow = async prefix => { const client = await io.deleteForPrefix(prefix);
+    return { ...client, async delete(key) { await new Promise(next => setTimeout(next, 5)); return client.delete(key); } }; };
+  await assert.rejects(executeRetention({ io, policy: shared, now, deleteForPrefix: slow,
+    asOf: plan.asOf, baselineReleaseId: plan.baselineReleaseId, approvedPlanSha256: plan.planSha256 }), /now names candidate/);
+  assert.ok(h.deletes.length < plan.totals.objects, 'stopped early');
+  assert.ok(reads < h.deletes.length, `guard reads (${reads}) are shared, not one per delete (${h.deletes.length})`);
 });

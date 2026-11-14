@@ -13,5 +13,6 @@
   "maximumReleasePrefixes": 2000,
   "maximumManifestBytes": 16777216,
   "maximumDeletesPerRun": 4000000,
-  "deleteConcurrency": 96
+  "deleteConcurrency": 256,
+  "guardReuseMs": 1000
 }

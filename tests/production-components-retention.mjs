@@ -10,7 +10,7 @@ const sha = value => createHash('sha256').update(value).digest('hex');
 const HOUR = 3_600_000;
 const T0 = Date.parse('2026-10-10T06:00:00.000Z');
 const iso = ms => new Date(ms).toISOString();
-const policy = { ...readPolicy(), maximumDeletesPerRun: 40, deleteConcurrency: 3, maximumChainSnapshots: 400 };
+const policy = { ...readPolicy(), maximumDeletesPerRun: 40, deleteConcurrency: 3, guardReuseMs: 0, maximumChainSnapshots: 400 };
 const DATA = policy.dataBucket, COMPONENTS = policy.componentBucket, STAGING = policy.stagingControlBucket;
 const artifact = (id, hoursAgo, suffix = 1791000000) => `${id}-${iso(T0 - hoursAgo * HOUR).replace(/[-:]/g, '').replace('.000', '')}-${suffix + hoursAgo}`;
 const rootFor = (id, hoursAgo, suffix) => `components/${id}/${artifact(id, hoursAgo, suffix)}/`;
@@ -550,4 +550,24 @@ test('a held root with an unknown layout holds every root of its component', asy
   assert.ok(!selected.includes(odd) && !selected.includes(dup), 'unknown routing holds the component');
   assert.deepEqual(plan.report.history.componentsHeldWhole, ['aifs']);
   assert.match(planSummary(plan), /components held whole: aifs/);
+});
+
+test('a shared guard (guardReuseMs > 0) reads the pointer far less than once per delete and still stops on a change', async () => {
+  const shared = { ...policy, guardReuseMs: 20 };
+  const h = history();
+  const plan = await planRetention({ io: h.io, policy: shared, now });
+  assert.ok(plan.totals.objects >= 10);
+  let reads = 0, changed = false;
+  const realGet = h.io.get;
+  h.io.get = async (bucket, key, maximum) => { if (key === 'catalogs/current.json') reads += 1; return realGet(bucket, key, maximum); };
+  const deleteForPrefix = async () => ({ async delete(key) {
+    await new Promise(next => setTimeout(next, 5));
+    h.io.deletes.push(key); h.buckets[COMPONENTS].delete(key);
+    if (!changed && h.io.deletes.length === 2) { changed = true;
+      h.put(STAGING, 'shared-read/pin.json', JSON.stringify({ schemaVersion: 1, releaseId: null, catalogId: '2-c2', expiresAt: iso(T0) })); }
+  }, close() {} });
+  await assert.rejects(executeRetention({ io: h.io, policy: shared, now, deleteForPrefix,
+    baselineCatalogId: plan.baseline.catalogId, approvedPlanSha256: plan.planSha256 }), /pin changed/);
+  assert.ok(h.io.deletes.length < plan.totals.objects, 'stopped early');
+  assert.ok(reads - 2 < h.io.deletes.length, `guard reads during execution (${reads}) are shared, not one per delete (${h.io.deletes.length})`);
 });

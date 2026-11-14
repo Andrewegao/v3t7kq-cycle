@@ -88,7 +88,8 @@ export function validatePolicy(p) {
   assert.ok(Number.isSafeInteger(p.maximumReleasePrefixes) && p.maximumReleasePrefixes > 0 && p.maximumReleasePrefixes <= 10_000);
   assert.ok(Number.isSafeInteger(p.maximumManifestBytes) && p.maximumManifestBytes > 0 && p.maximumManifestBytes <= 64 * 1024 * 1024);
   assert.ok(Number.isSafeInteger(p.maximumDeletesPerRun) && p.maximumDeletesPerRun > 0 && p.maximumDeletesPerRun <= 5_000_000);
-  assert.ok(Number.isSafeInteger(p.deleteConcurrency) && p.deleteConcurrency > 0 && p.deleteConcurrency <= 128);
+  assert.ok(Number.isSafeInteger(p.deleteConcurrency) && p.deleteConcurrency > 0 && p.deleteConcurrency <= 256);
+  assert.ok(Number.isSafeInteger(p.guardReuseMs) && p.guardReuseMs >= 0 && p.guardReuseMs <= 2000);
   return p;
 }
 export function controllerDigest(root = ROOT) {
@@ -151,6 +152,16 @@ async function readManifest(io, policy, prefix) {
 }
 
 // --- inventory --------------------------------------------------------------------------------
+// Every delete waits on a guard check that started at most `guardReuseMs` before it. Concurrent
+// deletes share one check in flight instead of each re-reading the pointer and the staging pin,
+// which tripled the request count and capped the delete rate. 0 means a fresh check per delete.
+function sharedGuard(check, reuseMs, clock = () => performance.now()) {
+  let last = null, at = 0;
+  return () => {
+    if (!last || reuseMs === 0 || clock() - at >= reuseMs) { at = clock(); last = check(); last.catch(() => {}); }
+    return last;
+  };
+}
 function pool(limit) {
   let active = 0; const waiting = [];
   return async task => {
@@ -388,6 +399,7 @@ export async function executeRetention({ io, policy, approvedPlanSha256, asOf, b
     assert.ok(!candidates.has(pointer.releaseId), `releases/current.json now names candidate ${pointer.releaseId}; stopping`);
     return { pointerObject, pointer };
   }
+  const checked = sharedGuard(guard, policy.guardReuseMs);
   const limit = pool(policy.deleteConcurrency);
   for (const candidate of content.candidates) {
     const rows = (await io.listRows(candidate.prefix, policy.maximumDeletesPerRun + 1)).sort(byKey);
@@ -414,7 +426,7 @@ export async function executeRetention({ io, policy, approvedPlanSha256, asOf, b
           if (aborted) return;
           try {
             assert.ok(key.startsWith(candidate.prefix) && key.length > candidate.prefix.length && key !== policy.releasePointerKey);
-            await guard();
+            await checked();
             if (aborted) return;
             await (await clientFor()).delete(key);
             deleted += 1;
@@ -477,7 +489,7 @@ export async function createRetentionIo(env, policy, injectedSdk, injectedReadCl
   assert.ok(env.PRODUCTION_RELEASES_GC_READ_ACCESS_KEY_ID && env.PRODUCTION_RELEASES_GC_READ_SECRET_ACCESS_KEY);
   for (const key of FORBIDDEN) assert.ok(!env[key], `retention refuses ${key}`);
   for (const key of Object.keys(env)) assert.ok(!FORBIDDEN_PREFIXES.some(prefix => key.startsWith(prefix)) || !env[key], `retention refuses ${key}`);
-  // Two guard reads and one delete per key are in flight per slot; the SDK's default of 50
+  // Up to two guard reads and one delete are in flight per slot; the SDK's default of 50
   // sockets per client would cap deleteConcurrency well below the policy value.
   const SOCKETS = 2 * policy.deleteConcurrency + 16;
   const endpoint = `https://${policy.accountId}.r2.cloudflarestorage.com`;

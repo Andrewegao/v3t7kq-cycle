@@ -44,7 +44,9 @@ run's `plan_as_of`, so the execution recomputes the same answer.
    (`baseline_release_id`), and the live pointer read again by the execution. The execution also
    re-reads the pointer **before every delete** and stops if it names a candidate (a rollback
    onto a candidate). A promotion to any other release, such as a new bake, does not stop it.
-   Up to `deleteConcurrency` (96) deletes may already be in flight when the pointer changes, so
+   Concurrent deletes share one guard check, started at most `guardReuseMs` (1,000 ms) before
+   each delete. Up to `deleteConcurrency` (256) deletes may already be in flight, plus up to one
+   second of deletes, when the pointer changes, so
    this check bounds the damage of a rollback during an execution; it does not prevent it. The
    operating rule below does.
 2. **It is among the newest `keepNewestReleases` (8) complete releases.** The pointer carries no
@@ -240,9 +242,11 @@ surge investigation there are about 76 release folders as of 10-21 (24 from befo
 With the default the newest-8 rule is not the binding one; it binds only if bakes stall for
 more than five days. Each plan lists the whole `releases/` prefix once (about 3,300 list
 requests) and reads about 80 manifests; an execution plans again, re-lists its candidates and
-issues two guard reads per delete. The 10-25 run took 2 h 52 min for 491 k objects at 16 deletes in
-flight (about 48 per second). At 96 in flight, with sockets sized to match, a 4,000,000-object run is
-expected to take roughly 2.5 to 4 hours, inside the 350-minute bound; a run cut off by the bound
+shares one guard check (two reads) among the deletes in flight, refreshed at least once a second.
+The 10-25 run took 2 h 52 min for 491 k objects at 16 deletes in flight (about 48 per second). On
+2026-11-14, at 96 in flight with two guard reads per delete, a run deleted about 250 objects per
+second. With the shared guard and 256 in flight, a 4,000,000-object run is expected well inside the
+350-minute bound; a run cut off by the bound
 leaves whole or partial releases that the next dry run plans again.
 
 ## Steady state
