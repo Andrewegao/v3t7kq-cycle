@@ -87,8 +87,8 @@ export function validatePolicy(p) {
   assert.ok(Number.isSafeInteger(p.maximumPlanAgeHours) && p.maximumPlanAgeHours > 0 && p.maximumPlanAgeHours <= 48);
   assert.ok(Number.isSafeInteger(p.maximumReleasePrefixes) && p.maximumReleasePrefixes > 0 && p.maximumReleasePrefixes <= 10_000);
   assert.ok(Number.isSafeInteger(p.maximumManifestBytes) && p.maximumManifestBytes > 0 && p.maximumManifestBytes <= 64 * 1024 * 1024);
-  assert.ok(Number.isSafeInteger(p.maximumDeletesPerRun) && p.maximumDeletesPerRun > 0 && p.maximumDeletesPerRun <= 500_000);
-  assert.ok(Number.isSafeInteger(p.deleteConcurrency) && p.deleteConcurrency > 0 && p.deleteConcurrency <= 32);
+  assert.ok(Number.isSafeInteger(p.maximumDeletesPerRun) && p.maximumDeletesPerRun > 0 && p.maximumDeletesPerRun <= 5_000_000);
+  assert.ok(Number.isSafeInteger(p.deleteConcurrency) && p.deleteConcurrency > 0 && p.deleteConcurrency <= 128);
   return p;
 }
 export function controllerDigest(root = ROOT) {
@@ -477,9 +477,13 @@ export async function createRetentionIo(env, policy, injectedSdk, injectedReadCl
   assert.ok(env.PRODUCTION_RELEASES_GC_READ_ACCESS_KEY_ID && env.PRODUCTION_RELEASES_GC_READ_SECRET_ACCESS_KEY);
   for (const key of FORBIDDEN) assert.ok(!env[key], `retention refuses ${key}`);
   for (const key of Object.keys(env)) assert.ok(!FORBIDDEN_PREFIXES.some(prefix => key.startsWith(prefix)) || !env[key], `retention refuses ${key}`);
+  // Two guard reads and one delete per key are in flight per slot; the SDK's default of 50
+  // sockets per client would cap deleteConcurrency well below the policy value.
+  const SOCKETS = 2 * policy.deleteConcurrency + 16;
   const endpoint = `https://${policy.accountId}.r2.cloudflarestorage.com`;
   const sdk = injectedSdk ?? await import('../staging-controller/node_modules/@aws-sdk/client-s3/dist-cjs/index.js');
   const readClient = injectedReadClient ?? new sdk.S3Client({ region: 'auto', endpoint, forcePathStyle: true, maxAttempts: 3,
+    requestHandler: { httpsAgent: { keepAlive: true, maxSockets: SOCKETS } },
     credentials: { accessKeyId: env.PRODUCTION_RELEASES_GC_READ_ACCESS_KEY_ID,
       secretAccessKey: env.PRODUCTION_RELEASES_GC_READ_SECRET_ACCESS_KEY } });
   const send = command => readClient.send(command, { abortSignal: AbortSignal.timeout(120_000) });
@@ -544,7 +548,7 @@ export async function createRetentionIo(env, policy, injectedSdk, injectedReadCl
     const credentials = scopedDeleteCredentials({ accessKeyId: env.PRODUCTION_RELEASES_GC_DELETE_ACCESS_KEY_ID,
       secretAccessKey: env.PRODUCTION_RELEASES_GC_DELETE_SECRET_ACCESS_KEY }, prefix, policy);
     const client = injectedDeleteClientFactory?.(credentials) ?? new sdk.S3Client({ region: 'auto', endpoint,
-      forcePathStyle: true, maxAttempts: 3, credentials });
+      forcePathStyle: true, maxAttempts: 3, requestHandler: { httpsAgent: { keepAlive: true, maxSockets: SOCKETS } }, credentials });
     return { async delete(key) {
       assert.ok(key.startsWith(prefix) && key.length > prefix.length && key !== policy.releasePointerKey);
       await client.send(new sdk.DeleteObjectCommand({ Bucket: policy.dataBucket, Key: key }),

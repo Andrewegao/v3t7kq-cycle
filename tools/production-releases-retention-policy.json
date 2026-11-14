@@ -12,6 +12,6 @@
   "maximumPlanAgeHours": 24,
   "maximumReleasePrefixes": 2000,
   "maximumManifestBytes": 16777216,
-  "maximumDeletesPerRun": 500000,
-  "deleteConcurrency": 16
+  "maximumDeletesPerRun": 4000000,
+  "deleteConcurrency": 96
 }

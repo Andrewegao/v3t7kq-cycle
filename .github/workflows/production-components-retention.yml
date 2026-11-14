@@ -24,7 +24,7 @@ jobs:
       name: data-production-components-cleanup
       url: https://weatherx.org
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 350
     env:
       COMPONENTS_GC_ENVIRONMENT: data-production-components-cleanup
       PRODUCTION_COMPONENTS_GC_ENABLED: ${{ vars.PRODUCTION_COMPONENTS_GC_ENABLED }}

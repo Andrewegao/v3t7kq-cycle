@@ -125,7 +125,7 @@ const now = () => T0 + 2 * HOUR;
 
 test('policy and scope: only canonical model roots, never the Wind100 or experiment roots', () => {
   assert.doesNotThrow(() => validatePolicy(readPolicy()));
-  assert.throws(() => validatePolicy({ ...readPolicy(), maximumDeletesPerRun: 500001 }));
+  assert.throws(() => validatePolicy({ ...readPolicy(), maximumDeletesPerRun: 5_000_001 }));
   assert.throws(() => validatePolicy({ ...readPolicy(), windowHours: 24 }), /7 days/);
   assert.throws(() => validatePolicy({ ...readPolicy(), componentBucket: 'weatherx-data-production' }));
   assert.ok(canonicalArtifact('ecmwf', 'ecmwf-20261009T120000Z-1791611713'));

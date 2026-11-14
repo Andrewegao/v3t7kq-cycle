@@ -41,7 +41,7 @@ A root is never a candidate when any of these holds:
    never touched.
 
 Everything else in scope is **eligible**. A plan selects the oldest eligible roots, up to
-`maximumDeletesPerRun` (500,000) objects. Each selected root is listed in full, and the plan
+`maximumDeletesPerRun` (4,000,000) objects, with `deleteConcurrency` (96) deletes in flight. Each selected root is listed in full, and the plan
 records its object count, bytes and the SHA-256 of its sorted `[key, size, etag]` rows.
 
 ## Plan, approval and execution
@@ -114,5 +114,6 @@ daily bucket analytics (`r2StorageAdaptiveGroups`), the bucket held 1,394 GB in 
 10-10 and grew by about 178 GB and 1.37 M objects over the six days from 10-04. A 7-day window
 therefore holds roughly 0.2–0.25 TB and 1.6–1.9 M objects. Expect about 1.1 TB and 8.5–9 M
 objects eligible. At 500,000 objects per approved run, that is roughly 18 runs (about an hour each) to clear the
-backlog. At steady state, after the hourly ECMWF stand-aside, retention keeps about one window of
+backlog. (2026-11-14: the backlog had grown to 16.5 M objects; the 500,000-object run took about 3 hours at 16 in
+flight, so the policy now allows 4,000,000 objects per run at 96 in flight, with a 350-minute bound.) At steady state, after the hourly ECMWF stand-aside, retention keeps about one window of
 data.

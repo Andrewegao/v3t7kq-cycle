@@ -122,8 +122,8 @@ const execute = (h, io, plan, extra = {}) => executeRetention({ io, policy, now,
 test('policy: reviewed defaults, floors that never shrink, and only releases/cycle-<digits>/ is in scope', () => {
   assert.equal(base.keepNewestReleases, 8);
   assert.equal(base.minimumAgeHours, 168, 'seven days, the Atmos runbook minimum for pointer/manifest history');
-  assert.equal(base.maximumDeletesPerRun, 500000);
-  assert.throws(() => validatePolicy({ ...base, maximumDeletesPerRun: 500001 }));
+  assert.equal(base.maximumDeletesPerRun, 4000000);
+  assert.throws(() => validatePolicy({ ...base, maximumDeletesPerRun: 5_000_001 }));
   assert.throws(() => validatePolicy({ ...base, minimumAgeHours: 48 }), /72 hours/);
   assert.throws(() => validatePolicy({ ...base, keepNewestReleases: 1 }), /two last-good/);
   assert.throws(() => validatePolicy({ ...base, dataBucket: 'weatherx-components-production' }));
