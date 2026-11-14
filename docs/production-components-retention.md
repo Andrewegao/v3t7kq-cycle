@@ -55,7 +55,7 @@ A root is never a candidate when any of these holds:
    keep the forecast history".
 
 Everything else in scope is **eligible**. A plan selects the oldest eligible roots, up to
-`maximumDeletesPerRun` (4,000,000) objects, with `deleteConcurrency` (96) deletes in flight. Each selected root is listed in full, and the plan
+`maximumDeletesPerRun` (4,000,000) objects, with `deleteConcurrency` (256) deletes in flight. Each selected root is listed in full, and the plan
 records its object count, bytes and the SHA-256 of its sorted `[key, size, etag]` rows.
 
 ## Plan, approval and execution
@@ -78,7 +78,8 @@ records its object count, bytes and the SHA-256 of its sorted `[key, size, etag]
      candidate, and the baseline is at most `maximumPlanAgeHours` (48 h) older than the live
      pointer;
    - re-lists each root and requires the recorded key digest;
-   - **before every delete**, re-reads `catalogs/current.json` and the staging pin. A new
+   - **before every delete**, waits on a read of `catalogs/current.json` and the staging pin
+     started at most `guardReuseMs` (1,000 ms) earlier, shared by the deletes in flight. A new
      pointer is walked back to the last verified head; a rollback, a broken chain or a
      re-promoted candidate stops the run. A changed pin stops the run;
    - deletes each root's `component.json` last, with a 15-minute `DeleteObject`-only credential
@@ -129,5 +130,5 @@ daily bucket analytics (`r2StorageAdaptiveGroups`), the bucket held 1,394 GB in 
 therefore holds roughly 0.2–0.25 TB and 1.6–1.9 M objects. Expect about 1.1 TB and 8.5–9 M
 objects eligible. At 500,000 objects per approved run, that is roughly 18 runs (about an hour each) to clear the
 backlog. (2026-11-14: the backlog had grown to 16.5 M objects; the 500,000-object run took about 3 hours at 16 in
-flight, so the policy now allows 4,000,000 objects per run at 96 in flight, with a 350-minute bound.) At steady state, after the hourly ECMWF stand-aside, retention keeps about one window of
+flight, so the policy now allows 4,000,000 objects per run, with a 350-minute bound. At 96 in flight with a fresh guard per delete a run deleted about 370 objects per second; the deletes in flight now share one guard check refreshed at least once a second (`guardReuseMs`), at 256 in flight.) At steady state, after the hourly ECMWF stand-aside, retention keeps about one window of
 data.

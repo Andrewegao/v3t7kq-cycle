@@ -13,7 +13,8 @@
   "maximumPlanAgeHours": 48,
   "maximumChainSnapshots": 6000,
   "maximumDeletesPerRun": 4000000,
-  "deleteConcurrency": 96,
+  "deleteConcurrency": 256,
+  "guardReuseMs": 1000,
   "capacity": {
     "objects": 12000000,
     "bytes": 1500000000000,
