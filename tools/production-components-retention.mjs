@@ -440,6 +440,32 @@ export async function planRetention({ io, policy, now = Date.now, baselineCatalo
   return { ...plan, planSha256, report };
 }
 
+
+// --- automatic approval -----------------------------------------------------------------------
+
+// The scheduled run approves its own fresh plan only when these independent checks hold; they
+// repeat what a reviewer checked by hand before approving a plan SHA. Any problem refuses the
+// whole run (it deletes nothing). The execution then recomputes the plan and requires the same SHA.
+export const AUTO_MINIMUM_CHAIN_SNAPSHOTS = 50;
+export function autoApproval(plan, policy, nowMs) {
+  const problems = [];
+  if (plan.kind !== PLAN_KIND) problems.push('not a component retention plan');
+  if (plan.historyRule !== 'keep-newest-complete-root-per-model-run') problems.push('plan without forecast history');
+  const windowStart = Date.parse(plan.baseline?.windowStart);
+  if (!(nowMs - windowStart >= policy.windowHours * HOUR)) problems.push('the window starts less than windowHours ago');
+  if (!(plan.chain?.snapshots >= AUTO_MINIMUM_CHAIN_SNAPSHOTS)) problems.push(`only ${plan.chain?.snapshots} catalog snapshots in the window`);
+  if (!(plan.totals.objects <= policy.maximumDeletesPerRun)) problems.push('over the delete budget');
+  const prefixes = new Set(plan.candidates.map(row => row.prefix));
+  for (const row of plan.candidates) {
+    const bad = [];
+    if (!scopedRoot(policy, row.prefix)) bad.push('prefix');
+    if (!(Date.parse(row.newestModified) < windowStart)) bad.push('recent');
+    if (!row.historyCopy || runKeyOf(row.historyCopy) !== runKeyOf(row.prefix) || prefixes.has(row.historyCopy)) bad.push('no kept copy of its run');
+    if (bad.length) problems.push(`${row.prefix}: ${bad.join(', ')}`);
+  }
+  return problems;
+}
+
 // --- execution --------------------------------------------------------------------------------
 
 // Execution never trusts a plan file: it recomputes the plan at the approved baseline and requires
@@ -678,18 +704,19 @@ export function planSummary(plan) {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const [command] = process.argv.slice(2);
   try {
-    assert.ok(['dry-run', 'execute'].includes(command));
+    assert.ok(['dry-run', 'execute', 'auto'].includes(command));
     const env = process.env;
     assert.equal(env.GITHUB_ACTIONS, 'true');
     assert.equal(env.GITHUB_REPOSITORY, 'Andrewegao/v3t7kq-cycle');
     assert.equal(env.GITHUB_REF, 'refs/heads/main');
-    assert.equal(env.GITHUB_EVENT_NAME, 'workflow_dispatch');
+    assert.ok(env.GITHUB_EVENT_NAME === 'workflow_dispatch' || (env.GITHUB_EVENT_NAME === 'schedule' && command === 'auto'));
     assert.equal(env.GITHUB_WORKFLOW_REF, 'Andrewegao/v3t7kq-cycle/.github/workflows/production-components-retention.yml@refs/heads/main');
     assert.equal(env.GITHUB_JOB, 'retention');
     assert.equal(env.COMPONENTS_GC_ENVIRONMENT, 'data-production-components-cleanup');
     assert.equal(env.PRODUCTION_COMPONENTS_GC_ENABLED, 'true');
     assert.equal(env.PRODUCTION_COMPONENTS_GC_CONTROLLER_SHA256, controllerDigest());
-    if (command === 'execute') assert.equal(env.PRODUCTION_COMPONENTS_GC_EXECUTE_ENABLED, 'true');
+    if (command !== 'dry-run') assert.equal(env.PRODUCTION_COMPONENTS_GC_EXECUTE_ENABLED, 'true');
+    if (command === 'auto') assert.equal(env.PRODUCTION_COMPONENTS_GC_AUTO_ENABLED, 'true', 'automatic retention is off');
     else assert.ok(!env.PRODUCTION_COMPONENTS_GC_DELETE_ACCESS_KEY_ID && !env.PRODUCTION_COMPONENTS_GC_DELETE_SECRET_ACCESS_KEY,
       'the dry run never holds the delete token');
     const policy = readPolicy();
@@ -698,6 +725,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
       if (command === 'dry-run') {
         const plan = await planRetention({ io, policy });
         process.stdout.write(`${JSON.stringify(plan)}\n`);
+      } else if (command === 'auto') {
+        const plan = await planRetention({ io, policy });
+        const problems = autoApproval(plan, policy, Date.now());
+        let result = null;
+        if (problems.length === 0 && plan.candidates.length > 0)
+          result = await executeRetention({ io, policy, deleteForPrefix: io.deleteForPrefix,
+            baselineCatalogId: plan.baseline.catalogId, approvedPlanSha256: plan.planSha256 });
+        process.stdout.write(`${JSON.stringify({ plan, problems, result })}\n`);
+        assert.deepEqual(problems, [], `automatic approval refused: ${problems.slice(0, 10).join('; ')}`);
       } else {
         process.stdout.write(`${JSON.stringify(await executeRetention({ io, policy, deleteForPrefix: io.deleteForPrefix,
           baselineCatalogId: env.INPUT_BASELINE_CATALOG_ID ?? '',

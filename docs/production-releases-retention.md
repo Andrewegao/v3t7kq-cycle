@@ -251,26 +251,62 @@ leaves whole or partial releases that the next dry run plans again.
 
 ## Forecast history
 
-Six families exist only inside the whole releases: `data/ecmwf-brick`, `data/gfs-brick`,
-`data/ecmwf-cn`, `data/gfs-cn`, `data-atmos/air` and `data/verify`, each as `<family>/runs/<YYYYMMDDHH>/`.
-Deleting the last release that carries a run directory would delete that forecast run's only copy.
-The forecast parts of a release, by contrast, duplicate the model components, which keep one copy
-per model run for good (`production-components-retention.md`).
+A release is the only copy of any forecast run it carries that has no other copy. That covers six
+release-only families (`data/ecmwf-brick`, `data/gfs-brick`, `data/ecmwf-cn`, `data/gfs-cn`,
+`data-atmos/air`, `data/verify`), replays and fixtures (`data/replay/...`, `data-atmos/<model>`), and
+any served run (`data/<model>/runs/<run>/`, `point-series/v2/<model>/<run>/`) whose component
+publication failed or was skipped. On 2026-11-14, 15 served model runs from 10-18 to 11-08 existed
+only in releases.
 
-- **Bake.** After `bake.yml` publishes `releases/cycle-<run>/`, `tools/forecast-history-copy.sh`
-  copies those run directories server-side into `weatherx-forecast-history/<family>/runs/<run>/`
-  (copy only, `--checksum`, so a run's newest bytes win), checks every file with `rclone check
-  --one-way`, then writes `history-receipts/cycle-<run>.json` in the data bucket with the object
-  count of each run directory. The step is `continue-on-error`: a failure only leaves no receipt.
-- **Retention.** The inventory counts each release's objects per release-only run directory. A
-  release that carries any is a candidate only when `history-receipts/<releaseId>.json` names that
-  release and `historyBucket` and records at least that many objects for every one of its run
-  directories. Otherwise it is held as `no-history` and listed in the plan summary. A receipt
-  removed after the dry run changes the recomputed plan, so the execution refuses.
-- **Backfill (2026-11-14).** The 567 run directories carried by the 140 releases then listed were
-  copied from the newest release carrying each (519,749 objects, 29.4 GB); every file of the
-  releases still to be deleted was then found in history by key (520,173 objects, 0 missing), and
-  receipts were written for the releases that passed.
+- **Run directories.** `runDirsOf` reads them from the release's immutable `manifest.json`:
+  `<family>/runs/<YYYYMMDDHH>/` (families may be nested) and `point-series/v<N>/<model>/<YYYYMMDDHH>/`.
+  Any other path with a `/runs/` segment or eight consecutive digits is `unrecognized`, and a
+  release carrying one is held. An unknown layout is never assumed to need no copy.
+- **Bake.** After `bake.yml` publishes `releases/cycle-<run>/`, `tools/forecast-history-copy.mjs`
+  handles every run directory of that manifest:
+  - If a complete component root of the same model run exists (`component.json` present), the
+    directory is recorded as `copy: component`. Components retention keeps one complete root per
+    model run for good.
+  - Otherwise the directory is copied server-side into `weatherx-forecast-history/<dir>`
+    (`--checksum`), checked with `rclone check --one-way`, and recorded as `copy: history`.
+
+  It then writes `history-receipts/cycle-<run>.json`, bound to the manifest's SHA-256. Only the newest
+  release writes. A re-run of an old bake stands aside, so older bytes never overwrite newer ones in
+  history. The step is `continue-on-error`: a failure only leaves no receipt.
+- **Retention.** A release with run directories is a candidate only when its receipt names this
+  release, this manifest SHA-256, the history and component buckets, and every run directory with the
+  manifest's object count, either as `history` or as a component root of the same run. Otherwise it
+  is held as `no-history` (`missing`, `short` or `unrecognized`) and listed in the plan summary. The
+  manifest is uploaded `--immutable` and deleted last, so a partial (interrupted) release stays
+  covered, and its bytes cannot change under a receipt. A receipt removed after the dry run changes
+  the recomputed plan, so the execution refuses.
+- **Backfill (2026-11-14).** The six release-only families of the 140 releases then listed were
+  copied from the newest release carrying each run (567 run directories, 519,749 objects, 29.4 GB).
+  Receipts for the releases that remained were written after each of their run directories was
+  matched to a complete component or copied into history.
+- **Known edge.** After a manual rollback, the next bake starts from the older release. It is the
+  newest by run id, so its copy can replace newer bytes of the same run in history.
+
+## Automatic daily cleanup
+
+Owner ruling, 2026-11-14: fully automatic. The workflow runs daily on `schedule` (`41 4 * * *`), and
+`automatic=true` on dispatch does the same now. In one job it:
+
+1. plans afresh;
+2. runs `autoApproval`, the independent checks a reviewer made before approving a plan SHA:
+   - the age cutoff is `minimumAgeHours` before `asOf` and at least that long ago;
+   - the plan is fresh;
+   - at least `keepNewestReleases` whole protected releases exist, including the current one;
+   - newest-by-createdAt and newest-by-run-id agree;
+   - the plan is within budget;
+   - every candidate is in scope, unprotected, older than the cutoff, and has a covering receipt;
+3. only when every check passes, executes that plan's SHA; the execution recomputes the plan and
+   must reproduce it.
+
+Any problem deletes nothing and fails the run, with the list in the step summary. The run requires
+`PRODUCTION_RELEASES_GC_AUTO_ENABLED=true` and `PRODUCTION_RELEASES_GC_EXECUTE_ENABLED=true`, the
+attested controller digest and `main`. The environment no longer requires a reviewer. Manual dry
+runs and approved executions work as before.
 
 ## Steady state
 

@@ -17,12 +17,5 @@
   "guardReuseMs": 1000,
   "historyBucket": "weatherx-forecast-history",
   "historyReceiptPrefix": "history-receipts/",
-  "historyFamilies": [
-    "data/ecmwf-brick",
-    "data/gfs-brick",
-    "data/ecmwf-cn",
-    "data/gfs-cn",
-    "data-atmos/air",
-    "data/verify"
-  ]
+  "receiptComponentBucket": "weatherx-components-production"
 }

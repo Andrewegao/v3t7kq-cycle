@@ -93,12 +93,11 @@ export function validatePolicy(p) {
   assert.ok(Number.isSafeInteger(p.maximumDeletesPerRun) && p.maximumDeletesPerRun > 0 && p.maximumDeletesPerRun <= 5_000_000);
   assert.ok(Number.isSafeInteger(p.deleteConcurrency) && p.deleteConcurrency > 0 && p.deleteConcurrency <= 256);
   assert.ok(Number.isSafeInteger(p.guardReuseMs) && p.guardReuseMs >= 0 && p.guardReuseMs <= 2000);
-  // Release-only forecast products (no copy outside the whole releases) must be in the history
-  // bucket before a release that carries them may be deleted.
+  // Every forecast run a release carries must have a copy outside the whole releases (a model
+  // component of the same run, or the history bucket) before that release may be deleted.
   assert.equal(p.historyBucket, 'weatherx-forecast-history');
   assert.equal(p.historyReceiptPrefix, 'history-receipts/');
-  assert.ok(Array.isArray(p.historyFamilies) && p.historyFamilies.length > 0 &&
-    p.historyFamilies.every(f => /^[a-z0-9-]+(\/[a-z0-9-]+)*$/.test(f)) && new Set(p.historyFamilies).size === p.historyFamilies.length);
+  assert.equal(p.receiptComponentBucket, 'weatherx-components-production');
   return p;
 }
 export function controllerDigest(root = ROOT) {
@@ -153,7 +152,8 @@ export function summarizeManifest(body, releaseId) {
       !Array.isArray(m.objects) || m.objects.length !== m.objectCount ||
       !m.objects.every(o => object(o) && typeof o.path === 'string' && o.path.length > 0 && Number.isSafeInteger(o.bytes)))
     return { status: 'manifest-invalid', reason: 'shape' };
-  return { status: 'manifest-valid', createdAt: m.createdAt, objectCount: m.objectCount, manifestSha256: hash(JSON.stringify(m)), manifest: m };
+  return { status: 'manifest-valid', createdAt: m.createdAt, objectCount: m.objectCount, manifestSha256: hash(JSON.stringify(m)), manifest: m,
+    ...runDirsOf(m.objects.map(o => o.path)) };
 }
 async function readManifest(io, policy, prefix) {
   try { return await io.getOptional(policy.dataBucket, `${prefix}manifest.json`, policy.maximumManifestBytes); }
@@ -179,19 +179,41 @@ function pool(limit) {
     try { return await task(); } finally { active -= 1; waiting.shift()?.(); }
   };
 }
-// `<family>/runs/<YYYYMMDDHH>/` of a release-relative key when the family is release-only, else null.
-function historyRunMatcher(policy) {
-  const re = new RegExp(`^(${policy.historyFamilies.map(f => f.replace(/[-/]/g, c => `\\${c}`)).join('|')})\\/runs\\/(\\d{10})\\/.`);
-  return rest => { const m = re.exec(rest); return m ? `${m[1]}/runs/${m[2]}/` : null; };
+// Forecast-run directories of a release, from its immutable manifest: `<family>/runs/<YYYYMMDDHH>/`
+// (families may be nested, e.g. data/replay/bebinca-2024/air) and
+// `point-series/v<N>/<model>/<YYYYMMDDHH>/`. Any other path that looks run-keyed (a `/runs/` segment
+// or eight consecutive digits) is `unrecognized`, and a release carrying one is held: the guard
+// never assumes an unknown layout needs no copy.
+const RUN_DIR = /^([a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)*)\/runs\/(\d{10})\/[^/]/;
+const POINT_DIR = /^(point-series\/v\d{1,3}\/[a-z0-9][a-z0-9-]*)\/(\d{10})\/[^/]/;
+export function runDirsOf(paths) {
+  const runs = {}, unrecognized = [];
+  for (const path of paths) {
+    const m = RUN_DIR.exec(path), p = m ? null : POINT_DIR.exec(path);
+    if (m) { const dir = `${m[1]}/runs/${m[2]}/`; runs[dir] = (runs[dir] ?? 0) + 1; }
+    else if (p) { const dir = `${p[1]}/${p[2]}/`; runs[dir] = (runs[dir] ?? 0) + 1; }
+    else if (path.includes('/runs/') || /\d{8}/.test(path)) unrecognized.push(path);
+  }
+  return { runs, unrecognized };
 }
-// A receipt covers a release when it names that release and the history bucket and records, for
-// every release-only run directory the release lists, at least as many objects present in history.
-export function receiptCovers(body, releaseId, policy, runs) {
+const COMPONENT_ROOT = /^components\/([a-z][a-z0-9-]{1,40})\/\1-(\d{8})T(\d{2})0000Z-[^/]+\/$/;
+// A receipt covers a release when it was written for this exact manifest (the manifest is
+// immutable and names every object with its size and SHA-256), and accounts for every forecast-run
+// directory of that manifest with the same object count: either copied into the history bucket
+// or matched to a complete component root of the same model run, which components retention keeps.
+export function receiptCovers(body, releaseId, policy, summary) {
   let r;
   try { r = JSON.parse(Buffer.from(body).toString('utf8')); } catch { return false; }
-  if (!r || r.schemaVersion !== 1 || r.kind !== RECEIPT_KIND || r.releaseId !== releaseId ||
-    r.historyBucket !== policy.historyBucket || !r.runs || typeof r.runs !== 'object' || Array.isArray(r.runs)) return false;
-  return Object.entries(runs).every(([run, n]) => Number.isSafeInteger(r.runs[run]) && r.runs[run] >= n);
+  if (!object(r) || r.schemaVersion !== 2 || r.kind !== RECEIPT_KIND || r.releaseId !== releaseId ||
+    r.manifestSha256 !== summary.manifestSha256 || r.historyBucket !== policy.historyBucket ||
+    r.componentBucket !== policy.receiptComponentBucket || !object(r.runs)) return false;
+  return Object.entries(summary.runs).every(([dir, n]) => {
+    const e = r.runs[dir];
+    if (!object(e) || e.objects !== n) return false;
+    if (e.copy === 'history') return true;
+    const run = /(\d{10})\/$/.exec(dir)[1], m = e.copy === 'component' && typeof e.component === 'string' && COMPONENT_ROOT.exec(e.component);
+    return Boolean(m && `${m[2]}${m[3]}` === run);
+  });
 }
 // Every release prefix under `releases/`, each listed in full (paginated) for its object count,
 // bytes and newest LastModified. Nothing outside `releases/` is listed.
@@ -199,15 +221,11 @@ async function inventory({ io, policy }) {
   const top = await io.listPrefixes(RELEASES);
   assert.ok(top.prefixes.length <= policy.maximumReleasePrefixes, 'more release prefixes than maximumReleasePrefixes: refusing');
   const loose = { objects: top.rows.length, bytes: top.rows.reduce((n, row) => n + row.size, 0) };
-  const limit = pool(8), runOf = historyRunMatcher(policy);
+  const limit = pool(8);
   const releases = await Promise.all(top.prefixes.map(prefix => limit(async () => {
     assert.ok(RELEASE_PREFIX.test(prefix), `unexpected release prefix ${String(prefix).slice(0, 120)}: refusing`);
-    const value = { prefix, objects: 0, bytes: 0, newest: 0, runs: {} };
-    await io.list(prefix, row => {
-      value.objects += 1; value.bytes += row.size; value.newest = Math.max(value.newest, row.lastModified);
-      const run = runOf(row.key.slice(prefix.length));
-      if (run) value.runs[run] = (value.runs[run] ?? 0) + 1;
-    });
+    const value = { prefix, objects: 0, bytes: 0, newest: 0 };
+    await io.list(prefix, row => { value.objects += 1; value.bytes += row.size; value.newest = Math.max(value.newest, row.lastModified); });
     return value;
   })));
   return { loose, releases: releases.sort((a, b) => (a.prefix < b.prefix ? -1 : 1)) };
@@ -289,11 +307,12 @@ export async function planRetention({ io, policy, now = Date.now, asOf = null, b
     }
     if (status === 'complete' && scoped.releaseId === live.releaseId && asOf === null)
       assert.equal(summary.manifestSha256, live.manifestSha256.toLowerCase(), 'releases/current.json and its manifest disagree: refusing');
-    const historyRuns = Object.keys(entry.runs).length;
+    const historyRuns = summary.runs ? Object.keys(summary.runs).length : 0;
     let history = 'not-needed';
-    if (historyRuns) {
+    if (summary.unrecognized?.length) history = 'unrecognized';
+    else if (historyRuns) {
       const receipt = await io.getOptional(policy.dataBucket, `${policy.historyReceiptPrefix}${scoped.releaseId}.json`, MAX_RECEIPT);
-      history = !receipt ? 'missing' : receiptCovers(receipt.body, scoped.releaseId, policy, entry.runs) ? 'covered' : 'short';
+      history = !receipt ? 'missing' : receiptCovers(receipt.body, scoped.releaseId, policy, summary) ? 'covered' : 'short';
     }
     const row = { ...scoped, prefix: entry.prefix, objects: entry.objects, bytes: entry.bytes, newest: entry.newest, status,
       history, historyRuns,
@@ -338,7 +357,7 @@ export async function planRetention({ io, policy, now = Date.now, asOf = null, b
     if (newest.has(row.releaseId)) reasons.push('newest');
     if (row.status === 'manifest-missing' || row.status === 'manifest-invalid') reasons.push('incomplete');
     if (row.status === 'surplus') reasons.push('inconsistent');
-    if (row.history === 'missing' || row.history === 'short') reasons.push('no-history');
+    if (['missing', 'short', 'unrecognized'].includes(row.history)) reasons.push('no-history');
     if (row.newest > cutoff || (row.createdAt && Date.parse(row.createdAt) > cutoff)) reasons.push('recent');
     row.reasons = reasons;
   }
@@ -390,7 +409,7 @@ export async function planRetention({ io, policy, now = Date.now, asOf = null, b
     incomplete: [...rows, ...later].filter(row => !['complete', 'partial'].includes(row.status))
       .map(row => ({ releaseId: row.releaseId, status: row.status, reason: row.reason, objects: row.objects, bytes: row.bytes })),
     partial: rows.filter(row => row.status === 'partial').map(row => row.releaseId),
-    history: { withReleaseOnlyRuns: rows.filter(row => row.historyRuns > 0).length,
+    history: { withRunDirectories: rows.filter(row => row.historyRuns > 0).length,
       covered: rows.filter(row => row.history === 'covered').length,
       heldNoHistory: rows.filter(row => row.reasons.includes('no-history')).map(row => ({ releaseId: row.releaseId, history: row.history, runs: row.historyRuns })) },
     outOfScope: outOfScope.map(row => ({ prefix: row.prefix, objects: row.objects, bytes: row.bytes })),
@@ -401,6 +420,38 @@ export async function planRetention({ io, policy, now = Date.now, asOf = null, b
     afterAllEligible: { objects: total.objects - plan.eligible.objects, bytes: total.bytes - plan.eligible.bytes },
   };
   return { ...plan, planSha256, report };
+}
+
+
+// --- automatic approval -----------------------------------------------------------------------
+
+// The scheduled run approves its own fresh plan only when these independent checks hold; they
+// repeat what a reviewer checked by hand before approving a plan SHA. Any problem refuses the
+// whole run (it deletes nothing). The execution then recomputes the plan and requires the same SHA.
+export function autoApproval(plan, policy, nowMs) {
+  const problems = [];
+  if (plan.kind !== PLAN_KIND) problems.push('not a release retention plan');
+  const asOf = Date.parse(plan.asOf), cut = Date.parse(plan.minimumAgeCutoff);
+  if (!(asOf - cut === policy.minimumAgeHours * HOUR)) problems.push('the age cutoff is not minimumAgeHours before asOf');
+  if (!(nowMs - cut >= policy.minimumAgeHours * HOUR)) problems.push('the age cutoff is less than minimumAgeHours ago');
+  if (!(nowMs - asOf <= 2 * HOUR && asOf <= nowMs)) problems.push('the plan is not fresh');
+  const protectedRows = plan.report?.protected ?? [];
+  const protectedIds = new Set(protectedRows.map(row => row.releaseId));
+  const whole = protectedRows.filter(row => row.present && row.manifestCovered);
+  if (whole.length < policy.keepNewestReleases) problems.push(`only ${whole.length} whole protected releases`);
+  for (const id of [plan.baselineReleaseId, plan.report?.livePointer?.releaseId])
+    if (!protectedIds.has(id)) problems.push(`the current release ${id} is not protected`);
+  if (plan.report?.order?.agree !== true) problems.push('newest by createdAt and by run id disagree');
+  if (!(plan.totals.objects <= policy.maximumDeletesPerRun)) problems.push('over the delete budget');
+  for (const row of plan.candidates) {
+    const bad = [];
+    if (!scopedRelease(row.prefix) || row.prefix !== `releases/${row.releaseId}/`) bad.push('prefix');
+    if (protectedIds.has(row.releaseId) || row.releaseId === plan.baselineReleaseId) bad.push('protected');
+    if (!(Date.parse(row.newestModified) < cut) || !(Date.parse(row.createdAt) < cut)) bad.push('recent');
+    if (row.historyRuns > 0 ? row.history !== 'covered' : row.history !== 'not-needed') bad.push('forecast history');
+    if (bad.length) problems.push(`${row.releaseId}: ${bad.join(', ')}`);
+  }
+  return problems;
 }
 
 // --- execution --------------------------------------------------------------------------------
@@ -630,7 +681,7 @@ export function planSummary(plan) {
     lines.push(`- Incomplete or inconsistent, kept and reported: ${plan.report.incomplete.map(row => `${row.releaseId} (${row.status}, ${n(row.objects)} objects)`).join(', ')}.`);
   if (plan.report.partial.length) lines.push(`- Partially deleted by an earlier run: ${plan.report.partial.join(', ')}.`);
   const h = plan.report.history;
-  lines.push(`- Forecast history: ${h.withReleaseOnlyRuns} releases carry release-only runs, ${h.covered} have a covering history receipt` +
+  lines.push(`- Forecast runs: ${h.withRunDirectories} releases carry run directories, ${h.covered} have a receipt covering every one` +
     (h.heldNoHistory.length ? `; held without one: ${h.heldNoHistory.map(r => `${r.releaseId} (${r.history})`).join(', ')}.` : '.'));
   if (plan.report.outOfScope.length) lines.push(`- Out of scope (not cycle-<digits>): ${plan.report.outOfScope.map(row => row.prefix).join(', ')}.`);
   return `${lines.join('\n')}\n`;
@@ -650,18 +701,19 @@ export function executionSummary(result) {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const [command] = process.argv.slice(2);
   try {
-    assert.ok(['dry-run', 'execute'].includes(command));
+    assert.ok(['dry-run', 'execute', 'auto'].includes(command));
     const env = process.env;
     assert.equal(env.GITHUB_ACTIONS, 'true');
     assert.equal(env.GITHUB_REPOSITORY, 'Andrewegao/v3t7kq-cycle');
     assert.equal(env.GITHUB_REF, 'refs/heads/main');
-    assert.equal(env.GITHUB_EVENT_NAME, 'workflow_dispatch');
+    assert.ok(env.GITHUB_EVENT_NAME === 'workflow_dispatch' || (env.GITHUB_EVENT_NAME === 'schedule' && command === 'auto'));
     assert.equal(env.GITHUB_WORKFLOW_REF, 'Andrewegao/v3t7kq-cycle/.github/workflows/production-releases-retention.yml@refs/heads/main');
     assert.equal(env.GITHUB_JOB, 'retention');
     assert.equal(env.RELEASES_GC_ENVIRONMENT, 'production-releases-retention');
     assert.equal(env.PRODUCTION_RELEASES_GC_ENABLED, 'true');
     assert.equal(env.PRODUCTION_RELEASES_GC_CONTROLLER_SHA256, controllerDigest());
-    if (command === 'execute') assert.equal(env.PRODUCTION_RELEASES_GC_EXECUTE_ENABLED, 'true');
+    if (command !== 'dry-run') assert.equal(env.PRODUCTION_RELEASES_GC_EXECUTE_ENABLED, 'true');
+    if (command === 'auto') assert.equal(env.PRODUCTION_RELEASES_GC_AUTO_ENABLED, 'true', 'automatic retention is off');
     else assert.ok(!env.PRODUCTION_RELEASES_GC_DELETE_ACCESS_KEY_ID && !env.PRODUCTION_RELEASES_GC_DELETE_SECRET_ACCESS_KEY,
       'the dry run never holds the delete token');
     const policy = readPolicy();
@@ -669,6 +721,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     try {
       if (command === 'dry-run') {
         process.stdout.write(`${JSON.stringify(await planRetention({ io, policy }))}\n`);
+      } else if (command === 'auto') {
+        const plan = await planRetention({ io, policy });
+        const problems = autoApproval(plan, policy, Date.now());
+        let result = null;
+        if (problems.length === 0 && plan.candidates.length > 0)
+          result = await executeRetention({ io, policy, deleteForPrefix: io.deleteForPrefix, asOf: plan.asOf,
+            baselineReleaseId: plan.baselineReleaseId, approvedPlanSha256: plan.planSha256 });
+        process.stdout.write(`${JSON.stringify({ plan, problems, result })}\n`);
+        assert.deepEqual(problems, [], `automatic approval refused: ${problems.slice(0, 10).join('; ')}`);
       } else {
         process.stdout.write(`${JSON.stringify(await executeRetention({ io, policy, deleteForPrefix: io.deleteForPrefix,
           asOf: env.INPUT_PLAN_AS_OF ?? '', baselineReleaseId: env.INPUT_BASELINE_RELEASE_ID ?? '',
