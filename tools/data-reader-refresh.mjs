@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
-import { normalizedSettings, canonical, saveReceipt, createTransport, safeFailureDiagnostic, ACCOUNT, ZONE } from './gdacs-feed-release.mjs';
+import { normalizedSettings, canonical, saveReceipt, createTransport, safeFailureDiagnostic, ACCOUNT, ZONE, routeMatches } from './gdacs-feed-release.mjs';
 import { activeVersion, normalizedBindings, assertSettings } from './consumer-refresh.mjs';
 import { proveReaders, verifySourceImports } from './data-reader-proof.mjs';
 
@@ -23,7 +23,33 @@ export const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const digest=value=>hash(canonical(value));
 const same=(a,b,message)=>assert.ok(canonical(a)===canonical(b),message);
 const sorted=values=>[...values].sort((a,b)=>canonical(a).localeCompare(canonical(b)));
-export const CLOSURE=['access','catalog','catalogApi','crypto','data','dataEdge','db','http','pointSeries','pointSeriesContract','releasePromotion','sharedRead','telemetry','types'].map(x=>`src/${x}.ts`).sort();
+export const CLOSURE=['access','bootDescriptor','catalog','catalogApi','crypto','data','dataEdge','db','http','pointSeries','pointSeriesContract','releasePromotion','sharedRead','telemetry','types'].map(x=>`src/${x}.ts`).sort();
+
+// Phase 2 owns this exact extra route. Repeated code-only refreshes must support
+// its already-activated state, without accepting arbitrary source/live routes.
+// Keep this literal equal to point-route-activate.PATTERN (tested); importing
+// that controller here would create a deployment-controller dependency cycle.
+const POINT_ROUTE='weatherx.org/api/v1/point-series/*';
+const BASE_ROUTES=['weatherx.org/data/*','weatherx.org/data-atmos/*','weatherx.org/api/platform/internal/catalog*','weatherx.org/api/platform/data-health*'].sort();
+export function assertDataRoutes(routes,sourceRoutes){
+  const approved=patterns=>canonical(patterns.slice().sort())===canonical(BASE_ROUTES)||canonical(patterns.slice().sort())===canonical([...BASE_ROUTES,POINT_ROUTE].sort());
+  assert.ok(Array.isArray(routes)&&Array.isArray(sourceRoutes),'invalid data route policy');
+  assert.ok(approved(sourceRoutes.map(r=>r.pattern)),'source data route policy changed');
+  assert.ok(approved(routes.filter(r=>r.script===WORKER).map(r=>r.pattern)),'data route policy changed');
+  for(const route of routes){
+    if(route.script===WORKER){
+      assert.ok(route.request_limit_fail_open==null||route.request_limit_fail_open===false,'fail-open data route prohibited');
+    }
+    if(route.pattern===POINT_ROUTE)assert.equal(route.script,WORKER,'point route owner changed');
+    if(route.pattern.replace(/^https?:\/\//,'').toLowerCase().startsWith('weatherx.org/api/v1/point-series')){
+      assert.equal(route.pattern,POINT_ROUTE,'unexpected narrower point route');
+    }
+    if(routeMatches(route.pattern,'https://weatherx.org/api/v1/point-series/gfs?lat=39.9')){
+      assert.ok((route.pattern===POINT_ROUTE&&route.script===WORKER)||
+        (route.pattern==='weatherx.org/api/v1/*'&&route.script==='weatherx-platform-edge-production'),'unexpected overlapping point route');
+    }
+  }
+}
 
 // Permission discovery only: this selected existing credential can issue one
 // fixed Pages GET, never a Pages mutation or redirect. Do not log API bodies.
@@ -250,7 +276,7 @@ export function makeOperations(transport,atmos,source){
     const pages=await transport.api(`/accounts/${ACCOUNT}/pages/projects/atmos-platform`,'PAGES_TOKEN');
     assert.equal(pages.canonical_deployment?.environment,'production');assert.equal(pages.canonical_deployment?.latest_stage?.status,'success');
     const routes=sorted(await api(`/zones/${ZONE}/workers/routes`));
-    same(routes.filter(x=>x.script===WORKER).map(x=>x.pattern).sort(),source.settings.routes.map(x=>x.pattern).sort(),'data route policy changed');
+    assertDataRoutes(routes,source.settings.routes);
     return {...targets,routes,pages:{id:pages.canonical_deployment.id,sha256:digest(pages.canonical_deployment),settingsSha256:digest(pages.deployment_configs)}};
   }
   return {active,version,history,object,pointers,boundary,
