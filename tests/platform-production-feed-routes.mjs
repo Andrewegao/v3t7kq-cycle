@@ -52,3 +52,16 @@ test('live proof waits for both newly attached routes to propagate, but remains 
   await assert.rejects(verifyFeedsEventually(async () => new Response('<html/>', { status: 404 }),
     async () => {}, 2), /production Platform health failed/);
 });
+
+test('live proof admits the Atmos build stamp in platform health (2026-11-21 shape)', async () => {
+  const responses = [
+    Response.json({ authMode: 'observe', billingMode: 'enabled', billingPurchaseMode: 'closed', build: { sourceSha: null }, ok: true }),
+    Response.json({ type: 'FeatureCollection', features: [] }),
+    Response.json({ v: 1, tc: [], ev: [], bundles: [], retired: [], feed: { tc: true, gdacs: true, eonet: true, usgs: true } },
+      { headers: { 'x-weatherx-hazards-source': 'scheduled' } }),
+  ];
+  assert.deepEqual(await verifyFeeds(async () => responses.shift()),
+    { status: 'verified', usgsStatus: 200, hazardsSource: 'scheduled' });
+  const changed = [Response.json({ ok: true, authMode: 'public', billingMode: 'enabled', billingPurchaseMode: 'closed', build: { sourceSha: null } })];
+  await assert.rejects(verifyFeeds(async () => changed.shift()), /contract changed/);
+});

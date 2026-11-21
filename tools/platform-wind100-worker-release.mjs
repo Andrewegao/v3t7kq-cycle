@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { activeVersion, assertSettings, expectedBindings, normalizedBindings } from './consumer-refresh.mjs';
+import { assertHealth } from './platform-health.mjs';
 
 const exec = promisify(execFile);
 const ACCOUNT = 'a89f9a1af485021fbc60a68b163c7c6e';
@@ -148,8 +149,7 @@ async function verifyLive(candidate, token) {
       const health = await fetch('https://weatherx.org/api/platform/health',
         { redirect: 'error', signal: AbortSignal.timeout(10_000), cache: 'no-store' });
       assert.equal(health.status, 200, `health returned HTTP ${health.status}`);
-      assert.deepEqual(await health.json(), { ok: true, authMode: 'observe',
-        billingMode: 'enabled', billingPurchaseMode: 'closed' });
+      assertHealth(await health.json());
       const selector = await fetch('https://weatherx.org/api/platform/production-wind100/current',
         { redirect: 'error', signal: AbortSignal.timeout(10_000), cache: 'no-store' });
       assert.equal(selector.status, 200, `Wind100 selector returned HTTP ${selector.status}`);
