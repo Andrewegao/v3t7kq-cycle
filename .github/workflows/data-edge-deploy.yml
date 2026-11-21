@@ -23,7 +23,8 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The complete Atmos release gates alone ran past 12 minutes on 2026-11-21.
+    timeout-minutes: 45
     environment: production
     steps:
       - name: Require exact phase confirmation
@@ -57,7 +58,7 @@ jobs:
       - name: Install publisher contract Python dependencies
         timeout-minutes: 2
         # Same pins as the reviewed Atmos data requirements; no live data collection.
-        run: python -m pip install --disable-pip-version-check Pillow==12.2.0 numpy==2.4.6 eccodes==2.47.0
+        run: python -m pip install --disable-pip-version-check Pillow==12.2.0 numpy==2.4.6 eccodes==2.47.0 requests==2.34.2 uv==0.12.3
       - name: Install locked edge dependencies
         working-directory: atmos/platform/edge
         run: npm ci
@@ -68,6 +69,16 @@ jobs:
         run: |
           npm --prefix commercial-portal ci
           npm --prefix commercial-portal run build
+      - name: Prepare the locked Python environments the release gates spawn
+        # Mirrors Atmos CI's platform-edge job: the commercial Python type environment, and data/.venv,
+        # which the IFS admission and serving fixtures in `npm run check` spawn explicitly.
+        timeout-minutes: 8
+        working-directory: atmos/platform/edge
+        run: |
+          uv sync --locked --group dev --project ../../clients/python
+          uv venv --python 3.12 ../../data/.venv
+          uv pip sync --require-hashes --python ../../data/.venv/bin/python ../../data/requirements.lock
+          uv pip check --python ../../data/.venv/bin/python
       - name: Run the complete data-edge release gates
         working-directory: atmos/platform/edge
         run: npm run check
