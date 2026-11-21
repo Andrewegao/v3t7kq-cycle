@@ -56,8 +56,8 @@ export const PUBLIC_COMBINED_ONBOARDING_SOURCES = Object.freeze({
   'onboarding/useObData.ts': '84696745e68d6c2a5b927439183751e53a3cd65604b619833899e1741ee936b3',
 });
 export const PUBLIC_COMBINED_SIDECAR = 'assets/weatherx-production-account-build-v1.json';
-// Owner-authorized merged source for Phase 0 to 2 live data, hazards and point-card work (Atmos #678); new-source staging acceptance remains pending.
-export const PUBLIC_COMBINED_ATMOS_SHA = '946c93addf0e68eafcc850c3f9618b2a600046ff';
+// Reviewed merged source: Merge pull request #683 from weatherx-hq/integ/wave-a2-20261121; new-source staging acceptance remains pending.
+export const PUBLIC_COMBINED_ATMOS_SHA = '9097613b8c6769861b98ff7cef2f06d367e13abc';
 
 export function assertPublicCombinedReady() {
   assert.match(PUBLIC_COMBINED_ATMOS_SHA, /^[a-f0-9]{40}$/);

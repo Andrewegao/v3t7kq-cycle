@@ -10,8 +10,8 @@ import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Owner-authorized merged source for Phase 0 to 2 live data, hazards and point-card work (Atmos #678); fresh staging qualification remains required.
-export const UI_SOURCE = '946c93addf0e68eafcc850c3f9618b2a600046ff';
+// Reviewed merged source: Merge pull request #683 from weatherx-hq/integ/wave-a2-20261121; fresh staging qualification remains required.
+export const UI_SOURCE = '9097613b8c6769861b98ff7cef2f06d367e13abc';
 export const REVIEWED_MASTER = UI_SOURCE;
 /** Exact extra paths allowed to differ between the pin and master (none at this pin). */
 export const EDGE_ONLY_DIFF = Object.freeze([]);
