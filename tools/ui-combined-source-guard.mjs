@@ -10,8 +10,8 @@ import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Reviewed merged source: Merge pull request #683 from weatherx-hq/integ/wave-a2-20261121; fresh staging qualification remains required.
-export const UI_SOURCE = '9097613b8c6769861b98ff7cef2f06d367e13abc';
+// Reviewed merged source: Merge pull request #686 from weatherx-hq/feat/hrrr-native-points; fresh staging qualification remains required.
+export const UI_SOURCE = '43a451dfa423600c1bbe376ce3c0f26ce491a769';
 export const REVIEWED_MASTER = UI_SOURCE;
 /** Exact extra paths allowed to differ between the pin and master (none at this pin). */
 export const EDGE_ONLY_DIFF = Object.freeze([]);
