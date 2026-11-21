@@ -81,6 +81,11 @@ jobs:
           uv pip check --python ../../data/.venv/bin/python
       - name: Run the complete data-edge release gates
         working-directory: atmos/platform/edge
+        env:
+          # npm run check runs the edge units and the commercial-portal check side by side; uncapped, both
+          # take every core and the portal's focus and render assertions time out (run 44864235082).
+          # Two workers each on the 4-vCPU runner, as the production platform Worker release gate uses.
+          VITEST_MAX_WORKERS: "2"
         run: npm run check
       - name: Require the dedicated production data-edge credential
         env:

@@ -135,7 +135,7 @@ assert.match(legacy,
 // Atmos's complete publisher contract, and (2026-11-21) the commercial-portal build that Atmos's
 // `npm run check` integration contract reads, and the locked Python environments its fixtures spawn. Future changes must review and update this pin explicitly.
 assert.equal(createHash('sha256').update(legacy).digest('hex'),
-  'd7c5a185dc8a6b1f87e5eddde0c9aee066487b1509e66f20b97a278a8b85795b',
+  '20cc6f489459a1483ca9dabe53168e1634054762c0a7db3cb7eef30b7970e8c2',
   'legacy bootstrap/shadow/serve workflow remains byte-for-byte unchanged');
 assert.equal(createHash('sha256').update(await readFile(
   new URL('../scheduler/test-production-cutover-contract.mjs', import.meta.url),
