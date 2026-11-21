@@ -61,6 +61,13 @@ jobs:
       - name: Install locked edge dependencies
         working-directory: atmos/platform/edge
         run: npm ci
+      - name: Build the commercial portal the release gates read
+        # Atmos `npm run check` now runs the commercial-portal integration contract, which reads
+        # commercial-portal/dist/console; Atmos CI builds it the same way before that contract.
+        working-directory: atmos/platform/edge
+        run: |
+          npm --prefix commercial-portal ci
+          npm --prefix commercial-portal run build
       - name: Run the complete data-edge release gates
         working-directory: atmos/platform/edge
         run: npm run check
