@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertHealth } from './platform-health.mjs';
 
 const ZONE = '9dc4df7c3c094ab9a11dd00d378adc26';
 const WORKER = 'weatherx-platform-edge-production';
@@ -73,7 +74,7 @@ export async function verifyFeeds(fetchImpl = fetch) {
   const health = await fetchImpl('https://weatherx.org/api/platform/health',
     { redirect: 'error', signal: AbortSignal.timeout(15_000), cache: 'no-store' });
   assert.equal(health.status, 200, 'production Platform health failed');
-  assert.deepEqual(await health.json(), { ok: true, authMode: 'observe', billingMode: 'enabled', billingPurchaseMode: 'closed' });
+  assertHealth(await health.json());
   const usgs = await fetchImpl('https://weatherx.org/api/usgs/list',
     { redirect: 'error', signal: AbortSignal.timeout(20_000), cache: 'no-store' });
   assert.match(usgs.headers.get('content-type') ?? '', /^application\/json(?:;|$)/i, 'USGS route returned non-JSON');

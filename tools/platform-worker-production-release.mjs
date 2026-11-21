@@ -32,22 +32,8 @@ const API = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/workers/sc
 const ROUTES_API = `https://api.cloudflare.com/client/v4/zones/${ZONE}/workers/routes`;
 const SHA = /^[a-f0-9]{40}$/;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
-export const HEALTH = Object.freeze({ ok: true, authMode: 'observe', billingMode: 'enabled', billingPurchaseMode: 'closed' });
-// Atmos 3087a055bb (2026-10-20) added `build: { sourceSha }` to /api/platform/health: the commit a Worker was
-// deployed from (`SOURCE_SHA` var), or null when unstamped. This lane uploads code only (`--keep-vars`, no new
-// binding), so the field is null on its candidates. It is admitted only in that exact shape; every other health
-// field must still equal HEALTH exactly (key order ignored).
-export function assertHealth(health) {
-  assert.ok(health && typeof health === 'object' && !Array.isArray(health), 'production platform health is not an object');
-  const { build, ...rest } = health;
-  assert.deepStrictEqual(rest, { ...HEALTH }, 'production platform health contract changed');
-  if (!Object.hasOwn(health, 'build')) return health;
-  assert.ok(build && typeof build === 'object' && !Array.isArray(build)
-    && JSON.stringify(Object.keys(build)) === '["sourceSha"]', 'production platform health build field changed');
-  assert.ok(build.sourceSha === null || (typeof build.sourceSha === 'string' && /^[a-f0-9]{40}$/.test(build.sourceSha)),
-    'production platform health build.sourceSha is not a commit');
-  return health;
-}
+export { HEALTH, assertHealth } from './platform-health.mjs';
+import { assertHealth } from './platform-health.mjs';
 const RELEASE_TAG = /^(?:production|wind100)-([a-f0-9]{12})$/;
 const sha256 = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const same = (a, b, message) => assert.equal(JSON.stringify(a), JSON.stringify(b), message);
