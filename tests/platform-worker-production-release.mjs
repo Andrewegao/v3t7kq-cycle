@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
-  admit, assertCodeOnly, assertSchedules, bindingSummary, confirmation, DATA_WORKER, foreignOverlaps, HEALTH,
+  admit, assertCodeOnly, assertHealth, assertSchedules, bindingSummary, confirmation, DATA_WORKER, foreignOverlaps, HEALTH,
   patternsOverlap, POINT_ROUTE, previousSource, recoveryAction, REQUIRED_ROUTES, REVIEWED_OVERLAPS, routeBoundary,
   validateLiveSelector, validateReleaseConfig, verifierEnvironment, WORKER,
 } from '../tools/platform-worker-production-release.mjs';
@@ -156,6 +156,19 @@ test('live selector must be a valid production selector and never regress', () =
     { runId: '20261009' }, { selectionSha256: 'x' }, { freshUntil: 'soon' }, { schemaVersion: 2 }])
     assert.throws(() => validateLiveSelector({ ...selector, ...changed }), JSON.stringify(changed));
   assert.deepEqual(HEALTH, { ok: true, authMode: 'observe', billingMode: 'enabled', billingPurchaseMode: 'closed' });
+});
+
+test('health admits only the Atmos build stamp beside the exact reviewed contract', () => {
+  const base = { ok: true, authMode: 'observe', billingMode: 'enabled', billingPurchaseMode: 'closed' };
+  assert.equal(assertHealth(base), base);
+  // Live 2026-11-21 shape from Atmos 705ddb3eea, key order differing from HEALTH.
+  assertHealth({ authMode: 'observe', billingMode: 'enabled', billingPurchaseMode: 'closed', build: { sourceSha: null }, ok: true });
+  assertHealth({ ...base, build: { sourceSha: SHA } });
+  for (const build of [null, {}, [], { sourceSha: 'abc' }, { sourceSha: SHA.toUpperCase() }, { sourceSha: SHA, extra: 1 }, { sha: SHA }])
+    assert.throws(() => assertHealth({ ...base, build }), /build/, JSON.stringify(build));
+  for (const changed of [{ ok: false }, { authMode: 'public' }, { billingMode: 'disabled' }, { billingPurchaseMode: 'open' }, { extra: true }])
+    assert.throws(() => assertHealth({ ...base, ...changed, build: { sourceSha: null } }), /contract changed/, JSON.stringify(changed));
+  for (const value of [null, [], 'ok']) assert.throws(() => assertHealth(value), /not an object/);
 });
 
 test('downgrade guard reads only reviewed release tags; rollback refuses a foreign publisher', () => {
