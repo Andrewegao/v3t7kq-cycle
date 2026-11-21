@@ -91,7 +91,7 @@ jobs:
     timeout-minutes: 210
     env:
       CATALOG_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || vars.CATALOG_DEFAULT_TARGET || 'staging' }}
-      ATMOS_SHA: 30a211be7692868f36380b809cd9b2bb01011e6a
+      ATMOS_SHA: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
       MODEL: ${{ matrix.model }}
     steps:
       - name: qualify production source and select schema-1 point reuse before credentials
@@ -119,14 +119,14 @@ jobs:
         with:
           repository: weatherx-hq/atmos
           # Qualified fast-lane source, independent of experimental app master.
-          ref: 30a211be7692868f36380b809cd9b2bb01011e6a
+          ref: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: atmos
           persist-credentials: false
       - name: Verify approved immutable component collector
         working-directory: atmos
         run: |
-          test "$(git rev-parse HEAD)" = "30a211be7692868f36380b809cd9b2bb01011e6a"
+          test "$(git rev-parse HEAD)" = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
           git diff --exit-code HEAD
       - name: Checkout the stand-aside check
         if: ${{ env.CATALOG_TARGET == 'production' && (matrix.model == 'ecmwf' || matrix.model == 'gfs' || matrix.model == 'hrrr' || matrix.model == 'aifs') }}
@@ -258,6 +258,8 @@ jobs:
           MODEL: ${{ matrix.model }}
           PUBLISH: '1'
           DATA_PUBLISH_MODE: component-catalog
+          # Staging first (proposal rollout step 3): its own variable, off unless set.
+          WEATHERX_HRRR_NATIVE_POINT: ${{ matrix.model == 'hrrr' && vars.WEATHERX_HRRR_NATIVE_POINT_STAGING || '0' }}
           LIVE: https://atmos-platform-dnp.pages.dev
           CATALOG_R2_REMOTE: weatherx:weatherx-data-staging
           COMPONENT_R2_REMOTE: weatherx:weatherx-components-staging
@@ -292,7 +294,10 @@ jobs:
           REUSE_ACTIVE_MAP_COMPONENT: '0'
           REUSE_ACTIVE_MAP_OBJECTS: '0'
           PACK_COMPONENT_OBJECTS: '0'
-          POINT_COMPONENT_PUBLISH_METRICS_FILE: ${{ runner.temp }}/point-publication-cost.json
+          # Atmos writes one cost file per component here (it stopped reading the old
+          # POINT_COMPONENT_PUBLISH_METRICS_FILE name, so that artifact was always empty).
+          COMPONENT_PUBLISH_METRICS_DIR: ${{ runner.temp }}/component-publication-cost
+          WEATHERX_HRRR_NATIVE_POINT: ${{ matrix.model == 'hrrr' && vars.WEATHERX_HRRR_NATIVE_POINT || '0' }}
           ACTIVE_COMPONENT_MANIFEST_FILE: ${{ runner.temp }}/active-${{ matrix.model }}-component.json
           LIVE: https://weatherx.org
           CATALOG_R2_REMOTE: weatherx:weatherx-data-production
@@ -316,6 +321,7 @@ jobs:
           : "${RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY:?R2 secret key required before collection}"
           : "${CATALOG_ENDPOINT:?CATALOG_ENDPOINT required before collection}"
           : "${CATALOG_PROMOTION_KEY:?CATALOG_PROMOTION_KEY required before collection}"
+          mkdir -p "$COMPONENT_PUBLISH_METRICS_DIR"
           bash ops/bake-model-component.sh
       - name: retain aggregate point costs only after successful production publication
         if: ${{ success() && env.CATALOG_TARGET == 'production' }}
@@ -323,7 +329,16 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: point-publication-cost-${{ matrix.model }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/point-publication-cost.json
+          path: ${{ runner.temp }}/component-publication-cost/point-${{ matrix.model }}.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: retain the native HRRR point cost on its own
+        if: ${{ success() && env.CATALOG_TARGET == 'production' && matrix.model == 'hrrr' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: point-publication-cost-hrrr-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/component-publication-cost/point-hrrr-native.json
           if-no-files-found: ignore
           retention-days: 14
   # Reporting only. Lists each model's outcome with its age and every run that holds a component

@@ -41,6 +41,8 @@ const MAX_POINTER = 16 * 1024;
 const MAX_SNAPSHOT = 4 * 1024 * 1024;
 const MAX_MANIFEST = 4 * 1024 * 1024;
 const LAYOUTS_WITHIN_ROOT = new Set(['packed-v1', 'direct-auth-v1']);
+// Models whose components may skip forecast history (decisions.md 2026-11-21, HRRR native 3 km points).
+const WINDOW_ONLY_ALLOWED = new Set(['hrrr-native']);
 const FORBIDDEN = ['R2_PRODUCTION_ACCESS_KEY_ID', 'R2_PRODUCTION_SECRET_ACCESS_KEY',
   'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'STAGING_R2_WRITE_ACCESS_KEY_ID', 'STAGING_R2_WRITE_SECRET_ACCESS_KEY',
   'PRODUCTION_WIND100_R2_ACCESS_KEY_ID', 'PRODUCTION_WIND100_R2_SECRET_ACCESS_KEY',
@@ -71,6 +73,13 @@ export function validatePolicy(p) {
   assert.ok(Array.isArray(p.models) && p.models.length > 0 && p.models.every(m => /^[a-z][a-z0-9-]{1,30}$/.test(m)));
   assert.ok(Number.isSafeInteger(p.windowHours) && p.windowHours >= 168, 'the window never shrinks below 7 days');
   assert.equal(p.keepOneCopyPerRun, true, 'one copy of every model run is forecast history and is never deleted');
+  // A model whose runs are another model's history on a different grid may keep only the window.
+  // Today that is hrrr-native: HRRR's history is kept by hrrr/point-hrrr at 0.25 degree, and one native
+  // run is up to 1.3 GB, so keeping every native run forever is refused rather than defaulted.
+  const windowOnly = p.windowOnlyModels ?? [];
+  assert.ok(Array.isArray(windowOnly) && new Set(windowOnly).size === windowOnly.length &&
+    windowOnly.every(m => p.models.includes(m) && WINDOW_ONLY_ALLOWED.has(m)), 'windowOnlyModels must be listed models allowed to drop history');
+  for (const m of WINDOW_ONLY_ALLOWED) assert.ok(!p.models.includes(m) || windowOnly.includes(m), `${m} needs windowOnlyModels: its runs are not forecast history`);
   assert.ok(Number.isSafeInteger(p.maximumPlanAgeHours) && p.maximumPlanAgeHours > 0 && p.maximumPlanAgeHours <= 72);
   assert.ok(Number.isSafeInteger(p.maximumChainSnapshots) && p.maximumChainSnapshots > 0 && p.maximumChainSnapshots <= 20_000);
   assert.ok(Number.isSafeInteger(p.maximumDeletesPerRun) && p.maximumDeletesPerRun > 0 && p.maximumDeletesPerRun <= 5_000_000);
@@ -91,6 +100,10 @@ export function controllerDigest(root = ROOT) {
 
 // --- scope ------------------------------------------------------------------------------------
 export function scopeIds(policy) { return new Set(policy.models.flatMap(m => [m, `point-${m}`])); }
+/** True for a component of a windowOnlyModels model: outside the window it is never forecast history. */
+export function windowOnlyComponent(policy, componentId) {
+  return (policy.windowOnlyModels ?? []).some(m => componentId === m || componentId === `point-${m}`);
+}
 export function canonicalArtifact(componentId, artifactId) {
   if (typeof artifactId !== 'string' || !artifactId.startsWith(`${componentId}-`)) return false;
   return /^\d{8}T\d{6}Z-(?:[1-9]\d{8,11}|[a-f0-9]{32})$/.test(artifactId.slice(componentId.length + 1));
@@ -146,6 +159,7 @@ export async function historyCopies(roots, policy, io, protectedRoots = new Set(
   await Promise.all(scoped.map(row => limit(async () => inspected.set(row.prefix, await inspectRoot(io, policy, row)))));
   const best = new Map(), runs = new Map();
   for (const row of scoped) {
+    if (windowOnlyComponent(policy, row.componentId)) continue;   // no forecast history kept for these
     const run = runKeyOf(row.prefix);
     assert.ok(run, `${row.prefix} has no model init time`);
     runs.set(run, [...(runs.get(run) ?? []), row]);
@@ -389,6 +403,7 @@ export async function planRetention({ io, policy, now = Date.now, baselineCatalo
     if (row.prefix && (keep.has(row.prefix) || later.has(row.prefix) || history.sources.has(row.prefix))) add(row, 'referenced');
     else if (!row.prefix || !scopedRoot(policy, row.prefix)) add(row, 'nonCanonical');
     else if (row.newest >= windowStart) add(row, 'recent');
+    else if (windowOnlyComponent(policy, row.componentId) && !history.heldComponents.has(row.componentId)) eligible.push(row);
     else if (historyRoots.has(row.prefix) || history.heldRuns.has(runKeyOf(row.prefix)) ||
       history.heldComponents.has(row.componentId)) add(row, 'history');
     else eligible.push(row);
@@ -402,8 +417,9 @@ export async function planRetention({ io, policy, now = Date.now, baselineCatalo
     assert.equal(rows.length, row.objects, `${row.prefix} changed while planning`);
     assert.ok(rows.every(r => r.key.startsWith(row.prefix) && r.key.length > row.prefix.length && r.key.length <= 1024 &&
       !r.key.slice(row.prefix.length).split('/').some(part => part === '' || part === '.' || part === '..')), `${row.prefix} key shape`);
-    const historyCopy = history.copies.get(runKeyOf(row.prefix));
-    assert.ok(historyCopy && historyCopy !== row.prefix, `${row.prefix} would be the last copy of its model run`);
+    const windowOnlyRoot = windowOnlyComponent(policy, row.componentId);
+    const historyCopy = windowOnlyRoot ? null : history.copies.get(runKeyOf(row.prefix));
+    assert.ok(windowOnlyRoot || (historyCopy && historyCopy !== row.prefix), `${row.prefix} would be the last copy of its model run`);
     candidates.push({ prefix: row.prefix, componentId: row.componentId, historyCopy, objectCount: rows.length,
       bytes: rows.reduce((n, r) => n + r.size, 0), newestModified: new Date(row.newest).toISOString(),
       keysSha256: keyDigest(rows.sort((a, b) => a.key.localeCompare(b.key))) });
@@ -458,8 +474,10 @@ export async function executeRetention({ io, policy, approvedPlanSha256, baselin
   const candidates = new Set(content.candidates.map(row => row.prefix));
   assert.ok(content.candidates.every(row => scopedRoot(policy, row.prefix)));
   assert.equal(content.historyRule, 'keep-newest-complete-root-per-model-run', 'plan without forecast history');
-  assert.ok(content.candidates.every(row => runKeyOf(row.prefix) && row.historyCopy !== row.prefix &&
-    runKeyOf(row.historyCopy) === runKeyOf(row.prefix) && !candidates.has(row.historyCopy)), 'every candidate names a kept copy of its run');
+  assert.ok(content.candidates.every(row => runKeyOf(row.prefix) && (windowOnlyComponent(policy, row.componentId)
+    ? row.historyCopy === null
+    : row.historyCopy !== row.prefix && runKeyOf(row.historyCopy) === runKeyOf(row.prefix) && !candidates.has(row.historyCopy))),
+  'every candidate names a kept copy of its run, unless its model keeps only the window');
   let verifiedHead = null, aborted = null;
   const verifiedPointers = new Set();
   let walking = Promise.resolve();
@@ -499,7 +517,7 @@ export async function executeRetention({ io, policy, approvedPlanSha256, baselin
   for (const candidate of content.candidates) {
     const rows = (await io.listRows(candidate.prefix, policy.maximumDeletesPerRun)).sort((a, b) => a.key.localeCompare(b.key));
     assert.equal(keyDigest(rows), candidate.keysSha256, `${candidate.prefix} changed since the dry run; replan`);
-    if (!twinsSeen.has(candidate.historyCopy)) {
+    if (candidate.historyCopy !== null && !twinsSeen.has(candidate.historyCopy)) {
       const twin = await io.getOptional(policy.componentBucket, `${candidate.historyCopy}component.json`, MAX_MANIFEST);
       assert.ok(twin, `${candidate.historyCopy}, the kept copy of ${candidate.prefix}'s model run, is missing or incomplete; stopping`);
       twinsSeen.add(candidate.historyCopy);
