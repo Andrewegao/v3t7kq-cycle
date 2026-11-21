@@ -10,8 +10,8 @@ import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Reviewed merged source for point-source labels and availability expiry (Atmos #662); fresh staging qualification remains required.
-export const UI_SOURCE = 'f6001575e3487a9354bfa73d6d8de6b5454455bd';
+// Owner-authorized merged source for Phase 0 to 2 live data, hazards and point-card work (Atmos #678); fresh staging qualification remains required.
+export const UI_SOURCE = '946c93addf0e68eafcc850c3f9618b2a600046ff';
 export const REVIEWED_MASTER = UI_SOURCE;
 /** Exact extra paths allowed to differ between the pin and master (none at this pin). */
 export const EDGE_ONLY_DIFF = Object.freeze([]);
