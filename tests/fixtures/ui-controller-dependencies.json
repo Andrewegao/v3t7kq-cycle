@@ -91,7 +91,7 @@
       ]
     },
     {
-      "pin": "9097613b8c6769861b98ff7cef2f06d367e13abc",
+      "pin": "43a451dfa423600c1bbe376ce3c0f26ce491a769",
       "files": [
         "app/e2e/layer-switch-surface.mjs",
         "app/e2e/layer-switch-tint.mjs",
@@ -131,7 +131,7 @@
   ],
   "stagingBuild": {
     "profile": "production-account-ru-kk-wind100-onboarding-v2",
-    "pin": "9097613b8c6769861b98ff7cef2f06d367e13abc",
+    "pin": "43a451dfa423600c1bbe376ce3c0f26ce491a769",
     "paths": [
       ".gitignore",
       "platform/edge/package.json",
@@ -139,6 +139,6 @@
       "ops/release/build-release-receipt.mjs"
     ],
     "coneMode": false,
-    "provenance": "Merged Atmos source 9097613b8c6769861b98ff7cef2f06d367e13abc, tree 32bb30e038df3ae8af6598a522f6e77e43e1bd27, committed 2026-11-21T08:28:40Z; Merge pull request #683 from weatherx-hq/integ/wave-a2-20261121. Supersedes 946c93addf0e68eafcc850c3f9618b2a600046ff. Between pins, 23 commits and 45 files changed, 31 of them inside the UI closure. Atmos #683 adds Phase 3 cold start (pre-paint bundle trim), content-addressed component anchors and the 11-21 admin logs on top of #678 and #681. It is an ancestor of Atmos refs/remotes/origin/master (9097613b8c6769861b98ff7cef2f06d367e13abc); all 23 controller inventory files and 4 sparse build paths are the same Git blobs as at the prior pin, and the intro digest and all 43 account/onboarding source digests equal PRODUCTION_INTRO_SOURCE_SHA256, STAGING_ACCOUNT_SOURCE_SHA256 and PRODUCTION_ONBOARDING_SOURCE_SHA256 in Atmos app/src/build/publicReleaseGuard.ts at this commit (tools/ui-source-pin.mjs). Fresh controller CI, clean exact-source admission and a new guarded staging run remain required."
+    "provenance": "Merged Atmos source 43a451dfa423600c1bbe376ce3c0f26ce491a769, tree e91a4a37a264b1d6aba52cf2b0531d56acd5d063, committed 2026-11-21T13:58:49Z; Merge pull request #686 from weatherx-hq/feat/hrrr-native-points. Supersedes 9097613b8c6769861b98ff7cef2f06d367e13abc. Between pins, 25 commits and 72 files changed, 44 of them inside the UI closure. Atmos #682 (hidden-pin preflight, red stale-data issue), #684 (publication freshness) and #686 (HRRR native points, every flag off) on top of #683. It is an ancestor of Atmos refs/remotes/origin/master (43a451dfa423600c1bbe376ce3c0f26ce491a769); all 23 controller inventory files and 4 sparse build paths are the same Git blobs as at the prior pin, and the intro digest and all 43 account/onboarding source digests equal PRODUCTION_INTRO_SOURCE_SHA256, STAGING_ACCOUNT_SOURCE_SHA256 and PRODUCTION_ONBOARDING_SOURCE_SHA256 in Atmos app/src/build/publicReleaseGuard.ts at this commit (tools/ui-source-pin.mjs). Fresh controller CI, clean exact-source admission and a new guarded staging run remain required."
   }
 }

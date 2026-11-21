@@ -56,8 +56,8 @@ export const PUBLIC_COMBINED_ONBOARDING_SOURCES = Object.freeze({
   'onboarding/useObData.ts': '84696745e68d6c2a5b927439183751e53a3cd65604b619833899e1741ee936b3',
 });
 export const PUBLIC_COMBINED_SIDECAR = 'assets/weatherx-production-account-build-v1.json';
-// Reviewed merged source: Merge pull request #683 from weatherx-hq/integ/wave-a2-20261121; new-source staging acceptance remains pending.
-export const PUBLIC_COMBINED_ATMOS_SHA = '9097613b8c6769861b98ff7cef2f06d367e13abc';
+// Reviewed merged source: Merge pull request #686 from weatherx-hq/feat/hrrr-native-points; new-source staging acceptance remains pending.
+export const PUBLIC_COMBINED_ATMOS_SHA = '43a451dfa423600c1bbe376ce3c0f26ce491a769';
 
 export function assertPublicCombinedReady() {
   assert.match(PUBLIC_COMBINED_ATMOS_SHA, /^[a-f0-9]{40}$/);
