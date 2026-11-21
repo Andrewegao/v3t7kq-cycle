@@ -294,9 +294,10 @@ jobs:
           REUSE_ACTIVE_MAP_COMPONENT: '0'
           REUSE_ACTIVE_MAP_OBJECTS: '0'
           PACK_COMPONENT_OBJECTS: '0'
-          # Atmos writes one cost file per component here: point-<model>.json and, for HRRR with
-          # the native lane on, point-hrrr-native.json (kept as its own artifact below).
-          COMPONENT_PUBLISH_METRICS_DIR: ${{ runner.temp }}/component-publication-cost
+          # Only the standalone point-hrrr-native lane writes a cost file here (point-hrrr-native.json,
+          # kept as its own artifact below). COMPONENT_PUBLISH_METRICS_DIR stays unset, so the cost
+          # writer stays off for every map and 0.25 degree point publication, as before.
+          NATIVE_POINT_PUBLISH_METRICS_DIR: ${{ runner.temp }}/component-publication-cost
           WEATHERX_HRRR_NATIVE_POINT: ${{ matrix.model == 'hrrr' && vars.WEATHERX_HRRR_NATIVE_POINT || '0' }}
           ACTIVE_COMPONENT_MANIFEST_FILE: ${{ runner.temp }}/active-${{ matrix.model }}-component.json
           LIVE: https://weatherx.org
@@ -321,7 +322,7 @@ jobs:
           : "${RCLONE_CONFIG_WEATHERX_SECRET_ACCESS_KEY:?R2 secret key required before collection}"
           : "${CATALOG_ENDPOINT:?CATALOG_ENDPOINT required before collection}"
           : "${CATALOG_PROMOTION_KEY:?CATALOG_PROMOTION_KEY required before collection}"
-          mkdir -p "$COMPONENT_PUBLISH_METRICS_DIR"
+          mkdir -p "$NATIVE_POINT_PUBLISH_METRICS_DIR"
           bash ops/bake-model-component.sh
       - name: retain aggregate point costs only after successful production publication
         if: ${{ success() && env.CATALOG_TARGET == 'production' }}

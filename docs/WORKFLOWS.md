@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `87f8816a20d567e1401deed0741b99366d3dd2e87a3c0ae489dcbfb37956eced`.
+Source digest (registry and workflow bytes): `f66f3dc8c1a1da8e6e2f6019eb4476622d8119b3cd98350bc7ea724571c30389`.
 
 75 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -238,15 +238,15 @@ Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: no
 | --- | --- | --- | --- | --- | --- | --- |
 | [plan](../.github/workflows/catalog-bake.yml#L51) ← <code>fallback-gate</code> | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"write"}</code> |
 | [model](../.github/workflows/catalog-bake.yml#L77) ← <code>["plan","fallback-gate"]</code> | <code>ubuntu-latest</code> | <code>production</code> | <code>210</code> | <code>{"group":"weatherx-component-${{ github.event_name == 'workflow_dispatch' &amp;&amp; inputs.target &#124;&#124; vars.CATALOG_DEFAULT_TARGET &#124;&#124; 'staging' }}-${{ matrix.model }}","cancel-in-progress":false}</code> | <code>{"fail-fast":false,"max-parallel":4,"matrix":{"model":"${{ fromJSON(needs.plan.outputs.models &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model == 'slow' &amp;&amp; '[\"ecmwf\",\"gfs\",\"aifs\"]' &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; inputs.model != 'all' &amp;&amp; format('[\"{0}\"]', inputs.model) &#124;&#124; github.event_name == 'workflow_dispatch' &amp;&amp; '[\"ecmwf\",\"gfs\",\"hrrr\",\"aifs\"]' &#124;&#124; github.event.schedule == '8-59/10 * * * *' &amp;&amp; '[\"hrrr\"]' &#124;&#124; '[\"ecmwf\",\"gfs\",\"aifs\"]') }}"}}</code> | inherits workflow/default policy |
-| [summary](../.github/workflows/catalog-bake.yml#L348) ← <code>["plan","model","fallback-gate"]</code> | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
-| [fallback-gate](../.github/workflows/catalog-bake.yml#L381) ← no needs | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"actions":"read"}</code> |
+| [summary](../.github/workflows/catalog-bake.yml#L349) ← <code>["plan","model","fallback-gate"]</code> | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"contents":"read","actions":"read"}</code> |
+| [fallback-gate](../.github/workflows/catalog-bake.yml#L382) ← no needs | <code>ubuntu-latest</code> | not declared | <code>3</code> | no job group; workflow-wide limit still applies if declared | not declared | <code>{"actions":"read"}</code> |
 
 Declared job conditions (additional step/helper checks may apply):
 
 - [plan](../.github/workflows/catalog-bake.yml#L52): <code>${{ !cancelled() &amp;&amp; needs.fallback-gate.outputs.run != 'false' }}</code>
 - [model](../.github/workflows/catalog-bake.yml#L81): <code>${{ !cancelled() &amp;&amp; needs.plan.outputs.models != '[]' &amp;&amp; needs.fallback-gate.outputs.run != 'false' }}</code>
-- [summary](../.github/workflows/catalog-bake.yml#L349): <code>${{ always() &amp;&amp; needs.fallback-gate.outputs.run != 'false' }}</code>
-- [fallback-gate](../.github/workflows/catalog-bake.yml#L382): <code>${{ github.event_name == 'schedule' }}</code>
+- [summary](../.github/workflows/catalog-bake.yml#L350): <code>${{ always() &amp;&amp; needs.fallback-gate.outputs.run != 'false' }}</code>
+- [fallback-gate](../.github/workflows/catalog-bake.yml#L383): <code>${{ github.event_name == 'schedule' }}</code>
 
 Checkout declarations (not a claim of approval or checkout success):
 
@@ -255,9 +255,9 @@ Checkout declarations (not a claim of approval or checkout success):
 | [plan / step 1](../.github/workflows/catalog-bake.yml#L62) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 | [model / Checkout WeatherX](../.github/workflows/catalog-bake.yml#L117) | <code>weatherx-hq/atmos</code> | <code>deadbeefdeadbeefdeadbeefdeadbeefdeadbeef</code> |
 | [model / Checkout the stand-aside check](../.github/workflows/catalog-bake.yml#L131) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
-| [summary / step 1](../.github/workflows/catalog-bake.yml#L356) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
+| [summary / step 1](../.github/workflows/catalog-bake.yml#L357) | caller repository (implicit) | implicit event/default ref; no explicit pin here |
 
-Variable references (declared names only; values and activation unknown): [CATALOG_DEFAULT_TARGET](../.github/workflows/catalog-bake.yml#L73), [CURRENT_RUN_CATALOG_BAKE_ATMOS_SHA](../.github/workflows/catalog-bake.yml#L100), [CURRENT_RUN_POINT_REUSE_MODEL](../.github/workflows/catalog-bake.yml#L101), [WEATHERX_HRRR_NATIVE_POINT](../.github/workflows/catalog-bake.yml#L300), [WEATHERX_HRRR_NATIVE_POINT_STAGING](../.github/workflows/catalog-bake.yml#L262).
+Variable references (declared names only; values and activation unknown): [CATALOG_DEFAULT_TARGET](../.github/workflows/catalog-bake.yml#L73), [CURRENT_RUN_CATALOG_BAKE_ATMOS_SHA](../.github/workflows/catalog-bake.yml#L100), [CURRENT_RUN_POINT_REUSE_MODEL](../.github/workflows/catalog-bake.yml#L101), [WEATHERX_HRRR_NATIVE_POINT](../.github/workflows/catalog-bake.yml#L301), [WEATHERX_HRRR_NATIVE_POINT_STAGING](../.github/workflows/catalog-bake.yml#L262).
 
 
 ## catalog-bootstrap
@@ -1262,7 +1262,7 @@ Checkout declarations (not a claim of approval or checkout success):
 | [publisher / checkout authenticated current-run controller](../.github/workflows/publish-current-model-production.yml#L82) | <code>Andrewegao/v3t7kq-cycle</code> | <code>${{ github.sha }}</code> |
 | [publisher / checkout exact qualified Atmos component publisher](../.github/workflows/publish-current-model-production.yml#L89) | <code>weatherx-hq/atmos</code> | <code>deadbeefdeadbeefdeadbeefdeadbeefdeadbeef</code> |
 
-Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/publish-current-model-production.yml#L53), [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/publish-current-model-production.yml#L52), [CURRENT_RUN_POINT_REUSE_MODEL](../.github/workflows/publish-current-model-production.yml#L73), [WEATHERX_HRRR_NATIVE_POINT](../.github/workflows/publish-current-model-production.yml#L233).
+Variable references (declared names only; values and activation unknown): [CURRENT_RUN_COMPONENT_PUBLISH_ATMOS_SHA](../.github/workflows/publish-current-model-production.yml#L53), [CURRENT_RUN_COMPONENT_PUBLISH_ENABLED](../.github/workflows/publish-current-model-production.yml#L52), [CURRENT_RUN_POINT_REUSE_MODEL](../.github/workflows/publish-current-model-production.yml#L73), [WEATHERX_HRRR_NATIVE_POINT](../.github/workflows/publish-current-model-production.yml#L234).
 
 
 ## qualify-bake-throughput

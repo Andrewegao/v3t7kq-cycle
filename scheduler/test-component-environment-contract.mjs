@@ -51,7 +51,7 @@ for (const target of ['staging', 'production']) {
     const config = Object.fromEntries(required.map(key => [key, sentinel]));
     // The production step creates the per-component cost directory its own env names.
     const metrics = mkdtempSync(join(tmpdir(), 'wx-component-cost-'));
-    if (target === 'production') config.COMPONENT_PUBLISH_METRICS_DIR = join(metrics, 'component-publication-cost');
+    if (target === 'production') config.NATIVE_POINT_PUBLISH_METRICS_DIR = join(metrics, 'component-publication-cost');
     // Stub only the child invocation. Execute the exact workflow preflight in Bash;
     // a missing binding must exit before any collector/publication process starts.
     const execute = env => spawnSync('/bin/bash', ['-c',

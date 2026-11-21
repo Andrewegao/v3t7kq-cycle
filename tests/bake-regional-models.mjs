@@ -251,10 +251,12 @@ test('summary keeps each model outcome independent',()=>{
 
 test('aggregate cost receipts are optional and retained only after successful production publication',()=>{
   for(const source of [publisher,catalog]){
-    // Atmos reads COMPONENT_PUBLISH_METRICS_DIR (one cost file per component); the old file name was dead.
-    assert.equal((source.match(/COMPONENT_PUBLISH_METRICS_DIR: \$\{\{ runner.temp \}\}\/component-publication-cost\n/g)||[]).length,1);
+    // Only the point-hrrr-native lane's cost file is enabled (Atmos NATIVE_POINT_PUBLISH_METRICS_DIR);
+    // COMPONENT_PUBLISH_METRICS_DIR, which turns the writer on for every publication, stays unset.
+    assert.equal((source.match(/NATIVE_POINT_PUBLISH_METRICS_DIR: \$\{\{ runner.temp \}\}\/component-publication-cost\n/g)||[]).length,1);
+    assert.doesNotMatch(source,/^\s+COMPONENT_PUBLISH_METRICS_DIR:|"\$COMPONENT_PUBLISH_METRICS_DIR"/m);
     assert.doesNotMatch(source,/POINT_COMPONENT_PUBLISH_METRICS_FILE/);
-    assert.match(source,/mkdir -p "\$COMPONENT_PUBLISH_METRICS_DIR"/);
+    assert.match(source,/mkdir -p "\$NATIVE_POINT_PUBLISH_METRICS_DIR"/);
     // The step ends at the next step or the next job (catalog-bake now ends with a summary job).
     const receipt=source.split('      - name: retain aggregate point costs only after successful')[1].split('\n      - name:')[0].split(/\n  [a-z][a-z0-9-]*:\n/)[0];
     assert.ok(receipt);
