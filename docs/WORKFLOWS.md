@@ -6,7 +6,7 @@ This is a navigation index of **declared configuration**, not a release or recov
 
 Metadata describes purpose and support intent only. `legacy-needs-review` entries are not recommended recovery paths. Historical runbook narratives do not override the linked executable declarations. See [operation and recovery guidance](WORKFLOW_OPERATIONS.md).
 
-Source digest (registry and workflow bytes): `747f324478c61b152131b6c5db1d9295de604eb083422ad01e150813c73f0a52`.
+Source digest (registry and workflow bytes): `49bacb08ae1ed7b27c7763a2e210c517dbe5a625e9de2a7b3d04352465119c04`.
 
 75 workflows. Ordering and output are deterministic; no API request or clock is used.
 
@@ -467,13 +467,13 @@ Workflow permissions: <code>{"contents":"read"}</code>. Workflow concurrency: <c
 
 | Job / dependency graph | Runner or reusable workflow | Environment | Timeout (minutes) | Concurrency | Matrix / parallelism | Permissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| [deploy](../.github/workflows/data-edge-deploy.yml#L25) ← no needs | <code>ubuntu-latest</code> | <code>production</code> | <code>20</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
+| [deploy](../.github/workflows/data-edge-deploy.yml#L25) ← no needs | <code>ubuntu-latest</code> | <code>production</code> | <code>45</code> | no job group; workflow-wide limit still applies if declared | not declared | inherits workflow/default policy |
 
 Checkout declarations (not a claim of approval or checkout success):
 
 | Job / checkout step | Repository | Ref |
 | --- | --- | --- |
-| [deploy / Checkout the reviewed WeatherX release](../.github/workflows/data-edge-deploy.yml#L41) | <code>Andrewegao/atmos</code> | <code>master</code> |
+| [deploy / Checkout the reviewed WeatherX release](../.github/workflows/data-edge-deploy.yml#L42) | <code>Andrewegao/atmos</code> | <code>master</code> |
 
 Variable references (declared names only; values and activation unknown): none detected.
 

@@ -133,9 +133,9 @@ assert.match(legacy,
   'the catalog cutover installs the exact publisher-contract Python dependencies before release gates');
 // The catalog cutover's reviewed bytes include the Python dependency setup required by
 // Atmos's complete publisher contract, and (2026-11-21) the commercial-portal build that Atmos's
-// `npm run check` integration contract reads. Future changes must review and update this pin explicitly.
+// `npm run check` integration contract reads, and the locked Python environments its fixtures spawn. Future changes must review and update this pin explicitly.
 assert.equal(createHash('sha256').update(legacy).digest('hex'),
-  '78f5e6a035c35d78b732c78df125c4640d7f2b592c68cb6923228964f3539fae',
+  'd7c5a185dc8a6b1f87e5eddde0c9aee066487b1509e66f20b97a278a8b85795b',
   'legacy bootstrap/shadow/serve workflow remains byte-for-byte unchanged');
 assert.equal(createHash('sha256').update(await readFile(
   new URL('../scheduler/test-production-cutover-contract.mjs', import.meta.url),
