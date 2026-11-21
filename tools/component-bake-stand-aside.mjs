@@ -58,6 +58,11 @@ const MAX_SERVED_AGE_HOURS = Object.freeze({hrrr: HRRR_MAX_SERVED_AGE_HOURS, aif
 // later pin keeps the run-id derivation or adds no other same-run publish, so any other checkout HEAD
 // turns the HRRR check off (the bake runs as before) until this constant is re-reviewed. ECMWF/GFS
 // keep their existing collector-call guard only.
+// RE-REVIEW NOTE (HRRR native 3 km points, Atmos feat/hrrr-native-points): a pin that carries the
+// standalone point-hrrr-native lane publishes a third same-run component. decide() checks only hrrr
+// and point-hrrr, so whoever moves this constant to such a pin must first add point-hrrr-native to
+// decide() (stand aside only when it is also at the upstream run, or when its producer flag is off);
+// otherwise the lane stands aside while a native run is still owed.
 export const HRRR_REVIEWED_ATMOS_SHA = '30a211be7692868f36380b809cd9b2bb01011e6a';
 // The same for AIFS: the only Atmos commit whose AIFS run selection (fetch_aifs.main/latest_run/
 // update_index with --keep 1) and bake publication path were reviewed for the AIFS stand-aside.

@@ -54,6 +54,14 @@ A root is never a candidate when any of these holds:
    cap line reports that growth. Owner ruling 2026-11-14: "delete the duplicates but
    keep the forecast history".
 
+   One exception, gated in the validator: a model in `windowOnlyModels` keeps no forecast history.
+   Today the only model allowed there is `hrrr-native` (HRRR on its native 3 km grid, Atmos branch
+   `feat/hrrr-native-points`). Its runs are the same HRRR runs that `hrrr` and `point-hrrr` keep as
+   history at 0.25 degree, and one native run is up to about 1.3 GB, so outside the 168 h window an
+   unreferenced `point-hrrr-native` root is a candidate whatever its run, with `historyCopy: null`.
+   The validator refuses a policy that lists `hrrr-native` without naming it in `windowOnlyModels`,
+   and refuses any other model there. Rules 1 to 5 still hold for these roots.
+
 Everything else in scope is **eligible**. A plan selects the oldest eligible roots, up to
 `maximumDeletesPerRun` (4,000,000) objects, with `deleteConcurrency` (256) deletes in flight. Each selected root is listed in full, and the plan
 records its object count, bytes and the SHA-256 of its sorted `[key, size, etag]` rows.

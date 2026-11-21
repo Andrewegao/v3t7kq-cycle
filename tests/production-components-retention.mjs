@@ -450,6 +450,37 @@ test('forecast history: one complete copy of every model run is never a candidat
   for (const key of w.io.deletes ?? []) assert.ok(!key.startsWith(first) && !key.startsWith(second), `${key} deleted without its kept copy`);
 });
 
+test('hrrr-native keeps only the window: its old unreferenced runs go, and the policy cannot keep it otherwise', async () => {
+  assert.deepEqual(readPolicy().windowOnlyModels, ['hrrr-native']);
+  assert.throws(() => validatePolicy({ ...readPolicy(), windowOnlyModels: [] }), /hrrr-native needs windowOnlyModels/);
+  assert.throws(() => validatePolicy({ ...readPolicy(), windowOnlyModels: undefined }), /hrrr-native needs windowOnlyModels/);
+  assert.throws(() => validatePolicy({ ...readPolicy(), windowOnlyModels: ['hrrr-native', 'hrrr'] }), /allowed to drop history/);
+  assert.throws(() => validatePolicy({ ...readPolicy(), models: readPolicy().models.filter(m => m !== 'hrrr-native') }),
+    /allowed to drop history/);
+  validatePolicy({ ...readPolicy(), models: readPolicy().models.filter(m => m !== 'hrrr-native'), windowOnlyModels: [] });
+  const w = world();
+  const current = w.component('point-hrrr-native', 0);
+  w.promote([w.component('ecmwf', 0), current], T0 - 170 * HOUR);
+  w.promote([w.component('ecmwf', 0, { suffix: 1799000000 })], T0);
+  // 9-day-old single copies: the native run goes, the 0.25 degree hrrr run of the same init stays history
+  const nativeOld = w.component('point-hrrr-native', 216).rootPrefix;
+  const hrrrOld = w.component('point-hrrr', 216).rootPrefix;
+  const nativeRecent = w.component('point-hrrr-native', 20).rootPrefix;
+  const plan = await planRetention({ io: w.io, policy: { ...policy, maximumDeletesPerRun: 1000 }, now });
+  const selected = plan.candidates.map(row => row.prefix);
+  assert.ok(selected.includes(nativeOld), 'an unreferenced native run outside the window is a candidate');
+  assert.equal(plan.candidates.find(row => row.prefix === nativeOld).historyCopy, null);
+  assert.ok(!selected.includes(hrrrOld), 'the 0.25 degree point-hrrr run is still forecast history');
+  assert.ok(!selected.includes(nativeRecent), 'a native run inside the window stays');
+  assert.ok(!selected.includes(current.rootPrefix), 'a native run a catalog in the window references stays');
+  for (const row of plan.candidates.filter(row => !row.prefix.startsWith('components/point-hrrr-native/')))
+    assert.ok(row.historyCopy && row.historyCopy !== row.prefix, `${row.prefix} still names a kept copy`);
+  await executeRetention({ io: w.io, policy: { ...policy, maximumDeletesPerRun: 1000 }, now,
+    deleteForPrefix: w.io.deleteForPrefix, baselineCatalogId: plan.baseline.catalogId, approvedPlanSha256: plan.planSha256 });
+  assert.ok(w.io.deletes.some(key => key.startsWith(nativeOld)));
+  assert.ok(!w.io.deletes.some(key => key.startsWith(hrrrOld) || key.startsWith(nativeRecent) || key.startsWith(current.rootPrefix)));
+});
+
 test('forecast history copies hold the roots they route to, need a passed manifest, and hold runs without one', async () => {
   const w = world();
   w.promote([w.component('ecmwf', 0)], T0 - 170 * HOUR);

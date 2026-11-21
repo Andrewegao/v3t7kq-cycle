@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import test from 'node:test';
 
@@ -47,6 +49,9 @@ for (const target of ['staging', 'production']) {
     assert.match(run, /bash ops\/bake-model-component\.sh/);
     const sentinel = 'private-fixture-not-a-real-secret';
     const config = Object.fromEntries(required.map(key => [key, sentinel]));
+    // The production step creates the per-component cost directory its own env names.
+    const metrics = mkdtempSync(join(tmpdir(), 'wx-component-cost-'));
+    if (target === 'production') config.COMPONENT_PUBLISH_METRICS_DIR = join(metrics, 'component-publication-cost');
     // Stub only the child invocation. Execute the exact workflow preflight in Bash;
     // a missing binding must exit before any collector/publication process starts.
     const execute = env => spawnSync('/bin/bash', ['-c',
@@ -65,5 +70,6 @@ for (const target of ['staging', 'production']) {
         assert.ok(!`${result.stdout}${result.stderr}`.includes(sentinel), 'preflight must not log secrets');
       }
     }
+    rmSync(metrics, {recursive: true, force: true});
   });
 }

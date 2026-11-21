@@ -41,7 +41,7 @@ jobs:
     outputs:
       status: ${{ steps.result.outputs.status }}
     env:
-      ATMOS_SHA: 30a211be7692868f36380b809cd9b2bb01011e6a
+      ATMOS_SHA: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
       UNQUALIFIED_PLACEHOLDER_SHA: 77487534a6ff0a17bf4e5d55f9ab5c06938138d4
       MODEL: ${{ inputs.model }}
       COMPONENT_KIND: ${{ inputs.kind }}
@@ -90,7 +90,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: weatherx-hq/atmos
-          ref: 30a211be7692868f36380b809cd9b2bb01011e6a
+          ref: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
           ssh-key: ${{ secrets.ATMOS_DEPLOY_KEY }}
           path: atmos
           fetch-depth: 32
@@ -227,7 +227,10 @@ jobs:
           REUSE_ACTIVE_MAP_COMPONENT: '0'
           REUSE_ACTIVE_MAP_OBJECTS: '0'
           PACK_COMPONENT_OBJECTS: '0'
-          POINT_COMPONENT_PUBLISH_METRICS_FILE: ${{ runner.temp }}/point-publication-cost.json
+          # Atmos writes one cost file per component here: point-<model>.json, map-<model>.json and,
+          # for HRRR with the native lane on, point-hrrr-native.json (kept as its own artifact below).
+          COMPONENT_PUBLISH_METRICS_DIR: ${{ runner.temp }}/component-publication-cost
+          WEATHERX_HRRR_NATIVE_POINT: ${{ inputs.model == 'hrrr' && vars.WEATHERX_HRRR_NATIVE_POINT || '0' }}
           CATALOG_ENDPOINT: ${{ secrets.CATALOG_ENDPOINT_PRODUCTION }}
           CATALOG_PROMOTION_KEY: ${{ secrets.CATALOG_PROMOTION_KEY_PRODUCTION }}
         working-directory: atmos
@@ -247,19 +250,41 @@ jobs:
             export REGIONAL_POINT_RECEIPT_SHA256="$point_receipt" REGIONAL_BASELINE_MANIFEST="$RUNNER_TEMP/baseline-manifest.json"
           fi
           log="$RUNNER_TEMP/component-publish.log"
+          mkdir -p "$COMPONENT_PUBLISH_METRICS_DIR"
           bash ops/bake-model-component.sh >"$log" 2>&1
-          if grep -Fq "unchanged ($forecast_run)" "$log"; then status=unchanged
-          elif grep -Eq "^(atomically promoted|promoted standalone point-)" "$log" && grep -Fq "$forecast_run" "$log"; then status=published
+          # The model's own result. HRRR may also print the standalone point-hrrr-native lines; they never
+          # decide this status (that lane cannot fail the HRRR job) and are reported separately below.
+          if grep -Eq "^(atomically promoted $MODEL and point-$MODEL|promoted standalone point-$MODEL) for $forecast_run\$" "$log"; then status=published
+          elif grep -Fq "$MODEL and point-$MODEL unchanged ($forecast_run)" "$log" ||
+               grep -Fxq "point-$MODEL unchanged ($forecast_run) — no upload or pointer mutation" "$log" ||
+               grep -Fq "$MODEL unchanged ($forecast_run)" "$log"; then status=unchanged
           else echo 'component publisher returned no recognized fixed result' >&2; exit 1; fi
+          native=off
+          if [ "$MODEL" = hrrr ] && [ "$WEATHERX_HRRR_NATIVE_POINT" = 1 ]; then
+            if grep -Fxq "promoted standalone point-hrrr-native for $forecast_run" "$log"; then native=published
+            elif grep -Fq "point-hrrr-native unchanged ($forecast_run)" "$log"; then native=unchanged
+            elif grep -Fq "point-hrrr-native failed for $forecast_run" "$log"; then native=failed
+            else native=absent; fi
+          fi
           echo "status=$status" >> "$GITHUB_OUTPUT"
-          echo "$MODEL: $status"
+          echo "native_status=$native" >> "$GITHUB_OUTPUT"
+          echo "$MODEL: $status (point-hrrr-native: $native)"
       - name: retain aggregate point costs only after successful publication
         if: ${{ steps.publish.outputs.status == 'published' }}
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: point-publication-cost-${{ inputs.model }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/point-publication-cost.json
+          path: ${{ runner.temp }}/component-publication-cost/point-${{ inputs.model }}.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: retain the native HRRR point cost on its own
+        if: ${{ steps.publish.outputs.native_status == 'published' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: point-publication-cost-hrrr-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/component-publication-cost/point-hrrr-native.json
           if-no-files-found: ignore
           retention-days: 14
       - name: encrypt bounded component diagnostics without exposing raw logs
