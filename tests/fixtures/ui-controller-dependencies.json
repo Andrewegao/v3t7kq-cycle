@@ -91,7 +91,7 @@
       ]
     },
     {
-      "pin": "f6001575e3487a9354bfa73d6d8de6b5454455bd",
+      "pin": "946c93addf0e68eafcc850c3f9618b2a600046ff",
       "files": [
         "app/e2e/layer-switch-surface.mjs",
         "app/e2e/layer-switch-tint.mjs",
@@ -131,7 +131,7 @@
   ],
   "stagingBuild": {
     "profile": "production-account-ru-kk-wind100-onboarding-v2",
-    "pin": "f6001575e3487a9354bfa73d6d8de6b5454455bd",
+    "pin": "946c93addf0e68eafcc850c3f9618b2a600046ff",
     "paths": [
       ".gitignore",
       "platform/edge/package.json",
@@ -139,6 +139,6 @@
       "ops/release/build-release-receipt.mjs"
     ],
     "coneMode": false,
-    "provenance": "Merged Atmos source f6001575e3487a9354bfa73d6d8de6b5454455bd, tree 22a9c662684b8e2cf07206960689fb68719f7211, committed 2026-11-07T23:45:11Z. Supersedes e33b6625c3516c2b0c2ef0f70153bd8aa165ee32. Between pins, 11 commits and 24 files changed. Atmos #662 updates the point-source picker and aligns expiry handling with the availability shown by the point card. The full ci, quality and overlay-quality merge queue workflows passed on this exact merged commit. All 23 controller inventory files, four sparse build paths, both release-layer hashes, the public journey harness hash, the intro digest and all 43 account/onboarding source digests match the prior staging source, verified from Git blobs. Fresh controller CI, clean exact-source admission and a new guarded staging run remain required. See docs/ui-public-combined.md."
+    "provenance": "Merged Atmos source 946c93addf0e68eafcc850c3f9618b2a600046ff, tree 5b6117409a9790db24ca77587a5e6c2e585e5443, committed 2026-11-21T02:52:09Z; Merge pull request #678 from weatherx-hq/fix/phase0-live-data. Supersedes f6001575e3487a9354bfa73d6d8de6b5454455bd. Between pins, 82 commits and 232 files changed, 162 of them inside the UI closure. Atmos #678 lands the owner-authorized Phase 0 to 2 work: live-data reliability, cold-start data aliases and hashed bootstrap scripts, pipeline hardening, hazard ageing and retirement, agency-graded storm classes and wind rings, and the point-card grid-point note. Atmos #670, #672 and #677 also moved four closure files outside #678 (platform/edge/scripts/sandbox-journey-local.mjs, testing/suites.json, tools/testing/testing.test.mjs, one commercial billing migration). The ci, quality and overlay-quality merge queue and push workflows passed on this exact merged commit. All 23 controller inventory files, four sparse build paths, both release-layer hashes, the public journey harness hash, the intro digest and all 43 account/onboarding source digests match the prior staging source, verified from Git blobs and recomputed SHA-256 digests. Fresh controller CI, clean exact-source admission and a new guarded staging run remain required. See docs/ui-public-combined.md."
   }
 }
