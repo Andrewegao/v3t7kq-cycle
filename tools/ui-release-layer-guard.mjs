@@ -10,7 +10,7 @@ import {addDiagnostics,addStageDiagnostics,filterLine,diagnosticFailure} from '.
 // Current release admission is independent of the historical diagnostics target.
 export const RELEASE_LAYER_FILES=Object.freeze({
  'app/e2e/layer-switch-tint.mjs':'4782ceec6f86e6e61effcb6f17e60d78c7e6276e998bda467577fa1bec49bf4e',
- 'app/e2e/layer-switch-surface.mjs':'a00b43bbaf99a5116125cc134600e04ebfc054b01f9680a0119537df5dc3bbaf',
+ 'app/e2e/layer-switch-surface.mjs':'21c96c51f03fd8ad9eeb40c50acae97cc2148bd014ea310ebee5052c2bfdddaa',
 });
 const ORIGINS=Object.freeze({staging:'https://staging.weatherx.org',production:'https://weatherx.org'});
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');

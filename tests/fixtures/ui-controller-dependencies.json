@@ -91,7 +91,7 @@
       ]
     },
     {
-      "pin": "43a451dfa423600c1bbe376ce3c0f26ce491a769",
+      "pin": "6b6d9227dd81c66af69056c698a7c7b78aa3f1a8",
       "files": [
         "app/e2e/layer-switch-surface.mjs",
         "app/e2e/layer-switch-tint.mjs",
@@ -124,14 +124,14 @@
       ],
       "releaseLayerFiles": {
         "app/e2e/layer-switch-tint.mjs": "4782ceec6f86e6e61effcb6f17e60d78c7e6276e998bda467577fa1bec49bf4e",
-        "app/e2e/layer-switch-surface.mjs": "a00b43bbaf99a5116125cc134600e04ebfc054b01f9680a0119537df5dc3bbaf"
+        "app/e2e/layer-switch-surface.mjs": "21c96c51f03fd8ad9eeb40c50acae97cc2148bd014ea310ebee5052c2bfdddaa"
       },
       "publicJourneyHarnessSha256": "f8df341d660feb3e38d0ec03bac5931aa17385eed83c264c3450013ca209bb54"
     }
   ],
   "stagingBuild": {
     "profile": "production-account-ru-kk-wind100-onboarding-v2",
-    "pin": "43a451dfa423600c1bbe376ce3c0f26ce491a769",
+    "pin": "6b6d9227dd81c66af69056c698a7c7b78aa3f1a8",
     "paths": [
       ".gitignore",
       "platform/edge/package.json",
@@ -139,6 +139,6 @@
       "ops/release/build-release-receipt.mjs"
     ],
     "coneMode": false,
-    "provenance": "Merged Atmos source 43a451dfa423600c1bbe376ce3c0f26ce491a769, tree e91a4a37a264b1d6aba52cf2b0531d56acd5d063, committed 2026-11-21T13:58:49Z; Merge pull request #686 from weatherx-hq/feat/hrrr-native-points. Supersedes 9097613b8c6769861b98ff7cef2f06d367e13abc. Between pins, 25 commits and 72 files changed, 44 of them inside the UI closure. Atmos #682 (hidden-pin preflight, red stale-data issue), #684 (publication freshness) and #686 (HRRR native points, every flag off) on top of #683. It is an ancestor of Atmos refs/remotes/origin/master (43a451dfa423600c1bbe376ce3c0f26ce491a769); all 23 controller inventory files and 4 sparse build paths are the same Git blobs as at the prior pin, and the intro digest and all 43 account/onboarding source digests equal PRODUCTION_INTRO_SOURCE_SHA256, STAGING_ACCOUNT_SOURCE_SHA256 and PRODUCTION_ONBOARDING_SOURCE_SHA256 in Atmos app/src/build/publicReleaseGuard.ts at this commit (tools/ui-source-pin.mjs). Fresh controller CI, clean exact-source admission and a new guarded staging run remain required."
+    "provenance": "Merged Atmos source 6b6d9227dd81c66af69056c698a7c7b78aa3f1a8, tree b0da10bbdd5376c859a744819946b8051a8e7b07, committed 2026-11-24T09:02:59Z; Merge pull request #783 from weatherx-hq/qp/pool-test-maintenance. Supersedes 43a451dfa423600c1bbe376ce3c0f26ce491a769. Between pins, 517 commits and 532 files changed, 348 of them inside the UI closure. It is an ancestor of Atmos refs/remotes/origin/master (6b6d9227dd81c66af69056c698a7c7b78aa3f1a8). The controller closure changed, so tools/ui-source-pin.mjs refused and this pin was human-reviewed on 2026-11-24 (sign-off plus an independent second review of each diff): 8 of the 23 controller inventory files (app/e2e/layer-switch-surface.mjs, app/e2e/staging-account-qualification.mjs, app/package-lock.json, app/package.json, ops/release/test-production-verifiers.mjs, ops/release/verify-platform-production.sh, platform/edge/package-lock.json, platform/edge/package.json) and 3 of the 4 sparse build paths (.gitignore, platform/edge/package.json, platform/edge/package-lock.json) differ from the prior pin; the other 15 inventory files and 1 sparse build path are the same Git blobs. The release harness hash of app/e2e/layer-switch-surface.mjs moves with it in tools/ui-release-layer-guard.mjs and releaseLayerFiles. The intro digest and all 43 account/onboarding source digests equal PRODUCTION_INTRO_SOURCE_SHA256, STAGING_ACCOUNT_SOURCE_SHA256 and PRODUCTION_ONBOARDING_SOURCE_SHA256 in Atmos app/src/build/publicReleaseGuard.ts at this commit (tools/ui-source-pin.mjs). Fresh controller CI, clean exact-source admission and a new guarded staging run remain required."
   }
 }
